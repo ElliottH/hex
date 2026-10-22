@@ -1,14 +1,12 @@
-use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use color_eyre::Result;
 use color_eyre::eyre::{WrapErr, bail};
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use windows_sys::Win32::System::Console::FreeConsole;
 
 use crate::audio::{AudioInput, AudioInputEvent};
@@ -142,19 +140,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         hidden: false,
         rune_args: Vec::new(),
     });
-    let log_dir = crate::app_paths::logs_dir()?;
-    fs::create_dir_all(&log_dir)?;
-    let process_log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join("process.log"))?;
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("voice_control=info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr.and(Mutex::new(process_log)))
-        .init();
-    ctrlc::set_handler(|| shutdown.store(true, Ordering::Relaxed))?;
+    let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
     let event_path = log_dir.join("live.ndjson");
     match command {

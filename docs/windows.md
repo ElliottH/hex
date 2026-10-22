@@ -77,7 +77,6 @@ whole clip. CPU devices (including ARM64) always use the whole-clip path. Set
   MSVC. Build with `CC=clang-cl`, `CXX=clang-cl`, `CMAKE_GENERATOR=Ninja`, and
   `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF -DGGML_OPENMP=OFF`, as
   `.github/workflows/check-windows.yml` does.
-- A Windows 10 or 11 SDK containing the DirectX `fxc.exe` shader compiler.
 - Bun is optional. It is required only for user-defined TypeScript
   transformations; the built-in Lowercase and SpongeBob case transformations
   run without it.
@@ -204,9 +203,9 @@ hex app
   same model, shader, and overlay path ran in a headless sway on apollo (a
   test binary including the two shared modules); on Windows it is only
   type-checked.
-- Not yet: the custom caption (native title bar for now),
-  website rules in Modes, and app icons. The window icon is set by finding
-  the window by title, since Rune exposes no window handle.
+- Not yet: the custom caption (native title bar for now) and app icons. The
+  window icon is set by finding the window by title, since Rune exposes no
+  window handle.
 - Without a tray (creation failed) closing the window quits Hex.
   See the [single-process plan](plans/single-process.md#windows-under-rune).
 

@@ -2,10 +2,8 @@
 //! Windows mode matcher compares them: Start menu shortcuts, apps registered
 //! under App Paths, and every application that currently shows a window.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::{Result, eyre};
 use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GW_OWNER, GWL_EXSTYLE, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW,
@@ -20,41 +18,31 @@ const APP_PATHS: &str = r"Software\Microsoft\Windows\CurrentVersion\App Paths";
 
 pub(super) fn applications() -> Vec<InstalledApplication> {
     let own = std::env::current_exe().ok();
-    let mut paths = start_menu_executables();
-    paths.extend(registered_executables());
-    paths.extend(windowed_executables());
-    // One entry per executable name.
-    let mut names = HashSet::new();
-    paths
+    start_menu_executables()
         .into_iter()
+        .chain(registered_executables())
+        .chain(windowed_executables())
         .filter(|path| own.as_deref() != Some(path.as_path()))
-        .filter(|path| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| names.insert(stem.to_lowercase()))
-        })
-        .filter_map(|path| metadata(&path).ok())
+        .filter_map(executable_entry)
         .collect()
 }
 
-pub(super) fn metadata(path: &Path) -> Result<InstalledApplication> {
-    let is_executable = path
+fn executable_entry(path: PathBuf) -> Option<InstalledApplication> {
+    if !path
         .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
-    if !is_executable {
-        return Err(eyre!("select a Windows .exe application"));
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+    {
+        return None;
     }
     let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.trim().is_empty())
-        .ok_or_else(|| eyre!("{} has no executable name", path.display()))?
+        .file_stem()?
+        .to_str()
+        .filter(|stem| !stem.trim().is_empty())?
         .to_lowercase();
-    Ok(InstalledApplication {
+    Some(InstalledApplication {
         name,
         bundle_id: None,
-        path: path.to_owned(),
+        path,
     })
 }
 
@@ -78,10 +66,6 @@ fn start_menu_executables() -> Vec<PathBuf> {
         .filter_map(|shortcut| std::fs::read(shortcut).ok())
         .filter_map(|bytes| shortcut_target(&bytes))
         .map(PathBuf::from)
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-        })
         .filter(|path| {
             let stem = path
                 .file_stem()
