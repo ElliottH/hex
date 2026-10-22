@@ -295,9 +295,7 @@ Requirements behind that shape, in priority order:
      needs a smithay-client-toolkit surface in Rune's Linux shell. Until
      then the GTK HUD thread stays as it is.
 
-Estimate for items 1–7 on winit: about 3–4 agent-days in Rune, plus review
-by Kit. Item 8 is about 5–7 days and belongs to the HUD port, not to single
-process.
+Item 8 belongs to the HUD port, not to single process.
 
 ## Linux
 
@@ -517,27 +515,65 @@ Rune's app lifetime landed (`a9cde14`/`a242f5a`, now `7eea3a3`) as
 
 LaunchServices keeps single instance, and the status item stays native.
 
-- **Main thread.** `rune::run_app` with `activation_policy: Accessory` and
-  `default_menu: false`.
-  - `start` installs Hex's own `NSApplicationDelegate`, which
-    `applicationShouldHandleReopen` → `AppProxy::send(Open)` (winit
-    promises not to install one).
-  - `start` also creates the `NSStatusItem` from `status_item.rs`, which is
-    already plain AppKit. Its menu target forwards `StatusItemAction`
-    through the proxy. The status item and Rune's windows share winit's
-    `NSApplication` run loop on the main thread.
-- **Runtime.** The macOS runtime (listener, the event-tap `CFRunLoop`
-  thread, meetings, `local_api`, Sparkle) moves out of `meeting_watcher`'s
-  GPUI `Application` into the runtime-thread and `HostHandle` shape.
-  Sparkle and the status item stay on the main thread through `start` and
-  `on_message`.
-- **Window close.** `CloseBehavior::Hide` (`orderOut`) for an instant
-  reopen, or `Destroy` to free GPU memory. Pick after measuring the reopen
-  cost.
-- **Rune windows Hex needs on macOS.** The Metal HUD
-  (`dictation_indicator`) and the meeting capsules need
-  `WindowKind::Overlay` and `WindowKind::Panel` (a non-activating
-  `NSPanel`). These are the largest macOS items and belong to the HUD port.
+### Written on `rune::App` (branch `rune-ui-macos`, compiled and launched on hailmary)
+
+[`macos_rune.rs`](../../src/macos_rune.rs) and
+[`rune_ui/macos_host.rs`](../../src/rune_ui/macos_host.rs); `hex app` runs
+it when built with `--features rune-ui` (`--ui gpui` keeps GPUI):
+
+- **Main thread.** `rune_ui::app().accessory()`, windowless (or open at
+  launch under GPUI's rule: setup or onboarding unfinished, or Show Dock
+  icon) and kept running. `App::accessory` (Rune `50d8d91`) builds winit's
+  loop with the Accessory policy, no default menu, and no activation at
+  launch.
+  - winit 0.30 installs its own `NSApplicationDelegate` and panics if it
+    is replaced, so Hex answers Dock and Finder reopen with an
+    `NSAppleEventManager` handler for `kAEReopenApplication` instead.
+  - The first `AppHandle::update` closure runs on the main thread once the
+    loop is live and installs Sparkle, the `NSStatusItem`, Hex's own
+    Hex/File/Window menu (⌘, ⌘H ⌘Q ⌘W ⌘M; no Edit menu, so ⌘C/⌘V reach
+    Rune's fields), the reopen handler, and the Metal HUD
+    (`dictation_indicator`'s NSPanel, unchanged). A 16 ms `NSTimer` in the
+    common run-loop modes then drains the HUD, status-item, meeting, and
+    developer-control channels with no window open.
+  - Opening the window shows the Dock icon and activates Hex; Rune's
+    close hides it and `on_close` restores the saved Dock policy.
+- **Runtime thread.** Owns `TranscriptionPreparation` (the menu bar's
+  model list asks for installed models only), commits prepared models to
+  `settings.json`, starts the listener once setup is ready, and publishes
+  listener, model, Sparkle, and settings state for the window and the menu
+  bar (`RuntimeHandle`, the Windows shape). The listener, the meeting
+  controller (`meeting_watcher::controller_loop`), and the local API keep
+  their own threads. Quit ends Rune's loop, then everything is joined.
+- **Window host.** The shared panes reach the runtime through
+  `macos_host::Backend`; Sparkle's actions run on the main thread there.
+  Shortcut capture is an AppKit local event monitor (modifier-only chords
+  such as Option or Fn never reach Rune as keys) with the listener's tap
+  suspended. `macos_host::MacHost` is the panes' `NativeHost`:
+  permissions and guides, System Audio, the login item worker, Hex
+  Microphone, meeting start/stop/summarize/rename/trash/reveal, the command
+  catalog and workspace, the command model, Apple Intelligence
+  availability, and relaunch.
+- **Not yet.**
+  - The meeting capsules (offer, recording, call ended, ready) are GPUI
+    windows and need GPUI's loop, which can't share the main thread with
+    Rune's. Offers are logged and time out; the menu bar still shows and
+    stops a recording. They need Rune's `Panel` kind (item 8), or an
+    AppKit panel hosting a Rune surface.
+  - The HUD stays a native NSPanel with its own Metal layer; moving it to
+    Rune needs the `Overlay` kind.
+  - The Meetings pane gets no meetings from the host yet (`meeting_query`
+    listing, transcripts, live refresh), the tour gets no practice
+    dictation events, and choosing the meetings folder needs a native open
+    panel.
+  - The window has no title-bar drag region (Rune's macOS window uses a
+    transparent, full-size title bar; the sidebar starts below the traffic
+    lights).
+- **Verification.** Built with Command Line Tools only (no Xcode): a local
+  shim stubs the Metal shader compiles (GPUI's runtime shaders, an empty
+  HUD metallib) and Apple Intelligence's `@Generable` types. Release
+  builds need Xcode 26 as before. See `dev.rune-ui-macos` in the feature
+  map for what was observed.
 - **CLI.** It already has a channel in `local_api`. A macOS `hex dictation
   …` over `POST /dictations` is optional.
 
@@ -563,16 +599,14 @@ LaunchServices keeps single instance, and the status item stays native.
 
 ## Implementation order
 
-| # | Step | Where | Effort |
-|---|---|---|---|
-| 1 | Rune core: `run_app` (argv-free, keep-alive), `AppProxy`, window table, `WindowSpec` with closures, `CloseBehavior` and `on_closed`, activation token on open and focus (Wayland and X11), shared GPU, fallible window creation, macOS activation policy and no default menu, `raw_window_handle()`. Keep `run(spec)` as a wrapper. | Rune, with Kit | 3–4 d |
-| 2 | Linux single process: `HostHandle` and runtime thread, `linux_instance` v2, launch logic, `rune_ui` on the handle, Quit Hex, `Type=notify`, session keys, installer and Home Manager and Nix, tests, docs, AGENTS.md. Remove the GPUI Settings process on Linux. | `rune-ui` | 4–5 d |
-| 3 | Physical validation on niri (portal) and i3: relaunch focus with a token, close and reopen, logout, crash restart, update restart. | person | — |
-| 4 | Windows: runtime and `HostHandle`, Rune window with Hide, tray on `run_app`, named event to the proxy, HUD as an overlay or HWND-tweaked Rune window. Plus the Windows pane parity work in `rune-ui.md`. | `rune-ui` | 3 d (+ pane parity) |
-| 5 | macOS: runtime out of `meeting_watcher`, delegate and reopen, status item on `run_app`, Rune window. The HUD and capsules wait for the Rune `Overlay` and `Panel` kinds (Rune 5–7 d). Plus the macOS pane parity work in `rune-ui.md`. | `rune-ui` + Rune | 4 d (+ kinds, parity) |
-| 6 | Delete GPUI: `app_window*`, `desktop_ui`, `design_tokens`, `text_input`, `desktop_transcription_picker`, `motion`, GPUI `windows_indicator` and `dictation_indicator`, the fork patch, the token lint. | `rune-ui` → main once Rune is public | 1–2 d |
+| # | Step | Where |
+|---|---|---|
+| 1 | Rune core: `run_app` (argv-free, keep-alive), `AppProxy`, window table, `WindowSpec` with closures, `CloseBehavior` and `on_closed`, activation token on open and focus (Wayland and X11), shared GPU, fallible window creation, macOS activation policy and no default menu, `raw_window_handle()`. Keep `run(spec)` as a wrapper. | Rune, with Kit |
+| 2 | Linux single process: `HostHandle` and runtime thread, `linux_instance` v2, launch logic, `rune_ui` on the handle, Quit Hex, `Type=notify`, session keys, installer and Home Manager and Nix, tests, docs, AGENTS.md. Remove the GPUI Settings process on Linux. | `rune-ui` |
+| 3 | Physical validation on niri (portal) and i3: relaunch focus with a token, close and reopen, logout, crash restart, update restart. | person |
+| 4 | Windows: runtime and `HostHandle`, Rune window with Hide, tray on `run_app`, named event to the proxy, HUD as an overlay or HWND-tweaked Rune window. Plus the Windows pane parity work in `rune-ui.md`. | `rune-ui` |
+| 5 | macOS: runtime out of `meeting_watcher`, reopen, status item beside `rune::App`, Rune window. Written (see [macOS under Rune](#macos-under-rune)); the capsules, the Rune HUD, and the Meetings pane's data remain. The HUD and capsules wait for the Rune `Overlay` and `Panel` kinds. Plus the macOS pane parity work in `rune-ui.md`. | `rune-ui` + Rune |
+| 6 | Delete GPUI: `app_window*`, `desktop_ui`, `design_tokens`, `text_input`, `desktop_transcription_picker`, `motion`, GPUI `windows_indicator` and `dictation_indicator`, the fork patch, the token lint. | `rune-ui` → main once Rune is public |
 
-Steps 1–3 deliver the Linux goal in about 8 agent-days. Windows and macOS
-follow the port order in [`rune-ui.md`](rune-ui.md#order-to-port), and the
-single-process work adds about 7 days to them, not counting window kinds and
-pane parity.
+Windows and macOS follow the port order in
+[`rune-ui.md`](rune-ui.md#order-to-port).

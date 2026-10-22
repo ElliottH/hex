@@ -970,9 +970,19 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
 ├── Modes: "Choose a file…" through the FileChooser portal; drag to reorder
 ├── Model and application searches: Up/Down highlight, Enter picks it
 ├── Not yet: app icons, right-click delete
-└── macOS/Windows surfaces as scenes only (Capabilities + preview data):
+└── macOS/Windows surfaces as scenes too (Capabilities + preview data):
     Commands, Meetings, permission rows, Launch at login, Dock icon,
-    Meetings and Hex microphone sections, the full tour // no native host yet
+    Meetings and Hex microphone sections, the full tour
+macOS `hex app` (--features rune-ui; `--ui gpui` keeps GPUI) -> one menu-bar process, Rune window // dev.rune-ui-macos
+├── rune::App on the main thread: accessory, windowless unless setup/onboarding/Dock icon open it
+├── Same AppKit loop: status item, Sparkle, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
+├── Runtime thread: model preparation (menu bar: installed only), starts the listener once setup is ready
+├── Listener, meeting controller, local API: their own threads, as under GPUI
+├── macos_host: AppKit event monitor records chords (Option, Fn); NativeHost does permissions,
+│   login item, Hex Microphone, meeting start/stop/rename/trash/reveal, commands workspace, relaunch
+├── Close hides the window (Dock policy restored); ⌘Q / menu-bar Quit / Ctrl-C quit and join
+└── Not yet: meeting capsules (offers are logged, not shown), Meetings pane data, practice
+    dictation events, choosing the meetings folder, a title-bar drag region
 Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
@@ -1003,13 +1013,25 @@ at login, permission warnings, the command model notice, Meetings settings,
 the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
 search, copy, rename, start/stop, two-step trash, and the overflow menu, and
 the macOS tour's permissions, practice, and relaunch) and compare 45 offscreen
-GPU renders with [tests/golden](../../tests/golden). The macOS and Windows
-surfaces have no native host yet: their requests are recorded, never
-performed, and none has run on macOS or Windows. They skip the goldens without a GPU
+GPU renders with [tests/golden](../../tests/golden). In these tests the macOS and
+Windows requests are recorded, never performed; the macOS native host
+(`dev.rune-ui-macos`) has no automated test of its own. They skip the goldens without a GPU
 adapter and do not prove a real window, input method, or physical shortcut.
 Before the single-process change, a headless script against an isolated
 service saved a new mode, a correction, and Voice Action. See
 [the Rune port plan](../plans/rune-ui.md) for what was observed.
+
+`dev.rune-ui-macos` lives in [macos_rune.rs](../../src/macos_rune.rs) and
+[rune_ui/macos_host.rs](../../src/rune_ui/macos_host.rs). On hailmary
+(macOS 26.2, Command Line Tools only) it compiles, passes clippy
+`-D warnings` and the macOS unit tests (including `macos_host`'s chord
+capture), and a debug `hex app` with an isolated data root started, showed
+its 980×760 window (CGWindowList; `lsappinfo`: Foreground while open),
+answered `hex dev status/show/hud`, and quit cleanly on Ctrl-C. Those
+builds stub the Metal shaders and Apple Intelligence (Xcode is missing), so
+the HUD failed to load its shader there; window contents, the status item,
+reopen, shortcut capture, and Sparkle have not been seen or exercised, and
+no screenshot could be taken over SSH.
 
 `dev.rune-ui-windows` lives in [windows_rune.rs](../../src/windows_rune.rs) and
 [rune_ui/windows_host.rs](../../src/rune_ui/windows_host.rs). It has only

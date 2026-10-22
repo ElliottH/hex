@@ -113,12 +113,13 @@ shared from `app_window` rather than copied.
 ### macOS and Windows surfaces, rendered on Linux
 
 The panes macOS and Windows add are ported and run on Linux from preview
-data, so they compile, test, and golden-render on apollo. None has run on
-macOS or Windows. Windows' Launch at login row is live through
-`host::set_launch_at_login` (the Windows host's Run key); every other
-macOS-only surface has no native host yet, and Hex cannot be compiled for
-macOS here (hailmary refuses SSH). `rune_ui` compiles for Linux and Windows
-(`main.rs`), not macOS, so these modules cannot break the macOS build.
+data, so they compile, test, and golden-render on apollo. Windows' Launch at
+login row is live through `host::set_launch_at_login` (the Windows host's
+Run key). On macOS, `rune_ui` now compiles with `--features rune-ui` and
+`macos_host::MacHost` performs these requests in the single-process app
+([single-process plan](single-process.md#macos-under-rune)); it was
+compiled, tested, and briefly launched on hailmary, but no pane's live
+macOS data has been seen on screen.
 
 - **`platform::Capabilities`** mirrors GPUI's `app_window::Capabilities` for
   the rows Rune draws (`LINUX`, `MACOS`, `WINDOWS`; `current()` by
@@ -294,34 +295,32 @@ make it exact).
 
 ## Every GPUI surface and what it needs
 
-Sizes are current GPUI lines. Effort is focused agent-days with review.
+Sizes are current GPUI lines.
 
-| Surface | Today | Status / Rune needs | Effort left |
-| --- | --- | --- | --- |
-| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS rows (permissions, Launch at login, Dock icon, Meetings and Hex Microphone sections) ported behind `Capabilities` and rendered from preview data, with no macOS host; modifier sides remain | 1 |
-| Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS needs its traffic-light inset | 1 |
-| Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); Windows prepares in-process through `transcription_preparation` on its runtime thread (type-checked only); macOS likewise, to do | 0.5 |
-| Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus icons and the context menu; macOS adds website rules (Brave) | 3 |
-| Voice Action | ~500 | Done on Linux | 0.5 |
-| History | ~250 | Done | 0 |
-| Commands (macOS) | ~400 | Ported, rendered on Linux from preview data; needs the macOS host (catalog, workspace, model status) | 0.5 |
-| Meetings pane (macOS, beta) | ~1k | Ported, rendered on Linux from preview data; needs the macOS host (store listing, transcript reader, controller requests, live refresh) | 1.5 |
-| Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Hex Microphone Settings section ported; Fun, Activity, HUD Lab deferred (custom vector drawing for waveforms, meters) | 4 (or drop debug panes) |
-| Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; macOS needs the host to feed permissions and practice observations and perform guide/relaunch requests; art is static until looping tracks exist | 1 |
-| Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order | Rune core |
-| Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Window kind: borderless, transparent, click-through, non-activating, all spaces | 4 |
-| HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) | 2 |
-| HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Stays GTK until Rune has a layer-shell surface | 3 later |
-| Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Panel window kind, focus-free buttons, live waveform | 5 |
-| Mac menu bar | `status_item.rs` (AppKit) | Stays native; Rune must run inside an app lifetime that outlives windows | 1 |
-| Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on the main thread beside `rune::App` (`keep_running`, `windowless` for `--hidden`, `AppHandle` open/quit); type-checked only | 0.5 |
-| Windows chrome | `windows_ui.rs` (311) | Custom title bar hit-testing | 2 |
-| Previews | macOS-only `capture-preview.sh` | Rune `--snap`/`--scene` on every OS (done for every Linux pane); goldens in CI on lavapipe | 1 |
-| i18n | `desktop_i18n.rs` | Done: CJK fallback in Rune, translation test covers Rune copy | 0 |
-| Design-token lint | GPUI-specific | Replace as described above | 0.5 |
+| Surface | Today | Status / Rune needs |
+| --- | --- | --- |
+| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS rows (permissions, Launch at login, Dock icon, Meetings and Hex Microphone sections) ported behind `Capabilities`, with the macOS host behind them (compiled and launched on hailmary, not seen on screen); modifier sides remain |
+| Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS gets a traffic-light inset (the sidebar starts at 40 pt) but no title-bar drag region yet |
+| Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); Windows and macOS prepare in-process through `transcription_preparation` on their runtime threads (Windows type-checked only; macOS compiled and tested on hailmary) |
+| Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus icons and the context menu; macOS adds website rules (Brave) |
+| Voice Action | ~500 | Done on Linux |
+| History | ~250 | Done |
+| Commands (macOS) | ~400 | Ported; the macOS host feeds the compiled and personal catalog, workspace, and model status |
+| Meetings pane (macOS, beta) | ~1k | Ported; the macOS host performs start/stop/summarize/rename/trash/reveal but lists no meetings yet (store listing, transcript reader, live refresh) |
+| Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Hex Microphone Settings section ported; Fun, Activity, HUD Lab deferred (custom vector drawing for waveforms, meters) |
+| Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; the macOS host feeds permissions and performs guide/relaunch requests; practice observations are not fed yet; art is static until looping tracks exist |
+| Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order |
+| Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Kept as is under Rune (native NSPanel driven from a main-loop timer); moving it needs a window kind: borderless, transparent, click-through, non-activating, all spaces |
+| HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) |
+| HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Stays GTK until Rune has a layer-shell surface |
+| Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Off under Rune (GPUI's loop can't share the main thread): offers are logged; needs a panel window kind, focus-free buttons, live waveform |
+| Mac menu bar | `status_item.rs` (AppKit) | Stays native, installed beside `rune::App` on the main thread (`macos_rune.rs`) |
+| Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on the main thread beside `rune::App` (`keep_running`, `windowless` for `--hidden`, `AppHandle` open/quit); type-checked only |
+| Windows chrome | `windows_ui.rs` (311) | Custom title bar hit-testing |
+| Previews | macOS-only `capture-preview.sh` | Rune `--snap`/`--scene` on every OS (done for every Linux pane; the mac scenes also render on macOS Metal, observed on hailmary); goldens in CI on lavapipe |
+| i18n | `desktop_i18n.rs` | Done: CJK fallback in Rune, translation test covers Rune copy |
+| Design-token lint | GPUI-specific | Replace as described above |
 
-Remaining after Linux: roughly 35–45 agent-days for Windows and macOS plus
-the Rune core work below.
 
 ## Gaps in Rune, in the order to close them
 
