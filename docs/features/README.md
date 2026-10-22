@@ -971,8 +971,9 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
 ├── Model and application searches: Up/Down highlight, Enter picks it
 ├── Not yet: app icons, right-click delete
 └── macOS/Windows surfaces as scenes too (Capabilities + preview data):
-    Commands, Meetings, permission rows, Launch at login, Dock icon,
-    Meetings and Hex microphone sections, the full tour
+    Commands, Meetings, Fun, HUD Lab, Activity, permission rows, Launch at
+    login, Dock icon, shortcut sides, Meetings and Hex microphone sections,
+    the full tour
 macOS `hex app` (--features rune-ui; `--ui gpui` keeps GPUI) -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── rune::App on the main thread: accessory, windowless unless setup/onboarding/Dock icon open it
 ├── Same AppKit loop: status item, Sparkle, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
@@ -1012,7 +1013,9 @@ saves; and, from macOS/Windows preview data, each OS's panes and rows, Launch
 at login, permission warnings, the command model notice, Meetings settings,
 the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
 search, copy, rename, start/stop, two-step trash, and the overflow menu, and
-the macOS tour's permissions, practice, and relaunch) and compare 45 offscreen
+the macOS tour's permissions, practice, and relaunch; Fun's modes, sliders,
+and demo requests, HUD Lab's indicator requests, Activity, and shortcut
+sides) and compare 53 offscreen
 GPU renders with [tests/golden](../../tests/golden). In these tests the macOS and
 Windows requests are recorded, never performed; the macOS native host
 (`dev.rune-ui-macos`) has no automated test of its own. They skip the goldens without a GPU
