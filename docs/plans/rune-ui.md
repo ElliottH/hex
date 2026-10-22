@@ -319,15 +319,15 @@ Sizes are current GPUI lines.
 | Surface | Today | Status / Rune needs |
 | --- | --- | --- |
 | Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS rows (permissions, Launch at login, Dock icon, Meetings and Hex Microphone sections) ported behind `Capabilities`, with the macOS host behind them (compiled and launched on hailmary, not seen on screen); Left/Either/Right sides for modifier-only shortcuts and macOS 27's Accessibility name ported |
-| Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS gets a traffic-light inset (the sidebar starts at 40 pt) but no title-bar drag region yet |
+| Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS gets a traffic-light inset (the sidebar starts at 40 pt), and the sidebar and pane header move the window (`El::window_drag`) |
 | Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); Windows and macOS prepare in-process through `transcription_preparation` on their runtime threads (Windows type-checked only; macOS compiled and tested on hailmary) |
 | Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus icons and the context menu; macOS adds website rules (Brave) |
 | Voice Action | ~500 | Done on Linux |
 | History | ~250 | Done |
 | Commands (macOS) | ~400 | Ported; the macOS host feeds the compiled and personal catalog, workspace, and model status |
-| Meetings pane (macOS, beta) | ~1k | Ported; the macOS host performs start/stop/summarize/rename/trash/reveal but lists no meetings yet (store listing, transcript reader, live refresh) |
+| Meetings pane (macOS, beta) | ~1k | Ported; the macOS host lists the store through `meeting::query` (1 s rescan, live transcripts included), performs start/stop/summarize/rename/trash/reveal, and chooses the folder with `NSOpenPanel` |
 | Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Ported (waveforms on Rune's vector shapes); the macOS host performs their requests (type-checked on hailmary, not run) |
-| Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; the macOS host feeds permissions and performs guide/relaunch requests; practice observations are not fed yet; art is static until looping tracks exist |
+| Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; the macOS host feeds permissions, practice dictations (from the event log), and listener failures, and performs guide/relaunch requests; art is static until looping tracks exist |
 | Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order |
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Kept as is under Rune (native NSPanel driven from a main-loop timer); moving it needs a window kind: borderless, transparent, click-through, non-activating, all spaces |
 | HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) |

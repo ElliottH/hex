@@ -1003,9 +1003,13 @@ macOS `hex app` (--features rune-ui; `--ui gpui` keeps GPUI) -> one menu-bar pro
 ├── Listener, meeting controller, local API: their own threads, as under GPUI
 ├── macos_host: AppKit event monitor records chords (Option, Fn); NativeHost does permissions,
 │   login item, Hex Microphone, meeting start/stop/rename/trash/reveal, commands workspace, relaunch
-├── Close hides the window (Dock policy restored); ⌘Q / menu-bar Quit / Ctrl-C quit and join
-└── Not yet: meeting capsules (offers are logged, not shown), Meetings pane data, practice
-    dictation events, choosing the meetings folder, a title-bar drag region
+├── Meetings pane lists the store through meeting::query (1 s rescan, sent only when changed);
+│   a controller failure shows in the pane; NSOpenPanel chooses the meetings folder
+├── Tour: practice dictations from the listener's event log; a listener that failed to start
+├── Sidebar and pane header move the window (Rune El::window_drag; the title bar is transparent)
+├── An open window polls its host every 250 ms; close hides it (Dock policy restored)
+├── ⌘Q / menu-bar Quit / Ctrl-C quit and join
+└── Not yet: meeting capsules (offers are logged, not shown) // the HUD/capsule port is separate
 Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
@@ -1052,11 +1056,16 @@ service saved a new mode, a correction, and Voice Action. See
 `-D warnings` and the macOS unit tests (including `macos_host`'s chord
 capture), and a debug `hex app` with an isolated data root started, showed
 its 980×760 window (CGWindowList; `lsappinfo`: Foreground while open),
-answered `hex dev status/show/hud`, and quit cleanly on Ctrl-C. Those
+answered `hex dev status/show/hud`, and quit cleanly on Ctrl-C, also with
+the meeting fixtures copied into its data root and the Meetings pane shown.
+`macos_host`'s tests cover the meeting feed over `tests/fixtures/meetings`
+(order, recovery to Interrupted, turns and pauses, no resend when unchanged)
+and the practice feed over a written event log. Those
 builds stub the Metal shaders and Apple Intelligence (Xcode is missing), so
-the HUD failed to load its shader there; window contents, the status item,
-reopen, shortcut capture, and Sparkle have not been seen or exercised, and
-no screenshot could be taken over SSH.
+the HUD failed to load its shader there; window contents (including the
+Meetings list and the practice step), dragging the window, the folder
+panel, the status item, reopen, shortcut capture, and Sparkle have not been
+seen or exercised, and no screenshot could be taken over SSH.
 
 `dev.rune-ui-windows` lives in [windows_rune.rs](../../src/windows_rune.rs) and
 [rune_ui/windows_host.rs](../../src/rune_ui/windows_host.rs). It has only

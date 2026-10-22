@@ -553,7 +553,14 @@ it when built with `--features rune-ui` (`--ui gpui` keeps GPUI):
   permissions and guides, System Audio, the login item worker, Hex
   Microphone, meeting start/stop/summarize/rename/trash/reveal, the command
   catalog and workspace, the command model, Apple Intelligence
-  availability, and relaunch.
+  availability, and relaunch. It also lists meetings for the Meetings pane
+  through the read-only `meeting::query` (rescanned once a second, sent
+  only when changed), feeds the tour's practice step from the listener's
+  event log, and chooses the meetings folder with `NSOpenPanel`. The main
+  loop's timer wakes an open window every 250 ms so these polls run.
+- **Title bar.** Rune's macOS window has a transparent, full-size title
+  bar; the sidebar starts below the traffic lights, and it and the pane
+  header move the window (Rune `El::window_drag`, `ea6b513`).
 - **Not yet.**
   - The meeting capsules (offer, recording, call ended, ready) are GPUI
     windows and need GPUI's loop, which can't share the main thread with
@@ -562,13 +569,6 @@ it when built with `--features rune-ui` (`--ui gpui` keeps GPUI):
     AppKit panel hosting a Rune surface.
   - The HUD stays a native NSPanel with its own Metal layer; moving it to
     Rune needs the `Overlay` kind.
-  - The Meetings pane gets no meetings from the host yet (`meeting_query`
-    listing, transcripts, live refresh), the tour gets no practice
-    dictation events, and choosing the meetings folder needs a native open
-    panel.
-  - The window has no title-bar drag region (Rune's macOS window uses a
-    transparent, full-size title bar; the sidebar starts below the traffic
-    lights).
 - **Verification.** Built with Command Line Tools only (no Xcode): a local
   shim stubs the Metal shader compiles (GPUI's runtime shaders, an empty
   HUD metallib) and Apple Intelligence's `@Generable` types. Release
