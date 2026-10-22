@@ -60,7 +60,7 @@ These live in [`rune_ui/controls.rs`](../src/rune_ui/controls.rs) and
 | A few exclusive choices / a dropdown | `segmented`, `select` |
 | Main, other, and destructive actions | `button(…, ButtonKind::{Primary, Secondary, Danger}, …)`; inside a row: `small_button` |
 | Shortcut keycaps | `keycaps`; the recorder is `settings::hotkey_control` |
-| Status (never clickable) | `tag`, `tone_tag`; a live or recorded state: `status_dot` |
+| Status (never clickable) | `tone_tag`; a live or recorded state: `status_dot` |
 | Short message under a control | `note` |
 | Text entry saved when typing pauses | `text_field` |
 | Keyboard highlight in a search popover | `Highlight` |

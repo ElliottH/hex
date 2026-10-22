@@ -11,7 +11,7 @@ const PANE_SIZE: (f32, f32) = (980.0, 760.0);
 const GOLDEN_SCALE: f32 = 2.0;
 
 fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
-    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()), None);
+    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()));
     let (_, apply) = SCENES
         .iter()
         .find(|(name, _)| *name == scene)
@@ -40,14 +40,16 @@ fn saved(rt: &Runtime<Ui>) -> usize {
     rt.state.saved
 }
 
+fn texts(rt: &Runtime<Ui>) -> Vec<String> {
+    rt.elements().into_iter().filter_map(|e| e.text).collect()
+}
+
 /// Presses an element by key and lets every animation settle.
 fn tap(rt: &mut Runtime<Ui>, key: &str) {
     let (x, y) = rt.find(key).unwrap_or_else(|| panic!("no element {key}"));
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
-    for _ in 0..60 {
-        rt.frame(1.0 / 60.0);
-    }
+    settle(rt);
 }
 
 fn key(rt: &mut Runtime<Ui>, key: Key, mods: Mods) {
@@ -58,7 +60,7 @@ fn key(rt: &mut Runtime<Ui>, key: Key, mods: Mods) {
 #[test]
 fn portal_desktops_show_what_they_granted_beside_each_recorder() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+    let shown = texts(&rt);
     for expected in [
         "Shortcuts",
         "Your desktop granted F12",
@@ -66,11 +68,11 @@ fn portal_desktops_show_what_they_granted_beside_each_recorder() {
         "Change shortcut",
     ] {
         assert!(
-            texts.iter().any(|text| text == expected),
-            "missing {expected:?} in {texts:?}"
+            shown.iter().any(|text| text == expected),
+            "missing {expected:?} in {shown:?}"
         );
     }
-    assert!(!texts.iter().any(|text| text == "Desktop shortcuts"));
+    assert!(!shown.iter().any(|text| text == "Desktop shortcuts"));
     for recorder in ["dictation-hotkey", "paste-last-hotkey"] {
         tap(&mut rt, recorder);
         assert!(matches!(
@@ -93,21 +95,20 @@ fn a_refused_portal_shortcut_says_how_to_free_it() {
     }
     rt.invalidate();
     rt.frame(0.0);
-    let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+    let shown = texts(&rt);
     assert!(
-        texts
+        shown
             .iter()
             .any(|text| text == "Your desktop did not grant this shortcut")
     );
-    assert!(texts.iter().any(|text| text.contains("config.kdl")));
+    assert!(shown.iter().any(|text| text.contains("config.kdl")));
     assert!(rt.find("dictation-hotkey").is_some());
 }
 
 #[test]
 fn desktops_without_a_portal_list_commands_instead_of_recording_rows() {
     let rt = runtime("commands", true, GOLDEN_SIZE);
-    let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
-    assert!(texts.iter().any(|text| text == "hex dictation toggle"));
+    assert!(texts(&rt).iter().any(|text| text == "hex dictation toggle"));
     assert!(rt.find("dictation-hotkey").is_none());
     assert!(rt.find("paste-last-hotkey").is_none());
 }
@@ -213,7 +214,7 @@ fn function_keys_and_super_record_as_linux_key_names() {
 
 #[test]
 fn shortcuts_that_collide_are_refused() {
-    let ui = fixture(portal_shortcuts());
+    let ui = portal_fixture();
     let paste = ui.settings.paste_last_hotkey.clone().unwrap();
     assert_eq!(
         validate(&ui.settings, ShortcutTarget::Dictation, &paste),
@@ -223,7 +224,7 @@ fn shortcuts_that_collide_are_refused() {
 
 #[test]
 fn service_settings_are_adopted_only_when_the_service_changes_them() {
-    let mut ui = fixture(portal_shortcuts());
+    let mut ui = portal_fixture();
     let service = ui.settings.clone();
     ui.adopt(service.clone());
     ui.update(|settings| settings.paste_with_shift = false);
@@ -559,7 +560,7 @@ fn onboarding_downloads_the_model_through_the_service() {
 
 #[test]
 fn recognition_hints_save_when_typing_pauses() {
-    let mut ui = fixture(portal_shortcuts());
+    let mut ui = portal_fixture();
     ui.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
     ui.hints = TextEdit::new("OpenCode, Effect");
     let start = std::time::Instant::now();

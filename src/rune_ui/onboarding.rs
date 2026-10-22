@@ -25,8 +25,8 @@ use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
 use crate::onboarding::{
-    Effect, Flow, Input, ItemStatus, ModelProgress, Observation, PermissionKind, PermissionState,
-    Practice, Row, SetupItem, Step, View,
+    Effect, Flow, Input, ItemStatus, ModelProgress, Observation, PermissionState, Practice, Row,
+    SetupItem, Step, View,
 };
 
 const WIDTH: f32 = 520.0;
@@ -39,7 +39,7 @@ pub(super) struct Tour {
     advance_at: Option<Instant>,
     completed: bool,
     /// The practice dictation pastes here.
-    pub(super) practice: TextEdit,
+    practice: TextEdit,
 }
 
 impl Tour {
@@ -54,7 +54,7 @@ impl Tour {
 
     /// The tour when this run still needs it.
     pub(super) fn start(settings: &AppSettings, platform: &PlatformState) -> Option<Tour> {
-        let installed = selected_installed(settings, None);
+        let installed = super::picker::Picker::default().selected_installed(settings);
         let status = platform.setup_status(installed);
         let completed = crate::onboarding::completion_recorded();
         let resume = crate::onboarding::take_resume();
@@ -72,22 +72,8 @@ impl Tour {
     }
 }
 
-fn selected_installed(
-    settings: &AppSettings,
-    fixture: Option<&Vec<crate::transcription_models::TranscriptionModelId>>,
-) -> bool {
-    crate::transcription_models::validate(&settings.transcription).is_ok_and(
-        |model| match fixture {
-            Some(installed) => installed.contains(&model.id),
-            None => {
-                crate::transcription_models::is_installed(model, &settings.transcription.language)
-            }
-        },
-    )
-}
-
 fn progress(ui: &Ui) -> (bool, ModelProgress) {
-    let installed = selected_installed(&ui.settings, ui.picker.installed.as_ref());
+    let installed = ui.picker.selected_installed(&ui.settings);
     let selected = crate::transcription_models::validate(&ui.settings.transcription).ok();
     let transcription = ui.view.as_ref().map(|view| &view.transcription);
     let downloading = selected.and_then(|model| {
@@ -111,14 +97,13 @@ fn progress(ui: &Ui) -> (bool, ModelProgress) {
 /// Feeds the flow fresh permission and model state; true when the tour
 /// changed.
 pub(super) fn poll(ui: &mut Ui) -> bool {
-    let Some(tour) = &ui.tour else {
-        return false;
-    };
-    let before = tour.flow.view();
     let (installed, model) = progress(ui);
     let status = ui.platform.setup_status(installed);
     let live = ui.live();
-    let tour = ui.tour.as_mut().expect("checked above");
+    let Some(tour) = &mut ui.tour else {
+        return false;
+    };
+    let before = tour.flow.view();
     let mut effect = tour.flow.on(Input::Status(status, model));
     if tour
         .advance_at
@@ -146,19 +131,7 @@ pub(super) fn poll(ui: &mut Ui) -> bool {
     changed || after.as_ref() != Some(&before)
 }
 
-/// A practice dictation's progress, from the dictation events the host
-/// observes while the practice step shows.
-pub(super) fn observe(ui: &mut Ui, observation: Observation) {
-    input(ui, Input::Dictation(observation));
-}
-
-/// The shortcut listener could not start once setup was ready: relaunch
-/// once, then ask the person to reopen Hex.
-pub(super) fn listener_failed(ui: &mut Ui, relaunch_allowed: bool) {
-    input(ui, Input::ListenerFailed { relaunch_allowed });
-}
-
-fn input(ui: &mut Ui, input: Input) {
+pub(super) fn input(ui: &mut Ui, input: Input) {
     let Some(tour) = &mut ui.tour else {
         return;
     };
@@ -182,23 +155,13 @@ fn apply(ui: &mut Ui, effect: Effect) {
                 tour.advance_at = Some(Instant::now());
             }
         }
-        Effect::RequestMicrophone => {
-            ui.ask(PlatformRequest::Permission(
-                crate::onboarding::PermissionAction::RequestMicrophone,
-            ));
-            ui.platform.note_asked(PermissionKind::Microphone);
-        }
-        Effect::ShowGuide(kind) => {
-            ui.ask(PlatformRequest::Permission(
-                crate::onboarding::PermissionAction::ShowGuide(kind),
-            ));
-            ui.platform.note_asked(kind);
-        }
-        Effect::Relaunch => {
-            if ui.host.send(PlatformRequest::Relaunch).is_err() {
-                ui.platform.relaunch_failed = true;
-            }
-        }
+        Effect::RequestMicrophone => ui.ask(PlatformRequest::Permission(
+            crate::onboarding::PermissionAction::RequestMicrophone,
+        )),
+        Effect::ShowGuide(kind) => ui.ask(PlatformRequest::Permission(
+            crate::onboarding::PermissionAction::ShowGuide(kind),
+        )),
+        Effect::Relaunch => ui.ask(PlatformRequest::Relaunch),
         Effect::Finish => ui.tour = None,
         Effect::None => {}
     }
@@ -348,7 +311,7 @@ fn download(p: Paint, status: ItemStatus) -> El {
     }
 }
 
-fn title(p: Paint, title: &str, body: Option<String>) -> El {
+fn title(p: Paint, title: &str, body: Option<&str>) -> El {
     col()
         .key("title-block")
         .gap(8.0)
@@ -411,14 +374,11 @@ fn welcome(ui: &Ui, p: Paint) -> El {
         .child(title(
             p,
             tr("Welcome to Hex"),
-            Some(
-                if ui.platform.caps.os == Os::Macos {
-                    tr("Hold a key, say what you mean, and Hex types it wherever your cursor is. Your voice is transcribed on this Mac.")
-                } else {
-                    tr("Hold a key, say what you mean, and Hex types it wherever your cursor is. Your voice is transcribed on this computer.")
-                }
-                .into(),
-            ),
+            Some(if ui.platform.caps.os == Os::Macos {
+                tr("Hold a key, say what you mean, and Hex types it wherever your cursor is. Your voice is transcribed on this Mac.")
+            } else {
+                tr("Hold a key, say what you mean, and Hex types it wherever your cursor is. Your voice is transcribed on this computer.")
+            }),
         ))
 }
 
@@ -434,9 +394,9 @@ fn setup(ui: &Ui, p: Paint, view: &View) -> El {
             title(
                 p,
                 tr("Download a speech model"),
-                Some(
-                    tr("Hex transcribes on this computer, so it needs a local model first.").into(),
-                ),
+                Some(tr(
+                    "Hex transcribes on this computer, so it needs a local model first.",
+                )),
             )
         })
         .child(card(p, "setup-card", rows));
@@ -562,18 +522,15 @@ fn try_it(ui: &Ui, p: Paint, tour: &Tour, view: &View) -> El {
         })
         .build(p.k)
         .key("practice-field");
+    let body = if holds(ui) {
+        tr_fill("Hold {}, say a sentence, then let go.", &shortcut)
+    } else {
+        tr_fill("Press {}, say a sentence, then press it again.", &shortcut)
+    };
     col()
         .key("try-it")
         .gap(24.0)
-        .child(title(
-            p,
-            tr("Give it a try"),
-            Some(if holds(ui) {
-                tr_fill("Hold {}, say a sentence, then let go.", &shortcut)
-            } else {
-                tr_fill("Press {}, say a sentence, then press it again.", &shortcut)
-            }),
-        ))
+        .child(title(p, tr("Give it a try"), Some(&body)))
         .child(
             col()
                 .key("practice")
@@ -584,7 +541,7 @@ fn try_it(ui: &Ui, p: Paint, tour: &Tour, view: &View) -> El {
 }
 
 fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
-    let hint = |copy: String, color| {
+    let hint = |copy: &str, color| {
         text(copy)
             .key("hint")
             .font(DESCRIPTION)
@@ -597,7 +554,7 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
     if view.reopen {
         return line
             .child(hint(
-                tr("Hex needs to reopen before it can hear the shortcut.").into(),
+                tr("Hex needs to reopen before it can hear the shortcut."),
                 p.muted(),
             ))
             .child(button(
@@ -610,7 +567,7 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
     }
     if !view.dictation_ready {
         return line.child(hint(
-            tr("Hex starts listening once the speech model has downloaded.").into(),
+            tr("Hex starts listening once the speech model has downloaded."),
             p.faint(),
         ));
     }
@@ -623,8 +580,7 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
                         tr("Hold to talk")
                     } else {
                         tr("Press to talk")
-                    }
-                    .into(),
+                    },
                     p.faint(),
                 ));
         }
@@ -673,7 +629,7 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
     } else {
         line
     };
-    line.child(hint(copy, color))
+    line.child(hint(&copy, color))
 }
 
 fn done(ui: &Ui, p: Paint) -> El {
@@ -736,7 +692,7 @@ fn done(ui: &Ui, p: Paint) -> El {
         .key("done")
         .gap(24.0)
         .children((ui.platform.caps.os == Os::Macos).then_some(art))
-        .child(title(p, tr("You're all set"), Some(send_off)))
+        .child(title(p, tr("You're all set"), Some(&send_off)))
         .child(
             col()
                 .key("more")
@@ -848,9 +804,13 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
         input(ui, Input::Continue);
     }
     if state == MacStep::SetupProgress {
-        input(ui, Input::Grant(SetupItem::Microphone));
-        input(ui, Input::Grant(SetupItem::InputMonitoring));
-        input(ui, Input::Grant(SetupItem::Accessibility));
+        for item in [
+            SetupItem::Microphone,
+            SetupItem::InputMonitoring,
+            SetupItem::Accessibility,
+        ] {
+            input(ui, Input::Grant(item));
+        }
     }
     ui.platform.permissions = permissions;
     match state {
@@ -886,7 +846,7 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
         _ => &[],
     };
     for observation in observations {
-        observe(ui, *observation);
+        input(ui, Input::Dictation(*observation));
     }
     if state == MacStep::TryItLanded
         && let Some(tour) = &mut ui.tour
@@ -894,7 +854,12 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
         tour.practice = TextEdit::new("Let's move the standup to ten thirty tomorrow.");
     }
     if state == MacStep::TryItReopen {
-        listener_failed(ui, false);
+        input(
+            ui,
+            Input::ListenerFailed {
+                relaunch_allowed: false,
+            },
+        );
     }
     if state == MacStep::Done {
         input(ui, Input::Skip);

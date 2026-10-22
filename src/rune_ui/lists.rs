@@ -2,13 +2,13 @@
 //! Settings rows share: list rows and group labels, the detail header and
 //! facts, tinted status tags, and the permission control.
 
-use rune::{El, TextStyle, col, el, row, text};
+use rune::{El, col, el, row, text};
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, status_dot};
 use crate::desktop_i18n::tr;
 
-pub(super) const LIST_WIDTH: f32 = 320.0;
+const LIST_WIDTH: f32 = 320.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Tone {
@@ -41,10 +41,7 @@ pub(super) fn tone_tag(p: Paint, key: &str, label: &str, tone: Tone) -> El {
         .child(
             text(label)
                 .key("label")
-                .font(TextStyle {
-                    line_height: 12.0,
-                    ..p.k.ty.small_medium
-                })
+                .font(p.k.ty.small_medium.lh(12.0))
                 .color(ink),
         )
 }
