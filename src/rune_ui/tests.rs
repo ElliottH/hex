@@ -482,10 +482,10 @@ fn a_chosen_file_joins_the_catalog_and_the_mode() {
             .contains(&"helix".to_string())
     );
     modes::chosen_application(&mut rt.state, Ok(None));
-    assert!(rt.state.modes_application_error().is_none());
+    assert!(rt.state.modes.application_error.is_none());
     modes::chosen_application(&mut rt.state, Err("no file chooser portal".into()));
     assert_eq!(
-        rt.state.modes_application_error(),
+        rt.state.modes.application_error.as_deref(),
         Some("no file chooser portal")
     );
 }
@@ -500,7 +500,7 @@ fn mode_applications_refuse_one_another_modes_use() {
             .clone()
     };
     tap(&mut rt, "available1");
-    assert!(rt.state.modes_application_error().is_some());
+    assert!(rt.state.modes.application_error.is_some());
     assert!(!chat(&rt).contains(&"WezTerm".to_string()));
     tap(&mut rt, "available2");
     assert!(chat(&rt).contains(&"Zed".to_string()));
