@@ -34,6 +34,17 @@ unsafe extern "C" {
     fn CGMainDisplayID() -> u32;
 }
 
+/// A `CGColorSpaceRef` as Objective-C encodes it, so `setColorspace:` passes
+/// the method-signature check debug builds of objc2 run.
+#[repr(transparent)]
+struct ColorSpaceRef(*mut c_void);
+
+// SAFETY: a transparent CGColorSpace pointer, encoded as one.
+unsafe impl objc2::Encode for ColorSpaceRef {
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Pointer(&objc2::Encoding::Struct("CGColorSpace", &[]));
+}
+
 const WINDOW_WIDTH: f32 = 112.0;
 const WINDOW_HEIGHT: f32 = 64.0;
 const CAPSULE_WIDTH: f32 = 56.0;
@@ -635,7 +646,7 @@ impl MetalRenderer {
             if !color_space.is_null() {
                 let any_layer = &*(layer.as_ref() as *const metal::MetalLayerRef)
                     .cast::<objc2::runtime::AnyObject>();
-                let _: () = objc2::msg_send![any_layer, setColorspace: color_space];
+                let _: () = objc2::msg_send![any_layer, setColorspace: ColorSpaceRef(color_space)];
                 CGColorSpaceRelease(color_space);
             }
         }
