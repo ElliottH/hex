@@ -180,7 +180,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
             }
             match ui {
                 AppUi::Gpui => crate::windows_app::open(event_path, shutdown, hidden),
-                AppUi::Rune => open_rune(event_path, shutdown, hidden, !rune_args.is_empty()),
+                AppUi::Rune => open_rune(event_path, shutdown, hidden, rune_args),
             }
         }
         Command::Listen { device, selection } => {
@@ -234,17 +234,17 @@ fn open_rune(
     event_path: PathBuf,
     shutdown: &'static AtomicBool,
     hidden: bool,
-    headless: bool,
+    rune_args: Vec<String>,
 ) -> Result<()> {
-    if headless {
-        crate::rune_ui::run();
+    if !rune_args.is_empty() {
+        crate::rune_ui::app().args(rune_args).run();
         return Ok(());
     }
-    crate::windows_rune::open(event_path, shutdown, hidden)
+    crate::windows_rune::open(event_path, shutdown, hidden, rune_args)
 }
 
 #[cfg(not(feature = "rune-ui"))]
-fn open_rune(_: PathBuf, _: &'static AtomicBool, _: bool, _: bool) -> Result<()> {
+fn open_rune(_: PathBuf, _: &'static AtomicBool, _: bool, _: Vec<String>) -> Result<()> {
     bail!("this Hex was built without the Rune front end; rebuild with `--features rune-ui`")
 }
 
