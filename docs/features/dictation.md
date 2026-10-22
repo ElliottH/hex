@@ -39,9 +39,11 @@ Neither proves the physical dictation shortcut; see the [feature index](README.m
 Ordinary hold                            // lock activation is mapped below
   ├── Hold -> Speak -> Release -> Finish          // dictate.hold
   ├── Release before 300 ms -> Discard            // dictate.short-tap
-  └── Early unrelated shortcut/click -> Discard   // not intentional dictation
-      └── Includes another app's global shortcut  // dictate.hidden-chord
-          (Spaceman's Option-1) -> Seen at HID -> Discard, no double-tap lock
+  ├── Early unrelated shortcut/click -> Discard   // not intentional dictation
+  │   └── Includes another app's global shortcut  // dictate.hidden-chord
+  │       (Spaceman's Option-1) -> Seen at HID -> Discard, no double-tap lock
+  └── Modifier-only hold + any key, at any time -> Discard  // dictate.held-chord
+      (key reaches the app; locked and toggle captures keep recording)
 
 Ordinary shortcut -> No recording mute/pause or idle-sleep prevention
 Intentional recording -> No automatic duration limit
@@ -69,6 +71,13 @@ logged with `key_codes`. Checks:
 listen-only session and HID taps on Kit's Studio: Spaceman's Option-1/2/3
 reached HID but never the session. The installed fix has no physical-keyboard
 run yet.
+
+**Changed October 22, 2026:** Kit holds Option a little past 300 ms before
+pressing the digit, which 2.3.0 and the Swift app both ignored after the
+threshold. Any non-modifier key pressed while a modifier-only shortcut is still
+held now discards the capture, with no transcription or paste. Keyed shortcuts
+keep the 300 ms rule. Check:
+`held_modifier_only_shortcut_plus_any_key_discards_after_the_hold_threshold`.
 
 ### Shortcut Mode
 

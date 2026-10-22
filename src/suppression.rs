@@ -1239,12 +1239,16 @@ impl DictationHotkey {
                 Some(HotkeyAction::Finish)
             }
             State::Recording { started_at, .. }
-                if now.duration_since(started_at) < MINIMUM_HOLD_DURATION
-                    // Delayed HID evidence from before the press is not a chord.
-                    && !(matches!(event, InputEvent::PhysicalKeyDown { .. }) && now < started_at)
-                    && (unrelated_key_down
-                        || matches!(event, InputEvent::MouseDown)
-                        || extra_modifiers) =>
+                // Delayed HID evidence from before the press is not a chord.
+                if !(matches!(event, InputEvent::PhysicalKeyDown { .. }) && now < started_at)
+                    && ((now.duration_since(started_at) < MINIMUM_HOLD_DURATION
+                        && (unrelated_key_down
+                            || matches!(event, InputEvent::MouseDown)
+                            || extra_modifiers))
+                        // A held modifier-only shortcut plus any key is a chord at any time.
+                        || (unrelated_key_down
+                            && self.binding.key_code.is_none()
+                            && !self.toggle)) =>
             {
                 self.state = State::Dirty;
                 Some(HotkeyAction::Discard)
@@ -3443,23 +3447,65 @@ mod tests {
     }
 
     #[test]
-    fn hid_evidence_after_the_hold_threshold_or_while_locked_is_ignored() {
+    fn held_modifier_only_shortcut_plus_any_key_discards_after_the_hold_threshold() {
         let now = capture_time();
+        for chord_ms in [300, 450, 2_000] {
+            for (key, hidden) in [(18, true), (19, true), (20, true), (49, true), (18, false)] {
+                let mut hotkey = test_hotkey(false, now);
+                hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+                let chord = now + Duration::from_millis(chord_ms);
+                let event = if hidden {
+                    InputEvent::PhysicalKeyDown { code: key }
+                } else {
+                    option_key(key, true, OPTION_KEY_MASK)
+                };
+                assert_eq!(
+                    hotkey.process(event, chord),
+                    Some(HotkeyAction::Discard),
+                    "key {key} hidden={hidden} at {chord_ms} ms"
+                );
+                if !hidden {
+                    hotkey.process(option_key(key, false, OPTION_KEY_MASK), chord);
+                }
+                assert_eq!(
+                    hotkey.process(InputEvent::Flags(NO_FLAGS), chord + Duration::from_millis(50)),
+                    None
+                );
+                assert!(!hotkey.is_recording());
+            }
+        }
+
+        // Toggle captures keep recording, and keyed shortcuts keep the threshold.
         let mut hotkey = test_hotkey(false, now);
+        hotkey.set_toggle(true);
         hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
         assert_eq!(
             hotkey.process(
                 InputEvent::PhysicalKeyDown { code: 18 },
-                now + MINIMUM_HOLD_DURATION
+                now + Duration::from_millis(500)
             ),
             None
         );
         assert!(hotkey.is_recording());
+        let mut hotkey = DictationHotkey::with_binding(false, now, true, shift_space_binding());
+        hotkey.process(shift_space_event(true), now);
         assert_eq!(
-            hotkey.process(InputEvent::Flags(NO_FLAGS), now + Duration::from_secs(1)),
-            Some(HotkeyAction::Finish)
+            hotkey.process(
+                InputEvent::Key {
+                    code: 0,
+                    down: true,
+                    flags: SHIFT_KEY_MASK
+                },
+                now + Duration::from_millis(500)
+            ),
+            None
         );
+        assert!(hotkey.is_recording());
+    }
 
+    #[test]
+    fn hid_evidence_while_locked_is_ignored() {
+        let now = capture_time();
         let mut hotkey = test_hotkey(false, now);
         hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
         hotkey.process(InputEvent::Flags(NO_FLAGS), now + Duration::from_millis(80));
