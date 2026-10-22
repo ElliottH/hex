@@ -1,0 +1,541 @@
+//! Hex on Windows with the Rune window (`hex app --ui rune`, built with
+//! `--features rune-ui`): one tray process per login session.
+//!
+//! - The main thread runs Rune's event loop, the window, and the tray
+//!   (`tray-icon` rides winit's Win32 message pump on that thread).
+//! - The runtime thread owns `WindowsDesktopHost` (the listener, OpenCode,
+//!   transformations, updates) and model preparation, and keeps running while
+//!   the window is hidden. The window reaches it through [`RuntimeHandle`].
+//! - The named event from `windows_app` keeps one app per session: a later
+//!   launch signals it and the running app shows its window.
+//!
+//! Rune's window closes the event loop when it closes, and has no hidden
+//! start. Until Rune has an app lifetime separate from windows
+//! (`docs/plans/single-process.md`), this module hides the window itself:
+//! it replaces the window procedure to turn WM_CLOSE into hiding, and hides
+//! the window right after creation for login launches.
+
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use color_eyre::Result;
+use color_eyre::eyre::eyre;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    CallWindowProcW, EnumThreadWindows, GWLP_WNDPROC, GetWindowTextW, IsIconic, IsWindowVisible,
+    PostMessageW, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
+    WM_CLOSE, WNDPROC,
+};
+
+use crate::app_settings::AppSettings;
+use crate::desktop_host::{
+    DesktopAction, DesktopListenerSnapshot, DesktopShortcut, DesktopShortcuts,
+    DesktopTranscriptionSnapshot, DesktopUpdateStatus,
+};
+use crate::desktop_i18n::{tr, tr_fill};
+use crate::transcription_models::{ModelPreparationStage, TranscriptionModelId};
+use crate::transcription_preparation::TranscriptionPreparation;
+use crate::windows_app::WindowsDesktopHost;
+use crate::windows_updater::UpdateCheck;
+
+/// How often the runtime refreshes the listener while nothing is asked.
+const RUNTIME_TICK: Duration = Duration::from_millis(250);
+
+/// What the window asks the runtime, in the Linux service's vocabulary so
+/// the shared panes send the same requests on both platforms.
+#[derive(Clone, Debug)]
+pub(crate) enum Request {
+    Desktop(DesktopAction),
+    /// Handled in the window (`rune_ui::host`): Windows polls the keyboard.
+    CaptureShortcutFor(#[allow(dead_code)] ShortcutTarget),
+    CancelShortcut,
+    /// Linux's service registers recorded shortcuts; on Windows the window
+    /// saves them, so the runtime ignores this.
+    #[allow(dead_code)]
+    SetShortcut {
+        target: ShortcutTarget,
+        shortcut: DesktopShortcut,
+    },
+    ChooseModel {
+        model: TranscriptionModelId,
+        language: String,
+    },
+    CancelModel,
+    /// The window saved `settings.json`; adopt it.
+    ReloadSettings,
+    /// The tray's Enable / Disable Hex.
+    ToggleListening,
+}
+
+/// A shortcut the listener registers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ShortcutTarget {
+    #[default]
+    Dictation,
+    PasteLast,
+    VoiceAction,
+}
+
+/// What the runtime last published for the window.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Published {
+    pub(crate) listener: DesktopListenerSnapshot,
+    pub(crate) operation_error: Option<String>,
+    pub(crate) transcription: DesktopTranscriptionSnapshot,
+    pub(crate) update_status: DesktopUpdateStatus,
+    pub(crate) settings: AppSettings,
+}
+
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Default)]
+struct Shared {
+    published: Mutex<Option<Arc<Published>>>,
+    wakers: Mutex<Vec<Wake>>,
+}
+
+/// The window's connection to the runtime thread.
+#[derive(Clone)]
+pub(crate) struct RuntimeHandle {
+    requests: Sender<Request>,
+    shared: Arc<Shared>,
+}
+
+impl RuntimeHandle {
+    pub(crate) fn send(&self, request: Request) -> Result<()> {
+        self.requests
+            .send(request)
+            .map_err(|_| eyre!("Hex's runtime stopped"))
+    }
+
+    pub(crate) fn published(&self) -> Option<Arc<Published>> {
+        lock(&self.shared.published).clone()
+    }
+
+    /// Wakes `wake` after every publication.
+    pub(crate) fn subscribe(&self, wake: Wake) {
+        lock(&self.shared.wakers).push(wake);
+    }
+}
+
+static RUNTIME: OnceLock<RuntimeHandle> = OnceLock::new();
+
+/// The running app's runtime; `None` outside `open` (headless snapshots).
+pub(crate) fn runtime() -> Option<RuntimeHandle> {
+    RUNTIME.get().cloned()
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bool) -> Result<()> {
+    let Some(instance) = crate::windows_app::AppInstance::claim(start_hidden)? else {
+        return Ok(());
+    };
+    shutdown.store(false, Ordering::Relaxed);
+    START_HIDDEN.store(start_hidden, Ordering::Relaxed);
+    let (settings, settings_error) = match AppSettings::load() {
+        Ok(settings) => (settings, None),
+        Err(error) => (
+            AppSettings::default(),
+            Some(tr_fill(
+                "Could not load settings: {}",
+                &format!("{error:#}"),
+            )),
+        ),
+    };
+    let (requests, receiver) = mpsc::channel();
+    let shared = Arc::new(Shared::default());
+    let handle = RuntimeHandle {
+        requests: requests.clone(),
+        shared: shared.clone(),
+    };
+    RUNTIME
+        .set(handle)
+        .map_err(|_| eyre!("the Hex runtime already started"))?;
+    let runtime = std::thread::Builder::new()
+        .name("hex-runtime".into())
+        .spawn(move || {
+            run_runtime(
+                event_path,
+                settings,
+                settings_error,
+                receiver,
+                &shared,
+                shutdown,
+            )
+        })?;
+    instance.forward_launches(|| {
+        show_window();
+        true
+    });
+    // Returns when the window closes for real: Quit, or closing it without
+    // a tray.
+    crate::rune_ui::run();
+    QUITTING.store(true, Ordering::Relaxed);
+    shutdown.store(true, Ordering::Relaxed);
+    drop(requests);
+    let _ = runtime.join();
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Runtime thread
+
+fn run_runtime(
+    event_path: PathBuf,
+    settings: AppSettings,
+    settings_error: Option<String>,
+    requests: Receiver<Request>,
+    shared: &Shared,
+    shutdown: &AtomicBool,
+) {
+    // The Rune window has no HUD yet (Rune has no overlay window kind);
+    // the listener's indicator events are drained and dropped.
+    let (indicator, indicator_events) = crate::windows_indicator::channel();
+    let mut runtime = Runtime {
+        host: WindowsDesktopHost::new(event_path, settings.clone(), settings_error, indicator),
+        preparation: TranscriptionPreparation::default(),
+        listen_after_setup: false,
+    };
+    // The microphone stays cold until first-run setup finishes.
+    if settings.enable_on_launch {
+        if crate::onboarding::completion_recorded() {
+            runtime.host.start();
+        } else {
+            runtime.listen_after_setup = true;
+        }
+    }
+    loop {
+        let mut next = match requests.recv_timeout(RUNTIME_TICK) {
+            Ok(request) => Some(request),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        while let Some(request) = next {
+            runtime.handle(request);
+            next = requests.try_recv().ok();
+        }
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        while indicator_events.try_recv().is_ok() {}
+        runtime.tick();
+        let published = Arc::new(runtime.publish());
+        let changed = {
+            let mut current = lock(&shared.published);
+            let changed = current.as_deref() != Some(&published);
+            if changed {
+                *current = Some(published);
+            }
+            changed
+        };
+        if changed {
+            for wake in lock(&shared.wakers).iter() {
+                wake();
+            }
+        }
+    }
+    runtime.host.stop();
+    drop(runtime);
+    quit_window();
+}
+
+struct Runtime {
+    host: WindowsDesktopHost,
+    preparation: TranscriptionPreparation,
+    /// Enable on launch waits for first-run setup.
+    listen_after_setup: bool,
+}
+
+impl Runtime {
+    fn handle(&mut self, request: Request) {
+        match request {
+            Request::Desktop(action) => self.dispatch(action),
+            Request::ToggleListening => {
+                if self.host.is_running() {
+                    self.host.stop();
+                } else {
+                    self.host.start();
+                }
+            }
+            Request::ChooseModel { model, language } => {
+                let definition = crate::transcription_models::definition(model);
+                let selection = crate::transcription_models::TranscriptionSelection {
+                    model,
+                    language,
+                    // Hints persist across models that can use them.
+                    recognition_hints: if definition.supports_recognition_hints {
+                        self.host.settings().transcription.recognition_hints.clone()
+                    } else {
+                        String::new()
+                    },
+                };
+                self.preparation.start(selection, false);
+            }
+            Request::CancelModel => self.preparation.cancel(),
+            Request::ReloadSettings => match AppSettings::load() {
+                Ok(settings) => self.host.apply_settings(&settings),
+                Err(error) => tracing::warn!(%error, "could not reload settings"),
+            },
+            Request::CaptureShortcutFor(_)
+            | Request::CancelShortcut
+            | Request::SetShortcut { .. } => {}
+        }
+    }
+
+    fn dispatch(&mut self, action: DesktopAction) {
+        match action {
+            DesktopAction::StartListening => self.host.start(),
+            DesktopAction::StopListening => self.host.stop(),
+            DesktopAction::ClearError => self.host.clear_error(),
+            DesktopAction::CheckForUpdates => self.host.check_for_updates(),
+            DesktopAction::OpenUpdate => {
+                if let UpdateCheck::Available { url, .. } = self.host.update_state()
+                    && let Err(error) = crate::commands::shell_open(&url)
+                {
+                    tracing::warn!(%error, "could not open the Hex release");
+                }
+            }
+            DesktopAction::RestartIntoUpdate => {
+                if self.host.restart_into_update().is_ok() {
+                    quit_window();
+                }
+            }
+            // Windows saves shortcuts from the window.
+            DesktopAction::SetDictationShortcut(_) => {}
+        }
+    }
+
+    /// Commits a prepared model, starts a listener that waited for setup,
+    /// and follows the listener.
+    fn tick(&mut self) {
+        if let Some(result) = self.preparation.poll() {
+            let result = result.and_then(|selection| {
+                crate::transcription_models::validate(&selection).map_err(|e| e.to_string())?;
+                let mut candidate = self.host.settings().clone();
+                candidate.remember_transcription(selection);
+                candidate.save().map_err(|e| format!("{e:#}"))?;
+                self.host.apply_settings(&candidate);
+                Ok(())
+            });
+            if let Err(error) = result {
+                self.preparation.set_error(Some(error));
+            }
+        }
+        if self.listen_after_setup && crate::onboarding::completion_recorded() {
+            self.listen_after_setup = false;
+            self.host.start();
+        }
+        self.host.refresh();
+    }
+
+    fn publish(&self) -> Published {
+        let listener = self.host.listener_state();
+        let preparation = self.preparation.status();
+        Published {
+            listener: DesktopListenerSnapshot {
+                running: listener.running,
+                status: listener.status,
+                warning: listener.last_failure,
+                shortcuts: DesktopShortcuts::Registered,
+            },
+            operation_error: listener.error,
+            transcription: DesktopTranscriptionSnapshot {
+                downloaded_bytes: preparation.downloaded_bytes,
+                error: preparation.error,
+                preparation_stage: preparation
+                    .model
+                    .map(|_| ModelPreparationStage::Downloading),
+                selection: self.host.settings().transcription.clone(),
+                preparing: preparation.model,
+            },
+            update_status: match self.host.update_state() {
+                UpdateCheck::Checking => DesktopUpdateStatus::Checking,
+                UpdateCheck::Current => DesktopUpdateStatus::Current,
+                UpdateCheck::Failed => DesktopUpdateStatus::Failed,
+                UpdateCheck::Available { .. } => DesktopUpdateStatus::Available,
+                UpdateCheck::ReadyToRestart { .. } => DesktopUpdateStatus::ReadyToRestart,
+            },
+            settings: self.host.settings().clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main thread: the window and the tray
+
+/// The Rune window's HWND once [`attach_window`] found it.
+static WINDOW: AtomicIsize = AtomicIsize::new(0);
+/// The window procedure the hide-on-close procedure forwards to.
+static ORIGINAL_PROC: AtomicIsize = AtomicIsize::new(0);
+/// Set to let WM_CLOSE through, which ends Rune's event loop.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+static START_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static TRAY: RefCell<Option<TrayIcon>> = const { RefCell::new(None) };
+}
+
+/// Called on the main thread once Rune created the window: gives it the
+/// app icon, adds the tray, makes close hide it while the tray exists, and
+/// hides it at once for a login launch. Does nothing without a window
+/// (headless snapshots) or outside [`open`].
+pub(crate) fn attach_window() {
+    if RUNTIME.get().is_none() || WINDOW.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    let Some(hwnd) = find_window() else {
+        tracing::warn!("could not find the Hex window; closing it will quit Hex");
+        return;
+    };
+    WINDOW.store(hwnd as isize, Ordering::Relaxed);
+    crate::windows_ui::apply_window_icon(Some(hwnd));
+    match create_tray() {
+        Ok(tray) => {
+            TRAY.with(|slot| *slot.borrow_mut() = Some(tray));
+            // SAFETY: `hwnd` is this thread's live window; the replacement
+            // forwards every message it does not handle to the original.
+            unsafe {
+                let procedure: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+                    hide_on_close;
+                let previous = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, procedure as usize as isize);
+                ORIGINAL_PROC.store(previous, Ordering::Relaxed);
+            }
+            if START_HIDDEN.load(Ordering::Relaxed) {
+                // SAFETY: see above.
+                unsafe { ShowWindow(hwnd, SW_HIDE) };
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "Windows system tray is unavailable; closing Hex will quit");
+        }
+    }
+    if QUITTING.load(Ordering::Relaxed) {
+        quit_window();
+    }
+}
+
+/// The top-level window titled "Hex" on this thread. Rune creates exactly
+/// one; the tray's message window does not exist yet.
+fn find_window() -> Option<HWND> {
+    unsafe extern "system" fn visit(hwnd: HWND, found: LPARAM) -> i32 {
+        let mut title = [0u16; 8];
+        // SAFETY: `title` is a writable buffer of the length passed.
+        let length = unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) };
+        if String::from_utf16_lossy(&title[..length.max(0) as usize]) == "Hex" {
+            // SAFETY: `found` points at the caller's `HWND` slot.
+            unsafe { *(found as *mut HWND) = hwnd };
+            return 0;
+        }
+        1
+    }
+    let mut found: HWND = std::ptr::null_mut();
+    // SAFETY: `visit` only writes through the pointer to `found`, which
+    // outlives the call.
+    unsafe {
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(visit),
+            (&raw mut found) as LPARAM,
+        );
+    }
+    (!found.is_null()).then_some(found)
+}
+
+unsafe extern "system" fn hide_on_close(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if message == WM_CLOSE && !QUITTING.load(Ordering::Relaxed) {
+        // SAFETY: `hwnd` is the window this procedure belongs to.
+        unsafe { ShowWindow(hwnd, SW_HIDE) };
+        return 0;
+    }
+    // SAFETY: ORIGINAL_PROC holds the procedure this one replaced.
+    unsafe {
+        let original: WNDPROC = std::mem::transmute(ORIGINAL_PROC.load(Ordering::Relaxed));
+        CallWindowProcW(original, hwnd, message, wparam, lparam)
+    }
+}
+
+/// Shows and focuses the window; safe from any thread.
+fn show_window() {
+    let hwnd = WINDOW.load(Ordering::Relaxed) as HWND;
+    if hwnd.is_null() {
+        return;
+    }
+    // SAFETY: these calls only send messages to the window, which lives
+    // until the process quits.
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        } else if IsWindowVisible(hwnd) == 0 {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+        SetForegroundWindow(hwnd);
+    }
+}
+
+/// Closes the window for real, which ends Rune's loop and so the app; safe
+/// from any thread.
+fn quit_window() {
+    QUITTING.store(true, Ordering::Relaxed);
+    let hwnd = WINDOW.load(Ordering::Relaxed) as HWND;
+    if !hwnd.is_null() {
+        // SAFETY: posting to a window handle is thread-safe.
+        unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
+    }
+}
+
+fn create_tray() -> Result<TrayIcon> {
+    let menu = Menu::new();
+    menu.append(&MenuItem::with_id("show", tr("Show Hex"), true, None))?;
+    menu.append(&MenuItem::with_id(
+        "toggle",
+        tr("Enable / Disable Hex"),
+        true,
+        None,
+    ))?;
+    menu.append(&MenuItem::with_id("quit", tr("Quit Hex"), true, None))?;
+    MenuEvent::set_event_handler(Some(|event: MenuEvent| match event.id.as_ref() {
+        "show" => show_window(),
+        "toggle" => {
+            if let Some(runtime) = runtime() {
+                let _ = runtime.send(Request::ToggleListening);
+            }
+        }
+        "quit" => quit_window(),
+        _ => {}
+    }));
+    TrayIconEvent::set_event_handler(Some(|event| {
+        if matches!(
+            event,
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+        ) {
+            show_window();
+        }
+    }));
+    Ok(TrayIconBuilder::new()
+        .with_tooltip(tr("Hex Dictation"))
+        .with_icon(crate::windows_app::tray_icon()?)
+        .with_menu(Box::new(menu))
+        // Left click shows the window (handled above); only right click
+        // opens the menu.
+        .with_menu_on_left_click(false)
+        .build()?)
+}

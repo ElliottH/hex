@@ -95,13 +95,13 @@ const APP_INSTANCE_EVENT: &str = r"Local\com.kitlangton.hex.app";
 /// second app whose listener cannot take `windows-listener.lock`. The first
 /// app process creates a named auto-reset event and keeps it for its
 /// lifetime; a later launch signals it to show the window and exits.
-struct AppInstance(HANDLE);
+pub(crate) struct AppInstance(HANDLE);
 
 impl AppInstance {
     /// Returns `None` when a Hex app already runs in this session, after
     /// asking it to show its window unless this launch is a hidden (login)
     /// launch, which must never pop up an app that is already running.
-    fn claim(start_hidden: bool) -> Result<Option<Self>> {
+    pub(crate) fn claim(start_hidden: bool) -> Result<Option<Self>> {
         let name: Vec<u16> = APP_INSTANCE_EVENT.encode_utf16().chain([0]).collect();
         // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the call.
         let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
@@ -130,17 +130,17 @@ impl AppInstance {
         Ok(None)
     }
 
-    /// Shows the window whenever a later launch signals the event. The
-    /// handle stays open until the process exits, keeping this process the
-    /// session's Hex app.
-    fn forward_launches(self, commands: mpsc::Sender<TrayCommand>) {
+    /// Calls `on_launch` whenever a later launch signals the event, until it
+    /// returns false. The handle stays open until the process exits, keeping
+    /// this process the session's Hex app.
+    pub(crate) fn forward_launches(self, on_launch: impl Fn() -> bool + Send + 'static) {
         let event = self.0 as usize;
         let spawned = std::thread::Builder::new()
             .name("hex-relaunch".into())
             .spawn(move || {
                 // SAFETY: the handle is never closed while the process runs.
                 while unsafe { WaitForSingleObject(event as HANDLE, INFINITE) } == WAIT_OBJECT_0 {
-                    if commands.send(TrayCommand::Show).is_err() {
+                    if !on_launch() {
                         return;
                     }
                 }
@@ -157,7 +157,8 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
     };
     shutdown.store(false, Ordering::Relaxed);
     let (tray_sender, tray_commands) = mpsc::channel();
-    instance.forward_launches(tray_sender.clone());
+    let relaunch = tray_sender.clone();
+    instance.forward_launches(move || relaunch.send(TrayCommand::Show).is_ok());
     let (indicator_sender, indicator_events) = crate::windows_indicator::channel();
     let (settings, settings_error) = match AppSettings::load() {
         Ok(settings) => (settings, None),
@@ -371,7 +372,7 @@ fn create_tray(commands: mpsc::Sender<TrayCommand>) -> Result<TrayIcon> {
         .build()?)
 }
 
-fn tray_icon() -> Result<Icon> {
+pub(crate) fn tray_icon() -> Result<Icon> {
     Ok(Icon::from_rgba(
         crate::windows_ui::tray_icon_rgba(),
         crate::windows_ui::TRAY_ICON_SIZE,
@@ -472,7 +473,7 @@ fn listener_settings_changed(previous: &AppSettings, current: &AppSettings) -> b
 }
 
 impl WindowsDesktopHost {
-    fn new(
+    pub(crate) fn new(
         event_path: PathBuf,
         settings: AppSettings,
         settings_error: Option<String>,
@@ -604,6 +605,16 @@ impl WindowsDesktopHost {
 
     pub(crate) fn history(&self) -> Option<History> {
         self.history.clone()
+    }
+
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub(crate) fn settings(&self) -> &AppSettings {
+        &self.settings
+    }
+
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub(crate) fn clear_error(&mut self) {
+        self.error = None;
     }
 
     pub(crate) fn indicator_position(&self) -> IndicatorPosition {
@@ -779,7 +790,7 @@ impl WindowsDesktopHost {
         }
     }
 
-    fn refresh(&mut self) {
+    pub(crate) fn refresh(&mut self) {
         self.poll_opencode_catalog();
         // Settings may set up the workspace at any time.
         if self.personal_commands_checked_at.elapsed() >= Duration::from_secs(2) {

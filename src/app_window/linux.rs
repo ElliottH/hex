@@ -581,6 +581,7 @@ impl AppWindow {
             DesktopUpdateStatus::Checking => SoftwareUpdate::Checking,
             DesktopUpdateStatus::Current => SoftwareUpdate::Current,
             DesktopUpdateStatus::Failed => SoftwareUpdate::Failed,
+            DesktopUpdateStatus::Available => SoftwareUpdate::Available { version: None },
             DesktopUpdateStatus::ReadyToRestart => SoftwareUpdate::ReadyToRestart { version: None },
         })
     }
