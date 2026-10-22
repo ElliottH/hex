@@ -367,6 +367,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn setup(ui: &mut Ui, waker: Waker) {
+    ui.modes.waker = Some(waker.clone());
     if matches!(ui.service, Service::Pending) {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
         ui.service = Service::Live(Box::new(Client::with_waker(wake)));
@@ -383,6 +384,7 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.models.poll(ui.live());
     changed |= ui.history.poll(ui.pane == Pane::History);
     changed |= ui.modes.poll(ui.live());
+    changed |= modes::poll_chooser(ui);
     if let Service::Live(client) = &mut ui.service {
         client.refresh();
         let error = client.error.clone();

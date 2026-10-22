@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rune::{El, TextEdit, Tx, col, edit_access, el, row, text};
+use rune::{Cursor, Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, text};
 use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
 
 use super::Ui;
@@ -29,16 +29,13 @@ const STATUS_INTERVAL: Duration = Duration::from_secs(1);
 
 static PLUS: &rune::Icon = &rune_theme_opencode::icons::PLUS;
 static CLOSE: &rune::Icon = &rune_theme_opencode::icons::CLOSE;
-static UP: rune::Icon = rune::Icon {
-    name: "hex-up",
+static GRIP: rune::Icon = rune::Icon {
+    name: "hex-grip",
     view: 16.0,
-    body: r#"<path d="M5 9.5L8 6.5L11 9.5" stroke="currentColor"/>"#,
+    body: r#"<path d="M4 5.5H12M4 8H12M4 10.5H12" stroke="currentColor"/>"#,
 };
-static DOWN: rune::Icon = rune::Icon {
-    name: "hex-down",
-    view: 16.0,
-    body: r#"<path d="M5 6.5L8 9.5L11 6.5" stroke="currentColor"/>"#,
-};
+/// A transformation row's height; dragging moves one place per row.
+const TRANSFORMATION_ROW: f32 = 36.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Selection {
@@ -89,6 +86,17 @@ impl Editor {
     }
 }
 
+/// A transformation being dragged: the order it started from, the order
+/// shown while dragging, and where it started.
+struct TransformationDrag {
+    id: String,
+    start: usize,
+    committed: Vec<String>,
+    order: Vec<String>,
+}
+
+pub(super) type ChosenApplication = Result<Option<InstalledApplication>, String>;
+
 enum Applications {
     NotLoaded,
     Loading(Receiver<Vec<InstalledApplication>>),
@@ -104,6 +112,10 @@ pub(super) struct ModesPane {
     application_search: TextEdit,
     application_error: Option<String>,
     applications: Applications,
+    /// The desktop's file chooser, while it is open.
+    chooser: Option<Receiver<ChosenApplication>>,
+    drag: Option<TransformationDrag>,
+    pub(super) waker: Option<Waker>,
     /// Whether the listener can tell which app is frontmost (X11, not Wayland).
     focused_app_known: bool,
     status: StatusSnapshot,
@@ -127,6 +139,9 @@ impl ModesPane {
             application_search: TextEdit::default(),
             application_error: None,
             applications: Applications::NotLoaded,
+            chooser: None,
+            drag: None,
+            waker: None,
             focused_app_known: true,
             status,
             status_read: None,
@@ -210,6 +225,7 @@ impl ModesPane {
         self.transformation_picker_open = false;
         self.application_picker_open = false;
         self.application_error = None;
+        self.drag = None;
     }
 
     pub(super) fn poll(&mut self, live: bool) -> bool {
@@ -375,6 +391,107 @@ fn add_application(ui: &mut Ui, name: String) {
         ui.modes.application_search = TextEdit::default();
         ui.modes.application_search.focused = true;
         ui.modes.application_error = None;
+    }
+}
+
+/// Opens the desktop's file chooser for an application the catalog does
+/// not list: a `.desktop` entry or an executable.
+fn choose_application(ui: &mut Ui) {
+    if !ui.live() || ui.modes.chooser.is_some() {
+        return;
+    }
+    let (sender, receiver) = sync_channel(1);
+    let waker = ui.modes.waker.clone();
+    let (title, accept) = (tr("Add Application").to_string(), tr("Add").to_string());
+    let filters = [
+        crate::linux_file_chooser::Filter {
+            label: tr("Applications").into(),
+            patterns: vec!["*.desktop"],
+        },
+        crate::linux_file_chooser::Filter {
+            label: tr("All files").into(),
+            patterns: vec!["*"],
+        },
+    ];
+    thread::spawn(move || {
+        let result = crate::linux_file_chooser::open_file(&title, &accept, &filters)
+            .and_then(|path| {
+                path.map(|path| crate::application_catalog::metadata(&path))
+                    .transpose()
+            })
+            .map_err(|error| format!("{error:#}"));
+        let _ = sender.send(result);
+        if let Some(waker) = waker {
+            waker();
+        }
+    });
+    ui.modes.chooser = Some(receiver);
+}
+
+/// Adds what the file chooser returned, as GPUI does: the application joins
+/// the catalog and the selected mode.
+pub(super) fn poll_chooser(ui: &mut Ui) -> bool {
+    let Some(result) = ui.modes.chooser.as_ref().and_then(|r| r.try_recv().ok()) else {
+        return false;
+    };
+    ui.modes.chooser = None;
+    chosen_application(ui, result);
+    true
+}
+
+pub(super) fn chosen_application(ui: &mut Ui, result: ChosenApplication) {
+    match result {
+        Ok(Some(application)) => {
+            let name = application.name.clone();
+            match &mut ui.modes.applications {
+                Applications::Loaded(applications) => {
+                    crate::application_catalog::insert(applications, application);
+                }
+                applications => *applications = Applications::Loaded(vec![application]),
+            }
+            ui.modes.application_error = None;
+            add_application(ui, name);
+        }
+        Ok(None) => {}
+        Err(error) => ui.modes.application_error = Some(error),
+    }
+}
+
+/// Drags a transformation by its handle. Rows are keyed by position, so the
+/// pressed slot stays put while the rows reorder under it; the new order is
+/// saved once, on release.
+fn drag_transformation(ui: &mut Ui, id: &str, start: usize, pitch: f32, d: &Drag) {
+    match d.phase {
+        Phase::Down => {
+            let committed = mode(&ui.settings, ui.modes.selected)
+                .transformations
+                .clone();
+            ui.modes.drag = Some(TransformationDrag {
+                id: id.to_string(),
+                start,
+                order: committed.clone(),
+                committed,
+            });
+        }
+        Phase::Move => {
+            let Some(drag) = &mut ui.modes.drag else {
+                return;
+            };
+            let moved = ((d.y - d.start_y) / pitch).round() as isize;
+            let last = drag.committed.len().saturating_sub(1) as isize;
+            let target = (drag.start as isize + moved).clamp(0, last) as usize;
+            let mut order = drag.committed.clone();
+            reorder_transformation(&mut order, &drag.id, target);
+            drag.order = order;
+        }
+        Phase::Up => {
+            let Some(drag) = ui.modes.drag.take() else {
+                return;
+            };
+            if drag.order != drag.committed {
+                update_mode(ui, |mode| mode.transformations = drag.order);
+            }
+        }
     }
 }
 
@@ -748,16 +865,28 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
                 .py(6.0)
         }))
         .child(results)
-        .child(row().key("picker-actions").justify_end().child(button(
-            p,
-            "close-application-picker",
-            tr("Done"),
-            ButtonKind::Secondary,
-            |ui: &mut Ui, _| {
-                ui.modes.application_picker_open = false;
-                ui.modes.application_search = TextEdit::default();
-            },
-        )))
+        .child(
+            row()
+                .key("picker-actions")
+                .justify_between()
+                .child(button(
+                    p,
+                    "choose-application-file",
+                    tr("Choose a file…"),
+                    ButtonKind::Secondary,
+                    |ui: &mut Ui, _| choose_application(ui),
+                ))
+                .child(button(
+                    p,
+                    "close-application-picker",
+                    tr("Done"),
+                    ButtonKind::Secondary,
+                    |ui: &mut Ui, _| {
+                        ui.modes.application_picker_open = false;
+                        ui.modes.application_search = TextEdit::default();
+                    },
+                )),
+        )
 }
 
 /// An app's initial on a tinted square: Rune has no raster images yet, so
@@ -967,68 +1096,64 @@ fn transformations(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         tr("Transformations"),
         action,
     )];
-    let count = current.transformations.len();
-    for (index, id) in current.transformations.iter().enumerate() {
+    let dragging = ui.modes.drag.as_ref();
+    let order = dragging.map_or(&current.transformations, |drag| &drag.order);
+    let pitch = TRANSFORMATION_ROW + p.hair;
+    for (index, id) in order.iter().enumerate() {
         let name = catalog
             .iter()
             .find(|transformation| &transformation.id == id)
             .map_or_else(|| id.clone(), |transformation| transformation.name.clone());
-        let (up, down, remove) = (id.clone(), id.clone(), id.clone());
-        rows.push(
-            row()
-                .key(format!("transformation{index}"))
-                .px(12.0)
-                .py(4.0)
-                .gap(4.0)
-                .center_y()
-                .child(
-                    text(name)
-                        .key("name")
-                        .font(p.k.ty.ui)
-                        .color(p.text())
-                        .grow(1.0)
-                        .truncate(),
-                )
-                .child(
-                    icon_button(p, "up", &UP, tr("Move up"))
-                        .disabled(index == 0)
-                        .on_press(move |ui: &mut Ui| {
-                            let id = up.clone();
-                            update_mode(ui, |mode| {
-                                reorder_transformation(
-                                    &mut mode.transformations,
-                                    &id,
-                                    index.saturating_sub(1),
-                                );
-                            });
-                        })
-                        .build(p.k)
-                        .key("up"),
-                )
-                .child(
-                    icon_button(p, "down", &DOWN, tr("Move down"))
-                        .disabled(index + 1 >= count)
-                        .on_press(move |ui: &mut Ui| {
-                            let id = down.clone();
-                            update_mode(ui, |mode| {
-                                reorder_transformation(&mut mode.transformations, &id, index + 1);
-                            });
-                        })
-                        .build(p.k)
-                        .key("down"),
-                )
-                .child(
-                    icon_button(p, "remove", CLOSE, tr("Remove"))
-                        .on_press(move |ui: &mut Ui| {
-                            let id = remove.clone();
-                            update_mode(ui, |mode| {
-                                mode.transformations.retain(|candidate| *candidate != id)
-                            });
-                        })
-                        .build(p.k)
-                        .key("remove"),
-                ),
-        );
+        let held = dragging.is_some_and(|drag| &drag.id == id);
+        let (dragged, remove) = (id.clone(), id.clone());
+        let handle = row()
+            .key("handle")
+            .role("button")
+            .label(tr("Reorder"))
+            .w(20.0)
+            .h_full()
+            .center()
+            .cursor(if dragging.is_some() {
+                Cursor::Grabbing
+            } else {
+                Cursor::Grab
+            })
+            .on_drag(move |ui: &mut Ui, d: &mut Drag, _: &mut Tx| {
+                drag_transformation(ui, &dragged, index, pitch, d)
+            })
+            .child(rune::icon(&GRIP, 16.0).key("grip").color(p.muted()));
+        let mut item = row()
+            .key(format!("transformation{index}"))
+            .h(TRANSFORMATION_ROW)
+            .pl(6.0)
+            .pr(12.0)
+            .gap(6.0)
+            .center_y()
+            .radius(p.k.radius.md)
+            .child(handle)
+            .child(
+                text(name)
+                    .key("name")
+                    .font(p.k.ty.ui)
+                    .color(p.text())
+                    .grow(1.0)
+                    .truncate(),
+            )
+            .child(
+                icon_button(p, "remove", CLOSE, tr("Remove"))
+                    .on_press(move |ui: &mut Ui| {
+                        let id = remove.clone();
+                        update_mode(ui, |mode| {
+                            mode.transformations.retain(|candidate| *candidate != id)
+                        });
+                    })
+                    .build(p.k)
+                    .key("remove"),
+            );
+        if held {
+            item = item.fill(p.k.c.layer_02);
+        }
+        rows.push(item);
     }
     if picker_open && !catalog.is_empty() {
         let available: Vec<&StatusTransformation> = catalog
