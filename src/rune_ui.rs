@@ -178,7 +178,7 @@ pub(crate) enum Destination {
 
 /// Shows `destination` in the window (the caller opens it).
 #[cfg(target_os = "macos")]
-pub(crate) fn show(ui: &mut Ui, destination: Destination) {
+pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
     let pane = match &destination {
         Destination::Settings | Destination::Models => Pane::Settings,
         Destination::Meetings(_) => Pane::Meetings,
@@ -188,7 +188,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination) {
         Destination::History => Pane::History,
     };
     if pane.shown(ui) {
-        ui.select_pane(pane);
+        ui.select_pane(pane, tx);
     }
     match destination {
         Destination::Models => {
@@ -599,10 +599,12 @@ impl Ui {
         }
     }
 
-    fn select_pane(&mut self, pane: Pane) {
+    /// Switches panes at once: the new pane replaces the old without a fade.
+    fn select_pane(&mut self, pane: Pane, tx: &mut Tx) {
         if self.pane == pane {
             return;
         }
+        tx.instant();
         self.flush_drafts();
         settings::cancel_capture(self);
         self.open = None;
@@ -824,7 +826,7 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
         .radius(p.k.radius.md)
         .hover(c.hover)
         .press(c.pressed)
-        .on_press(move |ui: &mut Ui| ui.select_pane(pane))
+        .on_press_tx(move |ui: &mut Ui, tx: &mut Tx| ui.select_pane(pane, tx))
         .child(icon(pane.icon(), 16.0).key("icon").color(if on {
             c.icon_base
         } else {
