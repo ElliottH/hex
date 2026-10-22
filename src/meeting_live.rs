@@ -366,8 +366,11 @@ pub(super) fn transcribe(
     Ok(())
 }
 
+/// Why live transcription stopped, beside the meeting's manifest.
+pub(super) const ERROR_FILE: &str = "transcript.live.error.txt";
+
 pub(super) fn persist_error(directory: &Path, error: &color_eyre::Report) {
-    let path = directory.join("transcript.live.error.txt");
+    let path = directory.join(ERROR_FILE);
     let result = (|| -> Result<()> {
         fs::write(&path, format!("{error}\n"))?;
         set_owner_only(&path, false)?;

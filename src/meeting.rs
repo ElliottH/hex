@@ -929,7 +929,7 @@ pub fn list() -> Result<Vec<MeetingManifest>> {
             && let Ok(mut manifest) = serde_json::from_slice::<MeetingManifest>(&data)
         {
             manifest.live_transcription_error =
-                fs::read_to_string(directory.join("transcript.live.error.txt"))
+                fs::read_to_string(directory.join(live::ERROR_FILE))
                     .ok()
                     .map(|error| error.trim().to_string());
             let process_is_active = meeting_is_active(&directory);

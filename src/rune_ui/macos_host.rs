@@ -20,8 +20,12 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
+use objc2_app_kit::{
+    NSEvent, NSEventMask, NSEventType, NSModalResponse, NSModalResponseOK, NSOpenPanel,
+};
+use objc2_foundation::{MainThreadMarker, NSString};
 
+use super::meetings::{Meeting, Status, Transcript, Turn};
 use super::platform::{
     CatalogCommand, CommandModel, MeetingRequest, NativeHost, NotesAvailability, PlatformRequest,
     PlatformState, Workspace,
@@ -35,7 +39,7 @@ use crate::desktop_i18n::tr;
 use crate::login_item::{LoginItemRequest, LoginItemWorker};
 use crate::macos_rune::RuntimeHandle;
 pub(super) use crate::macos_rune::{Request, ShortcutTarget};
-use crate::onboarding::{PermissionAction, PermissionKind, PermissionState};
+use crate::onboarding::{Input, Observation, PermissionAction, PermissionKind, PermissionState};
 
 /// The window saves a recorded shortcut; the listener follows `settings.json`.
 pub(super) const HOST_SAVES_SHORTCUTS: bool = false;
@@ -400,6 +404,10 @@ struct MacHost {
     folder_error: Option<String>,
     refresh_at: Instant,
     notes: Option<NotesAvailability>,
+    meetings: MeetingFeed,
+    practice: Option<PracticeFeed>,
+    /// The meetings folder the open panel returned.
+    folder_choice: Option<Receiver<PathBuf>>,
 }
 
 impl MacHost {
@@ -431,6 +439,9 @@ impl MacHost {
             folder_error: None,
             refresh_at: Instant::now(),
             notes: None,
+            meetings: MeetingFeed::default(),
+            practice: None,
+            folder_choice: None,
         };
         host.reload_personal_commands();
         host.request_login(LoginItemRequest::Status);
@@ -494,7 +505,8 @@ impl MacHost {
                 Ok(())
             }
             MeetingRequest::ChooseFolder => {
-                Err("Choosing a meetings folder is not available in this window yet".into())
+                self.folder_choice = Some(choose_folder()?);
+                Ok(())
             }
         }
     }
@@ -544,6 +556,10 @@ impl NativeHost for MacHost {
                 .runtime()?
                 .recognition(crate::recognition::RecognitionControl::RetryCommands)?,
             PlatformRequest::Relaunch => {
+                if let Err(error) = crate::onboarding::record_relaunch(crate::onboarding::unix_ms())
+                {
+                    tracing::warn!(%error, "could not record the onboarding relaunch");
+                }
                 if crate::onboarding::spawn_relaunch() {
                     crate::macos_rune::quit();
                 } else {
@@ -599,6 +615,13 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
+        if let Some(receiver) = &self.folder_choice
+            && let Ok(folder) = receiver.try_recv()
+        {
+            self.folder_choice = None;
+            self.folder_error = save_meetings_folder(folder).err();
+            changed = true;
+        }
         if Instant::now() < self.refresh_at {
             return changed;
         }
@@ -646,6 +669,216 @@ impl NativeHost for MacHost {
         state.relaunch_failed = self.relaunch_failed;
         changed || !same_platform_state(&before, state)
     }
+
+    fn meetings(&mut self) -> Option<Result<Vec<Meeting>, String>> {
+        self.meetings.poll()
+    }
+
+    fn tour_inputs(&mut self, practicing: bool) -> Vec<Input> {
+        let mut inputs = Vec::new();
+        if crate::onboarding::take_listener_failure() {
+            inputs.push(Input::ListenerFailed {
+                relaunch_allowed: crate::onboarding::relaunch_allowed(crate::onboarding::unix_ms()),
+            });
+        }
+        if !practicing {
+            self.practice = None;
+            return inputs;
+        }
+        if self.practice.is_none() {
+            self.practice =
+                crate::macos_rune::runtime().map(|runtime| PracticeFeed::new(runtime.event_path()));
+        }
+        if let Some(practice) = &mut self.practice {
+            inputs.extend(practice.observations().into_iter().map(Input::Dictation));
+        }
+        inputs
+    }
+}
+
+/// The Meetings pane's listing from the read-only store query, rescanned at
+/// most once a second; unchanged meeting folders come from its cache.
+#[derive(Default)]
+struct MeetingFeed {
+    library: Option<crate::meeting::query::Library>,
+    scan_at: Option<Instant>,
+    shown: Option<Result<Vec<Meeting>, String>>,
+}
+
+impl MeetingFeed {
+    fn poll(&mut self) -> Option<Result<Vec<Meeting>, String>> {
+        let now = Instant::now();
+        if self.scan_at.is_some_and(|at| now < at) {
+            return None;
+        }
+        self.scan_at = Some(now + PLATFORM_REFRESH);
+        let listed = self.scan();
+        if self.shown.as_ref() == Some(&listed) {
+            return None;
+        }
+        self.shown = Some(listed.clone());
+        Some(listed)
+    }
+
+    fn scan(&mut self) -> Result<Vec<Meeting>, String> {
+        let library = match &self.library {
+            Some(library) => library,
+            None => {
+                let root = crate::meeting::root().map_err(|error| format!("{error:#}"))?;
+                self.library
+                    .insert(crate::meeting::query::Library::new(root))
+            }
+        };
+        let scan = library.scan().map_err(|error| format!("{error:#}"))?;
+        let now_ms = crate::events::now_ms();
+        Ok(scan
+            .meetings
+            .iter()
+            .map(|meeting| pane_meeting(meeting, now_ms))
+            .collect())
+    }
+}
+
+/// A stored meeting as the pane shows it.
+fn pane_meeting(meeting: &crate::meeting::query::Meeting, now_ms: u64) -> Meeting {
+    use crate::meeting::MeetingStatus;
+    let manifest = &meeting.manifest;
+    let transcript = if meeting.entries.is_empty() && !meeting.warnings.is_empty() {
+        Transcript::Unavailable(meeting.warnings.join("\n"))
+    } else {
+        Transcript::Loaded(turns(&meeting.entries))
+    };
+    Meeting {
+        id: meeting.id.clone(),
+        title: meeting.title(),
+        status: match meeting.status {
+            MeetingStatus::Starting => Status::Starting,
+            MeetingStatus::Recording => Status::Recording,
+            MeetingStatus::Transcribing => Status::Transcribing,
+            MeetingStatus::Complete => Status::Complete,
+            MeetingStatus::Interrupted => Status::Interrupted,
+            MeetingStatus::Failed => Status::Failed,
+        },
+        day: crate::meeting::day_label(meeting.start_ms(), now_ms),
+        clock: crate::meeting::clock(meeting.start_ms()),
+        duration_ms: meeting.duration_ms(now_ms),
+        app: manifest.app.clone(),
+        summary: manifest
+            .notes
+            .as_ref()
+            .map(|notes| notes.summary.clone())
+            .filter(|summary| !summary.is_empty()),
+        notes_running: crate::meeting::notes_in_progress(&meeting.id),
+        has_markdown: manifest
+            .export_path
+            .as_ref()
+            .is_some_and(|path| path.exists()),
+        error: manifest.error.clone(),
+        export_error: manifest.export_error.clone(),
+        notes_error: manifest.notes_error.clone(),
+        live_error: manifest.live_transcription_error.clone(),
+        transcript,
+    }
+}
+
+/// Speaker turns, marking silences of 30 s or more, as GPUI's transcript.
+fn turns(entries: &[crate::meeting::TranscriptEntry]) -> Vec<Turn> {
+    let mut previous_end: Option<u64> = None;
+    crate::meeting::coalesce_transcript(entries.iter().cloned())
+        .into_iter()
+        .map(|turn| {
+            let pause_before_ms = previous_end
+                .map(|end| turn.start_ms.saturating_sub(end))
+                .filter(|pause| *pause >= 30_000);
+            previous_end = Some(previous_end.map_or(turn.end_ms, |end| end.max(turn.end_ms)));
+            Turn {
+                mine: turn.source == crate::meeting::MeetingSource::Microphone,
+                start_ms: turn.start_ms,
+                text: turn.text,
+                pause_before_ms,
+            }
+        })
+        .collect()
+}
+
+/// The listener's dictation outcomes logged since the practice step began.
+struct PracticeFeed {
+    reader: crate::events::EventReader,
+    since_ms: u64,
+}
+
+impl PracticeFeed {
+    fn new(event_path: &std::path::Path) -> Self {
+        Self {
+            reader: crate::events::EventReader::open(event_path),
+            since_ms: crate::events::now_ms(),
+        }
+    }
+
+    fn observations(&mut self) -> Vec<Observation> {
+        use crate::events::{DictationPhase, VoiceEvent};
+        if let Err(error) = self.reader.refresh() {
+            tracing::warn!(%error, "could not read dictation events for practice");
+            return Vec::new();
+        }
+        let since_ms = self.since_ms;
+        self.reader
+            .drain()
+            .filter_map(|event| match event {
+                VoiceEvent::Dictation {
+                    timestamp_ms,
+                    phase,
+                    ..
+                } if timestamp_ms >= since_ms => Some(match phase {
+                    DictationPhase::Started => Observation::Started,
+                    DictationPhase::Transcribing => Observation::Transcribing,
+                    DictationPhase::Discarded => Observation::Discarded,
+                    DictationPhase::Cancelled => Observation::Cancelled,
+                    DictationPhase::Pasted | DictationPhase::Edited => Observation::Pasted,
+                    DictationPhase::Failed(_) => Observation::Failed,
+                    _ => return None,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// Opens the folder panel beside the window; the chosen folder arrives on
+/// the returned channel (nothing when the person cancels).
+fn choose_folder() -> Result<Receiver<PathBuf>, String> {
+    let mtm = MainThreadMarker::new().ok_or("the folder panel needs the main thread")?;
+    let panel = NSOpenPanel::openPanel(mtm);
+    panel.setCanChooseFiles(false);
+    panel.setCanChooseDirectories(true);
+    panel.setCanCreateDirectories(true);
+    panel.setAllowsMultipleSelection(false);
+    panel.setPrompt(Some(&NSString::from_str(tr("Use Folder"))));
+    let (sender, receiver) = mpsc::channel();
+    let chosen = panel.clone();
+    let handler = RcBlock::new(move |response: NSModalResponse| {
+        if response == NSModalResponseOK
+            && let Some(path) = chosen.URL().and_then(|url| url.path())
+        {
+            let _ = sender.send(PathBuf::from(path.to_string()));
+        }
+    });
+    panel.beginWithCompletionHandler(&handler);
+    Ok(receiver)
+}
+
+/// Saves the chosen meetings folder; the runtime publishes it to the window.
+fn save_meetings_folder(folder: PathBuf) -> Result<(), String> {
+    let mut settings =
+        crate::app_settings::AppSettings::load().map_err(|error| format!("{error:#}"))?;
+    settings.meetings.output_folder = Some(folder);
+    settings.save().map_err(|error| format!("{error:#}"))?;
+    if let Some(runtime) = crate::macos_rune::runtime() {
+        runtime
+            .send(Request::ReloadSettings)
+            .map_err(|error| format!("{error:#}"))?;
+    }
+    Ok(())
 }
 
 /// `PlatformState` has no `PartialEq` (its driver status doesn't); compare
@@ -744,6 +977,79 @@ mod tests {
             Some(Chord::Cancelled) => panic!("cancelled"),
             None => panic!("nothing recorded"),
         }
+    }
+
+    #[test]
+    fn the_meeting_feed_lists_stored_meetings_once_until_they_change() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings");
+        let mut feed = MeetingFeed {
+            library: Some(crate::meeting::query::Library::new(root)),
+            ..MeetingFeed::default()
+        };
+        let meetings = feed.poll().expect("the first poll lists").unwrap();
+        let ids: Vec<_> = meetings.iter().map(|meeting| meeting.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "1790001000000-1003",
+                "1790000500000-1002",
+                "1790000000000-1001"
+            ],
+            "newest first, without the unreadable folder"
+        );
+        let standup = &meetings[0];
+        assert_eq!(standup.status, Status::Interrupted, "an unlocked recording");
+        let review = &meetings[1];
+        assert_eq!(review.title, "Roadmap review");
+        let Transcript::Loaded(turns) = &review.transcript else {
+            panic!("the roadmap review has a transcript");
+        };
+        assert!(!turns[0].mine && turns[1].mine);
+        assert_eq!(turns.last().unwrap().pause_before_ms, Some(42_000));
+        feed.scan_at = None;
+        assert!(
+            feed.poll().is_none(),
+            "an unchanged listing is not sent again"
+        );
+    }
+
+    #[test]
+    fn practice_hears_dictations_logged_after_it_began() {
+        use crate::events::{DictationPhase, VoiceEvent};
+        let path = std::env::temp_dir().join(format!("hex-practice-{}.ndjson", std::process::id()));
+        let dictation = |timestamp_ms, phase| {
+            serde_json::to_string(&VoiceEvent::Dictation {
+                timestamp_ms,
+                phase,
+                text: String::new(),
+                processing: None,
+            })
+            .unwrap()
+                + "\n"
+        };
+        std::fs::write(&path, dictation(1, DictationPhase::Started)).unwrap();
+        let mut practice = PracticeFeed::new(&path);
+        let now = practice.since_ms;
+        let log = [
+            dictation(now, DictationPhase::Started),
+            dictation(now + 1, DictationPhase::Transcribing),
+            dictation(now + 2, DictationPhase::Logged),
+            dictation(now + 3, DictationPhase::Edited),
+        ];
+        std::fs::write(&path, dictation(1, DictationPhase::Started) + &log.concat()).unwrap();
+        assert_eq!(
+            practice.observations(),
+            [
+                Observation::Started,
+                Observation::Transcribing,
+                Observation::Pasted
+            ]
+        );
+        assert!(
+            practice.observations().is_empty(),
+            "each event is heard once"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

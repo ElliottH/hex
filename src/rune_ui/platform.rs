@@ -9,10 +9,11 @@
 //! surfaces render and are tested on Linux; a native host fills the same
 //! data on its own OS.
 
+use super::meetings::Meeting;
 use crate::commands::CommandScope;
 use crate::hex_microphone::HexMicrophoneStatus;
 use crate::login_item::LoginItemStatus;
-use crate::onboarding::{PermissionAction, PermissionKind, PermissionState, SetupStatus};
+use crate::onboarding::{Input, PermissionAction, PermissionKind, PermissionState, SetupStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Os {
@@ -109,8 +110,8 @@ impl Capabilities {
 }
 
 /// The voice command model's state while commands are on (macOS).
-// The macOS host reports the states fixtures do not show.
-#[allow(dead_code)]
+// Only the macOS host reports the states fixtures do not show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum CommandModel {
     #[default]
@@ -122,8 +123,8 @@ pub(super) enum CommandModel {
 
 /// Whether Apple Intelligence can write meeting notes, as
 /// `apple_intelligence::Availability` reports it.
-// The macOS host reports the states fixtures do not show.
-#[allow(dead_code)]
+// Only the macOS host reports the states fixtures do not show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum NotesAvailability {
     #[default]
@@ -154,8 +155,8 @@ pub(super) struct CatalogCommand {
 }
 
 /// The personal commands workspace behind `hex.config.ts`.
-// The macOS host reports the states fixtures do not show.
-#[allow(dead_code)]
+// Only the macOS host reports the states fixtures do not show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Workspace {
     #[default]
@@ -393,12 +394,18 @@ pub(super) enum PlatformRequest {
 
 /// The host that performs [`PlatformRequest`]s and refreshes
 /// [`PlatformState`] on its own OS.
-// The macOS and Windows hosts implement it; Linux builds have none yet.
-#[allow(dead_code)]
+// Only macOS has a native host.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(super) trait NativeHost {
     fn send(&mut self, request: PlatformRequest) -> Result<(), String>;
     /// Copies fresh state in; true when anything shown changed.
     fn poll(&mut self, state: &mut PlatformState) -> bool;
+    /// The meetings store, newest first, when it changed since the last
+    /// call. Asked only while the Meetings pane shows.
+    fn meetings(&mut self) -> Option<Result<Vec<Meeting>, String>>;
+    /// What the tour hears from the runtime: practice dictation outcomes
+    /// while `practicing`, and a shortcut listener that failed to start.
+    fn tour_inputs(&mut self, practicing: bool) -> Vec<Input>;
 }
 
 pub(super) enum PlatformHost {
@@ -406,7 +413,7 @@ pub(super) enum PlatformHost {
     None,
     /// Scenes and tests: requests are recorded, never performed.
     Fixture(Vec<PlatformRequest>),
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Native(Box<dyn NativeHost>),
 }
 
@@ -426,6 +433,20 @@ impl PlatformHost {
         match self {
             Self::Native(host) => host.poll(state),
             _ => false,
+        }
+    }
+
+    pub(super) fn meetings(&mut self) -> Option<Result<Vec<Meeting>, String>> {
+        match self {
+            Self::Native(host) => host.meetings(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn tour_inputs(&mut self, practicing: bool) -> Vec<Input> {
+        match self {
+            Self::Native(host) => host.tour_inputs(practicing),
+            _ => Vec::new(),
         }
     }
 

@@ -27,8 +27,8 @@ static MORE_ICON: rune::Icon = rune::Icon {
     body: r#"<circle cx="3.5" cy="8" r="1.25" fill="currentColor"/><circle cx="8" cy="8" r="1.25" fill="currentColor"/><circle cx="12.5" cy="8" r="1.25" fill="currentColor"/>"#,
 };
 
-// The macOS host reports the states fixtures do not show.
-#[allow(dead_code)]
+// Only the macOS host reports the states fixtures do not show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Status {
     Starting,
@@ -55,8 +55,8 @@ pub(super) struct Turn {
     pub(super) pause_before_ms: Option<u64>,
 }
 
-// The macOS host reports the states fixtures do not show.
-#[allow(dead_code)]
+// Only the macOS host reports the states fixtures do not show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Transcript {
     Loaded(Vec<Turn>),
@@ -182,6 +182,43 @@ impl MeetingsPane {
             .iter()
             .filter(|meeting| query.is_empty() || meeting.searchable().contains(&query))
             .collect()
+    }
+
+    /// Adopts a fresh listing: follows a recording that just started,
+    /// settles the Start/Stop buttons, and drops a selection that is gone.
+    pub(super) fn adopt(&mut self, listed: Result<Vec<Meeting>, String>) {
+        let meetings = match listed {
+            Ok(meetings) => meetings,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let active = meetings.iter().find(|meeting| meeting.status.is_active());
+        let previous = self.active().map(|meeting| meeting.id.clone());
+        if let Some(active) = active {
+            self.start_pending = false;
+            if previous.as_deref() != Some(active.id.as_str()) {
+                self.select(active.id.clone());
+            }
+        }
+        if active.is_none_or(|meeting| meeting.status == Status::Transcribing) {
+            self.stop_pending = false;
+        }
+        if let Some(selected) = &self.selected
+            && !meetings.iter().any(|meeting| &meeting.id == selected)
+        {
+            self.selected = None;
+        }
+        self.meetings = meetings;
+        self.error = None;
+    }
+
+    /// A recording that could not start or finish.
+    pub(super) fn failed(&mut self, error: String) {
+        self.start_pending = false;
+        self.stop_pending = false;
+        self.runtime_error = Some(error);
     }
 
     pub(super) fn select(&mut self, id: String) {

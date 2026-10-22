@@ -184,6 +184,12 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination) {
     }
 }
 
+/// A meeting recording could not start or finish; the Meetings pane says why.
+#[cfg(target_os = "macos")]
+pub(crate) fn meeting_failed(ui: &mut Ui, error: String) {
+    ui.meetings.failed(error);
+}
+
 /// `hex app -- --snap out.png --scene …`: a headless render of a fixture
 /// scene, or `live` for the running Hex's `hex status`.
 #[cfg(target_os = "linux")]
@@ -195,6 +201,7 @@ fn spec() -> AppSpec<Ui> {
     AppSpec {
         title: "Hex",
         size: (980.0, 760.0),
+        min_size: Some((860.0, 560.0)),
         init: Ui::load,
         view,
         scenes: SCENES,
@@ -599,6 +606,12 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.modes.poll(ui.live());
     changed |= modes::poll_chooser(ui);
     changed |= ui.host.poll(&mut ui.platform);
+    if ui.pane == Pane::Meetings
+        && let Some(listed) = ui.host.meetings()
+    {
+        ui.meetings.adopt(listed);
+        changed = true;
+    }
     if let Service::Live(backend) = &mut ui.service {
         backend.refresh();
         let error = backend.error();
@@ -683,6 +696,16 @@ const SIDEBAR_TOP: f32 = if cfg!(target_os = "macos") {
     12.0
 };
 
+/// On macOS the sidebar and the pane header stand in for the title bar the
+/// window draws none of: pressing their background moves the window.
+fn title_bar(element: El) -> El {
+    if cfg!(target_os = "macos") {
+        element.window_drag()
+    } else {
+        element
+    }
+}
+
 fn sidebar(ui: &Ui, p: Paint) -> El {
     let mut nav = col().key("nav").gap(1.0);
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
@@ -702,7 +725,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
             move |ui: &mut Ui, _| ui.send(Request::Desktop(action.clone())),
         )
     });
-    col()
+    title_bar(col())
         .key("sidebar")
         .role("navigation")
         .w(220.0)
@@ -784,7 +807,7 @@ fn quit_item(p: Paint) -> El {
 
 /// The title bar of the content panel, with the pane's actions on the right.
 fn pane_header(p: Paint, title: &str, actions: Vec<El>) -> El {
-    row()
+    title_bar(row())
         .key("pane-header")
         .h(52.0)
         .px(24.0)

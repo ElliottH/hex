@@ -135,9 +135,15 @@ pub(super) fn poll(ui: &mut Ui) -> bool {
             tracing::warn!(%error, "could not record onboarding completion");
         }
     }
-    let changed = before != tour.flow.view();
+    let practicing = tour.flow.step() == Step::TryIt;
     apply(ui, effect);
-    changed || ui.tour.is_none()
+    let heard = ui.host.tour_inputs(practicing);
+    let changed = !heard.is_empty();
+    for heard in heard {
+        input(ui, heard);
+    }
+    let after = ui.tour.as_ref().map(|tour| tour.flow.view());
+    changed || after.as_ref() != Some(&before)
 }
 
 /// A practice dictation's progress, from the dictation events the host

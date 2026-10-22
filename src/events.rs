@@ -420,6 +420,12 @@ impl EventReader {
         &self.events
     }
 
+    /// Takes the events read so far, so the next `refresh` yields only newer ones.
+    #[cfg(all(target_os = "macos", feature = "rune-ui"))]
+    pub fn drain(&mut self) -> impl Iterator<Item = VoiceEvent> + '_ {
+        self.events.drain(..)
+    }
+
     pub fn recent(&self, limit: usize) -> Vec<VoiceEvent> {
         self.events.iter().rev().take(limit).cloned().collect()
     }
