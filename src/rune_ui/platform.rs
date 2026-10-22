@@ -88,16 +88,22 @@ impl Capabilities {
         terminal_paste: false,
         hex_microphone: false,
         practice_dictation: false,
-        manual_update_check: false,
+        manual_update_check: true,
     };
 
-    pub(super) const fn current() -> Self {
-        if cfg!(target_os = "macos") {
+    /// This OS's capabilities, with the rows its window host decides.
+    pub(super) fn current() -> Self {
+        let os = if cfg!(target_os = "macos") {
             Self::MACOS
         } else if cfg!(target_os = "windows") {
             Self::WINDOWS
         } else {
             Self::LINUX
+        };
+        Self {
+            terminal_paste: super::host::TERMINAL_PASTE,
+            manual_update_check: super::host::MANUAL_UPDATE_CHECK,
+            ..os
         }
     }
 }
@@ -222,6 +228,27 @@ impl PlatformState {
         SetupStatus {
             transcription_model,
             ..self.permissions
+        }
+    }
+
+    /// Adopts what the window host's login item reported: `None` where the
+    /// host has no such row (it stays unavailable), an error beside the last
+    /// known state.
+    pub(super) fn set_login_item(&mut self, result: Option<Result<bool, String>>) {
+        match result {
+            None => {}
+            Some(Ok(enabled)) => {
+                self.login_item = Some(if enabled {
+                    LoginItemStatus::Enabled
+                } else {
+                    LoginItemStatus::Disabled
+                });
+                self.login_item_error = None;
+            }
+            Some(Err(error)) => {
+                self.login_item.get_or_insert(LoginItemStatus::Disabled);
+                self.login_item_error = Some(error);
+            }
         }
     }
 
@@ -360,7 +387,6 @@ pub(super) enum PlatformRequest {
     CreateCommandsConfig,
     OpenCommandsConfig,
     RetryCommandModel,
-    CheckForUpdates,
     /// Quit and reopen Hex so macOS applies new permissions.
     Relaunch,
 }

@@ -874,6 +874,24 @@ impl DictationCapture {
         became_intentional
     }
 
+    /// Ends the active recording's environment (mute, paused media, idle-sleep
+    /// prevention) before the capture finishes, and runs `then` once a muted
+    /// output is audible again. A recording that never became intentional
+    /// cannot start the environment afterwards.
+    #[cfg(target_os = "macos")]
+    pub fn end_recording_environment_then(&mut self, then: impl FnOnce() + Send + Sync + 'static) {
+        let environment = self.recording.as_mut().map(|recording| {
+            std::mem::replace(
+                &mut recording.environment,
+                RecordingEnvironmentState::Disabled,
+            )
+        });
+        match environment {
+            Some(RecordingEnvironmentState::Active { _session: session }) => session.end_then(then),
+            _ => then(),
+        }
+    }
+
     /// The start of an active recording that has not yet passed the hold threshold.
     pub fn tentative_start(&self) -> Option<CaptureInstant> {
         self.recording

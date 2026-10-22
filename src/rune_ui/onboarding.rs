@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use rune::{El, TextEdit, col, el, row, text};
 use rune_kit::{Progress, TextInput};
 
+use super::Request;
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, keycaps, setting_row};
 use super::lists::{PermissionControl, allowed, permission_control};
@@ -23,7 +24,6 @@ use super::platform::{Os, PlatformRequest, PlatformState};
 use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
-use crate::linux_service::Request;
 use crate::onboarding::{
     Effect, Flow, Input, ItemStatus, ModelProgress, Observation, PermissionKind, PermissionState,
     Practice, Row, SetupItem, Step, View,

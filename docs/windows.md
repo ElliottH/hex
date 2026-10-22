@@ -170,6 +170,59 @@ preserves the previous pipeline output. Use **Retry** in the card after fixing a
 Bun, dependency, or config error. Literal voice commands in the same config
 remain unavailable on Windows until a real streaming command recognizer lands.
 
+## Rune Front End (Experimental)
+
+Branch `rune-ui` only; GPUI stays the default. Build with
+`--features rune-ui` and run `hex app --ui rune` (`--hidden` for a login
+launch). Snapshot fixtures without starting anything:
+`hex app --ui rune -- --snap out.png --scene modes`.
+
+```ts
+hex app --ui rune
+├── named event already held -> signal it (the running app shows its window) -> exit
+└── becomes the app                                   // windows_rune::open
+    ├── runtime thread: WindowsDesktopHost + TranscriptionPreparation, publishes every 250 ms
+    ├── main thread: Rune's winit loop, the window, the tray (rides winit's message pump)
+    ├── close -> hide (WM_CLOSE intercepted); tray Show or a relaunch -> show and focus
+    └── tray Quit / Ctrl-C / restart into an update -> real close -> runtime stops the listener
+```
+
+- The window uses the shared Rune panes (Settings, Modes, Voice Action,
+  History, the transcription picker, first-run setup) with Windows rows:
+  Launch at login (the current-user Run key), Check now and Update for
+  unmanaged installs, no terminal-paste row. Shortcuts are recorded by
+  polling the keyboard with the listener's hook suspended, as GPUI does,
+  because modifier-only chords never reach the window as key events.
+- Models are prepared in-process through `transcription_preparation`; the
+  runtime saves the selection when it is ready and restarts the listener.
+- Enable on launch waits until first-run setup has recorded completion.
+- Not yet: the HUD (Rune has no topmost, no-activate, click-through window
+  kind, and GPUI's HUD cannot share the process with Rune's event loop, so
+  dictation shows no pill), the custom caption (native title bar for now),
+  website rules in Modes, and app icons. A hidden start briefly shows the
+  window before hiding it, because Rune always creates it visible.
+- The hide-on-close bridge replaces the window procedure; it goes away once
+  Rune has an app lifetime separate from windows
+  ([single-process plan](plans/single-process.md#windows-under-rune)).
+
+None of this has run on Windows. It is type-checked by cross-compiling on
+Linux with [cargo-xwin](https://github.com/rust-cross/cargo-xwin):
+
+```sh
+rustup target add x86_64-pc-windows-msvc && cargo install cargo-xwin
+# clang-cl, lld-link, and llvm-lib must be on PATH (llvm-lib can be a
+# symlink to rustup's llvm-tools llvm-ar).
+mkdir -p /tmp/no-transcribe/lib
+echo '{"libraries":[],"shared":false}' > /tmp/no-transcribe/lib/transcribe-link.json
+# TRANSCRIBE_DIR skips the transcribe.cpp/Vulkan CMake build; nothing links in check.
+TRANSCRIBE_DIR=/tmp/no-transcribe cargo xwin clippy --target x86_64-pc-windows-msvc \
+  --features rune-ui --all-targets -- -D warnings
+```
+
+That checks every Rust path, including GPUI, wgpu's DX12 and Vulkan
+backends, and the Windows modules; it compiles C build scripts (ring) for
+the target but never links, builds transcribe.cpp, or runs anything.
+
 ## Local Transcription Service
 
 Not available on Windows in this build. The `windows-shell` branch generalized

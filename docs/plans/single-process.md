@@ -441,6 +441,39 @@ Keep the named event. It already gives single instance, the
   (`\\.\pipe\com.kitlangton.hex.<SID>`, owner-only DACL) with the same
   four-request protocol.
 
+### Written on current Rune (branch `rune-ui-windows`, cross-compiled only)
+
+`hex app --ui rune` already has this shape without `run_app`, in
+[`windows_rune.rs`](../../src/windows_rune.rs) and
+[`rune_ui/windows_host.rs`](../../src/rune_ui/windows_host.rs):
+
+- The runtime thread owns `WindowsDesktopHost` and
+  `TranscriptionPreparation`, takes the shared panes' requests over a
+  channel, and publishes an `Arc<Published>` (listener, preparation,
+  updates, settings), waking the window. `rune_ui` reaches it through the
+  per-OS `host` module (`Backend::{connect, send, state, error}`), the
+  same seam the Linux client sits behind. When Linux's `HostHandle` lands,
+  both should share it.
+- `rune::run(spec)` still owns the loop and creates one visible window.
+  In `setup` (main thread, window just created) Hex finds the HWND, sets
+  the icon, creates the tray, and replaces the window procedure so WM_CLOSE
+  hides instead of ending the loop; a hidden launch hides it at once (it
+  flashes first). Quit, Ctrl-C, or a restart into an update set a flag and
+  post WM_CLOSE, which Rune turns into `exit()`; `open` then joins the
+  runtime, which stops the listener. Without a tray, close quits.
+- The relaunch thread shows and focuses the HWND directly (`ShowWindow`,
+  `SetForegroundWindow`), relying on the relauncher's
+  `AllowSetForegroundWindow`.
+- Shortcut capture stays in the window (keyboard polling with the hook
+  suppressed), not on the runtime.
+- No HUD: GPUI's HUD window needs GPUI's own event loop on the main thread.
+
+Moving onto `run_app`: `start` takes over the tray and `attach_window`,
+`CloseBehavior::Hide` and `AppProxy` replace the window-procedure bridge
+and the direct `ShowWindow` calls, `visible: false` replaces the flashing
+hidden start, and `init` captures the `RuntimeHandle` instead of the
+`OnceLock`.
+
 ## macOS under Rune
 
 LaunchServices keeps single instance, and the status item stays native.

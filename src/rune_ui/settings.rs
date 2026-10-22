@@ -1,5 +1,5 @@
 //! The Settings pane: listener status, the desktop's shortcuts, dictation,
-//! behavior, and application rows, and recording shortcuts through the service.
+//! behavior, and application rows, and recording shortcuts through the host.
 
 use std::time::{Duration, Instant};
 
@@ -9,7 +9,8 @@ use super::controls::{
     ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section,
     segmented, select, setting_row, status_dot, tag, text_field, toggle_row,
 };
-use super::{Menu, Service, Ui};
+use super::host;
+use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
     RecordingAudioBehavior,
@@ -19,8 +20,6 @@ use crate::desktop_host::{
 };
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
-use crate::linux_input::LinuxHotkey;
-use crate::linux_service::{Request, ShortcutTarget};
 use crate::transcription_models::{self, ModelPreparationStage};
 
 pub(super) const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
@@ -55,8 +54,27 @@ pub(super) enum Capture {
     },
 }
 
-/// Follows the service's side of a shortcut edit.
+/// A chord the host recorded outside the window's key events (Windows
+/// polls the keyboard, since modifier-only chords never reach the window).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub(super) enum Chord {
+    Captured(Result<HotkeyBinding, &'static str>),
+    Cancelled,
+}
+
+/// Follows the host's side of a shortcut edit.
 pub(super) fn advance_capture(ui: &mut Ui) -> bool {
+    let chord = match &mut ui.service {
+        Service::Live(backend) => backend.take_chord(),
+        _ => None,
+    };
+    if let (Some(chord), Capture::Listening { target, .. }) = (chord, ui.capture.clone()) {
+        match chord {
+            Chord::Captured(binding) => record(ui, target, binding),
+            Chord::Cancelled => cancel_capture(ui),
+        }
+        return true;
+    }
     let editing = ui.view.as_ref().is_some_and(|view| view.editing);
     match ui.capture.clone() {
         Capture::Saving {
@@ -93,6 +111,8 @@ pub(super) fn advance_capture(ui: &mut Ui) -> bool {
 }
 
 /// Records a shortcut while capture listens; otherwise leaves keys alone.
+/// Where the host records chords itself, the window only takes Escape and
+/// keeps every other key out of the page.
 pub(super) fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
     let Capture::Listening { target, .. } = ui.capture else {
         return false;
@@ -101,32 +121,51 @@ pub(super) fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
         cancel_capture(ui);
         return true;
     }
-    let message = match recorded_binding(event) {
-        Ok(binding) => match validate(&ui.settings, target, &binding) {
-            Ok(()) => {
-                ui.send(Request::SetShortcut {
-                    target,
-                    shortcut: desktop_shortcut(&binding),
-                });
-                if matches!(ui.service, Service::Fixture(_)) {
-                    set_binding(&mut ui.settings, target, binding);
-                }
-                ui.capture = Capture::Saving {
-                    target,
-                    since: Instant::now(),
-                    seen_edit: false,
-                };
-                return true;
+    if host::RECORDS_KEY_EVENTS {
+        record(ui, target, recorded_binding(event));
+    }
+    true
+}
+
+/// Saves a recorded chord, or keeps listening with why it was rejected.
+fn record(ui: &mut Ui, target: ShortcutTarget, binding: Result<HotkeyBinding, &'static str>) {
+    let message = match binding.and_then(|binding| {
+        validate(&ui.settings, target, &binding)?;
+        Ok(binding)
+    }) {
+        Ok(binding) if host::HOST_SAVES_SHORTCUTS => {
+            ui.send(Request::SetShortcut {
+                target,
+                shortcut: desktop_shortcut(&binding),
+            });
+            if matches!(ui.service, Service::Fixture(_)) {
+                set_binding(&mut ui.settings, target, binding);
             }
-            Err(message) => message,
-        },
+            ui.capture = Capture::Saving {
+                target,
+                since: Instant::now(),
+                seen_edit: false,
+            };
+            return;
+        }
+        Ok(binding) => {
+            // The window saves the binding; the host restarts its listener
+            // with it.
+            cancel_capture(ui);
+            if ui.update(|settings| set_binding(settings, target, binding)) {
+                ui.capture = Capture::Saved {
+                    target,
+                    at: Instant::now(),
+                };
+            }
+            return;
+        }
         Err(message) => message,
     };
     ui.capture = Capture::Listening {
         target,
         message: Some(message),
     };
-    true
 }
 
 pub(super) fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
@@ -191,9 +230,7 @@ pub(super) fn validate(
     target: ShortcutTarget,
     binding: &HotkeyBinding,
 ) -> Result<(), &'static str> {
-    LinuxHotkey::from(binding)
-        .validate()
-        .map_err(|_| tr("Add a key Linux can register"))?;
+    host::validate_hotkey(target, binding)?;
     let mut others = Vec::new();
     if target != ShortcutTarget::Dictation {
         others.push(settings.dictation_hotkey.clone());
@@ -393,7 +430,7 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
 /// What the desktop granted (portal) or which commands to bind (none).
 pub(super) fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
     let rows = match ui.shortcuts()? {
-        DesktopShortcuts::Registered => return None,
+        DesktopShortcuts::Unregistered | DesktopShortcuts::Registered => return None,
         DesktopShortcuts::Portal(granted) => {
             let mut rows: Vec<El> = granted
                 .iter()
@@ -1067,26 +1104,30 @@ pub(super) fn software_update(ui: &Ui, p: Paint) -> Option<El> {
             .font(DESCRIPTION)
             .color(p.muted())
     };
-    let status_now = ui.view.as_ref()?.update_status;
-    if ui.platform.caps.manual_update_check
-        && matches!(
-            status_now,
-            DesktopUpdateStatus::Current | DesktopUpdateStatus::Failed
-        )
-    {
-        return Some(button(
+    let manual = ui.platform.caps.manual_update_check;
+    let check_now = |p: Paint| {
+        button(
             p,
             "check-for-updates",
             tr("Check now"),
             ButtonKind::Secondary,
-            |ui: &mut Ui, _| ui.ask(super::platform::PlatformRequest::CheckForUpdates),
-        ));
-    }
-    Some(match status_now {
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::CheckForUpdates)),
+        )
+    };
+    Some(match ui.view.as_ref()?.update_status {
         DesktopUpdateStatus::Unavailable => return None,
         DesktopUpdateStatus::Checking => status(tr("Checking")),
+        DesktopUpdateStatus::Current if manual => check_now(p),
+        DesktopUpdateStatus::Failed if manual => check_now(p),
         DesktopUpdateStatus::Current => status(tr("Up to date")),
         DesktopUpdateStatus::Failed => status(tr("Check failed; retrying later")),
+        DesktopUpdateStatus::Available => button(
+            p,
+            "open-update",
+            tr("Update"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::OpenUpdate)),
+        ),
         DesktopUpdateStatus::ReadyToRestart => button(
             p,
             "restart-update",

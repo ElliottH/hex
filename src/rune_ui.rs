@@ -1,18 +1,22 @@
-//! The experimental Rune front end for Linux (`hex app --ui rune`).
+//! The experimental Rune front end for Linux and Windows (`hex app --ui rune`).
 //!
-//! It is a client of the per-user `hex.service`, exactly like the GPUI
-//! Settings process: it saves `settings.json`, asks the service to reload it,
-//! and sends the same `linux_service::Request`s for listening, shortcuts,
-//! models, and updates. It has the same panes Linux shows in GPUI (Settings,
-//! Modes, Voice Action, History), the transcription picker, and first-run
-//! setup, drawn with `rune-kit`'s components in OpenCode's design language
-//! (`rune-theme-opencode`), not Hex's GPUI design tokens.
+//! The window talks to a host: on Linux the per-user `hex.service`, exactly
+//! like the GPUI Settings process (`linux_host`); on Windows the in-process
+//! runtime thread `windows_rune` starts (`windows_host`). Either way it saves
+//! `settings.json`, asks the host to reload it, and sends the same requests
+//! for listening, shortcuts, models, and updates. It has the panes GPUI shows
+//! there (Settings, Modes, Voice Action, History), the transcription picker,
+//! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
+//! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
 
 mod commands;
 mod controls;
 mod history;
 mod lists;
 mod meetings;
+#[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
+#[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
+mod host;
 mod models;
 mod modes;
 mod onboarding;
@@ -33,9 +37,9 @@ use crate::desktop_host::{
     DesktopTranscriptionSnapshot, DesktopUpdateStatus,
 };
 use crate::desktop_i18n::{tr, tr_fill};
-use crate::linux_service::{Client, Request, ShortcutTarget};
 use crate::transcription_models::TranscriptionModelId;
 use controls::Paint;
+use host::{Backend, Request, ShortcutTarget};
 use settings::Capture;
 
 /// How long typing pauses before a text field's edit is saved, as in GPUI.
@@ -96,9 +100,15 @@ fn spec() -> AppSpec<Ui> {
 enum Service {
     /// Not connected yet: `setup` connects unless a scene chose a fixture.
     Pending,
-    Live(Box<Client>),
+    Live(Box<Backend>),
     /// Snapshots and tests: requests are recorded, never sent.
     Fixture(Vec<Request>),
+}
+
+/// The host's latest state.
+struct HostState {
+    view: ServiceView,
+    settings: AppSettings,
 }
 
 /// What the window shows of the service, from its latest snapshot.
@@ -240,6 +250,7 @@ impl Ui {
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
         ui.tour = onboarding::Tour::start(&ui.settings, &ui.platform);
+        ui.platform.set_login_item(host::launch_at_login());
         ui
     }
 
@@ -348,6 +359,14 @@ impl Ui {
 
     /// Asks the OS host for something only it can do.
     fn ask(&mut self, request: platform::PlatformRequest) {
+        // Windows writes its Run key from the window's own process.
+        if let (platform::PlatformHost::None, platform::PlatformRequest::SetLaunchAtLogin(enabled)) =
+            (&self.host, &request)
+        {
+            let result = host::set_launch_at_login(*enabled);
+            self.platform.set_login_item(Some(result));
+            return;
+        }
         if let Err(error) = self.host.send(request) {
             self.error = Some(error);
         }
@@ -428,7 +447,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 fn setup(ui: &mut Ui, waker: Waker) {
     if matches!(ui.service, Service::Pending) {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
-        ui.service = Service::Live(Box::new(Client::with_waker(wake)));
+        ui.service = Service::Live(Box::new(Backend::connect(wake)));
     }
 }
 
@@ -443,17 +462,13 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.history.poll(ui.pane == Pane::History);
     changed |= ui.modes.poll(ui.live());
     changed |= ui.host.poll(&mut ui.platform);
-    if let Service::Live(client) = &mut ui.service {
-        client.refresh();
-        let error = client.error.clone();
-        let snapshot = client.state.clone();
-        let view = snapshot.as_ref().map(|state| ServiceView {
-            listener: state.desktop.listener.clone(),
-            operation_error: state.desktop.operation_error.clone(),
-            transcription: state.desktop.transcription.clone(),
-            update_status: state.desktop.update_status,
-            editing: state.capturing || state.editing,
-        });
+    if let Service::Live(backend) = &mut ui.service {
+        backend.refresh();
+        let error = backend.error();
+        let (view, settings) = match backend.state() {
+            Some(state) => (Some(state.view), Some(state.settings)),
+            None => (None, None),
+        };
         if error != ui.connection_error {
             ui.connection_error = error;
             changed = true;
@@ -462,9 +477,9 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
             ui.view = view;
             changed = true;
         }
-        if let Some(state) = snapshot {
+        if let Some(settings) = settings {
             let before = ui.settings.clone();
-            ui.adopt(state.settings);
+            ui.adopt(settings);
             changed |= before != ui.settings;
         }
     }
@@ -528,17 +543,18 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
-    let update = matches!(
-        ui.view.as_ref().map(|view| view.update_status),
-        Some(DesktopUpdateStatus::ReadyToRestart)
-    )
-    .then(|| {
+    let action = match ui.view.as_ref().map(|view| view.update_status) {
+        Some(DesktopUpdateStatus::ReadyToRestart) => Some(DesktopAction::RestartIntoUpdate),
+        Some(DesktopUpdateStatus::Available) => Some(DesktopAction::OpenUpdate),
+        _ => None,
+    };
+    let update = action.map(|action| {
         controls::button(
             p,
             "sidebar-update",
             tr("Update"),
             controls::ButtonKind::Secondary,
-            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::RestartIntoUpdate)),
+            move |ui: &mut Ui, _| ui.send(Request::Desktop(action.clone())),
         )
     });
     col()
@@ -639,13 +655,13 @@ const SCENES: &[Scene] = &[
     // "Connecting…" at virtual time zero.
     ("live", |ui| {
         *ui = Ui::load();
-        let mut client = Client::new();
+        let mut backend = Backend::connect(Arc::new(|| {}));
         let deadline = Instant::now() + Duration::from_secs(5);
-        while client.state.is_none() && client.error.is_none() && Instant::now() < deadline {
+        while backend.state().is_none() && backend.error().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(25));
-            client.refresh();
+            backend.refresh();
         }
-        ui.service = Service::Live(Box::new(client));
+        ui.service = Service::Live(Box::new(backend));
         poll(ui, 0.0, &mut Tx::default());
     }),
     ("portal", |ui| *ui = fixture(portal_shortcuts())),
@@ -920,5 +936,5 @@ fn fixture(shortcuts: DesktopShortcuts) -> Ui {
     ui
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
