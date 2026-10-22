@@ -1,5 +1,5 @@
 //! The Settings pane: listener status, the desktop's shortcuts, dictation,
-//! behavior, and application rows, and recording shortcuts through the service.
+//! behavior, and application rows, and recording shortcuts through the host.
 
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,8 @@ use crate::desktop_host::{
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
 use crate::linux_input::LinuxHotkey;
-use crate::linux_service::{Request, ShortcutTarget};
+use crate::linux_app::HostRequest;
+use crate::linux_service::ShortcutTarget;
 use crate::transcription_models::{self, ModelPreparationStage};
 
 pub(super) const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
@@ -32,7 +33,7 @@ pub(super) const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
 ];
 /// How long a newly saved shortcut shows "Saved".
 pub(super) const SAVED_FOR: Duration = Duration::from_millis(700);
-/// How long to wait for the service to start a requested shortcut edit.
+/// How long to wait for the host to start a requested shortcut edit.
 pub(super) const EDIT_START_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, PartialEq, Debug)]
@@ -43,7 +44,7 @@ pub(super) enum Capture {
         target: ShortcutTarget,
         message: Option<&'static str>,
     },
-    /// Sent to the service, which validates, registers, and saves it.
+    /// Sent to the host, which validates, registers, and saves it.
     Saving {
         target: ShortcutTarget,
         since: Instant,
@@ -55,7 +56,7 @@ pub(super) enum Capture {
     },
 }
 
-/// Follows the service's side of a shortcut edit.
+/// Follows the host's side of a shortcut edit.
 pub(super) fn advance_capture(ui: &mut Ui) -> bool {
     let editing = ui.view.as_ref().is_some_and(|view| view.editing);
     match ui.capture.clone() {
@@ -104,11 +105,11 @@ pub(super) fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
     let message = match recorded_binding(event) {
         Ok(binding) => match validate(&ui.settings, target, &binding) {
             Ok(()) => {
-                ui.send(Request::SetShortcut {
+                ui.send(HostRequest::SetShortcut {
                     target,
                     shortcut: desktop_shortcut(&binding),
                 });
-                if matches!(ui.service, Service::Fixture(_)) {
+                if matches!(ui.service, Service::Fixture { .. }) {
                     set_binding(&mut ui.settings, target, binding);
                 }
                 ui.capture = Capture::Saving {
@@ -136,7 +137,7 @@ pub(super) fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
             return;
         }
     }
-    ui.send(Request::CaptureShortcutFor(target));
+    ui.send(HostRequest::CaptureShortcut(target));
     ui.capture = Capture::Listening {
         target,
         message: None,
@@ -145,7 +146,7 @@ pub(super) fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
 
 pub(super) fn cancel_capture(ui: &mut Ui) {
     if matches!(ui.capture, Capture::Listening { .. }) {
-        ui.send(Request::CancelShortcut);
+        ui.send(HostRequest::CancelShortcut);
     }
     ui.capture = Capture::Idle;
 }
@@ -257,7 +258,7 @@ pub(super) fn sound_volume_index(settings: &AppSettings) -> usize {
 
 pub(super) fn toggle_menu(ui: &mut Ui, menu: Menu) {
     ui.open = (ui.open != Some(menu)).then_some(menu);
-    if ui.open == Some(Menu::Microphone) && !matches!(ui.service, Service::Fixture(_)) {
+    if ui.open == Some(Menu::Microphone) && !matches!(ui.service, Service::Fixture { .. }) {
         ui.microphones = crate::audio::input_device_names().map_err(|error| error.to_string());
     }
 }
@@ -285,8 +286,7 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
     let running = ui.running();
     let status = match &ui.view {
         Some(view) => tr(&view.listener.status).to_string(),
-        None if matches!(ui.service, Service::Fixture(_)) => tr("Service disconnected").to_string(),
-        None if ui.connection_error.is_some() => tr("Service disconnected").to_string(),
+        None if matches!(ui.service, Service::Fixture { .. }) => tr("Service disconnected").to_string(),
         None => tr("Connecting…").to_string(),
     };
     let shortcut = ui.settings.dictation_hotkey.keycaps().join("+");
@@ -309,7 +309,6 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
     let error = ui
         .error
         .clone()
-        .or_else(|| ui.connection_error.clone())
         .or_else(|| {
             ui.view
                 .as_ref()
@@ -321,7 +320,7 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
             "toggle-listening",
             tr("Disable"),
             ButtonKind::Secondary,
-            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::StopListening)),
+            |ui: &mut Ui, _| ui.send(HostRequest::Desktop(DesktopAction::StopListening)),
         )
     } else {
         button(
@@ -329,7 +328,7 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
             "toggle-listening",
             tr("Enable"),
             ButtonKind::Primary,
-            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::StartListening)),
+            |ui: &mut Ui, _| ui.send(HostRequest::Desktop(DesktopAction::StartListening)),
         )
     };
     let summary = row()
@@ -1061,7 +1060,7 @@ pub(super) fn software_update(ui: &Ui, p: Paint) -> Option<El> {
             "restart-update",
             tr("Restart to update"),
             ButtonKind::Secondary,
-            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::RestartIntoUpdate)),
+            |ui: &mut Ui, _| ui.send(HostRequest::Desktop(DesktopAction::RestartIntoUpdate)),
         ),
     })
 }

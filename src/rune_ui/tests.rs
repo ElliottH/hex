@@ -11,7 +11,7 @@ const PANE_SIZE: (f32, f32) = (980.0, 760.0);
 const GOLDEN_SCALE: f32 = 2.0;
 
 fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
-    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()), None);
+    let mut state = Ui::with(AppSettings::default(), Service::fixture(), None);
     let (_, apply) = SCENES
         .iter()
         .find(|(name, _)| *name == scene)
@@ -29,10 +29,17 @@ fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
     rt
 }
 
-fn sent(rt: &Runtime<Ui>) -> &[Request] {
+fn sent(rt: &Runtime<Ui>) -> &[HostRequest] {
     match &rt.state.service {
-        Service::Fixture(sent) => sent,
-        _ => panic!("fixtures never connect"),
+        Service::Fixture { sent, .. } => sent,
+        _ => panic!("fixtures never reach a host"),
+    }
+}
+
+fn saved(rt: &Runtime<Ui>) -> usize {
+    match &rt.state.service {
+        Service::Fixture { saved, .. } => *saved,
+        _ => panic!("fixtures never reach a host"),
     }
 }
 
@@ -79,12 +86,23 @@ fn desktops_without_a_portal_list_commands_instead_of_recording_rows() {
 }
 
 #[test]
-fn toggles_save_and_ask_the_service_to_reload() {
+fn toggles_save_through_the_host() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     assert!(rt.state.settings.paste_with_shift);
     tap(&mut rt, "terminal-paste");
     assert!(!rt.state.settings.paste_with_shift);
-    assert!(matches!(sent(&rt), [Request::ReloadSettings]));
+    assert_eq!(saved(&rt), 1);
+    assert!(sent(&rt).is_empty());
+}
+
+#[test]
+fn quit_hex_in_the_sidebar_asks_the_host_to_quit() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    tap(&mut rt, "quit");
+    assert!(matches!(
+        rt.state.service,
+        Service::Fixture { quit: true, .. }
+    ));
 }
 
 #[test]
@@ -93,7 +111,7 @@ fn enabling_sends_the_listener_action() {
     tap(&mut rt, "toggle-listening");
     assert!(matches!(
         sent(&rt),
-        [Request::Desktop(DesktopAction::StartListening)]
+        [HostRequest::Desktop(DesktopAction::StartListening)]
     ));
 }
 
@@ -109,12 +127,12 @@ fn releasing_the_microphone_asks_first() {
 }
 
 #[test]
-fn recording_a_shortcut_sends_the_chord_to_the_service() {
+fn recording_a_shortcut_sends_the_chord_to_the_host() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     tap(&mut rt, "dictation-hotkey");
     assert!(matches!(
         sent(&rt),
-        [Request::CaptureShortcutFor(ShortcutTarget::Dictation)]
+        [HostRequest::CaptureShortcut(ShortcutTarget::Dictation)]
     ));
     key(&mut rt, Key::Text("d".into()), Mods::default());
     assert!(matches!(
@@ -131,7 +149,7 @@ fn recording_a_shortcut_sends_the_chord_to_the_service() {
         ..Mods::default()
     };
     key(&mut rt, Key::Command('d'), mods);
-    let Some(Request::SetShortcut { target, shortcut }) = sent(&rt).last() else {
+    let Some(HostRequest::SetShortcut { target, shortcut }) = sent(&rt).last() else {
         panic!("no shortcut sent: {:?}", sent(&rt));
     };
     assert_eq!(*target, ShortcutTarget::Dictation);
@@ -145,7 +163,7 @@ fn escape_cancels_a_shortcut_recording() {
     let mut rt = runtime("capturing", true, GOLDEN_SIZE);
     key(&mut rt, Key::Escape, Mods::default());
     assert_eq!(rt.state.capture, Capture::Idle);
-    assert!(matches!(sent(&rt), [Request::CancelShortcut]));
+    assert!(matches!(sent(&rt), [HostRequest::CancelShortcut]));
 }
 
 #[test]
@@ -218,7 +236,8 @@ fn the_sidebar_switches_panes_and_keeps_settings() {
         tap(&mut rt, key);
         assert_eq!(rt.state.pane, pane);
     }
-    assert!(sent(&rt).is_empty(), "switching panes saves nothing");
+    assert!(sent(&rt).is_empty());
+    assert_eq!(saved(&rt), 0, "switching panes saves nothing");
 }
 
 #[test]
@@ -226,7 +245,7 @@ fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
     let mut rt = runtime("voice-action-off", true, PANE_SIZE);
     tap(&mut rt, "voice-action-enabled");
     assert!(rt.state.settings.voice_action.enabled);
-    assert!(matches!(sent(&rt), [Request::ReloadSettings]));
+    assert_eq!(saved(&rt), 1);
     assert!(rt.find("opencode-model").is_some(), "the model row appears");
 
     let mut rt = runtime("voice-action-off", true, PANE_SIZE);
@@ -234,7 +253,7 @@ fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
     tap(&mut rt, "voice-action-enabled");
     assert!(!rt.state.settings.voice_action.enabled);
     assert!(rt.state.voice_action_error.is_some());
-    assert!(sent(&rt).is_empty());
+    assert_eq!(saved(&rt), 0);
 }
 
 #[test]
@@ -369,7 +388,7 @@ fn the_transcription_picker_asks_the_service_for_a_model() {
     tap(&mut rt, "model2/top/actions/choose-model");
     assert!(matches!(
         sent(&rt),
-        [Request::ChooseModel {
+        [HostRequest::ChooseModel {
             model: TranscriptionModelId::WhisperLargeV3Turbo,
             ..
         }]
@@ -384,7 +403,7 @@ fn the_transcription_picker_asks_the_service_for_a_model() {
 fn a_download_in_progress_can_be_cancelled() {
     let mut rt = runtime("picker-downloading", true, PANE_SIZE);
     tap(&mut rt, "model1/top/actions/cancel-model");
-    assert!(matches!(sent(&rt), [Request::CancelModel]));
+    assert!(matches!(sent(&rt), [HostRequest::CancelModel]));
 }
 
 #[test]
@@ -401,7 +420,7 @@ fn onboarding_downloads_the_model_through_the_service() {
     tap(&mut rt, "tour-continue");
     assert!(matches!(
         sent(&rt),
-        [Request::ChooseModel {
+        [HostRequest::ChooseModel {
             model: TranscriptionModelId::ParakeetUnifiedEnglish,
             ..
         }]

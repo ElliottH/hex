@@ -13,7 +13,7 @@ use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::desktop_transcription_picker::transcription_selection_is_active;
-use crate::linux_service::Request;
+use crate::linux_app::HostRequest;
 use crate::transcription_models::{
     self, ModelDefinition, ModelPreparationStage, ModelRuntime, TranscriptionModelId,
 };
@@ -65,7 +65,7 @@ fn select_language(ui: &mut Ui, language: String) {
 
 fn cancel(ui: &mut Ui) {
     if ui.preparing.is_some() {
-        ui.send(Request::CancelModel);
+        ui.send(HostRequest::CancelModel);
     }
 }
 
@@ -77,7 +77,7 @@ fn choose(ui: &mut Ui, model: &'static ModelDefinition, language: String) {
         close(ui);
         return;
     }
-    ui.send(Request::ChooseModel {
+    ui.send(HostRequest::ChooseModel {
         model: model.id,
         language,
     });
