@@ -140,7 +140,7 @@ impl ChordWatch {
         let worker = std::thread::Builder::new()
             .name("hex-chord-capture".into())
             .spawn(move || {
-                let mut capture = ChordCapture::new();
+                let mut capture = ChordCapture::default();
                 while !worker_stop.load(Ordering::Relaxed) {
                     std::thread::sleep(CHORD_POLL);
                     // Keys typed into another application never rebind a
@@ -154,7 +154,7 @@ impl ChordWatch {
                         ChordPoll::Captured(hotkey) => {
                             // A rejected chord: record the next one from
                             // scratch.
-                            capture = ChordCapture::new();
+                            capture = ChordCapture::default();
                             Chord::Captured(Ok(HotkeyBinding::from(&hotkey)))
                         }
                     };
@@ -206,12 +206,16 @@ pub(super) fn validate_hotkey(
         .map_err(|_| tr("Use two modifiers or add a key"))
 }
 
+/// The listener's retained history, shared with the window.
 pub(super) fn history(
     retention: crate::history::HistoryRetention,
 ) -> Option<crate::history::History> {
-    crate::history::History::open_default(retention)
-        .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
-        .ok()
+    match crate::windows_rune::runtime() {
+        Some(runtime) => runtime.history(),
+        None => crate::history::History::open_default(retention)
+            .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
+            .ok(),
+    }
 }
 
 /// UI Automation reports the foreground application.

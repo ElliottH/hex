@@ -14,7 +14,7 @@
 //! through its `AppHandle`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -31,17 +31,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SM_CYICON, SM_CYSMICON, SendMessageW, WM_SETICON,
 };
 
-use crate::app_settings::{AppSettings, IndicatorPosition};
+use crate::app_settings::AppSettings;
 use crate::desktop_host::{
-    DesktopAction, DesktopListenerSnapshot, DesktopShortcut, DesktopShortcuts,
-    DesktopTranscriptionSnapshot, DesktopUpdateStatus,
+    DesktopAction, DesktopListenerSnapshot, DesktopShortcut, DesktopTranscriptionSnapshot,
+    DesktopUpdateStatus,
 };
 use crate::desktop_i18n::{tr, tr_fill};
+use crate::history::History;
 use crate::rune_ui::Ui;
-use crate::transcription_models::{ModelPreparationStage, TranscriptionModelId};
-use crate::transcription_preparation::TranscriptionPreparation;
+use crate::transcription_models::TranscriptionModelId;
 use crate::windows_app::WindowsDesktopHost;
-use crate::windows_updater::UpdateCheck;
 
 /// The tray icon: the app icon pre-rendered to raw 32×32 RGBA at build time
 /// from app/AppIcon.icon/Assets/Image.png (full color, so both taskbar
@@ -110,6 +109,7 @@ struct Shared {
 pub(crate) struct RuntimeHandle {
     requests: Sender<Request>,
     shared: Arc<Shared>,
+    history: Option<History>,
 }
 
 impl RuntimeHandle {
@@ -121,6 +121,10 @@ impl RuntimeHandle {
 
     pub(crate) fn published(&self) -> Option<Arc<Published>> {
         lock(&self.shared.published).clone()
+    }
+
+    pub(crate) fn history(&self) -> Option<History> {
+        self.history.clone()
     }
 
     /// Wakes `wake` after every publication.
@@ -155,6 +159,9 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
             )),
         ),
     };
+    let history = History::open_default(settings.history_retention)
+        .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
+        .ok();
     let mut app = crate::rune_ui::app().args(Vec::new());
     let window = app.handle();
     // The tray rides the main thread's message pump, which Rune's loop runs.
@@ -180,6 +187,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
         .set(RuntimeHandle {
             requests: requests.clone(),
             shared: shared.clone(),
+            history: history.clone(),
         })
         .map_err(|_| eyre!("the Hex runtime already started"))?;
     let quit = window.clone();
@@ -190,6 +198,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
                 event_path,
                 settings,
                 settings_error,
+                history,
                 receiver,
                 &shared,
                 shutdown,
@@ -214,61 +223,36 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
 // ---------------------------------------------------------------------------
 // Runtime thread
 
+#[allow(clippy::too_many_arguments)]
 fn run_runtime(
     event_path: PathBuf,
     settings: AppSettings,
     settings_error: Option<String>,
+    history: Option<History>,
     requests: Receiver<Request>,
     shared: &Shared,
     shutdown: &AtomicBool,
     hud: crate::windows_rune_hud::HudHandle,
 ) {
-    // The HUD thread owns the indicator and ends with the host's sender; the
-    // settings' position reaches it through `position`.
-    let (indicator, indicator_events) = crate::windows_rune_hud::channel();
-    let position = Arc::new(AtomicU8::new(settings.indicator_position as u8));
-    let hud_position = position.clone();
-    let _hud = std::thread::Builder::new()
-        .name("hex-hud".into())
-        .spawn(move || {
-            crate::windows_rune_hud::run(hud, indicator_events, || {
-                match hud_position.load(Ordering::Relaxed) {
-                    1 => IndicatorPosition::Bottom,
-                    2 => IndicatorPosition::Hidden,
-                    _ => IndicatorPosition::Top,
-                }
-            })
-        });
-    let mut runtime = Runtime {
-        host: WindowsDesktopHost::new(event_path, settings.clone(), settings_error, indicator),
-        preparation: TranscriptionPreparation::default(),
-        listen_after_setup: false,
-        quit: false,
-    };
-    // The microphone stays cold until first-run setup finishes.
-    if settings.enable_on_launch {
-        if crate::onboarding::completion_recorded() {
-            runtime.host.start();
-        } else {
-            runtime.listen_after_setup = true;
-        }
-    }
+    let indicator = hud.start(settings.indicator_position);
+    let mut host =
+        WindowsDesktopHost::new(event_path, settings, settings_error, history, indicator);
     loop {
         let mut next = match requests.recv_timeout(RUNTIME_TICK) {
             Ok(request) => Some(request),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => break,
         };
+        let mut quit = false;
         while let Some(request) = next {
-            runtime.handle(request);
+            quit |= host.handle(request);
             next = requests.try_recv().ok();
         }
-        if shutdown.load(Ordering::Relaxed) || runtime.quit {
+        if shutdown.load(Ordering::Relaxed) || quit {
             break;
         }
-        position.store(runtime.host.indicator_position() as u8, Ordering::Relaxed);
-        runtime.tick();
-        let published = Arc::new(runtime.publish());
+        host.refresh();
+        let published = Arc::new(host.publish());
         let changed = {
             let mut current = lock(&shared.published);
             let changed = current.as_deref() != Some(&published);
@@ -283,133 +267,7 @@ fn run_runtime(
             }
         }
     }
-    runtime.host.stop();
-}
-
-struct Runtime {
-    host: WindowsDesktopHost,
-    preparation: TranscriptionPreparation,
-    /// Enable on launch waits for first-run setup.
-    listen_after_setup: bool,
-    /// Quit Hex or restarting into an update ends the app.
-    quit: bool,
-}
-
-impl Runtime {
-    fn handle(&mut self, request: Request) {
-        match request {
-            Request::Desktop(action) => self.dispatch(action),
-            Request::ToggleListening => {
-                if self.host.is_running() {
-                    self.host.stop();
-                } else {
-                    self.host.start();
-                }
-            }
-            Request::ChooseModel { model, language } => {
-                let definition = crate::transcription_models::definition(model);
-                let selection = crate::transcription_models::TranscriptionSelection {
-                    model,
-                    language,
-                    // Hints persist across models that can use them.
-                    recognition_hints: if definition.supports_recognition_hints {
-                        self.host.settings().transcription.recognition_hints.clone()
-                    } else {
-                        String::new()
-                    },
-                };
-                self.preparation.start(selection, false);
-            }
-            Request::CancelModel => self.preparation.cancel(),
-            Request::Quit => self.quit = true,
-            Request::ReloadSettings => match AppSettings::load() {
-                Ok(settings) => self.host.apply_settings(&settings),
-                Err(error) => tracing::warn!(%error, "could not reload settings"),
-            },
-            Request::CaptureShortcutFor(_)
-            | Request::CancelShortcut
-            | Request::SetShortcut { .. } => {}
-        }
-    }
-
-    fn dispatch(&mut self, action: DesktopAction) {
-        match action {
-            DesktopAction::StartListening => self.host.start(),
-            DesktopAction::StopListening => self.host.stop(),
-            DesktopAction::ClearError => self.host.clear_error(),
-            DesktopAction::CheckForUpdates => self.host.check_for_updates(),
-            DesktopAction::OpenUpdate => {
-                if let UpdateCheck::Available { url, .. } = self.host.update_state()
-                    && let Err(error) = crate::commands::shell_open(&url)
-                {
-                    tracing::warn!(%error, "could not open the Hex release");
-                }
-            }
-            DesktopAction::RestartIntoUpdate => {
-                if self.host.restart_into_update().is_ok() {
-                    // Ends the app so the new version can take the named
-                    // event.
-                    self.quit = true;
-                }
-            }
-            // Windows saves shortcuts from the window.
-            DesktopAction::SetDictationShortcut(_) => {}
-        }
-    }
-
-    /// Commits a prepared model, starts a listener that waited for setup,
-    /// and follows the listener.
-    fn tick(&mut self) {
-        if let Some(result) = self.preparation.poll() {
-            let result = result.and_then(|selection| {
-                crate::transcription_models::validate(&selection).map_err(|e| e.to_string())?;
-                let mut candidate = self.host.settings().clone();
-                candidate.remember_transcription(selection);
-                candidate.save().map_err(|e| format!("{e:#}"))?;
-                self.host.apply_settings(&candidate);
-                Ok(())
-            });
-            if let Err(error) = result {
-                self.preparation.set_error(Some(error));
-            }
-        }
-        if self.listen_after_setup && crate::onboarding::completion_recorded() {
-            self.listen_after_setup = false;
-            self.host.start();
-        }
-        self.host.refresh();
-    }
-
-    fn publish(&self) -> Published {
-        let listener = self.host.listener_state();
-        let preparation = self.preparation.status();
-        Published {
-            listener: DesktopListenerSnapshot {
-                running: listener.running,
-                status: listener.status,
-                warning: listener.last_failure,
-                shortcuts: DesktopShortcuts::Registered,
-            },
-            operation_error: listener.error,
-            transcription: DesktopTranscriptionSnapshot {
-                downloaded_bytes: preparation.downloaded_bytes,
-                error: preparation.error,
-                preparation_stage: preparation
-                    .model
-                    .map(|_| ModelPreparationStage::Downloading),
-                selection: self.host.settings().transcription.clone(),
-                preparing: preparation.model,
-            },
-            update_status: match self.host.update_state() {
-                UpdateCheck::Checking => DesktopUpdateStatus::Checking,
-                UpdateCheck::Current => DesktopUpdateStatus::Current,
-                UpdateCheck::Failed => DesktopUpdateStatus::Failed,
-                UpdateCheck::Available { .. } => DesktopUpdateStatus::Available,
-                UpdateCheck::ReadyToRestart { .. } => DesktopUpdateStatus::ReadyToRestart,
-            },
-            settings: self.host.settings().clone(),
-        }
-    }
+    host.stop();
 }
 
 // ---------------------------------------------------------------------------

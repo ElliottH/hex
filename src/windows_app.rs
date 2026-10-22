@@ -19,28 +19,50 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
 
-use crate::app_settings::{AppSettings, IndicatorPosition};
+use crate::app_settings::AppSettings;
 use crate::desktop_activity::DesktopActivity;
+use crate::desktop_host::{
+    DesktopAction, DesktopListenerSnapshot, DesktopShortcuts, DesktopTranscriptionSnapshot,
+    DesktopUpdateStatus,
+};
 use crate::desktop_i18n::tr_fill;
 use crate::events::{EventReader, TranscriptPhase, VoiceEvent};
 use crate::history::History;
+use crate::transcription_models::{ModelPreparationStage, TranscriptionModelId};
+use crate::transcription_preparation::TranscriptionPreparation;
+use crate::windows_dictation::voice_action_model;
+use crate::windows_rune::{Published, Request};
+use crate::windows_updater::UpdateCheck;
 
 type ListenerResult = std::result::Result<(), String>;
 
-/// The listener and the runtime state it shares with the dictation loop.
-/// Settings reach it through [`WindowsDesktopHost::apply_settings`].
+struct RunningListener {
+    stop: Arc<AtomicBool>,
+    result: Receiver<ListenerResult>,
+    worker: JoinHandle<()>,
+}
+
+impl RunningListener {
+    fn stop_and_join(self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.worker.join();
+    }
+}
+
+/// The Windows runtime: owns the listener, model preparation, OpenCode
+/// catalog, personal transformations, and self-updater.
 pub(crate) struct WindowsDesktopHost {
     event_path: PathBuf,
     event_reader: EventReader,
     activity: DesktopActivity,
     /// When the current session's newest dictation completed.
     last_completed_at: Option<u64>,
-    listener_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
-    listener_result: Option<Receiver<ListenerResult>>,
-    listener_worker: Option<JoinHandle<()>>,
+    listener: Option<RunningListener>,
     session_before_start: Option<u64>,
     awaiting_session_start: bool,
     listen_when_ready: bool,
+    /// Enable on launch waits for first-run setup.
+    listen_after_setup: bool,
     status: String,
     error: Option<String>,
     settings: AppSettings,
@@ -54,15 +76,8 @@ pub(crate) struct WindowsDesktopHost {
     voice_action_model: Arc<RwLock<Option<crate::dictation_processor::Model>>>,
     opencode_catalog_rx: Option<Receiver<Result<crate::dictation_processor::ModelCatalog>>>,
     hints_restart_after: Option<Instant>,
+    preparation: TranscriptionPreparation,
     updater: crate::windows_updater::WindowsUpdater,
-}
-
-/// What the window shows of the listener.
-pub(crate) struct ListenerState {
-    pub(crate) running: bool,
-    pub(crate) status: String,
-    pub(crate) last_failure: Option<String>,
-    pub(crate) error: Option<String>,
 }
 
 /// Names the event that marks the running Hex app in this login session.
@@ -131,8 +146,6 @@ impl AppInstance {
     }
 }
 
-use crate::windows_dictation::voice_action_model;
-
 /// The settings a running listener captured when it started; a change
 /// restarts it.
 fn listener_settings_changed(previous: &AppSettings, current: &AppSettings) -> bool {
@@ -155,6 +168,7 @@ impl WindowsDesktopHost {
         event_path: PathBuf,
         settings: AppSettings,
         settings_error: Option<String>,
+        history: Option<History>,
         indicator: crate::windows_rune_hud::WindowsIndicatorSender,
     ) -> Self {
         crate::desktop_i18n::apply(settings.ui_language.as_deref());
@@ -162,13 +176,6 @@ impl WindowsDesktopHost {
         let mut activity = DesktopActivity::default();
         activity.refresh(&mut event_reader);
         let last_completed_at = last_completed_at(event_reader.events().iter());
-        let history = match History::open_default(settings.history_retention) {
-            Ok(history) => Some(history),
-            Err(error) => {
-                tracing::warn!(%error, "could not open retained history");
-                None
-            }
-        };
         let mode_runtime = Arc::new(RwLock::new(
             crate::dictation_modes::ModeRuntime::from_settings(&settings),
         ));
@@ -178,12 +185,11 @@ impl WindowsDesktopHost {
             event_reader,
             activity,
             last_completed_at,
-            listener_stop: Arc::new(Mutex::new(None)),
-            listener_result: None,
-            listener_worker: None,
+            listener: None,
             session_before_start: None,
             awaiting_session_start: false,
             listen_when_ready: false,
+            listen_after_setup: false,
             status: "Disabled".into(),
             error: settings_error,
             settings,
@@ -197,11 +203,85 @@ impl WindowsDesktopHost {
             voice_action_model,
             opencode_catalog_rx: None,
             hints_restart_after: None,
+            preparation: TranscriptionPreparation::default(),
             updater: crate::windows_updater::WindowsUpdater::start(),
         };
         host.refresh_personal_commands_host();
         host.adopt_default_voice_action_model();
+        // The microphone stays cold until first-run setup finishes.
+        if host.settings.enable_on_launch {
+            if crate::onboarding::completion_recorded() {
+                host.start();
+            } else {
+                host.listen_after_setup = true;
+            }
+        }
         host
+    }
+
+    /// Handles one window or tray request; returns `true` when Hex should quit.
+    pub(crate) fn handle(&mut self, request: Request) -> bool {
+        match request {
+            Request::Desktop(action) => return self.dispatch(action),
+            Request::ToggleListening => {
+                if self.is_running() {
+                    self.stop();
+                } else {
+                    self.start();
+                }
+            }
+            Request::ChooseModel { model, language } => self.choose_model(model, language),
+            Request::CancelModel => self.preparation.cancel(),
+            Request::Quit => return true,
+            Request::ReloadSettings => match AppSettings::load() {
+                Ok(settings) => self.apply_settings(&settings),
+                Err(error) => tracing::warn!(%error, "could not reload settings"),
+            },
+            Request::CaptureShortcutFor(_)
+            | Request::CancelShortcut
+            | Request::SetShortcut { .. } => {}
+        }
+        false
+    }
+
+    fn dispatch(&mut self, action: DesktopAction) -> bool {
+        match action {
+            DesktopAction::StartListening => self.start(),
+            DesktopAction::StopListening => self.stop(),
+            DesktopAction::ClearError => self.error = None,
+            DesktopAction::CheckForUpdates => self.updater.request_check(),
+            DesktopAction::OpenUpdate => {
+                if let UpdateCheck::Available { url } = self.updater.state()
+                    && let Err(error) = crate::commands::shell_open(&url)
+                {
+                    tracing::warn!(%error, "could not open the Hex release");
+                }
+            }
+            DesktopAction::RestartIntoUpdate => {
+                if self.restart_into_update().is_ok() {
+                    // Ends the app so the new version can take the named event.
+                    return true;
+                }
+            }
+            // Windows saves shortcuts from the window.
+            DesktopAction::SetDictationShortcut(_) => {}
+        }
+        false
+    }
+
+    fn choose_model(&mut self, model: TranscriptionModelId, language: String) {
+        let definition = crate::transcription_models::definition(model);
+        let selection = crate::transcription_models::TranscriptionSelection {
+            model,
+            language,
+            // Hints persist across models that can use them.
+            recognition_hints: if definition.supports_recognition_hints {
+                self.settings.transcription.recognition_hints.clone()
+            } else {
+                String::new()
+            },
+        };
+        self.preparation.start(selection, false);
     }
 
     fn model_ready(&self) -> bool {
@@ -212,7 +292,7 @@ impl WindowsDesktopHost {
 
     pub(crate) fn start(&mut self) {
         self.listen_when_ready = true;
-        if self.listener_result.is_some() {
+        if self.is_running() {
             return;
         }
         if !self.model_ready() {
@@ -220,10 +300,7 @@ impl WindowsDesktopHost {
             return;
         }
         let stop = Arc::new(AtomicBool::new(false));
-        *self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(stop.clone());
+        let worker_stop = stop.clone();
         let (result_sender, result_receiver) = mpsc::channel();
         let event_path = self.event_path.clone();
         let selection = self.runtime_selection();
@@ -240,14 +317,17 @@ impl WindowsDesktopHost {
             .name("windows-listener".into())
             .spawn(move || {
                 let result = crate::instance::acquire("windows-listener").and_then(|_instance| {
-                    crate::windows_dictation::run(&event_path, &selection, config, &stop)
+                    crate::windows_dictation::run(&event_path, &selection, config, &worker_stop)
                 });
                 let _ = result_sender.send(result.map_err(|error| format!("{error:#}")));
             });
         match worker {
             Ok(worker) => {
-                self.listener_worker = Some(worker);
-                self.listener_result = Some(result_receiver);
+                self.listener = Some(RunningListener {
+                    stop,
+                    result: result_receiver,
+                    worker,
+                });
                 self.session_before_start = self.activity.session_started_at;
                 self.awaiting_session_start = true;
                 self.status = "Enabling…".into();
@@ -256,56 +336,29 @@ impl WindowsDesktopHost {
             Err(error) => {
                 self.status = "Couldn't enable".into();
                 self.error = Some(tr_fill("Could not start listener: {}", &error.to_string()));
-                self.listener_stop
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .take();
             }
         }
     }
 
     pub(crate) fn stop(&mut self) {
         self.listen_when_ready = false;
-        if let Some(stop) = self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-        {
-            stop.store(true, Ordering::Relaxed);
-            self.status = "Disabling…".into();
+        self.signal_stop("Disabling…");
+    }
+
+    fn is_running(&self) -> bool {
+        self.listener.is_some()
+    }
+
+    fn signal_stop(&mut self, status: &str) {
+        if let Some(listener) = &self.listener {
+            listener.stop.store(true, Ordering::Relaxed);
+            self.status = status.into();
         }
     }
 
-    pub(crate) fn is_running(&self) -> bool {
-        self.listener_result.is_some()
-    }
-
-    pub(crate) fn settings(&self) -> &AppSettings {
-        &self.settings
-    }
-
-    pub(crate) fn clear_error(&mut self) {
-        self.error = None;
-    }
-
-    pub(crate) fn indicator_position(&self) -> IndicatorPosition {
-        self.settings.indicator_position
-    }
-
-    pub(crate) fn update_state(&self) -> crate::windows_updater::UpdateCheck {
-        self.updater.state()
-    }
-
-    pub(crate) fn check_for_updates(&mut self) {
-        self.updater.request_check();
-    }
-
     /// Starts the installed update; the caller quits Hex afterwards.
-    pub(crate) fn restart_into_update(&mut self) -> Result<()> {
-        let crate::windows_updater::UpdateCheck::ReadyToRestart { executable, .. } =
-            self.updater.state()
-        else {
+    fn restart_into_update(&mut self) -> Result<()> {
+        let UpdateCheck::ReadyToRestart { executable } = self.updater.state() else {
             return Err(eyre!("no installed Windows update is ready"));
         };
         crate::windows_updater::relaunch_at(&executable).inspect_err(|error| {
@@ -315,21 +368,21 @@ impl WindowsDesktopHost {
         Ok(())
     }
 
-    pub(crate) fn listener_state(&self) -> ListenerState {
-        ListenerState {
-            running: self.is_running(),
-            status: self.status.clone(),
-            last_failure: visible_failure(&self.activity, self.last_completed_at),
-            error: self.error.clone(),
-        }
-    }
-
     /// Applies the settings the shared window saved. Shared state the
     /// listener reads changes in place; anything the listener captured at
     /// start restarts a running listener.
-    pub(crate) fn apply_settings(&mut self, settings: &AppSettings) {
+    fn apply_settings(&mut self, settings: &AppSettings) {
         let previous = std::mem::replace(&mut self.settings, settings.clone());
         let current = settings;
+        if previous.indicator_position != current.indicator_position {
+            self.indicator.set_position(current.indicator_position);
+        }
+        if previous.history_retention != current.history_retention
+            && let Some(history) = &self.history
+            && let Err(error) = history.set_retention(current.history_retention)
+        {
+            tracing::warn!(%error, "could not update history retention");
+        }
         let modes_changed = previous.dictation_processing != current.dictation_processing;
         if modes_changed {
             *self
@@ -447,22 +500,30 @@ impl WindowsDesktopHost {
     }
 
     fn restart_listener_for_settings(&mut self) {
-        if !self.is_running() {
-            return;
-        }
-        self.listen_when_ready = true;
-        if let Some(stop) = self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-        {
-            stop.store(true, Ordering::Relaxed);
-            self.status = "Applying settings…".into();
+        if self.is_running() {
+            self.listen_when_ready = true;
+            self.signal_stop("Applying settings…");
         }
     }
 
     pub(crate) fn refresh(&mut self) {
+        if let Some(result) = self.preparation.poll() {
+            let result = result.and_then(|selection| {
+                crate::transcription_models::validate(&selection).map_err(|e| e.to_string())?;
+                let mut candidate = self.settings.clone();
+                candidate.remember_transcription(selection);
+                candidate.save().map_err(|e| format!("{e:#}"))?;
+                self.apply_settings(&candidate);
+                Ok(())
+            });
+            if let Err(error) = result {
+                self.preparation.set_error(Some(error));
+            }
+        }
+        if self.listen_after_setup && crate::onboarding::completion_recorded() {
+            self.listen_after_setup = false;
+            self.start();
+        }
         self.poll_opencode_catalog();
         // Settings may set up the workspace at any time.
         if self.personal_commands_checked_at.elapsed() >= Duration::from_secs(2) {
@@ -477,8 +538,8 @@ impl WindowsDesktopHost {
             self.restart_listener_for_settings();
         }
         let mut start_listener = false;
-        if let Some(receiver) = &self.listener_result {
-            let finished = match receiver.try_recv() {
+        if let Some(listener) = &self.listener {
+            let finished = match listener.result.try_recv() {
                 Ok(result) => Some(result),
                 Err(TryRecvError::Empty) => None,
                 Err(TryRecvError::Disconnected) => {
@@ -487,12 +548,9 @@ impl WindowsDesktopHost {
             };
             if let Some(result) = finished {
                 self.awaiting_session_start = false;
-                self.listener_result = None;
-                self.join_listener();
-                self.listener_stop
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .take();
+                if let Some(listener) = self.listener.take() {
+                    let _ = listener.worker.join();
+                }
                 match result {
                     Ok(()) => {
                         self.status = "Disabled".into();
@@ -516,7 +574,7 @@ impl WindowsDesktopHost {
         {
             self.awaiting_session_start = false;
         }
-        if self.listener_result.is_some()
+        if self.is_running()
             && !self.awaiting_session_start
             && let Some(status) = self.activity.state_label()
         {
@@ -524,9 +582,33 @@ impl WindowsDesktopHost {
         }
     }
 
-    fn join_listener(&mut self) {
-        if let Some(worker) = self.listener_worker.take() {
-            let _ = worker.join();
+    pub(crate) fn publish(&self) -> Published {
+        let preparation = self.preparation.status();
+        Published {
+            listener: DesktopListenerSnapshot {
+                running: self.is_running(),
+                status: self.status.clone(),
+                warning: visible_failure(&self.activity, self.last_completed_at),
+                shortcuts: DesktopShortcuts::Registered,
+            },
+            operation_error: self.error.clone(),
+            transcription: DesktopTranscriptionSnapshot {
+                downloaded_bytes: preparation.downloaded_bytes,
+                error: preparation.error,
+                preparation_stage: preparation
+                    .model
+                    .map(|_| ModelPreparationStage::Downloading),
+                selection: self.settings.transcription.clone(),
+                preparing: preparation.model,
+            },
+            update_status: match self.updater.state() {
+                UpdateCheck::Checking => DesktopUpdateStatus::Checking,
+                UpdateCheck::Current => DesktopUpdateStatus::Current,
+                UpdateCheck::Failed => DesktopUpdateStatus::Failed,
+                UpdateCheck::Available { .. } => DesktopUpdateStatus::Available,
+                UpdateCheck::ReadyToRestart { .. } => DesktopUpdateStatus::ReadyToRestart,
+            },
+            settings: self.settings.clone(),
         }
     }
 }
@@ -534,15 +616,9 @@ impl WindowsDesktopHost {
 impl Drop for WindowsDesktopHost {
     fn drop(&mut self) {
         self.updater.stop();
-        if let Some(stop) = self
-            .listener_stop
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-        {
-            stop.store(true, Ordering::Relaxed);
+        if let Some(listener) = self.listener.take() {
+            listener.stop_and_join();
         }
-        self.join_listener();
     }
 }
 
@@ -577,6 +653,7 @@ fn visible_failure(activity: &DesktopActivity, last_completed_at: Option<u64>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_settings::IndicatorPosition;
 
     fn transcript(timestamp_ms: u64, text: &str) -> VoiceEvent {
         VoiceEvent::Transcript {

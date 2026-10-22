@@ -50,14 +50,8 @@ const FEED: &str = "windows-aarch64-update.json";
 pub enum UpdateCheck {
     Checking,
     Current,
-    Available {
-        version: String,
-        url: String,
-    },
-    ReadyToRestart {
-        version: String,
-        executable: PathBuf,
-    },
+    Available { url: String },
+    ReadyToRestart { executable: PathBuf },
     Failed,
 }
 
@@ -73,17 +67,6 @@ impl WindowsUpdater {
         let state = Arc::new(Mutex::new(UpdateCheck::Checking));
         let stop = Arc::new(AtomicBool::new(false));
         let check_now = Arc::new(AtomicBool::new(false));
-        if std::env::var_os("HEX_MOCK_UPDATE").is_some() {
-            *state.lock().unwrap_or_else(|error| error.into_inner()) = UpdateCheck::Available {
-                version: "9.9.9".into(),
-                url: RELEASES_PAGE.into(),
-            };
-            return Self {
-                state,
-                stop,
-                check_now,
-            };
-        }
         let worker_state = state.clone();
         let worker_stop = stop.clone();
         let worker_check_now = check_now.clone();
@@ -153,7 +136,7 @@ impl WindowsUpdater {
 /// while a redirected or machine-wide tree offers no such guarantee, so
 /// those installs keep the release-page link behavior, like source
 /// builds and unpacked zips.
-pub fn managed_install() -> bool {
+fn managed_install() -> bool {
     let Ok(executable) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
         return false;
     };
@@ -174,10 +157,7 @@ pub fn managed_install() -> bool {
 
 fn self_update_check() -> UpdateCheck {
     match install_latest() {
-        Ok(Some(update)) => UpdateCheck::ReadyToRestart {
-            version: update.version,
-            executable: update.executable,
-        },
+        Ok(Some(executable)) => UpdateCheck::ReadyToRestart { executable },
         Ok(None) => UpdateCheck::Current,
         Err(error) => {
             tracing::warn!(%error, "Windows self-update failed");
@@ -186,12 +166,7 @@ fn self_update_check() -> UpdateCheck {
     }
 }
 
-struct InstalledUpdate {
-    version: String,
-    executable: PathBuf,
-}
-
-fn install_latest() -> Result<Option<InstalledUpdate>> {
+fn install_latest() -> Result<Option<PathBuf>> {
     let support = crate::app_paths::support_dir()?;
     let updates = support.join("updates");
     fs::create_dir_all(&updates)?;
@@ -242,10 +217,7 @@ fn install_latest() -> Result<Option<InstalledUpdate>> {
     if let Err(error) = update_uninstall_entry(&manifest.version) {
         tracing::warn!(%error, "could not update the Apps & Features version");
     }
-    Ok(Some(InstalledUpdate {
-        version: manifest.version,
-        executable,
-    }))
+    Ok(Some(executable))
 }
 
 /// Retarget the installer-created Start Menu shortcut at the activated
@@ -454,10 +426,7 @@ fn check_latest_release() -> UpdateCheck {
             .and_then(|url| url.as_str())
             .unwrap_or(RELEASES_PAGE)
             .to_string();
-        UpdateCheck::Available {
-            version: latest.to_string(),
-            url,
-        }
+        UpdateCheck::Available { url }
     } else {
         UpdateCheck::Current
     }
@@ -473,7 +442,6 @@ fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_version;
     use super::*;
 
     #[test]

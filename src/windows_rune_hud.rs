@@ -9,6 +9,7 @@
 //! listener never waits on it.
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rune::{Cx, El, OverlayHandle, OverlaySpec, Pixels, ScreenEdge, el};
@@ -28,11 +29,14 @@ const BOTTOM_OFFSET: f32 = 24.0;
 
 /// How the listener reports captures to the HUD; sending never waits.
 #[derive(Clone)]
-pub(crate) struct WindowsIndicatorSender(Sender<WindowsIndicatorEvent>);
+pub(crate) struct WindowsIndicatorSender {
+    events: Sender<WindowsIndicatorEvent>,
+    position: Arc<Mutex<IndicatorPosition>>,
+}
 
 impl WindowsIndicatorSender {
     pub(crate) fn send(&self, event: WindowsIndicatorEvent) {
-        let _ = self.0.send(event);
+        let _ = self.events.send(event);
     }
 
     pub(crate) fn meter(&self, samples: &[f32]) {
@@ -40,21 +44,42 @@ impl WindowsIndicatorSender {
             self.send(event);
         }
     }
-}
 
-pub(crate) fn channel() -> (WindowsIndicatorSender, Receiver<WindowsIndicatorEvent>) {
-    let (sender, receiver) = mpsc::channel();
-    (WindowsIndicatorSender(sender), receiver)
+    pub(crate) fn set_position(&self, position: IndicatorPosition) {
+        *self
+            .position
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = position;
+    }
 }
 
 pub(crate) struct Hud {
     pixels: Pixels,
 }
 
-/// The overlay and the frame it shows; `run` feeds both from the HUD thread.
+/// The overlay and the frame it shows; [`HudHandle::start`] feeds both from
+/// the HUD thread.
 pub(crate) struct HudHandle {
     overlay: OverlayHandle<Hud>,
     pixels: Pixels,
+}
+
+impl HudHandle {
+    pub(crate) fn start(self, initial: IndicatorPosition) -> WindowsIndicatorSender {
+        let (events, receiver) = mpsc::channel();
+        let position = Arc::new(Mutex::new(initial));
+        let hud_position = position.clone();
+        let _ = std::thread::Builder::new()
+            .name("hex-hud".into())
+            .spawn(move || {
+                run(self, receiver, || {
+                    *hud_position
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                })
+            });
+        WindowsIndicatorSender { events, position }
+    }
 }
 
 /// Adds the overlay to the window's app.
@@ -79,7 +104,7 @@ pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) -> HudHandle {
 }
 
 /// The HUD thread: returns when the listener's event channel closes.
-pub(crate) fn run(
+fn run(
     hud: HudHandle,
     events: Receiver<WindowsIndicatorEvent>,
     position: impl Fn() -> IndicatorPosition,
