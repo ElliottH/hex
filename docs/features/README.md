@@ -827,7 +827,10 @@ cross-version signed update, or microphone/target-app success on the user's devi
 
 `malformed_settings_cannot_start_even_after_dismissing_the_error` in
 [linux_app.rs](../../src/linux_app.rs) checks the failure gate and recovery after a
-simulated successful settings commit. It has **not been executed on Linux**.
+simulated successful settings commit. It selects a model never installed on
+Linux, so the resumed start stops at `Model required` instead of opening the
+microphone on a machine with the real model; it passed on apollo on 2026-10-22
+beside the live service.
 `listener_startup_ignores_the_previous_session_until_a_new_one_arrives` checks the
 listener owner's startup observation and stop signal; the exact production owner
 and test passed in an isolated standard-library-only Rust harness on macOS. That
