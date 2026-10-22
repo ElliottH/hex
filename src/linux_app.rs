@@ -185,8 +185,6 @@ struct Shared {
     host: Mutex<LinuxDesktopHost>,
     waker: Mutex<Option<Waker>>,
     window_open: AtomicBool,
-    /// Set once the host drained its work and released the socket.
-    finished: AtomicBool,
     shutdown: &'static AtomicBool,
 }
 
@@ -201,7 +199,6 @@ impl HostHandle {
             host: Mutex::new(host),
             waker: Mutex::new(None),
             window_open: AtomicBool::new(false),
-            finished: AtomicBool::new(false),
             shutdown,
         }))
     }
@@ -279,26 +276,27 @@ impl HostHandle {
         self.lock().output.history.clone()
     }
 
-    /// The window wakes on host changes through `waker`.
-    pub(crate) fn window_opened(&self, waker: Waker) {
+    /// The window's toolkit wakes on host changes through `waker`.
+    pub(crate) fn set_waker(&self, waker: Waker) {
         *self.0.waker.lock().unwrap() = Some(waker);
-        self.0.window_open.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn set_window_open(&self, open: bool) {
+        self.0.window_open.store(open, Ordering::Release);
+    }
+
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub(crate) fn window_open(&self) -> bool {
+        self.0.window_open.load(Ordering::Acquire)
     }
 
     /// A closed window leaves no shortcut capture behind.
     pub(crate) fn window_closed(&self) {
-        *self.0.waker.lock().unwrap() = None;
-        self.0.window_open.store(false, Ordering::Release);
+        self.set_window_open(false);
         let mut host = self.lock();
         if host.capturing_hotkey() {
             host.cancel_settings_edit();
         }
-    }
-
-    /// The host drained its work after `hex quit` or a signal.
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
-    pub(crate) fn finished(&self) -> bool {
-        self.0.finished.load(Ordering::Acquire)
     }
 
     fn wake(&self) {
@@ -419,53 +417,55 @@ fn run_host(
     }
     *published.shortcuts.lock().unwrap() = None;
     drop(server);
-    host.0.finished.store(true, Ordering::Release);
-    host.wake();
 }
 
-/// The one seam between the process and its window toolkit. The main
-/// thread waits for `Activate` and `Quit`; each window runs until it closes.
+/// The one seam between the process and its window toolkit, on the main
+/// thread until Hex quits. `first` opens the window at once.
 fn run_windows(
     ui: WindowUi,
+    host: &HostHandle,
+    requests: Receiver<Control>,
+    first: Option<Activation>,
+    shutdown: &'static AtomicBool,
+) {
+    match ui {
+        #[cfg(feature = "rune-ui")]
+        WindowUi::Rune => {
+            let host = host.clone();
+            // A missing display or GPU fails the window, never Hex.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::rune_ui::run_app(host, requests, first)
+            }))
+            .is_err()
+            {
+                tracing::error!("the Hex window failed; Hex keeps running without it");
+                while !shutdown.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        #[cfg(not(feature = "rune-ui"))]
+        WindowUi::Rune => {
+            let _ = (first, shutdown);
+            while let Ok(Control::Activate(_)) = requests.recv() {}
+        }
+        WindowUi::Gpui => run_gpui_windows(host, requests, first, shutdown),
+    }
+}
+
+/// GPUI on Linux ends its loop with the last window, so it runs once per
+/// opened window and the main thread waits for requests in between.
+fn run_gpui_windows(
     host: &HostHandle,
     mut requests: Receiver<Control>,
     mut next: Option<Activation>,
     shutdown: &'static AtomicBool,
 ) {
-    #[cfg(feature = "rune-ui")]
-    let mut rune_used = false;
     loop {
-        if let Some(_activation) = next.take() {
-            let quit = match ui {
-                #[cfg(feature = "rune-ui")]
-                WindowUi::Rune if rune_used => {
-                    // winit allows one event loop per process; Rune's
-                    // windowless app lifetime replaces this.
-                    tracing::warn!("the Rune window cannot reopen in this process yet");
-                    false
-                }
-                #[cfg(feature = "rune-ui")]
-                WindowUi::Rune => {
-                    rune_used = true;
-                    // A missing display or GPU fails the window, never Hex.
-                    let host = host.clone();
-                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::rune_ui::run_window(host, _activation)
-                    }))
-                    .is_err()
-                    {
-                        tracing::error!("the Hex window failed to open");
-                    }
-                    false
-                }
-                #[cfg(not(feature = "rune-ui"))]
-                WindowUi::Rune => false,
-                WindowUi::Gpui => {
-                    let (quit, returned) = run_gpui_window(host, requests, shutdown);
-                    requests = returned;
-                    quit
-                }
-            };
+        if next.take().is_some() {
+            host.set_window_open(true);
+            let (quit, returned) = run_gpui_window(host, requests, shutdown);
+            requests = returned;
             host.window_closed();
             if quit {
                 break;
@@ -523,7 +523,6 @@ fn run_gpui_window(
                 return;
             }
         };
-        host.window_opened(Arc::new(|| {}));
         window
             .update(cx, |_, window, cx| {
                 window.set_window_title("Hex");

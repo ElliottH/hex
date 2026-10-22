@@ -15,7 +15,6 @@ use crate::desktop_i18n::tr;
 use crate::linux_app::HostHandle;
 pub(super) use crate::linux_app::HostRequest as Request;
 use crate::linux_input::LinuxHotkey;
-use crate::linux_service::Activation;
 pub(super) use crate::linux_service::ShortcutTarget;
 
 /// The host registers recorded shortcuts (`SetShortcut`) and saves them.
@@ -32,13 +31,14 @@ pub(super) const QUIT_IN_WINDOW: bool = true;
 /// `wake_after`, a tick redraws them while the window is open.
 const TICK: Duration = Duration::from_millis(250);
 
-/// The host the open window uses; `AppSpec::init` takes no arguments.
+/// The host the window's app runs beside; `AppSpec::init` and `setup` take
+/// no arguments.
 static HOST: Mutex<Option<HostHandle>> = Mutex::new(None);
 
-/// Clears the window's host when it closes, even after a failed open.
-pub(super) struct Open;
+/// Clears the host when the app returns, even after a panic.
+pub(super) struct Installed;
 
-impl Drop for Open {
+impl Drop for Installed {
     fn drop(&mut self) {
         HOST.lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -46,9 +46,9 @@ impl Drop for Open {
     }
 }
 
-pub(super) fn open(host: HostHandle, _activation: Activation) -> Open {
+pub(super) fn install(host: HostHandle) -> Installed {
     *HOST.lock().unwrap() = Some(host);
-    Open
+    Installed
 }
 
 fn current() -> Option<HostHandle> {
@@ -70,11 +70,14 @@ impl Backend {
             backend.refresh();
             return backend;
         };
-        host.window_opened(wake.clone());
+        host.set_waker(wake.clone());
+        let ticking = host.clone();
         std::thread::spawn(move || {
             while current().is_some() {
                 std::thread::sleep(TICK);
-                wake();
+                if ticking.window_open() {
+                    wake();
+                }
             }
         });
         Self::Host(host)
@@ -95,21 +98,22 @@ impl Backend {
         }
     }
 
+    /// The host drains its work, then asks the app to quit.
     pub(super) fn quit(&mut self) {
         if let Self::Host(host) = self {
             host.quit();
         }
     }
 
+    pub(super) fn closed(&mut self) {
+        if let Self::Host(host) = self {
+            host.window_closed();
+        }
+    }
+
     pub(super) fn refresh(&mut self) {
         match self {
-            Self::Host(host) => {
-                if host.finished() {
-                    // The host drained its work after Quit; Rune cannot end its
-                    // event loop from here until its windowless app lifetime lands.
-                    std::process::exit(0);
-                }
-            }
+            Self::Host(_) => {}
             Self::Status(status, error) => {
                 match crate::linux_service::request(crate::linux_service::Request::Status) {
                     Ok(state) => (*status, *error) = (Some(Box::new(state)), None),

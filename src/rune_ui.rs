@@ -67,17 +67,62 @@ pub(crate) fn run() {
     rune::App::new(spec()).run();
 }
 
-/// Opens the Linux window beside `host` and returns when it closes: the
-/// window side of `linux_app`'s seam. Rune's windowless app lifetime will
-/// let the seam reopen and focus it and consume `activation`.
+/// Runs the Linux window's app on the main thread until Hex quits: the
+/// window side of `linux_app`'s seam. It starts without a window; each
+/// `Activate` opens or focuses it with the launcher's activation token, and
+/// closing it keeps the app, its state, and the host running.
 #[cfg(target_os = "linux")]
-pub(crate) fn run_window(
+pub(crate) fn run_app(
     host: crate::linux_app::HostHandle,
-    activation: crate::linux_service::Activation,
+    requests: std::sync::mpsc::Receiver<crate::linux_service::Control>,
+    first: Option<crate::linux_service::Activation>,
 ) {
-    let _open = host::open(host, activation);
+    use crate::linux_service::{Activation, Control};
+    let _host = host::install(host.clone());
     rune::set_app_id("hex");
-    rune::run(spec());
+    let app = rune::App::new(spec())
+        .args(Vec::new())
+        .windowless()
+        .on_close(on_close);
+    let handle = app.handle();
+    let show = move |activation: Activation| {
+        host.set_window_open(true);
+        match activation.token.or(activation.startup_id) {
+            Some(token) => handle.activate(token),
+            None => handle.open(),
+        }
+    };
+    if let Some(activation) = first {
+        show(activation.clone());
+    }
+    let quit = app.handle();
+    std::thread::Builder::new()
+        .name("hex-window-requests".into())
+        .spawn(move || {
+            while let Ok(request) = requests.recv() {
+                match request {
+                    Control::Activate(activation) => show(activation),
+                    Control::Quit => {
+                        quit.quit();
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("could not start the window request thread");
+    app.run();
+}
+
+/// Closing the window keeps Hex: save drafts and drop an uncommitted
+/// shortcut recording.
+#[cfg(target_os = "linux")]
+fn on_close(ui: &mut Ui, _: &mut Tx) {
+    ui.flush_drafts();
+    settings::cancel_capture(ui);
+    ui.open = None;
+    if let Service::Live(backend) = &mut ui.service {
+        backend.closed();
+    }
 }
 
 /// `hex app -- --snap out.png --scene …`: a headless render of a fixture
