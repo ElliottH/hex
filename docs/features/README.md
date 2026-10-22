@@ -926,7 +926,8 @@ Linux `hex app --ui rune` (--features rune-ui) -> the Linux window on Rune // de
 ├── Sidebar: Settings, Modes, Voice Action, History (the panes Linux GPUI shows)
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
-└── Not yet: app file chooser, app icons, drag reorder, right-click delete
+├── Modes: "Choose a file…" through the FileChooser portal; drag to reorder
+└── Not yet: app icons, right-click delete
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -943,8 +944,8 @@ its tests drive the Rune runtime headlessly (navigation; Settings rows per
 shortcut source, saves with `ReloadSettings`, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
-clear, copy; Modes add/delete, corrections, transformations, application
-conflicts; the picker's ChooseModel/CancelModel; setup's download; draft
+clear, copy; Modes add/delete, corrections, transformations (drag reorder saves once
+on release), application conflicts, a chosen file joining the mode; the picker's ChooseModel/CancelModel; setup's download; draft
 saves) and compare 19 offscreen GPU renders (every pane, light and dark) with
 [tests/golden](../../tests/golden). They skip the goldens without a GPU
 adapter and do not prove a real window, input method, or physical shortcut.

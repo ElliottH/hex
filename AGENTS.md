@@ -162,6 +162,9 @@ substitute for source inspection or a second roadmap.
   connection: `Register("hex")`, one session for Hex's shortcuts, a second
   session binding Escape only while recording, granted-trigger descriptions,
   and session-closed reporting.
+- `linux_file_chooser`: one blocking `OpenFile` call on the FileChooser
+  portal over a private bus connection, for the Rune Modes picker's
+  "Choose a file…" (`rune-ui` only).
 - `linux_context`: the frontmost X11 application for modes; Wayland has none.
 - `linux_audio_control`: While-dictating mute through `wpctl`/`pactl` and
   MPRIS pause over D-Bus, restoring only what it changed.

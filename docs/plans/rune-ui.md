@@ -64,11 +64,12 @@ src/rune_ui/settings.rs        Settings pane, shortcut capture             1067
 src/rune_ui/voice_action.rs    Voice Action pane                             77
 src/rune_ui/models.rs          OpenCode catalog, model + thinking pickers   492
 src/rune_ui/history.rs         History pane                                 502
-src/rune_ui/modes.rs           Modes pane                                  1204
+src/rune_ui/modes.rs           Modes pane                                  1329
 src/rune_ui/picker.rs          transcription picker modal                   518
 src/rune_ui/onboarding.rs      first-run setup                              397
 src/rune_ui/controls.rs        rows, cards, selects, buttons on rune-kit    377
-src/rune_ui/tests.rs           26 tests incl. 19 goldens                    552
+src/rune_ui/tests.rs           27 tests incl. 19 goldens                    597
+src/linux_file_chooser.rs      the FileChooser portal ("Choose a file…")    163
 ```
 
 Every pane keeps GPUI's behavior and service contract. The window is a
@@ -89,7 +90,7 @@ shared from `app_window` rather than copied.
 | Settings | Every Linux row (status, desktop shortcuts, dictation, behavior, application); the transcription row opens the picker | as above, plus [Chinese](rune-ui/hex-rune-shell-chinese-dark.png) |
 | Voice Action | Opt-in with GPUI's shortcut conflict check, the recorder, OpenCode model (searchable popover) and thinking pickers, unavailable/missing OpenCode notice with retry and setup | [light](rune-ui/hex-rune-shell-voice-action-light.png) / [dark](rune-ui/hex-rune-shell-voice-action-dark.png), [model search](rune-ui/hex-rune-shell-voice-action-models-dark.png), [OpenCode missing](rune-ui/hex-rune-shell-voice-action-unavailable-light.png) |
 | History | Search, retention select, two-step Clear all, detail with Copy (Rune's clipboard request) and Delete, latency and processing facts; follows new dictations while shown | [light](rune-ui/hex-rune-shell-history-light.png) / [dark](rune-ui/hex-rune-shell-history-dark.png) |
-| Modes | Global + custom modes; name; applications with a searchable picker and the cross-mode conflict check; corrections; OpenCode rewriting (model, thinking, deadline, instructions); transformations with add, reorder (up/down), remove, and the TypeScript workspace status/setup; two-step delete | [light](rune-ui/hex-rune-shell-modes-light.png) / [dark](rune-ui/hex-rune-shell-modes-dark.png), [pickers open](rune-ui/hex-rune-shell-modes-picker-light.png) |
+| Modes | Global + custom modes; name; applications with a searchable picker and the cross-mode conflict check; corrections; OpenCode rewriting (model, thinking, deadline, instructions); applications from the desktop's file chooser ("Choose a file…"); transformations with add, drag to reorder, remove, and the TypeScript workspace status/setup; two-step delete | [light](rune-ui/hex-rune-shell-modes-light.png) / [dark](rune-ui/hex-rune-shell-modes-dark.png), [pickers open](rune-ui/hex-rune-shell-modes-picker-light.png) |
 | Transcription picker | Modal over a scrim: languages, model cards with recommendation and streaming badges, metrics, Use/Download/Cancel/Delete (two-step), download/verify/load progress from the service snapshot, install and delete errors | [light](rune-ui/hex-rune-shell-picker-light.png) / [dark](rune-ui/hex-rune-shell-picker-dark.png), [downloading](rune-ui/hex-rune-shell-picker-downloading-dark.png) |
 | Setup | `onboarding::Flow` without permissions or practice (Linux has neither): Welcome, the model download through the service with progress and retry, Done with the shortcut tips; records completion when the model is ready | [welcome](rune-ui/hex-rune-shell-onboarding-dark.png), [download light](rune-ui/hex-rune-shell-onboarding-setup-light.png) / [dark](rune-ui/hex-rune-shell-onboarding-setup-dark.png) |
 
@@ -101,7 +102,7 @@ Run it: `cargo run --release --features rune-ui -- app --ui rune`. Headless:
 `history`, `history-empty`, `modes`, `modes-global`, `modes-picker`, `picker`,
 `picker-downloading`, `onboarding`, `onboarding-setup`.
 
-Checks: `cargo test --features rune-ui rune_ui`. 25 tests drive the Rune
+Checks: `cargo test --features rune-ui rune_ui`. 26 tests drive the Rune
 runtime headlessly without a GPU (navigation, every pane's edits and the
 requests they send, drafts, conflicts, the picker, setup); `goldens` renders
 19 PNGs offscreen (`tests/golden/rune-*.png`, every pane light and dark) and
@@ -163,8 +164,17 @@ real window.
 These need a person at the keyboard (no input was synthesized in Dax's
 session):
 
-- Pointer: hover and press states, cursor shapes (Rune never sets one, so
-  expect the default arrow over buttons and text fields).
+- Pointer: hover and press states; cursor shapes (pointer over buttons and
+  segments, I-beam over text fields, grab/grabbing on the transformation
+  handles; unit-tested in Rune, never seen on screen); dragging a
+  transformation with a real pointer (headless test only).
+- "Choose a file…": the FileChooser portal dialog (version 4 on apollo's
+  niri session, checked with `busctl introspect`) was never opened, so the
+  dialog, its filters, and the round trip into the mode are unobserved. Hex
+  passes no parent window handle (Rune exposes none), so the dialog is not
+  attached to Hex's window.
+- Copy and paste through the Wayland data-control clipboard (Rune now uses
+  it on Wayland; never exercised on niri).
 - Keyboard focus and IME in every text field; whether the model and
   application search fields take focus when their popover opens.
 - Recording a physical F-key or Super shortcut through the service.
@@ -173,11 +183,8 @@ session):
 
 ## What's left for Linux parity
 
-- **File chooser for applications** ("Choose a file…" in the Modes app
-  picker): Rune has no native dialog; add an XDG portal or `rfd` call.
 - **App icons**: the catalog's icons are not drawn (Rune has no raster
-  images); Modes shows monograms.
-- **Drag to reorder transformations**: replaced by up/down buttons.
+  images; Kit's `hex-gaps` agent has claimed them); Modes shows monograms.
 - **Right-click "Delete mode…"**: no context-menu trigger on right press;
   delete is the two-step button in the editor.
 - **Spinners and pulses**: no looping animation yet (the recording pulse on
@@ -197,6 +204,8 @@ session):
 | `rune-kit`, `rune-theme-opencode`, CSS shadows/gradients/outlines, `El::anchored` overlays (`ad80ae1`…`1177fbd`) | the component library and OpenCode theme the panes use |
 | CJK font fallback (`aebf3a1`) | app-supplied extra fonts, then installed CJK fonts (Noto/Source Han, PingFang, Hiragino, YaHei, WenQuanYi, …) become fontique fallbacks for Han, kana, Hangul, Bopomofo; Latin output byte-identical |
 | `on_edit` takes closures; `rune::edit_access` (`338d22a`) | a list of fields (each mode's corrections) binds each row's `TextEdit` by index |
+| `rune::Cursor`, `El::cursor`, `Runtime::cursor`; the shell sets the pointer shape; rune-kit buttons and segments use the pointer as @opencode/ui does | parity with GPUI's pointer and I-beam cursors; the drag handles grab |
+| `arboard` with `wayland-data-control` | copy and paste on Wayland without XWayland |
 
 Built in Hex for now, to move when Rune has them: the picker's modal scrim
 (Kit's `motion-focus` agent is adding dialog, scrim, and focus trap), the
@@ -214,7 +223,7 @@ Sizes are current GPUI lines. Effort is focused agent-days with review.
 | Settings pane | `render_settings` in `app_window.rs` | Done on Linux; macOS adds permissions rows, Launch at login, Dock icon, Meetings and Hex Microphone sections; Windows adds its caption | 2 |
 | Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows needs its caption row, macOS its traffic-light inset | 1 |
 | Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); macOS/Windows prepare in-process through `transcription_preparation` | 1 |
-| Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus file chooser, icons, drag, context menu; macOS adds website rules (Brave) | 3 |
+| Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus icons and the context menu; macOS adds website rules (Brave) | 3 |
 | Voice Action | ~500 | Done on Linux | 0.5 |
 | History | ~250 | Done | 0 |
 | Commands (macOS) | ~400 | Catalog list, status rows | 2 |
@@ -250,9 +259,11 @@ the Rune core work below.
    physical key codes, Globe/Fn (macOS shortcuts).
 5. **Raster images and custom vector drawing** (app icons, waveforms).
 6. **Platform text input and clipboard**: native IME protocols; Wayland
-   clipboard (`arboard` without `wayland-data-control` uses XWayland).
-7. **Accessibility** (AccessKit) and **cursor shapes**.
-8. **Native file dialogs** (portal on Linux, `NSOpenPanel`, `IFileDialog`).
+   clipboard: done (`arboard` with `wayland-data-control`, X11 fallback).
+7. **Accessibility** (AccessKit). Cursor shapes: done.
+8. **Native file dialogs**: Linux uses the FileChooser portal from Hex
+   (`linux_file_chooser.rs`, over gio like `linux_portal.rs`); macOS
+   (`NSOpenPanel`) and Windows (`IFileDialog`) still need one.
 9. **Scrolling polish**: visible scrollbars, scroll-into-view.
 
 ## Order to port
