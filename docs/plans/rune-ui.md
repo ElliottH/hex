@@ -2,9 +2,10 @@
 
 **Status:** Started, experimental, on the `rune-ui` branch only. The Linux
 Settings pane runs on Rune behind `--features rune-ui` and `hex app --ui rune`;
-GPUI stays the default everywhere. Rune is pinned to its `hex-port` branch
-(`anomalyco/rune`, private). Do not merge to `main` until the dependency
-questions under [Risks](#risks) are settled.
+GPUI stays the default everywhere. Rune, `rune-kit`, and
+`rune-theme-opencode` are pinned to a commit on Rune's `main`
+(`anomalyco/rune`, private; `1177fbd`). Do not merge to `main` until the
+dependency questions under [Risks](#risks) are settled.
 
 **Goal:** one Rune front end for Hex on macOS, Windows, and Linux, replacing
 about 29k lines of GPUI (`app_window.rs` and its OS modules, `desktop_ui.rs`,
@@ -14,42 +15,47 @@ about 29k lines of GPUI (`app_window.rs` and its OS modules, `desktop_ui.rs`,
 
 ## Design direction
 
-The Rune front end adopts **Rune's design language**, not Hex's current GPUI
-design system. Controls, colour (OKLCH `rune::tok::theme(dark)` with light and
-dark), spacing (`tok::space`), type (`tok::type_`, Inter), radii, and motion
-(`tok::motion`, analytic springs) come from Rune and the components Kit built in
-`examples/settings` and `examples/opencode`. Hex keeps its information,
-sections, copy, and behavior; only the look and layout follow Rune.
+The Rune front end uses **OpenCode's design language through Rune's component
+library**, not Hex's current GPUI design system. Controls come from `rune-kit`
+(generic components with `@opencode/ui`'s names: `Button`, `Switch`,
+`SegmentedControl`, `Select`, `Menu`, `TextInput`, …), and every colour,
+elevation, radius, type style, and motion token comes from the OpenCode theme
+(`rune_theme_opencode::kit(dark)`), which is `@opencode/ui`'s tokens as data.
+Theming stays a Rune feature: Hex could switch themes without touching a
+view. Hex keeps its information, sections, copy, and behavior; only the look
+and layout follow the kit.
 
 What that means for Hex's existing rules:
 
 - `docs/design-system.md` describes the GPUI front end and stays authoritative
   for it while GPUI ships. It does not govern `src/rune_settings*`. When Rune
-  becomes the default, replace it with a short Hex page that points at Rune's
-  theming system and lists only Hex-specific components (keycaps, shortcut
-  recorder, listener card) and copy rules, which still apply (sentence case,
-  "Hex", one accent action per screen, descriptions without full stops).
+  becomes the default, replace it with a short Hex page that points at
+  `rune-kit` and the OpenCode theme and lists only Hex-specific pieces
+  (keycaps, shortcut recorder, listener card) and copy rules, which still
+  apply (sentence case, "Hex", one accent action per screen, descriptions
+  without full stops).
 - The token lint (`design_tokens::tests::desktop_sources_use_tokens_instead_of_raw_styles`)
   matches GPUI calls (`rgb(0x…)`, `.text_size(`, `.rounded(px(`), so it neither
-  applies to nor flags Rune code. The Rune equivalent is: views name `tok`
-  values or a Hex `Paint`; raw `oklch(…)` appears only in the controls module
-  (today: the danger colour Rune's palette lacks). Add that as a lint over
+  applies to nor flags Rune code. The Rune equivalent: views name kit tokens
+  (`p.k.c.*`, `p.k.ty.*`, `p.k.radius.*`, `p.k.elevation.*`) or kit
+  components; the only raw style values are the row and keycap metrics in
+  `src/rune_settings/controls.rs`. Add that as a lint over
   `src/rune_settings/` once a second Rune screen exists, and delete the GPUI
   lint with the last GPUI pane.
 - Hex gains a light appearance for free (Rune follows the system), so every
   Rune screen gets light and dark goldens.
-- Rune's palette has no danger or success roles. Hex derives them in
-  `controls::Paint` (danger: OKLCH red at the accents' lightness; success:
-  Rune's green accent). Upstream them into `tok` rather than growing a Hex
-  palette.
+- Danger, success, and accent roles come from the theme's state colours
+  (`k.c.danger`, `k.c.success`, `k.c.text_accent`); Hex no longer derives any.
+- The one main action per screen uses the kit's contrast button (OpenCode's
+  primary look); everything else uses the neutral button.
 
 ## What this pass did
 
 ```text
 src/rune_settings.rs           state, service bridge, view, scenes   (~1.4k lines)
-src/rune_settings/controls.rs  Rune-style card, row, switch, segmented,
-                               disclosure + inline menu, button, keycaps,
-                               tag, note, text field                 (~460)
+src/rune_settings/controls.rs  settings rows, cards, select menus,
+                               segmented, buttons, keycaps, tag, note,
+                               text field on rune-kit                (~360)
 src/rune_settings/tests.rs     10 runtime tests + 4 GPU goldens      (~310)
 tests/golden/rune-settings-*.png
 ```
@@ -62,6 +68,20 @@ tests/golden/rune-settings-*.png
   service's copy changes, so a stale snapshot never reverts a fresh edit.
   `Client::with_waker` (new) wakes Rune's on-demand redraw loop when a snapshot
   arrives.
+- **Re-skinned on `rune-kit` and the OpenCode theme** (second pass): switches,
+  segmented controls, buttons, and the text field are kit components; the
+  model, microphone, and language choices are kit `Select` fields whose
+  options open in an anchored kit `Menu` above the page (outside presses
+  close it) instead of inline rows; cards use the kit's raised elevation;
+  Inter and IBM Plex Mono come from the theme crate. Behaviour, keys, scenes,
+  and the service contract are unchanged; the microphone-mode test taps
+  `microphone-mode-control/segment1` (the kit's segment key).
+  [light](rune-ui/hex-rune-portal-light.png),
+  [dark](rune-ui/hex-rune-portal-dark.png),
+  [menu open + confirmation](rune-ui/hex-rune-menus-light.png),
+  [commands](rune-ui/hex-rune-commands-dark.png),
+  [recording a shortcut](rune-ui/hex-rune-capturing-dark.png),
+  [disabled](rune-ui/hex-rune-disabled-light.png).
 - **Rows ported:** Status (listener state, hint, last failure, operation and
   connection errors, Enable/Disable), Desktop shortcuts (portal grants or the
   `hex` commands to bind), Local transcription (model menu for the current
@@ -80,7 +100,8 @@ tests/golden/rune-settings-*.png
   `--snap` shows real state and `--script` drives real edits without a window.
 - **Checks:** `cargo test --features rune-ui rune_settings` (10 headless
   runtime tests need no GPU; 4 goldens skip without an adapter;
-  `HEX_UPDATE_GOLDENS=1` rewrites them).
+  `HEX_UPDATE_GOLDENS=1` rewrites them). Goldens for the re-skin were written
+  on apollo (RADV).
 
 ### Observed on Linux (apollo: Arch, niri, AMD RADV, scale 2)
 
@@ -90,7 +111,7 @@ tests/golden/rune-settings-*.png
   [opencode](rune-ui/rune-example-opencode-session.png)). One real-window check
   of `examples/settings` on niri rendered correctly at scale 2
   ([crop](rune-ui/rune-example-window-niri.png)); the window had no `app_id`
-  (fixed on `hex-port`). No further windows were opened.
+  (fixed on Rune `main`). No further windows were opened.
 - Mesa lavapipe (software Vulkan on the agent host) renders `examples/settings`
   pixel-identically to RADV at the goldens' tolerance (0 of 1.29 M pixels over
   12/255), so the goldens can run in CI on lavapipe.
@@ -99,7 +120,10 @@ tests/golden/rune-settings-*.png
 - Hex's Rune Settings against the real `hex.service` on niri shows the portal's
   grants (F12, Ctrl+Alt+V) and the service's last error exactly as GPUI does
   ([live](rune-ui/hex-rune-live-real-service.png),
-  [GPUI reference](rune-ui/gpui-settings-linux.png)).
+  [GPUI reference](rune-ui/gpui-settings-linux.png)). These live captures and
+  the motion strip predate the kit re-skin (first pass, Rune's neutral look);
+  from an SSH session the service now reports that it belongs to another
+  desktop session, so they were not re-taken.
 - End to end against an isolated service (`HEX_APPLICATION_SUPPORT_DIR`, no
   display, listener off): a headless script toggled Terminal paste, While
   dictating, and Recording indicator; `settings.json` and the service's
@@ -117,7 +141,7 @@ shapes, keyboard focus and IME in the hints field, physical shortcut recording
 (F-keys, Super), wheel/trackpad scrolling feel, fractional scaling, and
 closing the window while the service keeps running.
 
-## Rune changes made (`hex-port` branch, commit `13d36b0`)
+## Rune changes made (now on Rune `main`)
 
 | Change | Why |
 | --- | --- |
@@ -125,9 +149,12 @@ closing the window while the service keeps running.
 | `Key::Function(1..=24)` mapped from winit | Hex records F-key shortcuts (apollo's dictation key is F12); Rune dropped them |
 | `Mods::logo` (Super/Windows) | Linux and Windows shortcuts use Super; Rune only reported Ctrl/Alt/Shift |
 | Script `key` events accept `F1`–`F24` and `"logo": true` | so headless scripts can drive the above |
+| `rune-kit` + `rune-theme-opencode` | the component library and OpenCode theme the re-skin uses |
+| CSS box shadows, gradients, outlines; `El::anchored` overlays that follow scrolled anchors | the kit's elevation tokens and Settings' menus over a scrolling page |
 
-Everything else was worked around in Hex (see the gaps below). An `AppSpec`
-field would be the cleaner final shape for the app id; a global setter avoided
+The Linux fixes landed on `main` as their own commit (`6d87e63`, cherry-picked
+from `hex-port` `13d36b0`); `hex-port` is no longer used. An `AppSpec` field
+would be the cleaner final shape for the app id; a global setter avoided
 breaking Kit's examples while `main` moves.
 
 ## Every GPUI surface and what it needs
@@ -167,8 +194,10 @@ Total for the panes, shell, and overlays after the core gaps close: roughly
 1. **Font fallback and system fonts** (blocker for zh, ja, and emoji). Parley
    and fontique support fallback; Rune pins one family per style.
 2. **Popover and modal layer**: anchored menus, dropdowns, context menus,
-   tooltips, sheets with a scrim, outside-click dismissal, and z-order above
-   later siblings. Hex shows choices inline in the card for now.
+   tooltips, outside-press dismissal, and z-order above later siblings now
+   exist (`El::anchored`, `rune_kit::root`); still missing: modal sheets with a
+   scrim that blocks the page, focus trapping, keyboard navigation in menus,
+   and closing an open menu when its anchor scrolls.
 3. **Timers and continuous animation**: `Tx::wake_after`, looping tracks for
    pulses and indeterminate progress. Hex relies on the service's 4 Hz
    snapshots to clear "Saved" and has no recording pulse.
@@ -177,7 +206,7 @@ Total for the panes, shell, and overlays after the core gaps close: roughly
 5. **Keyboard**: key-up and modifier-only events, left/right modifier sides,
    physical key codes (macOS keys shortcuts by layout keycode), Globe/Fn.
    Required for macOS modifier-only shortcuts; Linux needs only what
-   `hex-port` added.
+   the Linux fixes on Rune `main` added.
 6. **App and window model**: an app lifetime separate from windows, several
    windows, hide-on-close, close-request hooks, window kinds (non-activating
    panel, transparent click-through overlay, Wayland layer-shell), per-app
@@ -231,9 +260,11 @@ Total for the panes, shell, and overlays after the core gaps close: roughly
   the port stays on the branch.
 - **API churn.** Kit is changing Rune's `main` daily (layout measurement,
   growth, text flights landed during this pass). Pin a commit, keep Hex's Rune
-  code in `src/rune_settings*`, and rebase `hex-port` deliberately. Rune's
+  code in `src/rune_settings*`, and move the pinned commit deliberately. Rune's
   workspace also ships a vendored copy under `crates/rune-light/vendor/rune`,
-  which makes Cargo warn about a duplicate `rune` package.
+  which makes Cargo warn about a duplicate `rune` package. Hex now pins a
+  commit on `main` (not a branch) so Kit's daily changes land only when the
+  pin moves.
 - **Unproven platform shells.** Rune ran on Kit's Macs; this pass is its first
   Linux run and only one short window check. Windows is untested; macOS window
   kinds Hex needs do not exist yet.
