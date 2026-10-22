@@ -151,6 +151,7 @@ fn spec() -> AppSpec<Ui> {
     AppSpec {
         title: "Hex",
         size: (980.0, 760.0),
+        min_size: None,
         init: Ui::load,
         view,
         scenes: SCENES,
