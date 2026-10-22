@@ -135,6 +135,8 @@ struct LinuxDesktopHost {
 
 enum UpdateState {
     Unmanaged,
+    /// Built from a checkout: updates come from that checkout.
+    SourceBuild,
     Checking(Receiver<Result<Option<InstalledUpdate>, String>>),
     Failed(Instant),
     Waiting(Instant),
@@ -314,6 +316,8 @@ pub(crate) fn run(
     crate::linux_dictation::initialize_feedback(&settings);
     let update = if crate::linux_updater::managed_install() {
         UpdateState::Checking(start_update_check())
+    } else if crate::linux_updater::source_install() {
+        UpdateState::SourceBuild
     } else {
         UpdateState::Unmanaged
     };
@@ -981,6 +985,7 @@ impl LinuxDesktopHost {
     fn snapshot(&self) -> DesktopSnapshot {
         let update_status = match &self.update {
             UpdateState::Unmanaged => DesktopUpdateStatus::Unavailable,
+            UpdateState::SourceBuild => DesktopUpdateStatus::SourceBuild,
             UpdateState::Checking(_) => DesktopUpdateStatus::Checking,
             UpdateState::Failed(_) => DesktopUpdateStatus::Failed,
             UpdateState::Waiting(_) => DesktopUpdateStatus::Current,

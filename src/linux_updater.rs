@@ -21,31 +21,46 @@ const TARGET: UpdateTarget = UpdateTarget {
 #[derive(Clone)]
 pub(crate) struct InstalledUpdate(PathBuf);
 
+/// The marker `scripts/install-linux.sh` leaves beside an executable it
+/// built from a checkout: that install updates from its checkout, never
+/// from the release feed.
+const SOURCE_MARKER: &str = "source-build";
+
+/// A release install in the user-local version layout, which the signed
+/// feed updates.
 pub(crate) fn managed_install() -> bool {
+    installed_version_dir().is_some_and(|directory| !directory.join(SOURCE_MARKER).exists())
+}
+
+/// A build installed from a source checkout into the version layout.
+pub(crate) fn source_install() -> bool {
+    installed_version_dir().is_some_and(|directory| directory.join(SOURCE_MARKER).exists())
+}
+
+/// This executable's version directory, when it runs from the user-local
+/// version layout with safe ownership.
+fn installed_version_dir() -> Option<PathBuf> {
     // geteuid has no preconditions and does not mutate process state.
     let user = unsafe { libc::geteuid() };
     if user == 0 {
-        return false;
+        return None;
     }
-    let Ok(executable) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
-        return false;
-    };
-    let Ok(support) = crate::app_paths::support_dir().and_then(|path| {
-        path.canonicalize()
-            .wrap_err("could not resolve application support")
-    }) else {
-        return false;
-    };
-    let Ok(versions) = support.join("versions").canonicalize() else {
-        return false;
-    };
-    let Some(parent) = executable.parent() else {
-        return false;
-    };
-    executable.starts_with(&versions)
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .ok()?;
+    let support = crate::app_paths::support_dir()
+        .and_then(|path| {
+            path.canonicalize()
+                .wrap_err("could not resolve application support")
+        })
+        .ok()?;
+    let versions = support.join("versions").canonicalize().ok()?;
+    let parent = executable.parent()?;
+    (executable.starts_with(&versions)
         && [support.as_path(), versions.as_path(), parent]
             .into_iter()
-            .all(|path| safe_owned_directory(path, user))
+            .all(|path| safe_owned_directory(path, user)))
+    .then(|| parent.to_path_buf())
 }
 
 pub(crate) fn install_latest() -> Result<Option<InstalledUpdate>> {

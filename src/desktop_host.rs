@@ -65,6 +65,9 @@ pub(crate) enum DesktopUpdateStatus {
     /// Windows source build); the window links to its download.
     Available,
     ReadyToRestart,
+    /// Installed from a source checkout, which updates it; the release feed
+    /// never replaces it.
+    SourceBuild,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

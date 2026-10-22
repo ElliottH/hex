@@ -151,9 +151,12 @@ cd hex
 ```
 
 Do not run the installer as root. It installs a user-local binary, desktop
-launcher, and autostart entry in the same managed layout as published builds.
-Newer signed releases can therefore replace this installed source build
-through the in-app updater. With a custom
+launcher, and autostart entry in the same layout as published builds, and
+marks the version as a source build (`source-build` beside the executable).
+The in-app updater never replaces a source build; Settings shows "Updated from
+your source checkout", and you update by pulling and running the installer
+again. Installing a published release over it switches back to signed
+updates. With a custom
 `HEX_APPLICATION_SUPPORT_DIR`, `cargo run --release` runs an
 unmanaged development Hex instead; without one it forwards to the installed Hex.
 

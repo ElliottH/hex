@@ -393,6 +393,12 @@ install -m755 "$artifact_path" "$version_staged"
 sync -f "$version_staged"
 mv -Tf "$version_staged" "$version_dir/hex"
 version_staged=
+# A build from a checkout updates from that checkout, never from the feed.
+if [ "${HEX_INSTALL_SOURCE:-}" = 1 ]; then
+  : > "$version_dir/source-build"
+else
+  rm -f "$version_dir/source-build"
+fi
 sync -f "$version_dir"
 rm -f "$current_staged" "$binary_staged"
 ln -s "versions/$version" "$current_staged"
