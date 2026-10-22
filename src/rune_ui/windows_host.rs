@@ -33,7 +33,10 @@ pub(super) const QUIT_IN_WINDOW: bool = true;
 const CHORD_POLL: Duration = Duration::from_millis(16);
 
 /// The runtime is found through its own module; nothing is handed over.
-pub(crate) type Connect = ();
+#[derive(Default)]
+pub(crate) struct Connect {
+    _nothing: (),
+}
 
 pub(super) struct Backend {
     runtime: Option<RuntimeHandle>,

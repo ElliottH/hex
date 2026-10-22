@@ -161,7 +161,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
     let history = History::open_default(settings.history_retention)
         .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
         .ok();
-    let mut app = crate::rune_ui::app(())
+    let mut app = crate::rune_ui::app(Default::default())
         .args(Vec::new())
         .on_window(|window| {
             let _ = window.with_raw_handle(|handle| {

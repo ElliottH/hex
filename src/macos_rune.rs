@@ -319,7 +319,9 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
                 (!setup_ready).then_some(recognition_start),
             )
         })?;
-    let mut app = crate::rune_ui::app(()).args(Vec::new()).accessory();
+    let mut app = crate::rune_ui::app(Default::default())
+        .args(Vec::new())
+        .accessory();
     let window = app.handle();
     let _ = WINDOW.set(window.clone());
     // The status item is created inside the loop; Hex can't run without a

@@ -55,7 +55,10 @@ const PLATFORM_REFRESH: Duration = Duration::from_secs(1);
 const ESCAPE_KEY_CODE: u16 = 53;
 
 /// The runtime is found through its own module; nothing is handed over.
-pub(crate) type Connect = ();
+#[derive(Default)]
+pub(crate) struct Connect {
+    _nothing: (),
+}
 
 pub(super) struct Backend {
     runtime: Option<RuntimeHandle>,
