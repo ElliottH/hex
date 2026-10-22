@@ -990,6 +990,8 @@ impl LinuxDesktopHost {
                 self.start();
             }
             DesktopAction::StopListening => self.stop(),
+            // Linux checks on its own schedule and applies what it finds.
+            DesktopAction::CheckForUpdates | DesktopAction::OpenUpdate => {}
         }
         Ok(())
     }

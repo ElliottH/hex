@@ -938,6 +938,12 @@ Linux `hex app --ui rune` (--features rune-ui) -> the Linux window on Rune // de
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
 └── Not yet: app file chooser, app icons, drag reorder, right-click delete
+Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
+├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
+├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
+├── Close hides the window (WM_CLOSE intercepted); Quit or no tray ends the process
+├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
+└── Not yet: HUD (no Rune overlay window), custom caption, website rules, hidden start without a flash
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -962,6 +968,12 @@ adapter and do not prove a real window, input method, or physical shortcut.
 A headless script against an isolated `hex service` saved a new mode, a
 correction, and Voice Action, and the service adopted them. See
 [the Rune port plan](../plans/rune-ui.md) for what was observed.
+
+`dev.rune-ui-windows` lives in [windows_rune.rs](../../src/windows_rune.rs) and
+[rune_ui/windows_host.rs](../../src/rune_ui/windows_host.rs). It has only
+been cross-compiled (`cargo xwin check` and `clippy -D warnings` for
+`x86_64-pc-windows-msvc`, with the transcribe.cpp build stubbed out); it has
+never run on Windows, and no test covers it.
 
 `incremental_projection_matches_snapshot_after_updates_and_partial_writes` in
 [meeting_live.rs](../../src/meeting_live.rs) compares the incremental transcript

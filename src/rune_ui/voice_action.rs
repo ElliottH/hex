@@ -5,13 +5,13 @@
 
 use rune::{El, col};
 
+use super::ShortcutTarget;
 use super::Ui;
 use super::controls::{Paint, card, note, section, setting_row, toggle_row};
 use super::models::{self, Target};
 use super::settings::{cancel_capture, hotkey_control};
 use crate::app_window::{OpenCodeFeature, set_voice_action_enabled, voice_action_description};
 use crate::desktop_i18n::tr;
-use crate::linux_service::ShortcutTarget;
 
 fn toggle(ui: &mut Ui) {
     cancel_capture(ui);

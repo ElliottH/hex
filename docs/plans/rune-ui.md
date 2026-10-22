@@ -3,7 +3,9 @@
 **Status:** Linux has a complete experimental Rune front end on the `rune-ui`
 branch: `hex app --ui rune` (built with `--features rune-ui`) shows every pane
 GPUI's Linux Settings process shows (Settings, Modes, Voice Action, History),
-the local transcription picker, and first-run setup. GPUI stays the default
+the local transcription picker, and first-run setup. Windows has the same
+panes in a single-instance tray process (`hex app --ui rune`), written and
+cross-compiled but never run (see `docs/windows.md`). GPUI stays the default
 everywhere. Rune, `rune-kit`, and `rune-theme-opencode` are pinned to a
 commit on Rune's `main` (`anomalyco/rune`, private; `338d22a`). Do not merge
 to `main` until the dependency questions under [Risks](#risks) are settled
@@ -211,9 +213,9 @@ Sizes are current GPUI lines. Effort is focused agent-days with review.
 
 | Surface | Today | Status / Rune needs | Effort left |
 | --- | --- | --- | --- |
-| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; macOS adds permissions rows, Launch at login, Dock icon, Meetings and Hex Microphone sections; Windows adds its caption | 2 |
-| Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows needs its caption row, macOS its traffic-light inset | 1 |
-| Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); macOS/Windows prepare in-process through `transcription_preparation` | 1 |
+| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS adds permissions rows, Launch at login, Dock icon, Meetings and Hex Microphone sections | 1.5 |
+| Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS needs its traffic-light inset | 1 |
+| Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); Windows prepares in-process through `transcription_preparation` on its runtime thread (type-checked only); macOS likewise, to do | 0.5 |
 | Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus file chooser, icons, drag, context menu; macOS adds website rules (Brave) | 3 |
 | Voice Action | ~500 | Done on Linux | 0.5 |
 | History | ~250 | Done | 0 |
@@ -223,11 +225,11 @@ Sizes are current GPUI lines. Effort is focused agent-days with review.
 | Onboarding tour | `app_window/tour.rs` (1.1k) | Linux done; macOS adds permission rows, the System Settings guide, relaunch, and the practice dictation; animated art needs looping tracks | 3 |
 | Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order | Rune core |
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Window kind: borderless, transparent, click-through, non-activating, all spaces | 4 |
-| HUD, Windows | `windows_indicator.rs` (151) + GPUI | Overlay window: topmost, no activation, click-through | 2 |
+| HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) | 2 |
 | HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Stays GTK until Rune has a layer-shell surface | 3 later |
 | Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Panel window kind, focus-free buttons, live waveform | 5 |
 | Mac menu bar | `status_item.rs` (AppKit) | Stays native; Rune must run inside an app lifetime that outlives windows | 1 |
-| Windows tray | `tray-icon` + `windows_app.rs` | Stays native; same app-lifetime need | 1 |
+| Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on Rune's winit thread; close-to-tray bridged in Hex by replacing the window procedure until Rune has an app lifetime (type-checked only) | 0.5 |
 | Windows chrome | `windows_ui.rs` (311) | Custom title bar hit-testing | 2 |
 | Previews | macOS-only `capture-preview.sh` | Rune `--snap`/`--scene` on every OS (done for every Linux pane); goldens in CI on lavapipe | 1 |
 | i18n | `desktop_i18n.rs` | Done: CJK fallback in Rune, translation test covers Rune copy | 0 |
@@ -262,7 +264,11 @@ the Rune core work below.
 
 1. Linux: done except the parity list above; switch the default after the
    real-window checks.
-2. Windows: chrome and title-bar hit-testing, overlay HUD window, tray stays
+2. Windows: the panes, tray, single instance, and in-process runtime are
+   written and cross-compiled (`hex app --ui rune`, `docs/windows.md`) but
+   have never run; next a person on Windows runs them, then Rune's app
+   lifetime replaces the hide-on-close bridge, then chrome and title-bar
+   hit-testing and the overlay HUD window; tray stays
    native; panes as Linux, in-process model preparation, Launch at login.
 3. macOS: app lifetime with the status item, keyboard gap 4, the panel window
    kind, then the HUD, meeting capsules, permissions rows and the full tour,
@@ -296,10 +302,15 @@ the Rune core work below.
   workspace ships a vendored copy under `crates/rune-light/vendor/rune`, which
   makes Cargo warn about a duplicate `rune` package.
 - **Unproven platform shells.** Rune's Linux window has had one short check;
-  Windows is untested; the macOS window kinds Hex needs do not exist yet.
+  Windows has only been cross-compiled (`cargo xwin clippy` on apollo; see
+  `docs/windows.md`), never run; the macOS window kinds Hex needs do not exist yet.
 - **Two front ends at once.** Until a platform switches, every pane change must
   land in GPUI and Rune. Shared helpers live in `app_window` (pure functions);
   keep moving behavior there rather than copying it.
+- **Windows lockfile.** Resolving Rune for Windows put `gpu-allocator` on
+  `windows` 0.57 (shared with GPUI's `sysinfo`), which breaks `wgpu-hal`'s
+  DX12 backend; `Cargo.lock` pins `gpu-allocator`'s `windows` to 0.62.2 by
+  hand. A `cargo update` that re-resolves it brings the error back.
 - **Pre-existing on `f8774a5`:** `linux_app::tests::malformed_settings_cannot_start_even_after_dismissing_the_error`
   fails on Linux without these changes, and
   `dictation_processor::tests::service_discovery_fallback_shares_deadline_and_observes_cancellation`

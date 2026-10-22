@@ -138,7 +138,7 @@ impl ModesPane {
     }
 
     pub(super) fn load_personal_commands(&mut self) {
-        self.focused_app_known = !crate::linux_session::LinuxSession::detect().is_wayland();
+        self.focused_app_known = super::host::focused_application_known();
         self.workspace = crate::app_paths::personal_commands_workspace()
             .unwrap_or_else(|_| PathBuf::from("~/.config/hex"));
         self.read_status();
@@ -1138,7 +1138,7 @@ fn workspace_status(ui: &Ui, p: Paint) -> Option<El> {
 }
 
 impl Ui {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn modes_application_error(&self) -> Option<&str> {
         self.modes.application_error.as_deref()
     }

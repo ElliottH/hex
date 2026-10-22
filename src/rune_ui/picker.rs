@@ -9,11 +9,11 @@
 use rune::{El, col, el, row, text};
 use rune_kit::{Badge, ButtonSize, IconButton, IconButtonVariant, Progress};
 
+use super::Request;
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::desktop_transcription_picker::transcription_selection_is_active;
-use crate::linux_service::Request;
 use crate::transcription_models::{
     self, ModelDefinition, ModelPreparationStage, ModelRuntime, TranscriptionModelId,
 };
