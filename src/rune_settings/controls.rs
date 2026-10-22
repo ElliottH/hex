@@ -182,8 +182,8 @@ pub(super) fn segmented(
 ) -> El {
     let widest = labels
         .iter()
-        .map(|label| label.chars().count() as f32 * 7.6 + 26.0)
-        .fold(56.0, f32::max)
+        .map(|label| label.chars().count() as f32 * 8.0 + 28.0)
+        .fold(60.0, f32::max)
         .round();
     SegmentedControl::new(labels, Some(selected))
         .width(Some(widest * labels.len() as f32))
