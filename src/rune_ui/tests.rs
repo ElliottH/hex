@@ -235,6 +235,34 @@ fn the_sidebar_switches_panes_and_keeps_settings() {
 }
 
 #[test]
+fn switching_panes_is_instant() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    let (x, y) = rt.find("nav-modes").expect("the Modes item");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    let panel: Vec<_> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.contains("/panel/"))
+        .collect();
+    assert!(!panel.is_empty());
+    assert!(
+        !panel
+            .iter()
+            .any(|e| e.key.as_deref() == Some("terminal-paste")),
+        "Settings left at once"
+    );
+    for element in panel {
+        assert!(
+            element.opacity >= 0.999 && !element.moving,
+            "{} is still animating",
+            element.path
+        );
+    }
+}
+
+#[test]
 fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
     let mut rt = runtime("voice-action-off", true, PANE_SIZE);
     tap(&mut rt, "voice-action-enabled");
@@ -392,7 +420,6 @@ fn mode_transformations_add_reorder_and_remove() {
         rt.pointer_move(x, y - step as f32 * 5.0);
         rt.frame(1.0 / 60.0);
     }
-    assert_eq!(rt.cursor(), rune::Cursor::Grabbing);
     assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
     let shown: Vec<String> = rt
         .elements()

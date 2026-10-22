@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rune::{Cursor, Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, spacer, text};
+use rune::{Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, spacer, text};
 use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
 
 use super::Ui;
@@ -1153,11 +1153,6 @@ fn transformations(ui: &Ui, p: Paint, current: &DictationMode) -> El {
             .w(20.0)
             .h_full()
             .center()
-            .cursor(if dragging.is_some() {
-                Cursor::Grabbing
-            } else {
-                Cursor::Grab
-            })
             .on_drag(move |ui: &mut Ui, d: &mut Drag, _: &mut Tx| {
                 drag_transformation(ui, &dragged, index, pitch, d)
             })

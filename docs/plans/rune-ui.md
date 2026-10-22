@@ -102,7 +102,7 @@ shared from `app_window` rather than copied.
 
 | Pane | Status | Screenshots (light / dark) |
 | --- | --- | --- |
-| Shell | Sidebar with the four Linux panes, version, Update button when a restart is ready; Escape closes the open menu or the picker | [settings light](rune-ui/hex-rune-shell-portal-light.png) / [dark](rune-ui/hex-rune-shell-portal-dark.png) |
+| Shell | Sidebar with the four Linux panes, switching instantly (no fade), version, Update button when a restart is ready; Escape closes the open menu or the picker | [settings light](rune-ui/hex-rune-shell-portal-light.png) / [dark](rune-ui/hex-rune-shell-portal-dark.png) |
 | Settings | Every Linux row (status, desktop shortcuts, dictation, behavior, application); the transcription row opens the picker | as above, plus [Chinese](rune-ui/hex-rune-shell-chinese-dark.png) |
 | Voice Action | Opt-in with GPUI's shortcut conflict check, the recorder, OpenCode model (searchable popover) and thinking pickers, unavailable/missing OpenCode notice with retry and setup | [light](rune-ui/hex-rune-shell-voice-action-light.png) / [dark](rune-ui/hex-rune-shell-voice-action-dark.png), [model search](rune-ui/hex-rune-shell-voice-action-models-dark.png), [OpenCode missing](rune-ui/hex-rune-shell-voice-action-unavailable-light.png) |
 | History | Search, retention select, two-step Clear all, detail with Copy (Rune's clipboard request) and Delete, latency and processing facts; follows new dictations while shown | [light](rune-ui/hex-rune-shell-history-light.png) / [dark](rune-ui/hex-rune-shell-history-dark.png) |
@@ -259,10 +259,10 @@ real window.
 These need a person at the keyboard (no input was synthesized in Dax's
 session):
 
-- Pointer: hover and press states; cursor shapes (pointer over buttons and
-  segments, I-beam over text fields, grab/grabbing on the transformation
-  handles; unit-tested in Rune, never seen on screen); dragging a
-  transformation with a real pointer (headless test only).
+- Pointer: hover and press states; the I-beam over text fields (every other
+  control keeps the arrow, as Dax asked; unit-tested in Rune, never seen on
+  screen); dragging a transformation with a real pointer (headless test
+  only).
 - "Choose a file…": the FileChooser portal dialog (version 4 on apollo's
   niri session, checked with `busctl introspect`) was never opened, so the
   dialog, its filters, and the round trip into the mode are unobserved. Hex
@@ -301,7 +301,7 @@ session):
 | `rune-kit`, `rune-theme-opencode`, CSS shadows/gradients/outlines, `El::anchored` overlays (`ad80ae1`…`1177fbd`) | the component library and OpenCode theme the panes use |
 | CJK font fallback (`aebf3a1`) | app-supplied extra fonts, then installed CJK fonts (Noto/Source Han, PingFang, Hiragino, YaHei, WenQuanYi, …) become fontique fallbacks for Han, kana, Hangul, Bopomofo; Latin output byte-identical |
 | `on_edit` takes closures; `rune::edit_access` (`338d22a`) | a list of fields (each mode's corrections) binds each row's `TextEdit` by index |
-| `rune::Cursor`, `El::cursor`, `Runtime::cursor`; the shell sets the pointer shape; rune-kit buttons and segments use the pointer as @opencode/ui does | parity with GPUI's pointer and I-beam cursors; the drag handles grab |
+| `rune::Cursor`, `El::cursor`, `Runtime::cursor`; the shell sets the pointer shape; rune-kit controls keep the arrow (`7794e49`) | the I-beam over text fields; Hex shows no hand cursor because every control has a hover state |
 | `arboard` with `wayland-data-control` | copy and paste on Wayland without XWayland |
 | Vector shapes: `rune::Shape`, `Path`, `canvas`, `El::shape`, `KIND_SEGMENT`/`KIND_TRIANGLE` (`d666064`), `Shape::view_box` (`a5121c3`) | the Fun pane's waveforms; strokes and seam-free fills checked on lavapipe and hailmary's Metal |
 
