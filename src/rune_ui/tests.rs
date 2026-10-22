@@ -56,21 +56,51 @@ fn key(rt: &mut Runtime<Ui>, key: Key, mods: Mods) {
 }
 
 #[test]
-fn portal_desktops_show_what_they_granted_and_keep_recording_rows() {
-    let rt = runtime("portal", true, GOLDEN_SIZE);
+fn portal_desktops_show_what_they_granted_beside_each_recorder() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
     let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
     for expected in [
-        "Desktop shortcuts",
-        "F12",
-        "Ctrl+Alt+V",
-        "Granted by your desktop",
-        "Dictation shortcut",
+        "Shortcuts",
+        "Your desktop granted F12",
+        "Your desktop granted Ctrl+Alt+V",
+        "Change shortcut",
     ] {
         assert!(
             texts.iter().any(|text| text == expected),
             "missing {expected:?} in {texts:?}"
         );
     }
+    assert!(!texts.iter().any(|text| text == "Desktop shortcuts"));
+    for recorder in ["dictation-hotkey", "paste-last-hotkey"] {
+        tap(&mut rt, recorder);
+        assert!(matches!(
+            rt.state.capture,
+            settings::Capture::Listening { .. }
+        ));
+        key(&mut rt, Key::Escape, Mods::default());
+        assert_eq!(rt.state.capture, settings::Capture::Idle);
+    }
+}
+
+#[test]
+fn a_refused_portal_shortcut_says_how_to_free_it() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    if let Some(view) = &mut rt.state.view {
+        view.listener.shortcuts = DesktopShortcuts::Portal(vec![DesktopGrantedShortcut {
+            name: "Dictation".into(),
+            trigger: None,
+        }]);
+    }
+    rt.invalidate();
+    rt.frame(0.0);
+    let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "Your desktop did not grant this shortcut")
+    );
+    assert!(texts.iter().any(|text| text.contains("config.kdl")));
+    assert!(rt.find("dictation-hotkey").is_some());
 }
 
 #[test]
@@ -78,7 +108,7 @@ fn desktops_without_a_portal_list_commands_instead_of_recording_rows() {
     let rt = runtime("commands", true, GOLDEN_SIZE);
     let texts: Vec<String> = rt.elements().into_iter().filter_map(|e| e.text).collect();
     assert!(texts.iter().any(|text| text == "hex dictation toggle"));
-    assert!(!texts.iter().any(|text| text == "Dictation shortcut"));
+    assert!(rt.find("dictation-hotkey").is_none());
     assert!(rt.find("paste-last-hotkey").is_none());
 }
 

@@ -316,7 +316,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     if caps.listener_control {
         content = content.child(listener_card(ui, p));
     }
-    if let Some(shortcuts) = desktop_shortcuts(ui, p) {
+    if let Some(shortcuts) = shortcuts_section(ui, p).or_else(|| desktop_commands(ui, p)) {
         content = content.child(shortcuts);
     }
     content = content
@@ -427,25 +427,103 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
     section(p, "listening", tr("Status"), rows)
 }
 
-/// What the desktop granted (portal) or which commands to bind (none).
-pub(super) fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
+/// Every shortcut Hex records, each with its recorder. Under a shortcuts
+/// portal each row also says what the desktop granted, since the desktop
+/// decides which trigger Hex actually gets.
+pub(super) fn shortcuts_section(ui: &Ui, p: Paint) -> Option<El> {
+    if !ui.records_shortcuts() {
+        return None;
+    }
+    let granted = match ui.shortcuts() {
+        Some(DesktopShortcuts::Portal(granted)) => Some(granted.as_slice()),
+        _ => None,
+    };
+    let mut targets = vec![ShortcutTarget::Dictation, ShortcutTarget::PasteLast];
+    if ui.settings.voice_action.enabled {
+        targets.push(ShortcutTarget::VoiceAction);
+    }
+    let mut rows: Vec<El> = targets
+        .into_iter()
+        .map(|target| shortcut_row(ui, p, target, granted))
+        .collect();
+    if granted.is_some_and(|granted| granted.iter().any(|shortcut| shortcut.trigger.is_none())) {
+        rows.push(note(
+            "refused",
+            tr("Your desktop kept a shortcut for itself. Record another one, or free it in your desktop's keyboard settings (on niri, remove its bind from config.kdl)."),
+            p.danger(),
+        ));
+    }
+    Some(section(p, "shortcuts", tr("Shortcuts"), rows))
+}
+
+/// One recordable shortcut: what it does, or what the desktop granted for
+/// it, beside its recorder.
+fn shortcut_row(
+    ui: &Ui,
+    p: Paint,
+    target: ShortcutTarget,
+    granted: Option<&[DesktopGrantedShortcut]>,
+) -> El {
+    let (key, title, purpose, portal_name) = match target {
+        ShortcutTarget::Dictation => (
+            "dictation-shortcut",
+            tr("Dictation"),
+            tr("Click to record a new shortcut"),
+            "Dictation",
+        ),
+        ShortcutTarget::PasteLast => (
+            "paste-last",
+            tr("Paste last dictation"),
+            tr("Re-paste the most recent dictation"),
+            "Paste last dictation",
+        ),
+        ShortcutTarget::VoiceAction => (
+            "voice-action-shortcut",
+            tr("Voice Action"),
+            tr("Hold to speak; selected text is included automatically"),
+            "Voice Action",
+        ),
+    };
+    let grant =
+        granted.and_then(|granted| granted.iter().find(|shortcut| shortcut.name == portal_name));
+    let description = match grant {
+        Some(DesktopGrantedShortcut {
+            trigger: Some(trigger),
+            ..
+        }) => (tr_fill("Your desktop granted {}", trigger), p.muted()),
+        Some(DesktopGrantedShortcut { trigger: None, .. }) => (
+            tr("Your desktop did not grant this shortcut").to_string(),
+            p.danger(),
+        ),
+        None => (purpose.to_string(), p.muted()),
+    };
+    let mut control = row()
+        .key(format!("{key}-control"))
+        .gap(8.0)
+        .center_y()
+        .children(super::platform_settings::side_selector(ui, p, target))
+        .child(hotkey_control(ui, p, target));
+    if target == ShortcutTarget::PasteLast && ui.settings.paste_last_hotkey.is_some() {
+        control = control.child(button(
+            p,
+            "clear-paste-last",
+            tr("Clear"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| {
+                ui.update(|settings| settings.paste_last_hotkey = None);
+            },
+        ));
+    }
+    described_row(p, key, title, Some(description), control)
+}
+
+/// Without a shortcuts portal the desktop's keybindings own every shortcut:
+/// the commands to bind there.
+pub(super) fn desktop_commands(ui: &Ui, p: Paint) -> Option<El> {
     let rows = match ui.shortcuts()? {
-        DesktopShortcuts::Unregistered | DesktopShortcuts::Registered => return None,
-        DesktopShortcuts::Portal(granted) => {
-            let mut rows: Vec<El> = granted
-                .iter()
-                .enumerate()
-                .map(|(index, shortcut)| granted_row(p, index, shortcut))
-                .collect();
-            if granted.iter().any(|shortcut| shortcut.trigger.is_none()) {
-                rows.push(note(
-                    "refused",
-                    tr("Your desktop did not grant every shortcut. Record another one, or free it in your desktop's keyboard settings."),
-                    p.danger(),
-                ));
-            }
-            rows
-        }
+        DesktopShortcuts::Unregistered
+        | DesktopShortcuts::Registered
+        | DesktopShortcuts::Portal(_) => return None,
         DesktopShortcuts::Commands => {
             let mut rows = vec![
                 note(
@@ -502,31 +580,6 @@ pub(super) fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
         tr("Desktop shortcuts"),
         rows,
     ))
-}
-
-pub(super) fn granted_row(p: Paint, index: usize, shortcut: &DesktopGrantedShortcut) -> El {
-    let title = match shortcut.name.as_str() {
-        "Paste last dictation" => tr("Paste last dictation"),
-        "Voice Action" => tr("Voice Action"),
-        _ => tr("Dictation"),
-    };
-    let value = match &shortcut.trigger {
-        Some(trigger) => text(trigger.clone())
-            .key("trigger")
-            .font(p.k.ty.ui)
-            .color(p.muted()),
-        None => text(tr("Not granted"))
-            .key("trigger")
-            .font(p.k.ty.ui)
-            .color(p.danger()),
-    };
-    setting_row(
-        p,
-        &format!("granted{index}"),
-        title,
-        Some(tr("Granted by your desktop")),
-        value,
-    )
 }
 
 pub(super) fn command_row(
@@ -671,24 +724,6 @@ pub(super) fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             },
         ),
     ));
-    if ui.records_shortcuts() {
-        rows.push(setting_row(
-            p,
-            "dictation-shortcut",
-            tr("Dictation shortcut"),
-            Some(tr("Click to record a new shortcut")),
-            row()
-                .key("dictation-shortcut-control")
-                .gap(8.0)
-                .center_y()
-                .children(super::platform_settings::side_selector(
-                    ui,
-                    p,
-                    ShortcutTarget::Dictation,
-                ))
-                .child(hotkey_control(ui, p, ShortcutTarget::Dictation)),
-        ));
-    }
     section(p, "dictation", tr("Dictation"), rows)
 }
 
@@ -939,36 +974,6 @@ pub(super) fn behavior_section(ui: &Ui, p: Paint) -> El {
                 let enabled = !ui.settings.paste_with_shift;
                 ui.update(|settings| settings.paste_with_shift = enabled);
             },
-        ));
-    }
-    if ui.records_shortcuts() {
-        let mut control = row()
-            .key("paste-last-control")
-            .gap(8.0)
-            .center_y()
-            .children(super::platform_settings::side_selector(
-                ui,
-                p,
-                ShortcutTarget::PasteLast,
-            ))
-            .child(hotkey_control(ui, p, ShortcutTarget::PasteLast));
-        if settings.paste_last_hotkey.is_some() {
-            control = control.child(button(
-                p,
-                "clear-paste-last",
-                tr("Clear"),
-                ButtonKind::Secondary,
-                |ui: &mut Ui, _| {
-                    ui.update(|settings| settings.paste_last_hotkey = None);
-                },
-            ));
-        }
-        rows.push(setting_row(
-            p,
-            "paste-last",
-            tr("Paste last dictation"),
-            Some(tr("Re-paste the most recent dictation")),
-            control,
         ));
     }
     section(p, "behavior", tr("Behavior"), rows)

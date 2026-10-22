@@ -367,7 +367,7 @@ latency measurement.
 
 ```ts
 Settings                                 // settings
-├── Dictation shortcut -> Capture a replacement binding
+├── Shortcuts (top) -> Dictation, Paste last, Voice Action -> Change shortcut
 ├── Microphone -> Automatic or saved device
 │   ├── Automatic -> Compiled preferences, then the macOS default
 │   │   └── Default is a Bluetooth headset -> Built-in mic when present // avoids the call profile
@@ -725,8 +725,12 @@ Linux beta                               // not macOS feature parity
 ├── Shortcuts -> One state machine, three sources        // linux.shortcuts
 │   ├── X11 -> Root-window key grabs; Settings records the chord
 │   ├── Wayland + GlobalShortcuts portal -> Desktop grants the triggers
-│   │   ├── Settings shows the granted trigger (GNOME/KDE may assign another)
-│   │   └── Refused shortcut -> "Not granted" + error; the rest keep working
+│   │   ├── Settings > Shortcuts -> Change shortcut -> Press chord (Esc cancels)
+│   │   │   └── Saved -> New portal session asks for it as preferred_trigger
+│   │   │       // observed on the niri fork: a new session gets it, a rebind in the same one fails
+│   │   ├── Each row: "Your desktop granted <trigger>" (it may assign another)
+│   │   └── Refused shortcut -> Danger row + how to free it (niri: config.kdl);
+│   │       the rest keep working
 │   ├── Wayland without the portal -> Bind `hex` commands in the desktop
 │   │   └── Settings hides shortcut rows and lists the commands
 │   └── Listener starting or stopped -> `hex status` reports Unregistered,
