@@ -333,7 +333,6 @@ pub fn initialize_workspace() -> Result<PathBuf> {
 }
 
 /// Whether the personal command workspace has a config to host.
-#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn workspace_configured() -> bool {
     crate::app_paths::personal_commands_workspace()
         .is_ok_and(|workspace| workspace.join("hex.config.ts").is_file())

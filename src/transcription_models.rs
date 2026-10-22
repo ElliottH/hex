@@ -204,6 +204,7 @@ impl ModelDefinition {
             .then(|| self.runtime_language(language))
     }
 
+    #[cfg(target_os = "macos")]
     pub fn presentation_languages(&self) -> Vec<&'static str> {
         self.languages
             .iter()
@@ -634,6 +635,7 @@ pub fn is_verified(model: &ModelDefinition) -> bool {
     verification_receipt_matches(&path, model)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub fn verify_installed(model: &ModelDefinition, canceled: &AtomicBool) -> Result<PathBuf> {
     check_canceled(canceled)?;
     let path = model_path(model)?;
@@ -641,6 +643,7 @@ pub fn verify_installed(model: &ModelDefinition, canceled: &AtomicBool) -> Resul
     Ok(path)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn verify_installed_at(path: &Path, model: &ModelDefinition, canceled: &AtomicBool) -> Result<()> {
     check_canceled(canceled)?;
     if !path.is_file() {
@@ -897,30 +900,6 @@ fn verification_receipt_path(model_path: &Path) -> PathBuf {
     model_path.with_extension("gguf.verified.json")
 }
 
-/// Every model offered on desktop platforms.
-#[cfg(target_os = "windows")]
-pub fn available_models() -> Vec<&'static ModelDefinition> {
-    MODELS.iter().filter(|model| model.available()).collect()
-}
-
-/// The language a newly chosen model dictates in: the current preference
-/// when supported, otherwise automatic detection, otherwise the model's
-/// first supported language.
-#[cfg(target_os = "windows")]
-pub fn language_for_model(model: TranscriptionModelId, preferred: &str) -> Option<String> {
-    let definition = definition(model);
-    if definition.supports_language(preferred) {
-        return Some(preferred.to_string());
-    }
-    if definition.supports_language(AUTO_LANGUAGE) {
-        return Some(AUTO_LANGUAGE.to_string());
-    }
-    LANGUAGES
-        .iter()
-        .find(|(code, _)| definition.supports_language(code))
-        .map(|(code, _)| (*code).to_string())
-}
-
 /// The best starting selection for a dictation language: its first
 /// recommended runtime model. Unknown languages fall back to English, so an
 /// English system starts with Parakeet Unified English.
@@ -944,30 +923,6 @@ pub fn recommended_selection(language: &str) -> TranscriptionSelection {
     }
 }
 
-/// Removes a downloaded model and its verification receipt. A model still
-/// held open by the runtime surfaces the sharing violation as the error.
-#[cfg(target_os = "windows")]
-pub fn uninstall(model: &ModelDefinition) -> Result<()> {
-    let path = model_path(model)?;
-    let _ = fs::remove_file(verification_receipt_path(&path));
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => {
-            Err(error).wrap_err_with(|| format!("could not remove {} from disk", model.name))
-        }
-    }
-}
-
-/// Replaces `destination` with `source`. On Windows `fs::rename` already
-/// uses `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`; on Linux it is
-/// `rename(2)`.
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn atomic_replace(source: &Path, destination: &Path) -> Result<()> {
-    fs::rename(source, destination)?;
-    Ok(())
-}
-
 pub(crate) fn modified_ns(metadata: &fs::Metadata) -> Option<u64> {
     metadata
         .modified()
@@ -988,7 +943,7 @@ fn sync_file(path: &Path) -> std::io::Result<()> {
 
 /// Persists a rename or removal in `directory`. Windows cannot open a
 /// directory as a file, and NTFS journals the entry change itself.
-fn sync_directory(directory: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_directory(directory: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
     #[cfg(windows)]
@@ -1323,7 +1278,6 @@ mod tests {
         assert!(check_canceled(&canceled).is_err());
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn installed_only_verification_never_downloads_or_replaces_an_invalid_model() {
         let model = fixture_model();

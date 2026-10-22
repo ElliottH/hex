@@ -1149,23 +1149,8 @@ impl Parakeet {
     /// whole-clip padding; chunks and control-trimmed reruns below only apply
     /// the minimum duration, never another model-specific trailing context.
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<String> {
-        let Some(max_audio_samples) = self
-            .max_audio_samples
-            .filter(|&max_samples| samples.len() > max_samples)
-        else {
-            return self.transcribe_segments(samples).map(|result| result.text);
-        };
-        let mut text = Vec::new();
-        for chunk in samples.chunks(max_audio_samples) {
-            let mut chunk = chunk.to_vec();
-            pad_for_parakeet(&mut chunk);
-            let result = self.transcribe_segments(&chunk)?;
-            let result = result.text.trim();
-            if !result.is_empty() {
-                text.push(result.to_string());
-            }
-        }
-        Ok(text.join(" "))
+        self.session
+            .transcribe_chunked(samples, &self.options, self.max_audio_samples)
     }
 
     pub fn transcribe_voice(

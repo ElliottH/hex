@@ -16,7 +16,7 @@ const MINIMUM_SPEECH_DB: f32 = -55.0;
 const LOWEST_FLOOR_DB: f32 = -90.0;
 /// About 3 dB per second at 50 frames per second.
 const FLOOR_RISE_DB_PER_FRAME: f32 = 0.06;
-pub(crate) const MINIMUM_PIECE: Duration = Duration::from_secs(3);
+const MINIMUM_PIECE: Duration = Duration::from_secs(3);
 const PAUSE: Duration = Duration::from_millis(600);
 const LONG_PIECE: Duration = Duration::from_secs(8);
 const LONG_PIECE_PAUSE: Duration = Duration::from_millis(300);

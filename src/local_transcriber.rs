@@ -6,9 +6,10 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use transcribe_cpp::{Backend, Model, ModelOptions, RunOptions, TimestampKind};
 
 use crate::gguf_session::OfflineGgufSession;
+#[cfg(target_os = "linux")]
+use crate::transcription_models::{ModelDefinition, TranscriptionModelId, definition};
 use crate::transcription_models::{
-    ModelDefinition, TranscriptionModelId, TranscriptionSelection, definition,
-    download_with_progress, model_path, validate,
+    TranscriptionSelection, download_with_progress, model_path, validate,
 };
 
 pub struct LocalTranscriber {
@@ -19,10 +20,12 @@ pub struct LocalTranscriber {
     stream: Option<transcribe_cpp::StreamOptions>,
 }
 
+#[cfg(target_os = "linux")]
 pub fn default_model() -> &'static ModelDefinition {
     definition(TranscriptionModelId::default())
 }
 
+#[cfg(target_os = "linux")]
 pub fn install_default(canceled: &AtomicBool) -> Result<()> {
     install(&TranscriptionSelection::default(), canceled)
 }
@@ -69,6 +72,7 @@ pub fn devices() -> Result<Vec<String>> {
 /// or window can start: two Vulkan instances created at once in one process
 /// (ggml's here, wgpu's for the window) crash inside the Vulkan loader.
 /// Later model loads reuse the instance.
+#[cfg(target_os = "linux")]
 pub fn initialize_backends() {
     transcribe_cpp::init_logging();
     match transcribe_cpp::init_backends_default() {
@@ -78,6 +82,7 @@ pub fn initialize_backends() {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub fn transcribe_wav(path: &Path) -> Result<String> {
     transcribe_wav_with_selection(path, &TranscriptionSelection::default())
 }
@@ -118,6 +123,7 @@ pub fn read_wav_for_parakeet(path: &Path) -> Result<Vec<f32>> {
 }
 
 impl LocalTranscriber {
+    #[cfg(target_os = "linux")]
     pub fn load_default() -> Result<Self> {
         Self::load(&TranscriptionSelection::default())
     }
@@ -231,29 +237,7 @@ impl LocalTranscriber {
     }
 
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<String> {
-        let Some(max_samples) = self
-            .max_audio_samples
-            .filter(|&max_samples| samples.len() > max_samples)
-        else {
-            return self.run(samples);
-        };
-        let mut output = Vec::new();
-        for samples in samples.chunks(max_samples) {
-            let mut chunk = samples.to_vec();
-            crate::dictation::pad_for_parakeet(&mut chunk);
-            let text = self.run(&chunk)?;
-            let text = text.trim();
-            if !text.is_empty() {
-                output.push(text.to_string());
-            }
-        }
-        Ok(output.join(" "))
-    }
-
-    fn run(&mut self, samples: &[f32]) -> Result<String> {
         self.session
-            .run(samples, &self.options)
-            .map(|transcript| transcript.text)
-            .wrap_err("transcription failed")
+            .transcribe_chunked(samples, &self.options, self.max_audio_samples)
     }
 }
