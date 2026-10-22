@@ -616,7 +616,10 @@ impl NativeHost for MacHost {
         if state.demo.is_none()
             || crate::hex_microphone::demo_is_busy()
             || crate::hex_microphone::demo_recompute_is_running()
-            || state.demo.as_ref().is_some_and(|demo| demo.is_recording || demo.playing.is_some())
+            || state
+                .demo
+                .as_ref()
+                .is_some_and(|demo| demo.is_recording || demo.playing.is_some())
         {
             state.demo = Some(crate::hex_microphone::demo_snapshot());
             changed = true;
