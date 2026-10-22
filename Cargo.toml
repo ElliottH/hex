@@ -92,9 +92,9 @@ x11rb = { version = "0.14.0", features = ["xtest"] }
 # The Rune front end (`--features rune-ui`) on Linux and Windows.
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 png = { version = "0.18", optional = true }
-rune = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "a242f5aeca578cbf3453215b3b8d344a8fd8d42c", optional = true }
-rune-kit = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "a242f5aeca578cbf3453215b3b8d344a8fd8d42c", optional = true }
-rune-theme-opencode = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "a242f5aeca578cbf3453215b3b8d344a8fd8d42c", optional = true }
+rune = { git = "https://github.com/anomalyco/rune.git", rev = "7eea3a36b72098a0814c1063928912886529e825", optional = true }
+rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "7eea3a36b72098a0814c1063928912886529e825", optional = true }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "7eea3a36b72098a0814c1063928912886529e825", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }

@@ -354,10 +354,55 @@ fn mode_transformations_add_reorder_and_remove() {
             .clone()
     };
     assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
-    tap(&mut rt, "transformation1/up");
+    let reloads = sent(&rt).len();
+    // Drag the second row's handle up one row: the rows reorder while the
+    // pointer moves and the order is saved once, on release.
+    let (x, y) = rt.find("transformation1/handle").expect("a drag handle");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    for step in 1..=8 {
+        rt.pointer_move(x, y - step as f32 * 5.0);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(rt.cursor(), rune::Cursor::Grabbing);
+    assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
+    let shown: Vec<String> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.ends_with("/name") && e.path.contains("/transformation"))
+        .filter_map(|e| e.text)
+        .collect();
+    assert_eq!(shown, ["Normalize links", "Smart punctuation"]);
+    rt.pointer_up(x, y - 40.0);
+    rt.frame(1.0 / 60.0);
     assert_eq!(ids(&rt), ["normalize-links", "smart-punctuation"]);
+    assert_eq!(sent(&rt).len(), reloads + 1);
     tap(&mut rt, "transformation0/remove");
     assert_eq!(ids(&rt), ["smart-punctuation"]);
+}
+
+#[test]
+fn a_chosen_file_joins_the_catalog_and_the_mode() {
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    let application = crate::application_catalog::InstalledApplication {
+        name: "helix".into(),
+        bundle_id: None,
+        path: "/usr/bin/helix".into(),
+        icon: None,
+    };
+    modes::chosen_application(&mut rt.state, Ok(Some(application)));
+    assert!(
+        rt.state.settings.dictation_processing.modes[0]
+            .applications
+            .contains(&"helix".to_string())
+    );
+    modes::chosen_application(&mut rt.state, Ok(None));
+    assert!(rt.state.modes_application_error().is_none());
+    modes::chosen_application(&mut rt.state, Err("no file chooser portal".into()));
+    assert_eq!(
+        rt.state.modes_application_error(),
+        Some("no file chooser portal")
+    );
 }
 
 #[test]
@@ -563,3 +608,5 @@ fn goldens() {
     check_golden("voice-action-unavailable", false, PANE_SIZE);
     check_golden("onboarding", true, PANE_SIZE);
 }
+
+mod panes;

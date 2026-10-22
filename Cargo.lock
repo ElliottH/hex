@@ -7312,7 +7312,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+ssh://git@github.com/anomalyco/rune.git?rev=a242f5aeca578cbf3453215b3b8d344a8fd8d42c#a242f5aeca578cbf3453215b3b8d344a8fd8d42c"
+source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
 dependencies = [
  "arboard",
  "bytemuck",
@@ -7334,7 +7334,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+ssh://git@github.com/anomalyco/rune.git?rev=a242f5aeca578cbf3453215b3b8d344a8fd8d42c#a242f5aeca578cbf3453215b3b8d344a8fd8d42c"
+source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
 dependencies = [
  "rune",
  "rune-motion",
@@ -7344,12 +7344,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+ssh://git@github.com/anomalyco/rune.git?rev=a242f5aeca578cbf3453215b3b8d344a8fd8d42c#a242f5aeca578cbf3453215b3b8d344a8fd8d42c"
+source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
 
 [[package]]
 name = "rune-theme-opencode"
 version = "0.0.1"
-source = "git+ssh://git@github.com/anomalyco/rune.git?rev=a242f5aeca578cbf3453215b3b8d344a8fd8d42c#a242f5aeca578cbf3453215b3b8d344a8fd8d42c"
+source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
 dependencies = [
  "rune",
  "rune-kit",

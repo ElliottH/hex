@@ -9,15 +9,20 @@
 //! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
 //! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
 
+mod commands;
 mod controls;
 mod history;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
 #[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
 mod host;
+mod lists;
+mod meetings;
 mod models;
 mod modes;
 mod onboarding;
 mod picker;
+mod platform;
+mod platform_settings;
 mod settings;
 mod voice_action;
 
@@ -60,12 +65,16 @@ static HISTORY_ICON: Icon = Icon {
     view: 16.0,
     body: include_str!("../assets/icons/history.svg"),
 };
-
-#[cfg(target_os = "windows")]
-pub(crate) fn run() {
-    rune::set_app_id("hex");
-    rune::App::new(spec()).run();
-}
+static COMMANDS_ICON: Icon = Icon {
+    name: "hex-commands",
+    view: 16.0,
+    body: include_str!("../assets/icons/commands.svg"),
+};
+static MEETINGS_ICON: Icon = Icon {
+    name: "hex-meetings",
+    view: 16.0,
+    body: include_str!("../assets/icons/meetings.svg"),
+};
 
 /// Runs the Linux window's app on the main thread until Hex quits: the
 /// window side of `linux_app`'s seam. It starts without a window; each
@@ -113,13 +122,19 @@ pub(crate) fn run_app(
     app.run();
 }
 
-/// Closing the window keeps Hex: save drafts and drop an uncommitted
-/// shortcut recording.
-#[cfg(target_os = "linux")]
+/// The window as a Rune app whose lifetime the caller chooses.
+#[cfg(target_os = "windows")]
+pub(crate) fn app() -> rune::App<Ui> {
+    rune::App::new(spec()).on_close(on_close)
+}
+
+/// Closing the window saves pending text edits and stops a shortcut
+/// recording, as leaving a pane does. Hex keeps running.
 fn on_close(ui: &mut Ui, _: &mut Tx) {
     ui.flush_drafts();
     settings::cancel_capture(ui);
     ui.open = None;
+    picker::close(ui);
     if let Service::Live(backend) = &mut ui.service {
         backend.closed();
     }
@@ -173,30 +188,48 @@ struct ServiceView {
     editing: bool,
 }
 
-/// The panes Linux shows, in navigation order.
+/// Every pane, in navigation order. Which ones show depends on the OS's
+/// [`platform::Capabilities`] and opt-ins ([`Pane::shown`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Pane {
     #[default]
     Settings,
     Modes,
+    /// The voice command catalog (macOS).
+    Commands,
     VoiceAction,
     History,
+    /// Recorded calls (macOS beta, behind the Meetings opt-in).
+    Meetings,
 }
 
 impl Pane {
-    const ALL: [Pane; 4] = [
+    const ALL: [Pane; 6] = [
         Pane::Settings,
         Pane::Modes,
+        Pane::Commands,
         Pane::VoiceAction,
         Pane::History,
+        Pane::Meetings,
     ];
+
+    fn shown(self, ui: &Ui) -> bool {
+        let caps = ui.platform.caps;
+        match self {
+            Pane::Commands => caps.commands,
+            Pane::Meetings => caps.meetings && ui.settings.meetings.available(),
+            _ => true,
+        }
+    }
 
     fn title(self) -> &'static str {
         match self {
             Pane::Settings => tr("Settings"),
             Pane::Modes => tr("Modes"),
+            Pane::Commands => tr("Commands"),
             Pane::VoiceAction => tr("Voice Action"),
             Pane::History => tr("History"),
+            Pane::Meetings => tr("Meetings"),
         }
     }
 
@@ -204,8 +237,10 @@ impl Pane {
         match self {
             Pane::Settings => "nav-settings",
             Pane::Modes => "nav-modes",
+            Pane::Commands => "nav-commands",
             Pane::VoiceAction => "nav-voice-action",
             Pane::History => "nav-history",
+            Pane::Meetings => "nav-meetings",
         }
     }
 
@@ -213,8 +248,10 @@ impl Pane {
         match self {
             Pane::Settings => &SETTINGS_ICON,
             Pane::Modes => &MODES_ICON,
+            Pane::Commands => &COMMANDS_ICON,
             Pane::VoiceAction => &VOICE_ACTION_ICON,
             Pane::History => &HISTORY_ICON,
+            Pane::Meetings => &MEETINGS_ICON,
         }
     }
 }
@@ -229,6 +266,8 @@ enum Menu {
     Model,
     /// The OpenCode thinking variant.
     Variant,
+    /// The selected meeting's overflow menu.
+    MeetingActions,
 }
 
 pub(crate) struct Ui {
@@ -258,8 +297,11 @@ pub(crate) struct Ui {
     modes: modes::ModesPane,
     picker: picker::Picker,
     tour: Option<onboarding::Tour>,
-    /// Windows' startup registration; `None` where Hex has no such row.
-    launch_at_login: Option<Result<bool, String>>,
+    /// The OS's capabilities and the OS-only state its panes show.
+    platform: platform::PlatformState,
+    host: platform::PlatformHost,
+    commands: commands::CommandsPane,
+    meetings: meetings::MeetingsPane,
     /// Settings saves and Quit Hex a fixture recorded.
     saved: usize,
     quit_requested: bool,
@@ -276,8 +318,8 @@ impl Ui {
         ui.history = history::HistoryPane::shared(host::history(ui.settings.history_retention));
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
-        ui.tour = onboarding::Tour::start(&ui.settings);
-        ui.launch_at_login = host::launch_at_login();
+        ui.tour = onboarding::Tour::start(&ui.settings, &ui.platform);
+        ui.platform.set_login_item(host::launch_at_login());
         ui
     }
 
@@ -305,7 +347,10 @@ impl Ui {
             modes,
             picker: picker::Picker::default(),
             tour: None,
-            launch_at_login: None,
+            platform: platform::PlatformState::new(platform::Capabilities::current()),
+            host: platform::PlatformHost::None,
+            commands: commands::CommandsPane::default(),
+            meetings: meetings::MeetingsPane::default(),
             saved: 0,
             quit_requested: false,
         }
@@ -386,6 +431,23 @@ impl Ui {
         }
     }
 
+    /// Asks the OS host for something only it can do.
+    fn ask(&mut self, request: platform::PlatformRequest) {
+        // Windows writes its Run key from the window's own process.
+        if let (
+            platform::PlatformHost::None,
+            platform::PlatformRequest::SetLaunchAtLogin(enabled),
+        ) = (&self.host, &request)
+        {
+            let result = host::set_launch_at_login(*enabled);
+            self.platform.set_login_item(Some(result));
+            return;
+        }
+        if let Err(error) = self.host.send(request) {
+            self.error = Some(error);
+        }
+    }
+
     fn running(&self) -> bool {
         self.view.as_ref().is_some_and(|view| view.listener.running)
     }
@@ -460,12 +522,17 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     } else if ui.open.is_some() {
         ui.open = None;
         true
+    } else if ui.meetings.renaming.is_some() || ui.meetings.delete_armed.is_some() {
+        ui.meetings.renaming = None;
+        ui.meetings.delete_armed = None;
+        true
     } else {
         false
     }
 }
 
 fn setup(ui: &mut Ui, waker: Waker) {
+    ui.modes.waker = Some(waker.clone());
     if matches!(ui.service, Service::Pending) {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
         ui.service = Service::Live(Box::new(Backend::connect(wake)));
@@ -482,6 +549,8 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.models.poll(ui.live());
     changed |= ui.history.poll(ui.pane == Pane::History);
     changed |= ui.modes.poll(ui.live());
+    changed |= modes::poll_chooser(ui);
+    changed |= ui.host.poll(&mut ui.platform);
     if let Service::Live(backend) = &mut ui.service {
         backend.refresh();
         let error = backend.error();
@@ -525,8 +594,10 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     let (actions, body) = match ui.pane {
         Pane::Settings => (Vec::new(), settings::pane(ui, p, &mut layer)),
         Pane::Modes => modes::pane(ui, p, &mut layer),
+        Pane::Commands => commands::pane(ui, p),
         Pane::VoiceAction => (Vec::new(), voice_action::pane(ui, p, &mut layer)),
         Pane::History => history::pane(ui, p, &mut layer),
+        Pane::Meetings => meetings::pane(ui, p, &mut layer),
     };
     let panel = col()
         .key("panel")
@@ -558,7 +629,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
 
 fn sidebar(ui: &Ui, p: Paint) -> El {
     let mut nav = col().key("nav").gap(1.0);
-    for pane in Pane::ALL {
+    for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
     let action = match ui.view.as_ref().map(|view| view.update_status) {
@@ -803,7 +874,128 @@ const SCENES: &[Scene] = &[
         *ui = fixture(portal_shortcuts());
         onboarding::fixture(ui, crate::onboarding::Step::Setup, true);
     }),
+    // macOS and Windows surfaces, from preview data (see `platform`).
+    ("mac-settings", |ui| *ui = mac_fixture()),
+    ("mac-settings-permissions", |ui| {
+        *ui = mac_fixture();
+        use crate::onboarding::PermissionState;
+        ui.platform.permissions.input_monitoring = PermissionState::NeedsSettings;
+        ui.platform.permissions.accessibility = PermissionState::NeedsSettings;
+        ui.platform
+            .permissions_asked
+            .push(crate::onboarding::PermissionKind::Accessibility);
+        ui.settings.commands_enabled = true;
+        ui.platform.command_model = platform::CommandModel::Failed;
+        ui.platform.login_item = Some(crate::login_item::LoginItemStatus::RequiresApproval);
+    }),
+    ("windows-settings", |ui| {
+        *ui = fixture(DesktopShortcuts::Registered);
+        ui.platform = platform::PlatformState::preview(platform::Capabilities::WINDOWS);
+        ui.host = platform::PlatformHost::Fixture(Vec::new());
+        ui.settings.paste_with_shift = false;
+    }),
+    ("mac-commands", |ui| {
+        *ui = mac_fixture();
+        ui.settings.commands_enabled = true;
+        ui.pane = Pane::Commands;
+    }),
+    ("mac-commands-confirm", |ui| {
+        *ui = mac_fixture();
+        ui.settings.release_microphone_while_idle = true;
+        ui.commands.confirm_enable = true;
+        ui.platform.workspace = platform::Workspace::Missing;
+        ui.commands.search = TextEdit::new("zzz");
+        ui.pane = Pane::Commands;
+    }),
+    ("meetings", |ui| {
+        *ui = mac_fixture();
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-recording", |ui| {
+        *ui = mac_fixture();
+        ui.meetings.select("preview-live".into());
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-actions", |ui| {
+        *ui = mac_fixture();
+        ui.open = Some(Menu::MeetingActions);
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-delete", |ui| {
+        *ui = mac_fixture();
+        ui.meetings.delete_armed = Some("preview-notes".into());
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-rename", |ui| {
+        *ui = mac_fixture();
+        ui.meetings.renaming = Some("preview-notes".into());
+        ui.meetings.rename = TextEdit::new("Arcade launch plan");
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-failed", |ui| {
+        *ui = mac_fixture();
+        ui.meetings.select("preview-failed".into());
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-empty", |ui| {
+        *ui = mac_fixture();
+        ui.meetings = meetings::MeetingsPane::default();
+        ui.pane = Pane::Meetings;
+    }),
+    ("mac-onboarding", |ui| {
+        mac_tour(ui, onboarding::MacStep::Welcome)
+    }),
+    ("mac-onboarding-setup", |ui| {
+        mac_tour(ui, onboarding::MacStep::Setup)
+    }),
+    ("mac-onboarding-progress", |ui| {
+        mac_tour(ui, onboarding::MacStep::SetupProgress)
+    }),
+    ("mac-onboarding-denied", |ui| {
+        mac_tour(ui, onboarding::MacStep::SetupDenied)
+    }),
+    ("mac-onboarding-download-failed", |ui| {
+        mac_tour(ui, onboarding::MacStep::SetupDownloadFailed)
+    }),
+    ("mac-onboarding-try", |ui| {
+        mac_tour(ui, onboarding::MacStep::TryIt)
+    }),
+    ("mac-onboarding-listening", |ui| {
+        mac_tour(ui, onboarding::MacStep::TryItListening)
+    }),
+    ("mac-onboarding-landed", |ui| {
+        mac_tour(ui, onboarding::MacStep::TryItLanded)
+    }),
+    ("mac-onboarding-reopen", |ui| {
+        mac_tour(ui, onboarding::MacStep::TryItReopen)
+    }),
+    ("mac-onboarding-done", |ui| {
+        mac_tour(ui, onboarding::MacStep::Done)
+    }),
 ];
+
+/// The macOS window with every permission granted, meetings on, the Hex
+/// Microphone experiment on, and sample meetings and commands.
+fn mac_fixture() -> Ui {
+    let mut ui = fixture(DesktopShortcuts::Registered);
+    ui.platform = platform::PlatformState::preview(platform::Capabilities::MACOS);
+    ui.host = platform::PlatformHost::Fixture(Vec::new());
+    ui.settings.dictation_hotkey = AppSettings::default().dictation_hotkey;
+    ui.settings.paste_with_shift = false;
+    ui.settings.meetings.enabled = true;
+    ui.settings.meetings.never_offer = vec![crate::app_settings::NeverOfferMeeting {
+        key: "meet.google.com".into(),
+        label: "meet.google.com".into(),
+    }];
+    ui.settings.experimental.hex_microphone = true;
+    ui.meetings = meetings::MeetingsPane::fixture();
+    ui
+}
+
+fn mac_tour(ui: &mut Ui, step: onboarding::MacStep) {
+    *ui = mac_fixture();
+    onboarding::mac_fixture(ui, step);
+}
 
 fn portal_shortcuts() -> DesktopShortcuts {
     DesktopShortcuts::Portal(vec![

@@ -120,7 +120,7 @@ impl HostHandle {
 
 ## What Rune must gain
 
-### Landed on Rune `main` (`a9cde14`, `a242f5a`; Hex pins `a242f5a`)
+### Landed on Rune `main` (`a9cde14`, `a242f5a`; public as `7eea3a3`, which Hex pins)
 
 Requirements 1–5 below landed as a smaller API than the proposal: one window
 per app, built on the existing `AppSpec`. It is documented in Rune's
@@ -483,9 +483,11 @@ Keep the named event. It already gives single instance, the
   (`\\.\pipe\com.kitlangton.hex.<SID>`, owner-only DACL) with the same
   four-request protocol.
 
-### Written on current Rune (branch `rune-ui-windows`, cross-compiled only)
+### Written on `rune::App` (cross-compiled only)
 
-`hex app --ui rune` already has this shape without `run_app`, in
+Rune's app lifetime landed (`a9cde14`/`a242f5a`, now `7eea3a3`) as
+`rune::App` + `AppHandle` rather than the `run_app`/`AppCx` sketch above.
+`hex app --ui rune` uses it in
 [`windows_rune.rs`](../../src/windows_rune.rs) and
 [`rune_ui/windows_host.rs`](../../src/rune_ui/windows_host.rs):
 
@@ -496,25 +498,20 @@ Keep the named event. It already gives single instance, the
   per-OS `host` module (`Backend::{connect, send, state, error}`), the
   same seam the Linux client sits behind. When Linux's `HostHandle` lands,
   both should share it.
-- `rune::run(spec)` still owns the loop and creates one visible window.
-  In `setup` (main thread, window just created) Hex finds the HWND, sets
-  the icon, creates the tray, and replaces the window procedure so WM_CLOSE
-  hides instead of ending the loop; a hidden launch hides it at once (it
-  flashes first). Quit, Ctrl-C, or a restart into an update set a flag and
-  post WM_CLOSE, which Rune turns into `exit()`; `open` then joins the
-  runtime, which stops the listener. Without a tray, close quits.
-- The relaunch thread shows and focuses the HWND directly (`ShowWindow`,
-  `SetForegroundWindow`), relying on the relauncher's
-  `AllowSetForegroundWindow`.
+- `rune::App::new(spec).on_close(..)` with `keep_running()`, or
+  `windowless()` for `--hidden`. The tray is created on the main thread
+  before `run` (winit's loop pumps its messages); its Show and the relaunch
+  thread call `AppHandle::open`, Quit calls `AppHandle::quit`, and so does
+  the runtime thread on Ctrl-C or a restart into an update. `open` then
+  joins the runtime, which stops the listener. Without a tray the app keeps
+  Rune's default, close quits.
+- `on_close` flushes text drafts and stops a shortcut recording.
+- Rune exposes no window handle yet, so the window icon is set by finding
+  the window by title on the main thread before a frame.
 - Shortcut capture stays in the window (keyboard polling with the hook
   suppressed), not on the runtime.
-- No HUD: GPUI's HUD window needs GPUI's own event loop on the main thread.
-
-Moving onto `run_app`: `start` takes over the tray and `attach_window`,
-`CloseBehavior::Hide` and `AppProxy` replace the window-procedure bridge
-and the direct `ShowWindow` calls, `visible: false` replaces the flashing
-hidden start, and `init` captures the `RuntimeHandle` instead of the
-`OnceLock`.
+- No HUD: GPUI's HUD window needs GPUI's own event loop on the main thread,
+  and Rune has no overlay window kind.
 
 ## macOS under Rune
 

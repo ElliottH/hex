@@ -961,13 +961,17 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
 ├── Sidebar: Settings, Modes, Voice Action, History (the panes Linux GPUI shows)
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
-└── Not yet: app file chooser, app icons, drag reorder, right-click delete
+├── Modes: "Choose a file…" through the FileChooser portal; drag to reorder
+├── Not yet: app icons, right-click delete
+└── macOS/Windows surfaces as scenes only (Capabilities + preview data):
+    Commands, Meetings, permission rows, Launch at login, Dock icon,
+    Meetings and Hex microphone sections, the full tour // no native host yet
 Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
-├── Close hides the window (WM_CLOSE intercepted); Quit or no tray ends the process
+├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
 ├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
-└── Not yet: HUD (no Rune overlay window), custom caption, website rules, hidden start without a flash
+└── Not yet: HUD (no Rune overlay window), custom caption, website rules
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -984,10 +988,16 @@ its tests drive the Rune runtime headlessly (navigation; Settings rows per
 shortcut source, saves through the host, Quit Hex, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
-clear, copy; Modes add/delete, corrections, transformations, application
-conflicts; the picker's ChooseModel/CancelModel; setup's download; draft
-saves) and compare 19 offscreen GPU renders (every pane, light and dark) with
-[tests/golden](../../tests/golden). They skip the goldens without a GPU
+clear, copy; Modes add/delete, corrections, transformations (drag reorder saves once
+on release), application conflicts, a chosen file joining the mode; the picker's ChooseModel/CancelModel; setup's download; draft
+saves; and, from macOS/Windows preview data, each OS's panes and rows, Launch
+at login, permission warnings, the command model notice, Meetings settings,
+the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
+search, copy, rename, start/stop, two-step trash, and the overflow menu, and
+the macOS tour's permissions, practice, and relaunch) and compare 45 offscreen
+GPU renders with [tests/golden](../../tests/golden). The macOS and Windows
+surfaces have no native host yet: their requests are recorded, never
+performed, and none has run on macOS or Windows. They skip the goldens without a GPU
 adapter and do not prove a real window, input method, or physical shortcut.
 Before the single-process change, a headless script against an isolated
 service saved a new mode, a correction, and Voice Action. See
