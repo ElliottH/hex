@@ -638,10 +638,7 @@ fn mode_row(
 fn detail(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let selection = ui.modes.selected;
     let current = mode(&ui.settings, selection);
-    let mut content = col()
-        .key("mode-detail-content")
-        .px(24.0)
-        .gap(16.0);
+    let mut content = col().key("mode-detail-content").px(24.0).gap(16.0);
     content = content.child(basics(ui, p, selection, current));
     content = content.child(
         text(tr("Text processing"))
