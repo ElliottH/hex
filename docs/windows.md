@@ -203,9 +203,10 @@ hex app
   same model, shader, and overlay path ran in a headless sway on apollo (a
   test binary including the two shared modules); on Windows it is only
   type-checked.
-- Not yet: the custom caption (native title bar for now) and app icons. The
-  window icon is set by finding the window by title, since Rune exposes no
-  window handle.
+- The window gets the executable's icon from Rune's `App::on_window` hook
+  (its HWND through `WindowHandle::with_raw_handle`).
+- Not yet: the custom caption (native title bar for now) and app icons in
+  Modes.
 - Without a tray (creation failed) closing the window quits Hex.
   See the [single-process plan](plans/single-process.md#windows-under-rune).
 

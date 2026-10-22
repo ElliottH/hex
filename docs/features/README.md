@@ -1002,7 +1002,7 @@ macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 │   a controller failure shows in the pane; NSOpenPanel chooses the meetings folder
 ├── Tour: practice dictations from the listener's event log; a listener that failed to start
 ├── Sidebar and pane header move the window (Rune El::window_drag; the title bar is transparent)
-├── An open window polls its host every 250 ms; close hides it (Dock policy restored)
+├── While the window shows, its poll re-checks timed state every 250 ms (Rune Tx::wake_after); close hides it (Dock policy restored)
 ├── ⌘Q / menu-bar Quit / Ctrl-C quit and join
 ├── Meeting capsules: Rune interactive overlays (offer, call ended, ready, recording)
 └── Not yet: capsule Copy new/all, hover expansion, drag

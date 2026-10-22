@@ -142,9 +142,15 @@ Before cutting a release from `rune-ui`:
 - **Native file dialogs on macOS and Windows:** Linux uses
   `linux_file_chooser.rs` (`OpenFile` portal); macOS (`NSOpenPanel` for Modes
   applications) and Windows (`IFileDialog`) remain to wire.
-- **Looping animations and timers:** `Tx::wake_after` for exact 250 ms draft
-  debouncing (currently driven by a 4 Hz poll while open) and looping tracks
-  for the shortcut-recorder pulse and indeterminate model-loading bar.
+- **Looping animations:** looping tracks for the shortcut-recorder pulse and
+  the indeterminate model-loading bar. Timed state already runs on
+  `Tx::wake_after`, re-checked every 250 ms while the window shows.
+- **Rune rough edges still worked around in Hex:** `Pixels::set` doesn't wake
+  its overlay (the Windows HUD sends an empty update), no rounded child clip
+  (the picker hand-rounds its left column), no modifier-only key events (the
+  macOS host keeps an NSEvent monitor), and the event loop panics without a
+  display (Linux catches that unwind). Queued in Rune behind the current core
+  work.
 - **Focus trap and menu keyboard navigation:** modal focus trap for the
   transcription picker scrim and arrow-key navigation in `rune-kit` selects and
   menus (model and application search popovers already support Up/Down/Enter
