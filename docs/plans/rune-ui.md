@@ -368,6 +368,13 @@ Sizes are current GPUI lines.
    (`linux_file_chooser.rs`, over gio like `linux_portal.rs`); macOS
    (`NSOpenPanel`) and Windows (`IFileDialog`) still need one.
 9. **Scrolling polish**: visible scrollbars, scroll-into-view.
+10. **Rounded clipping**: `clip_soft`/`clip_fade` clip children to a
+    rectangle, never to the parent's corner radius, and a child's fill paints
+    over its parent's border. Until Rune clips to radii, Hex keeps children
+    inside their containers: the window panel and the picker pad by their
+    hairline border, the picker's language column rounds its own corner, and
+    `scroll_body` insets its content by its edge fades so the first and last
+    borders, rings, and fills are never cut at rest.
 
 ## Order to port
 

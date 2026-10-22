@@ -579,7 +579,6 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         .h_full()
         .pl(16.0)
         .pr(8.0)
-        .pb(16.0)
         .child(super::scroll_body("modes-scroll", list));
     let body = row()
         .key("modes-body")
@@ -642,8 +641,6 @@ fn detail(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let mut content = col()
         .key("mode-detail-content")
         .px(24.0)
-        .pt(4.0)
-        .pb(24.0)
         .gap(16.0);
     content = content.child(basics(ui, p, selection, current));
     content = content.child(

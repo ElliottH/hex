@@ -733,6 +733,8 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .radius(p.k.radius.lg)
         .fill(p.k.c.bg_base)
         .border(p.hair, p.k.c.border_weak)
+        // Children sit inside the border, so their fills never paint over it.
+        .padding(p.hair)
         .clip_soft(0.0)
         .child(pane_header(p, ui.pane.title(), actions))
         .child(body);
@@ -887,17 +889,24 @@ fn pane_header(p: Paint, title: &str, actions: Vec<El>) -> El {
         .children(actions)
 }
 
-/// A vertically scrolling pane body with Settings' column inset.
+/// How far a scroll body's top and bottom edges fade out.
+const SCROLL_FADE: (f32, f32) = (4.0, 24.0);
+
+/// A vertically scrolling body whose edges fade out. At rest its content
+/// sits clear of the fades, so the first and last borders, rings, and fills
+/// are never cut; content needing room beside the edges (bordered cards)
+/// pads itself horizontally.
 fn scroll_body(key: &str, content: El) -> El {
+    let (top, bottom) = SCROLL_FADE;
     col()
         .key(key)
         .grow(1.0)
         .shrink()
-        .clip_fade(0.0, 4.0, 0.0, 24.0)
+        .clip_fade(0.0, top, 0.0, bottom)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(content)
+        .child(col().key("inset").pt(top).pb(bottom).child(content))
 }
 
 // ---------------------------------------------------------------------------
