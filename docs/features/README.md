@@ -172,9 +172,8 @@ Only Parakeet Unified English is marked `streams`
 (`only_the_buffered_parakeet_artifact_is_marked_streaming`). The mark describes
 the artifact; dictation still streams only after the load probe succeeds on a GPU
 device ([Streaming Finish](dictation.md#streaming-finish)). The menu bar lists
-names only and shows no tags. Preview:
-`voice-control preview transcription-picker --language en --model-state installed`
-(also `missing`, `downloading`).
+names only and shows no tags. Scenes: `hex app -- --snap OUT --scene picker`
+(also `picker-downloading`).
 
 Parakeet v3 remains available for Portuguese and its other existing language
 choices. Its card explains the limitation and suggests Whisper for
@@ -184,15 +183,15 @@ the pinned v3 GGUF has no `stt.parakeet.prompt.num_prompts` metadata, which gate
 language prompting in `transcribe-cpp-sys` 0.1.3.
 
 Sources: [model catalog](../../src/transcription_models.rs),
-[shared picker](../../src/desktop_transcription_picker.rs), and the runtime
+[shared picker](../../src/rune_ui/picker.rs), and the runtime
 options in [parakeet.rs](../../src/parakeet.rs) and
 [local_transcriber.rs](../../src/local_transcriber.rs). The regression
 `parakeet_v3_supports_portuguese_without_language_conditioning` checks that the
 Portuguese selection remains valid and available, sends no runtime language
 hint, and contrasts Whisper's `pt` hint. It does not run inference.
 The regression was observed failing with the old metadata and passing after the
-correction. The macOS release picker preview built, but screenshot capture was
-blocked by missing Screen Recording access; visual layout remains unverified.
+correction. The picker's layout is checked by Rune goldens (`rune-picker-*`), not on a
+Mac screen.
 
 **Unreproduced recognition report:** [#68](https://github.com/anomalyco/hex/issues/68)
 reports Portuguese speech misrecognized as English. Source and pinned-model
@@ -207,15 +206,21 @@ prove rendering, not clean-account permission grants or model preparation.
 
 The tour is the pure `onboarding::Flow` (steps, row states, background
 download, practice hints, one-relaunch guard) drawn by
-[tour.rs](../../src/app_window/tour.rs), which also owns `permission_control`,
-the one Allow / pulse / Allowed control Settings and Meetings reuse. The guide
+[rune_ui/onboarding.rs](../../src/rune_ui/onboarding.rs); `permission_control`
+in [rune_ui/lists.rs](../../src/rune_ui/lists.rs) is the one Allow / dot /
+Allowed control Settings and the tour share. The guide
 beside System Settings is [permission_guide.m](../../native/permission_guide.m).
 Unit tests (`onboarding::tests`) cover step order, the download starting on the
 welcome screen and retrying from any step, permissions-only setup with the
 model waiting for practice, the auto-advance beat, live row flips, a refused
 microphone, platforms without permissions or practice, practice hints, resume,
-and the relaunch guard and resume marker. Every step is capturable with
-`voice-control preview onboarding --step <welcome|setup|setup-progress|setup-denied|setup-ready|setup-download-failed|try-it-downloading|try-it|try-it-listening|try-it-short|try-it-silent|try-it-landed|try-it-reopen|done>`.
+and the relaunch guard and resume marker. Rune tests drive the tour
+(`the_mac_tour_asks_each_permission_then_practices`,
+`a_listener_that_will_not_start_relaunches_once_then_asks_to_reopen`,
+`a_refused_microphone_points_to_system_settings`,
+`onboarding_downloads_the_model_through_the_service`), and every macOS step
+is a scene (`mac-onboarding`, `-setup`, `-progress`, `-denied`,
+`-download-failed`, `-try`, `-listening`, `-landed`, `-reopen`, `-done`).
 The default model comes from `desktop_i18n::preferred_language` (macOS:
 `NSLocale.preferredLanguages`) through `recommended_selection`; existing
 settings keep their saved model.
@@ -247,9 +252,8 @@ cannot save, and delivered menu controls are drained before accepting completion
 The desktop root commits through an existing editor to retain unrelated unsaved
 settings, or through persisted settings when no window exists.
 
-Sources: [status_item.rs](../../src/status_item.rs),
-[meeting_watcher.rs](../../src/meeting_watcher.rs), and
-[app_window.rs](../../src/app_window.rs). Key checks are
+Sources: [status_item.rs](../../src/status_item.rs) and
+[macos_rune.rs](../../src/macos_rune.rs). Key checks are
 `preparation_has_one_worker_and_only_keeps_the_latest_pending_choice`,
 `cancelling_a_completed_unpolled_preparation_never_commits_it`,
 `model_switches_remember_language_and_hints_without_changing_other_settings`, and
@@ -284,13 +288,12 @@ deleted model because it reads installation state when it builds the menu. Linux
 Settings does not offer deletion: the service owns model files and has no delete
 request yet.
 
-Sources: [shared picker](../../src/desktop_transcription_picker.rs),
-`remove_installed` in [transcription_models.rs](../../src/transcription_models.rs),
-and [app_window.rs](../../src/app_window.rs). Checks are
+Sources: [shared picker](../../src/rune_ui/picker.rs) and `remove_installed`
+in [transcription_models.rs](../../src/transcription_models.rs). The check is
 `removing_a_model_deletes_its_artifacts_unless_a_download_is_active` (real files
-and lock) and `model_deletion_confirms_first_and_spares_the_dictation_model`
-(preview state, no disk access). Preview: `voice-control preview
-transcription-picker --model-state installed --confirm-model-deletion`.
+and lock). The picker's two-step confirmation lost its regression with GPUI
+(`model_deletion_confirms_first_and_spares_the_dictation_model`); no Rune test
+covers it yet.
 
 **Known gap:** `is_installed` checks size, not checksum. Not every native-load
 path requires verification. Picker Active means selected/installed, not live
@@ -342,8 +345,6 @@ pause before ⌘V for a [Chrome 155 paste bug](dictation.md#ongoing-jobs-and-out
 logs are separate and currently unbounded on disk. See the
 [privacy guide](../../README.md#privacy-and-local-data).
 
-Opening or reopening Settings does not read the diagnostic event log. Commands
-and developer Activity load it on demand through `AppWindow::reload_events`.
 The shared `EventReader` streams a file-length snapshot in 16 KiB chunks rather
 than copying the entire log into memory. It retains up to 1,024 event rows and
 the latest context, even when that context predates the retained rows.
@@ -351,10 +352,10 @@ Diagnostic records over 1 MiB are skipped through their terminating newline;
 the original log and dictation output remain intact. Partial UTF-8 records carry
 over to the next refresh, and truncation or file replacement resets the reader.
 
-Checks: `activity_log_is_only_read_when_an_observing_pane_needs_it` in
-[app_window.rs](../../src/app_window.rs) and the `reader_*` regressions in
-[events.rs](../../src/events.rs). These exercise synthetic files, not an
-installed Settings session. A first Commands/Activity refresh still scans the
+Checks: the `reader_*` regressions in [events.rs](../../src/events.rs). These
+exercise synthetic files, not an installed app. The GPUI window's
+on-demand-loading regression went with GPUI; when the Rune window reads the
+log is not covered by a test. A first Commands/Activity refresh still scans the
 full log snapshot; disk rotation and background parsing remain separate work.
 
 Observed September 26, 2026: the reader and pane-loading regressions passed.
@@ -393,11 +394,10 @@ Immediate settings controls commit a candidate before changing the saved UI
 choice or applying dependent native/history effects. A failed shortcut save
 stays in capture instead of showing Saved; failed retention saves keep the old
 choice and surface the error. Failed debounced text saves retain their drafts
-for a subsequent edit or close-time flush. The regressions
-`failed_shortcut_save_stays_in_capture_and_preserves_pending_edits` and
-`failed_retention_save_keeps_previous_choice_and_reports_the_error` in
-[app_window.rs](../../src/app_window.rs) inject persistence failure in an
-in-memory GPUI window; they do not simulate disk failure in an installed app.
+for a subsequent edit or close-time flush. The GPUI regressions that injected
+these save failures (`failed_shortcut_save_stays_in_capture_and_preserves_pending_edits`,
+`failed_retention_save_keeps_previous_choice_and_reports_the_error`) went with
+GPUI; no Rune test injects a save failure yet.
 Persistence, conflict, and ownership checks live in
 [app_settings.rs](../../src/app_settings.rs),
 [recording_environment.rs](../../src/recording_environment.rs), and
@@ -425,13 +425,9 @@ report or a connected headset.
 occluding the panel, so hovering or clicking a device also reached the setting
 under the pointer ([#94](https://github.com/anomalyco/hex/issues/94)), and it
 only closed by choosing or reopening. The menu is now anchored to its button,
-occludes the controls beneath it, and closes on any outside mouse-down.
-`microphone_picker_occludes_the_controls_beneath_it` in
-[app_window.rs](../../src/app_window.rs) renders the production menu over a
-hoverable, clickable control and fails without the occlusion; it does not prove
-a native pointer session. The recognition-hints editor also now uses the compact
-multiline height, so it no longer overlaps the shortcut row for Whisper models.
-Screen Recording was unavailable, so that layout is unverified visually.
+occludes the controls beneath it, and closes on any outside mouse-down. In the
+Rune window the menu is a rune-kit `Menu` in the overlay layer (scene `menus`);
+the GPUI occlusion regression went with GPUI and has no Rune counterpart.
 
 **Easy to misread:** an open microphone is not an active recording. Sleeping
 Commands still needs open input; it is not Release when idle.
@@ -484,10 +480,11 @@ a temporary executable; it does not run an installed Vite Plus shim or provider.
 conditional Processing-stage emission, and retained transformation selection.
 It uses controlled profiles, not a live provider or custom transformation host.
 
-`mode_rows_preserve_edits_across_add_delete_and_supersede_old_debounces` in
-[app_window.rs](../../src/app_window.rs) covers mode-editor changes and stale
-debounced saves with one row owning its draft and inputs. It does not exercise
-native typing or foreground mode activation.
+`modes_add_select_and_delete`, `mode_corrections_and_names_save_from_their_fields`,
+and `mode_transformations_add_reorder_and_remove` in
+[rune_ui/tests.rs](../../src/rune_ui/tests.rs) cover the Rune mode editor and
+its debounced drafts headlessly. They do not exercise native typing or
+foreground mode activation.
 
 Application activations compare the picker's bundle name with the foreground
 application's localized name. When Finder shows all filename extensions, the
@@ -548,7 +545,7 @@ Sources: [voice_filter.rs](../../src/voice_filter.rs),
 [hex_microphone.rs](../../src/hex_microphone.rs),
 [HexMicrophoneDriver.c](../../macos/HexMicrophoneDriver/HexMicrophoneDriver.c),
 [build-app.sh](../../scripts/build-app.sh),
-and [app_window.rs](../../src/app_window.rs). Checks:
+and [rune_ui/fun.rs](../../src/rune_ui/fun.rs). Checks:
 `muffled_mode_attenuates_high_frequencies_and_preserves_length`,
 `muted_mode_with_comfort_noise_drops_speech_to_room_tone_floor`,
 `all_modes_produce_finite_bounded_samples`,
@@ -556,10 +553,10 @@ and [app_window.rs](../../src/app_window.rs). Checks:
 `driver_plugin_loopback_streams_at_48khz_under_20ms_latency`,
 `driver_plist_version_and_status_mismatch_are_detected`,
 `osascript_failure_classifies_user_cancel_and_errors`,
-`audio_service_restart_interrupts_stream_and_recovers`, and
-`experimental_fun_pane_appears_only_when_enabled`. Previews:
-`./scripts/capture-preview.sh /tmp/hex-fun.png fun` (with `--fun-driver-missing`
-and `--fun-mode <mode>`) and `./scripts/capture-preview.sh /tmp/hex-settings-mic.png settings --experimental-mic`.
+`audio_service_restart_interrupts_stream_and_recovers`,
+`fun_saves_the_mode_and_applies_the_tuning_live`,
+`try_it_records_and_plays_through_the_host`, and `settings_try_it_opens_fun`.
+Scenes: `mac-fun`, `mac-fun-muted`, `mac-fun-driver-missing`.
 Proof limit: in-process `dlopen` loopback proves the compiled driver's 48 kHz
 `WriteMix`/`ReadInput` path at 5.33 ms (256 frames), not an interactive macOS
 admin authorization prompt or an active Slack/Zoom call.
@@ -609,14 +606,14 @@ window-owned worker, with bounded request and response channels and an autorelea
 pool per operation. Settings reads responses without blocking every 500 ms;
 refreshes do not accumulate while macOS is busy. The toggle is unavailable until
 the first successful status lookup. macOS owns registration state; no login
-Boolean is persisted. Preview controls never start the worker or call macOS.
+Boolean is persisted. Scenes never start the worker or call macOS.
 
 The worker tests in `login_item.rs` exercise thread reuse, nonblocking polling,
 latest-action coalescing, action priority, and closing during a blocked call.
-`login_item_response_reconciles_optimistic_toggle_and_unknown_state` in
-[app_window.rs](../../src/app_window.rs) checks initial status, error rollback
-including redraw, unchanged errors, error-only clearing, approval, and external
-enablement. Native `RequiresApproval` and error transitions remain unverified;
+`launch_at_login_asks_the_login_item_and_needs_approval_first` in
+[rune_ui/tests/panes.rs](../../src/rune_ui/tests/panes.rs) checks the Rune row's
+requests and the approval state; the GPUI regression for error rollback and
+external enablement went with GPUI. Native `RequiresApproval` and error transitions remain unverified;
 the simulated checks do not establish Developer ID signed distribution behavior.
 
 Observed September 23, 2026, on `d1930b5` after the final simplifications: the
@@ -649,12 +646,12 @@ does not change login registration, and does not hide an already open window
 when the preference changes. Any open Settings window keeps the Dock icon: macOS
 deactivates an app asynchronously when it becomes menu-bar only, which dropped
 the window behind other applications ([#103](https://github.com/anomalyco/hex/issues/103)).
-Turning the preference off therefore takes effect when Settings closes. Explicit previews always open their requested pane.
+Turning the preference off therefore takes effect when Settings closes.
 
 Checks in [meeting_watcher.rs](../../src/meeting_watcher.rs):
 `dockless_startup_stays_quiet_only_when_setup_and_menu_bar_are_ready` and
 `dock_visible_startup_always_opens_the_app` cover the startup decision. The
-existing `on_reopen` and status-item `OpenSettings` paths bypass that decision.
+Dock/Finder reopen Apple event and the status item's `OpenSettings` bypass it.
 These checks do not establish signed-app login behavior or native Finder/Spotlight
 reopening; those still need an installed-app smoke test. This addresses the
 menu-bar-only case in [#64](https://github.com/anomalyco/hex/issues/64), not an
@@ -686,11 +683,9 @@ one and a change applies after relaunch. Speech-model downloads are unaffected.
 No automated check covers it; the read is a single preference lookup in
 [sparkle.rs](../../src/sparkle.rs).
 
-The sidebar uses window-local deferred action dispatch in
-[app_window.rs](../../src/app_window.rs). The executed
-`sidebar_update_click_dispatches_only_outside_preview` regression clicks the
-production control in an active in-memory GPUI window: zero actions before the
-fix, one afterward, and no action in a preview. It does not start Sparkle.
+The Rune sidebar's Update button asks the host to show Sparkle's dialog. The
+GPUI click regression (`sidebar_update_click_dispatches_only_outside_preview`)
+went with GPUI; no Rune test clicks the sidebar Update yet.
 
 **Fixed in 2.1.13:** older releases through 2.1.12 used app-global dispatch from
 inside the sidebar click, losing the action while the active window was borrowed.
@@ -743,11 +738,11 @@ Linux beta                               // not macOS feature parity
 │   └── Selected text from the primary selection -> OpenCode -> Paste the reply
 ├── Recording HUD -> "Recording" pill on the top or bottom edge, "Transcribing"
 │   │   until accepted output finishes; Hidden position -> none   // linux.hud
-│   ├── rune-ui builds -> Rune overlay in Hex's process (linux_rune_hud)
-│   │   ├── Wayland -> layer-shell overlay layer, no keyboard, empty input region
-│   │   ├── X11 -> override-redirect window, empty input shape
-│   │   └── No layer-shell -> `hex status` reports the HUD limitation
-│   └── GPUI builds -> GTK thread (linux_desktop), same placement
+│   └── Rune overlay in Hex's process (linux_rune_hud)
+│       ├── Wayland -> layer-shell overlay layer, no keyboard, empty input region
+│       ├── X11 -> override-redirect window, empty input shape
+│       ├── No layer-shell -> `hex status` reports the HUD limitation
+│       └── No window loop (no GPU or display, `hex dictate`) -> no HUD
 ├── X11 -> No tray; status and sounds remain available
 ├── Microphone failure -> Listener exits, not macOS automatic recovery
 │   └── Overload (Xrun) glitch -> Logged; not a failure
@@ -792,9 +787,10 @@ using synthetic uinput keys against an isolated service: granted triggers,
 hold and Escape while held, double-tap lock, Paste Last, and commands. A
 physical keyboard press has not been recorded.
 
-`linux.hud` on Rune: [linux_rune_hud.rs](../../src/linux_rune_hud.rs) keeps
-the listener's generation slot from `linux_desktop` (an old listener cannot hide
-a restarted HUD) and starts before the window's app exists. Observed on
+`linux.hud`: [linux_rune_hud.rs](../../src/linux_rune_hud.rs) keeps the
+listener's generation slot (an old listener cannot hide a restarted HUD) and
+accepts reports before the window's app exists. The GTK HUD it replaced is
+deleted. Observed on
 2026-10-22 in a headless sway on apollo (isolated data root, real microphone,
 `hex service`): `hex dictation start` showed the pill at the top edge and it
 was gone after `hex dictation stop` and transcription. The Rune overlay itself
@@ -837,12 +833,12 @@ the single-instance socket and systemd lifecycle in
 observations. `hex app --hidden` and `hex start` start Hex without the window;
 `hex stop` equals `hex quit`. Closing the window does not mean Disable; the
 Settings card's Enable/Disable controls the listener, Quit Hex the process. No
-root daemon or new input grants. The Rune window runs on Rune's app lifetime:
-it opens or focuses with the forwarded activation token and keeps its state
-across close and reopen. The GPUI window (`--ui gpui`) reopens but ignores the
-token. Observed in a headless sway on apollo on 2026-10-22 with
-[test-wayland-paste.sh](../../scripts/test-wayland-paste.sh) for both toolkits
-(open in the same process, close, still answering, reopen, quit). On niri
+root daemon or new input grants. The window runs on Rune's app lifetime: it
+opens or focuses with the forwarded activation token and keeps its state
+across close and reopen. Observed in a headless sway on apollo on 2026-10-22
+with [test-wayland-paste.sh](../../scripts/test-wayland-paste.sh), then with
+GPUI and Rune builds (open in the same process, close, still answering,
+reopen, quit); not rerun since GPUI was removed. On niri
 (apollo, 2026-10-22, isolated data directory, listener off) launches spawned
 through `niri msg action spawn` opened the window in the instance's process,
 `close-window` left the same process answering, a relaunch opened a new
@@ -866,7 +862,7 @@ audio device; it passed on apollo (Arch, niri) on 2026-10-22.
 `adopting_saved_settings_restarts_only_for_listener_settings` use controlled
 runtime workers. The virtual-microphone and Wayland scripts open the window
 through a second launch; the Wayland script passed on apollo (headless sway,
-`WLR_RENDERER=gles2`, Rune and GPUI builds), the X11 virtual-microphone script
+`WLR_RENDERER=gles2`, before GPUI was removed), the X11 virtual-microphone script
 has not run since the single-process change. A throwaway `Type=notify` user unit
 on apollo (`HEX_SYSTEMD_UNIT`) started ready through `hex start`, restarted
 after SIGABRT and SIGKILL without a window, stopped cleanly on
@@ -983,10 +979,10 @@ macOS debug runtime                      // not release navigation
 ├── Meetings -> Always available; release builds need the Settings opt-in
 └── Activity / HUD Lab / hex dev -> Observation and developer controls
 
-Desktop previews -> Rendered fixtures    // not proof capture/download/update happened
-Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process // dev.rune-ui
+`hex app -- --snap OUT --scene NAME` -> Rendered fixtures    // not proof capture/download/update happened
+Linux `hex` -> the Linux window on Rune, in the Hex process // dev.rune-ui
 ├── Calls the host directly: saves settings through it; woken on host changes
-├── Sidebar: Settings, Modes, Voice Action, History (the panes Linux GPUI shows)
+├── Sidebar: Settings, Modes, Voice Action, History
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
 ├── Modes: "Choose a file…" through the FileChooser portal; drag to reorder
@@ -996,11 +992,11 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
     Commands, Meetings, Fun, HUD Lab, Activity, permission rows, Launch at
     login, Dock icon, shortcut sides, Meetings and Hex microphone sections,
     the full tour
-macOS `hex app` (--features rune-ui; `--ui gpui` keeps GPUI) -> one menu-bar process, Rune window // dev.rune-ui-macos
+macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── rune::App on the main thread: accessory, windowless unless setup/onboarding/Dock icon open it
 ├── Same AppKit loop: status item, Sparkle, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
 ├── Runtime thread: model preparation (menu bar: installed only), starts the listener once setup is ready
-├── Listener, meeting controller, local API: their own threads, as under GPUI
+├── Listener, meeting controller, local API: their own threads
 ├── macos_host: AppKit event monitor records chords (Option, Fn); NativeHost does permissions,
 │   login item, Hex Microphone, meeting start/stop/rename/trash/reveal, commands workspace, relaunch
 ├── Meetings pane lists the store through meeting::query (1 s rescan, sent only when changed);
@@ -1009,13 +1005,15 @@ macOS `hex app` (--features rune-ui; `--ui gpui` keeps GPUI) -> one menu-bar pro
 ├── Sidebar and pane header move the window (Rune El::window_drag; the title bar is transparent)
 ├── An open window polls its host every 250 ms; close hides it (Dock policy restored)
 ├── ⌘Q / menu-bar Quit / Ctrl-C quit and join
-└── Not yet: meeting capsules (offers are logged, not shown) // the HUD/capsule port is separate
-Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
+├── Meeting capsules: Rune interactive overlays (offer, call ended, ready, recording)
+└── Not yet: capsule Copy new/all, hover expansion, drag
+Windows `hex app` -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
 ├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
 ├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
-└── Not yet: HUD (no Rune overlay window), custom caption, website rules
+├── HUD: shared indicator model + CPU shader in a Rune overlay
+└── Not yet: custom caption, app icons, file dialog
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -1023,7 +1021,7 @@ Unmerged Windows / deferred features -> Not part of this map
 Sources: [meeting.rs](../../src/meeting.rs),
 [meeting_watcher.rs](../../src/meeting_watcher.rs),
 [developer_control.rs](../../src/developer_control.rs),
-[capture-preview.sh](../../scripts/capture-preview.sh), [iOS guide](../../ios/README.md).
+`SCENES` in [rune_ui.rs](../../src/rune_ui.rs), [iOS guide](../../ios/README.md).
 iOS physical-device proof and temporary-WAV failure cleanup remain gaps;
 best-effort deletion is not guaranteed deletion.
 
@@ -1060,35 +1058,37 @@ answered `hex dev status/show/hud`, and quit cleanly on Ctrl-C, also with
 the meeting fixtures copied into its data root and the Meetings pane shown.
 `macos_host`'s tests cover the meeting feed over `tests/fixtures/meetings`
 (order, recovery to Interrupted, turns and pauses, no resend when unchanged)
-and the practice feed over a written event log. Those
-builds stub the Metal shaders and Apple Intelligence (Xcode is missing), so
-the HUD failed to load its shader there; window contents (including the
+and the practice feed over a written event log. After GPUI's removal the
+same host built with a local Command Line Tools stub passed clippy and all
+648 macOS tests on hailmary (2026-10-22); it was not launched again. Those
+builds stub the HUD's Metal shader and Apple Intelligence (Xcode is missing),
+so the HUD failed to load its shader there; window contents (including the
 Meetings list and the practice step), dragging the window, the folder
 panel, the status item, reopen, shortcut capture, and Sparkle have not been
 seen or exercised, and no screenshot could be taken over SSH.
 
 `dev.rune-ui-windows` lives in [windows_rune.rs](../../src/windows_rune.rs) and
 [rune_ui/windows_host.rs](../../src/rune_ui/windows_host.rs). It has only
-been cross-compiled (`cargo xwin check` and `clippy -D warnings` for
-`x86_64-pc-windows-msvc`, with the transcribe.cpp build stubbed out); it has
-never run on Windows, and no test covers it.
+been cross-compiled (`cargo xwin clippy -D warnings` for
+`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`, with the
+transcribe.cpp build stubbed out, last after GPUI's removal on 2026-10-22); it
+has never run on Windows, and no test covers it. It replaces the GPUI app
+earlier Windows releases shipped.
 
 `incremental_projection_matches_snapshot_after_updates_and_partial_writes` in
 [meeting_live.rs](../../src/meeting_live.rs) compares the incremental transcript
 reader with snapshot projection across updates, partial writes, and source
 ordering. This checks filesystem/projection behavior, not native meeting capture.
 
-`production_navigation_keeps_commands_available_as_an_opt_in` and
-`developer_navigation_appends_developer_panes_in_order` in
-[app_window.rs](../../src/app_window.rs) check exact pane availability and order
-from the developer-feature flag and the Meetings opt-in; they do not exercise
-native navigation clicks.
+`each_os_lists_only_the_panes_it_can_run` and
+`developer_panes_show_only_in_developer_builds` in
+[rune_ui/tests/panes.rs](../../src/rune_ui/tests/panes.rs) check pane
+availability from the capabilities, the developer flag, and the Meetings
+opt-in; they do not exercise native navigation clicks.
 
-Desktop previews use a deterministic microphone list. Their settings controls do
-not change global shortcut-capture suspension or Dock policy, or play preview
-sounds. The
-in-memory editor regressions use these fixtures; they do not establish native
-device discovery or installed-app behavior.
+Scenes and tests use fixture state (`Service::Fixture`, `PlatformHost::Fixture`):
+requests are recorded, never performed. They do not establish native device
+discovery or installed-app behavior.
 
 `default_paste_hotkeys_follow_build_capabilities` in
 [app_settings.rs](../../src/app_settings.rs) checks the production default runtime

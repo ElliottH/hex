@@ -1,6 +1,7 @@
 # Windows Beta
 
-The Windows port is a beta with a native GPUI desktop app, WASAPI capture,
+The Windows port is a beta with a Rune desktop app (a tray process; see
+[The app](#the-app)), WASAPI capture,
 local `transcribe.cpp` transcription, a global shortcut, and generation-safe
 automatic paste. Its daily-use surface includes live microphone, model, and
 shortcut settings, Hold or Toggle shortcut modes, double-tap lock, Paste Last
@@ -92,9 +93,8 @@ compatible Visual Studio installation and installs only missing prerequisites.
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1
 ```
 
-The script also discovers the installed Windows SDK, persists `GPUI_FXC_PATH`
-for GPUI release builds, installs `rustfmt`, Clippy, and rust-analyzer, fetches
-Cargo dependencies, and runs `cargo check --all-targets`.
+The script also installs `rustfmt`, Clippy, and rust-analyzer, fetches Cargo
+dependencies, and runs `cargo check --all-targets`.
 
 ## Smoke Test
 
@@ -170,15 +170,13 @@ preserves the previous pipeline output. Use **Retry** in the card after fixing a
 Bun, dependency, or config error. Literal voice commands in the same config
 remain unavailable on Windows until a real streaming command recognizer lands.
 
-## Rune Front End (Experimental)
+## The App
 
-Branch `rune-ui` only; GPUI stays the default. Build with
-`--features rune-ui` and run `hex app --ui rune` (`--hidden` for a login
-launch). Snapshot fixtures without starting anything:
-`hex app --ui rune -- --snap out.png --scene modes`.
+`hex app` (`--hidden` for a login launch) runs the tray app on Rune. Snapshot
+fixtures without starting anything: `hex app -- --snap out.png --scene modes`.
 
 ```ts
-hex app --ui rune
+hex app
 ├── named event already held -> signal it (the running app shows its window) -> exit
 └── becomes the app                                   // windows_rune::open
     ├── runtime thread: WindowsDesktopHost + TranscriptionPreparation, publishes every 250 ms
@@ -194,8 +192,7 @@ hex app --ui rune
   History, the transcription picker, first-run setup) with Windows rows:
   Launch at login (the current-user Run key), Check now and Update for
   unmanaged installs, no terminal-paste row. Shortcuts are recorded by
-  polling the keyboard with the listener's hook suspended, as GPUI does,
-  because modifier-only chords never reach the window as key events.
+  polling the keyboard with the listener's hook suspended, because modifier-only chords never reach the window as key events.
 - Models are prepared in-process through `transcription_preparation`; the
   runtime saves the selection when it is ready and restarts the listener.
 - Enable on launch waits until first-run setup has recorded completion.
@@ -213,8 +210,11 @@ hex app --ui rune
 - Without a tray (creation failed) closing the window quits Hex.
   See the [single-process plan](plans/single-process.md#windows-under-rune).
 
-None of this has run on Windows. It is type-checked by cross-compiling on
-Linux with [cargo-xwin](https://github.com/rust-cross/cargo-xwin):
+**This app has never run on Windows.** Earlier releases shipped a GPUI app
+that a person did run; that app is gone, and the Rune app replaces it in the
+next release, so a person must run it on Windows (x64 and ARM64) before that
+release. It is type-checked by cross-compiling on Linux with
+[cargo-xwin](https://github.com/rust-cross/cargo-xwin):
 
 ```sh
 rustup target add x86_64-pc-windows-msvc && cargo install cargo-xwin
@@ -224,7 +224,7 @@ mkdir -p /tmp/no-transcribe/lib
 echo '{"libraries":[],"shared":false}' > /tmp/no-transcribe/lib/transcribe-link.json
 # TRANSCRIBE_DIR skips the transcribe.cpp/Vulkan CMake build; nothing links in check.
 TRANSCRIBE_DIR=/tmp/no-transcribe cargo xwin clippy --target x86_64-pc-windows-msvc \
-  --features rune-ui --all-targets -- -D warnings
+  --all-targets -- -D warnings
 ```
 
 For ARM64, add the `aarch64-pc-windows-msvc` target and set
@@ -232,7 +232,7 @@ For ARM64, add the `aarch64-pc-windows-msvc` target and set
 `clang` driver, which rejects the clang-cl `/imsvc` flags cargo-xwin passes
 by default.
 
-That checks every Rust path, including GPUI, wgpu's DX12 and Vulkan
+That checks every Rust path, including Rune, wgpu's DX12 and Vulkan
 backends, and the Windows modules; it compiles C build scripts (ring) for
 the target but never links, builds transcribe.cpp, or runs anything.
 
@@ -249,7 +249,7 @@ The target is product and visual parity with macOS, using native Windows
 adapters where the operating-system APIs differ. A direct copy of AppKit,
 CoreAudio event taps, Metal, `SMAppService`, Accessibility, or
 ScreenCaptureKit code would not run on Windows; the Windows implementation must
-preserve the same user contract through Win32, WASAPI, GPUI/DirectX, the
+preserve the same user contract through Win32, WASAPI, Rune (wgpu), the
 current-user startup registry, UI Automation, and Windows capture APIs.
 
 | Area | Windows status |
@@ -258,10 +258,10 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Live model, shortcut, and microphone selection | Implemented |
 | Double-tap lock and Paste Last Dictation | Implemented |
 | Clipboard preservation and generation-safe restoration | Implemented |
-| Recording tones and click-through recording/processing HUD | Implemented; the renderer is native GPUI/DirectX rather than the macOS Metal shader |
+| Recording tones and click-through recording/processing HUD | Implemented; a CPU port of the macOS Metal shader drawn in a Rune overlay, never run on Windows |
 | History retention, list, detail, search, copy, delete, and clear | Implemented |
 | Text replacements | Implemented in the Windows Modes pane using the shared phrase-boundary replacement engine |
-| Application picker in Modes | Implemented; lists Start menu shortcuts, App Paths, and apps with an open window, each with its executable's icon |
+| Application picker in Modes | Implemented; lists Start menu shortcuts, App Paths, and apps with an open window. No icons and no file dialog yet |
 | Interface language | Implemented on every OS; English, Polish, Chinese, Japanese, German, and Spanish |
 | Resident tray and Launch at login | Implemented |
 | Application modes with per-mode corrections, OpenCode rewriting, and transformations | Implemented on the shared ordered processing policy; global and contextual profiles persist their own corrections, model, reasoning variant, deadline, and ordered built-in/TypeScript transformations, while modes match by application name — physical end-to-end paste/UI validation remains |
@@ -273,8 +273,8 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Web-domain mode rules and browser context via UI Automation | Implemented; the page URL comes from the browser's UIA document element, bounded so a hung provider degrades to application-only context |
 | Opt-in voice Commands | Missing; blocked on a Windows streaming command model |
 | Managed installer with Start Menu integration and clean uninstall | Implemented as `scripts/install-windows.ps1`; it creates the self-updating versions layout, and updates retarget the managed shortcut and Launch-at-login entry |
-| First-run onboarding | Implemented; a fresh install picks a dictation language, downloads its recommended model with live progress, and starts listening only after the dialog closes — shared with the Linux shell |
-| Activity pane with the live session and recent transcripts | Implemented; one shared read-only pane on both port shells |
+| First-run onboarding | Implemented; a fresh install picks a dictation language, downloads its recommended model with live progress, and starts listening only once setup is recorded — the shared Rune tour |
+| Activity pane with the live session and recent transcripts | Implemented in developer builds; the shared read-only pane |
 | Developer Meetings, live drafts, and meeting paste | Missing |
 | Local transcription API and public TypeScript SDK host lifecycle on Windows | Missing; see Local Transcription Service |
 | Streaming finish with whole-clip fallback | Implemented on GPU devices with Parakeet Unified English |
@@ -284,11 +284,8 @@ Linux use. On first launch, an existing `windows-settings.json` is migrated once
 and kept as `windows-settings.json.migrated`.
 
 The Windows window uses the shared design system
-([design-system.md](design-system.md)): the same tokens, components, and text
-input as macOS, with Segoe Fluent Icons glyphs for inline icons. The sidebar
-runs the full window height as on macOS; the caption row above the content
-holds the window buttons, and the sidebar's part of it holds the app name.
-Mode processing, OpenCode rewriting, Voice Action, and transformations run
+([design-system.md](design-system.md)): the same Rune panes as macOS and
+Linux under the native title bar. Mode processing, OpenCode rewriting, Voice Action, and transformations run
 through the same `dictation_processor` and `personal_commands` modules as
 macOS; Windows reaches OpenCode through the `opencode2 api` CLI. Like macOS,
 an unset OpenCode model tries the ranked recommended models before the
@@ -300,9 +297,9 @@ empty look-alike screens do not count as parity.
 
 The Windows listener preserves physical press/release timestamps, keeps audio
 capture off the transcription and paste worker, and restores the previous
-clipboard only when no newer clipboard change supersedes it. The optimized
-MSVC release build is verified with GPUI's DirectX shaders; `check-windows`
-builds and tests x64 and ARM64 on every pull request. The remaining code
+clipboard only when no newer clipboard change supersedes it.
+`check-windows` builds and tests the optimized MSVC release for x64 and ARM64
+on every pull request. The remaining code
 parity slice is the developer-only Meetings surface after the physical matrix
 is green; opt-in Commands wait on a Windows streaming command model. Shared
 first-run onboarding, complete OpenCode mode rewriting controls, and the bounded

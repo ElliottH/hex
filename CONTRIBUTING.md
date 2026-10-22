@@ -22,7 +22,7 @@ Linux dependencies and installation are documented in
 [`docs/linux.md`](docs/linux.md); Nix development is covered in
 [`docs/nix.md`](docs/nix.md). The Linux pull-request workflow builds and tests
 native code, exercises X11 grabs on Xvfb, and tests native Wayland clipboard
-insertion into a GTK target with Settings open under isolated headless Sway.
+insertion into a GTK target with the Hex window open under isolated headless Sway.
 It also builds the Nix package with its tests and checks the installed wrapper.
 An X11 virtual-microphone test exercises real capture, local inference, paste,
 and shutdown using a public speech sample. These checks do not replace physical

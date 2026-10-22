@@ -140,8 +140,9 @@ substitute for source inspection or a second roadmap.
   selection, recording behavior, processing, sound volume, indicator position,
   interface language, and Dock policy. It records one-time changes in
   `migrations` and migrates the Windows and Linux beta files once.
-- `login_item`: the native `SMAppService.mainAppService` adapter. macOS owns
-  registration state; it is deliberately not duplicated in `settings.json`.
+- `login_item`: the native `SMAppService.mainAppService` adapter and its worker
+  thread. macOS owns registration state; it is deliberately not duplicated in
+  `settings.json`.
 - `app_paths`: the Application Support owner for runtime logs and shared state,
   including the one-time macOS `voice-control` to `hex` folder rename, which runs
   in `main` before logging, the instance lock, or any file in the folder opens.
@@ -164,80 +165,76 @@ substitute for source inspection or a second roadmap.
   session binding Escape only while recording, granted-trigger descriptions,
   and session-closed reporting.
 - `linux_file_chooser`: one blocking `OpenFile` call on the FileChooser
-  portal over a private bus connection, for the Rune Modes picker's
-  "Choose a file…" (`rune-ui` only).
+  portal over a private bus connection, for the Modes picker's
+  "Choose a file…".
 - `linux_context`: the frontmost X11 application for modes; Wayland has none.
 - `linux_audio_control`: While-dictating mute through `wpctl`/`pactl` and
   MPRIS pause over D-Bus, restoring only what it changed.
-- `linux_session`: display-backend selection matching GPUI's nonempty
-  `WAYLAND_DISPLAY` rule, independent of persisted preferences.
+- `linux_session`: display-backend selection matching winit's (Rune's)
+  nonempty `WAYLAND_DISPLAY` rule, independent of persisted preferences.
 - `linux_service`: the single-instance lock and owner-only, same-user Unix
   socket that forwards `Activate` (with the activation token), shortcut
   commands, `Status`, and `Quit` to the one Hex process, plus the per-user
   systemd lifecycle (`Type=notify` readiness, `session.env`, start/restart).
-- `linux_desktop`: the GTK thread in the Hex process for the focus-free,
-  click-through recording/processing HUD: layer-shell on Wayland, an
-  override-redirect popup on X11, at the top or bottom. The window never owns
-  its lifecycle; Linux has no tray icon.
+- `linux_rune_hud`: the focus-free, click-through recording/processing HUD as
+  a Rune overlay in the Hex process: layer-shell on Wayland, override-redirect
+  on X11, at the top or bottom. The listener reports through `LinuxIndicator`
+  and never waits on it; it shows once the window's app runs, whether or not
+  the window is open. Linux has no tray icon.
 - `self_update`: the signed-feed core the Linux and Windows updaters share:
   ed25519 feed verification, per-target manifest validation, bounded HTTPS
   downloads, and size and checksum verification.
 - `linux_updater`: signed direct-install updates, atomic version activation,
   and restart handoff for user-local Linux installs.
-- `windows`, `windows_app`, `windows_dictation`, `windows_input`,
-  `windows_paste`, `windows_migration`, `windows_indicator`, `windows_updater`,
-  `windows_context`, `windows_audio_control`, `login_item`: the Windows beta
-  CLI, the tray, HUD, and listener host around the shared window, the WASAPI
+- `windows`, `windows_app`, `windows_rune`, `windows_dictation`,
+  `windows_input`, `windows_paste`, `windows_migration`, `windows_rune_hud`,
+  `windows_updater`, `windows_context`, `windows_audio_control`,
+  `windows_login_item`: the Windows beta CLI, the listener host and
+  single-instance claim, the tray app on `rune::App` (tray, window icon, and
+  runtime thread; `rune_ui/windows_host.rs` is the window's host), the WASAPI
   dictation loop, low-level keyboard hook, clipboard paste, the one-time
-  `windows-settings.json` migration, HUD, signed self-update, UI Automation
-  context, audio ducking, and login item.
-- `windows_ui`: Windows window chrome on the shared design system: the split
-  caption row (brand over the full-height sidebar, window buttons over the
-  content), Segoe Fluent Icons glyphs, and window, tray, and HUD-popup
-  integration.
+  `windows-settings.json` migration, the HUD (the shared indicator model and
+  CPU shader in a Rune overlay), signed self-update, UI Automation context,
+  audio ducking, and the login item.
 - `dictation_modes`: the mode runtime the Windows and Linux listeners share:
   mode selection by application and website, then global replacements, mode
   corrections, OpenCode rewriting, and transformations, and the History entry.
 - `desktop_i18n`: interface translations keyed by the English source string,
-  `tr`, `tr_fill`, and `tr_named`. A test fails if any string the shared window
+  `tr`, `tr_fill`, and `tr_named`. A test fails if any string the window
   translates lacks a language.
 - `history`: the owner-only bounded retained-dictation store: retention
   windows with hard entry and byte caps, atomic crash-safe persistence, and
   search. Text and bounded metadata only, never audio.
 - `events`: bounded asynchronous append-only NDJSON observations and bounded
-  incremental reading; `dashboard` and the GPUI Activity pane are read-only
+  incremental reading; `dashboard` and the Activity pane are read-only
   projections.
 - `desktop_activity`: the shared listener, device, session, and latest-failure
   projection over `EventReader`. Transcript rows read retained events directly.
 - `desktop_host`: the Linux host's in-process snapshot-and-action types, shared
   by the window and `hex status`.
-- `design_tokens`: the desktop design tokens (surface, text and role colours,
-  the five-step type scale, spacing, radii, and control geometry) plus the
-  `Typography` trait and the test that rejects raw styles in desktop sources.
-- `desktop_ui`: the platform-neutral GPUI components shared by both desktop
-  roots: the pane scaffold, cards and rows, the one button system, tags, menus,
-  segmented controls, icons, and empty and error states.
-- `text_input`: the shared GPUI single- and multi-line text input with editing,
-  selection, clipboard, and input-method support.
-- `desktop_transcription_picker`: the single GPUI language/model picker used by
-  both desktop roots over portable model presentation and platform preparation
-  callbacks.
-- `app_window`: the one window on macOS, Windows, and Linux: Settings, Modes
-  with mode-owned corrections and processing, Voice Action, History, opt-in
-  Commands, and developer-only Meetings, Activity, and HUD Lab panes. A
-  `Capabilities` struct decides which panes and rows exist; `app_window/macos.rs`,
-  `windows.rs`, and `linux.rs` supply each OS's chrome, settings hooks, and
-  backends. Keep shared UI in `app_window.rs` and only OS behavior in those
-  modules.
+- `rune_ui`: the one window on macOS, Windows, and Linux, on Rune with
+  `rune-kit` and the OpenCode theme: Settings, Modes with mode-owned
+  corrections and processing, Voice Action, History, opt-in Commands, Meetings,
+  experimental Fun, developer-only Activity and HUD Lab, the transcription
+  picker, the onboarding tour, the macOS meeting capsules, and the `--snap`
+  fixture scenes. `platform::Capabilities` decides which panes and rows exist;
+  `rune_ui/linux_host.rs`, `windows_host.rs`, and `macos_host.rs` connect it to
+  each OS's host. Keep shared UI in the pane modules and only OS behavior in
+  the hosts.
+- `opencode_catalog`: the OpenCode model catalog as the window shows it:
+  loading off the UI thread, the missing/failing notice, model names, search,
+  and thinking variants.
 - `status_item`: the persistent macOS menu-bar owner for Settings, Paste Last
   Dictation, meeting recording state and Stop & Transcribe, update checks, and
   orderly application shutdown.
-- `macos_rune` (`rune-ui` only): the macOS app as one menu-bar process on
+- `macos_rune`: the macOS app as one menu-bar process on
   `rune::App`: the status item, Sparkle, main menu, Dock reopen Apple event,
   and HUD on the main AppKit loop, and a runtime thread for model
   preparation and the window's state. `rune_ui/macos_host.rs` is the
   window's host and the panes' `NativeHost`.
-- `dictation_indicator`: the click-through Metal/GPUI capture and processing HUD.
+- `dictation_indicator`: the click-through native Metal/AppKit capture and
+  processing HUD (an `NSPanel` driven from `macos_rune`'s main-loop timer), with
+  `spring` for its frame-rate-independent springs and Reduce Motion.
 - `meeting`: explicit capture through `meeting_capture`, owner-only WAV and transcript
   artifacts, Screen Recording permission checks, final local-model publication,
   the user-facing Markdown copy, and recovery.
@@ -267,9 +264,9 @@ substitute for source inspection or a second roadmap.
 - `microphone_activity`: permission-light CoreAudio process input observation.
 - `meeting_detection`: pure provider classification, debounce, per-call snooze,
   and call-ended presence.
-- `meeting_watcher`: GPUI application lifecycle, recognition ownership, the
-  focus-free meeting capsules, menu-bar meeting state, and explicit handoff into
-  capture.
+- `meeting_watcher`: the meeting controller loop: call detection, offers,
+  recording workers, call-ended presence, notes, and the menu-bar meeting
+  state. The capsules that show its events are `rune_ui::meeting_capsules`.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
 - `feedback`: bounded volume-controlled mode, capture, cancellation, and
@@ -296,7 +293,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   modifier-plus-key, standalone Globe/Fn, and standalone function-key bindings.
   Capturing a new binding suspends global matching.
 - GUI startup must successfully call `keyboard::initialize_layout` on the OS
-  main thread before settings, keyboard-using workers, or GPUI start. That
+  main thread before settings, keyboard-using workers, or Rune start. That
   snapshot is fixed until restart; cached misses must not re-enter TIS/TSM.
   Uncached headless lookups retain live-layout resolution, with all native
   lookup and snapshot construction serialized by the same lock.
@@ -515,14 +512,15 @@ CoreAudio formats, AppleScript details, or event serialization.
 - The HUD is observational and click-through. It must not alter capture
   boundaries, steal focus, or block controls in the foreground application.
 - Desktop UI is governed by [`docs/design-system.md`](docs/design-system.md);
-  read it before changing any GPUI pane, capsule, or picker. Use only
-  `design_tokens` values and `desktop_ui` components: no raw colours, type
-  sizes, line heights, or radii (`desktop_sources_use_tokens_instead_of_raw_styles`
-  enforces this). Use sentence case and the product name "Hex" in all copy.
-  Reserve the accent (Primary) fill for at most one main action per screen;
-  states such as recording or an available update use a Secondary button with
-  a status dot. Extend a token or component instead of adding a parallel helper, and verify
-  visual changes with `scripts/capture-preview.sh`.
+  read it before changing any pane, capsule, or picker. Rune is the only UI
+  toolkit: compose `rune-kit` components and Hex's pieces in
+  `rune_ui/controls.rs` and `rune_ui/lists.rs`, and name only the OpenCode
+  theme's tokens, never colour literals. Use sentence case and the product name
+  "Hex" in all copy. Reserve the accent (Primary) fill for at most one main
+  action per screen; states such as recording or an available update use a
+  Secondary button with a status dot. Extend a piece instead of adding a
+  parallel helper, and verify visual changes with `--snap` scenes in light and
+  dark.
 - Public app updates are Developer ID signed, notarized, stapled, EdDSA signed,
   published artifact-first/feed-last, and installed through Sparkle.
 - Linux direct-install updates accept only a strictly newer signed stable
@@ -612,23 +610,10 @@ cargo run -- status
 cargo run -- meeting record --title "Design sync"
 cargo run -- meeting probe
 cargo run -- mcp --meetings-dir tests/fixtures/meetings
-cargo run -- meeting watch --preview
-cargo run -- app --preview-dictation
-cargo run -- preview onboarding
-cargo run -- preview transcription-picker --language zh --model-state installed
-./scripts/capture-preview.sh /tmp/hex-preview.png settings
-./scripts/capture-preview.sh /tmp/hex-update.png settings --update-available
-./scripts/capture-preview.sh /tmp/hex-model-missing.png settings --model-missing
-./scripts/capture-preview.sh /tmp/hex-command-model-missing.png settings --command-model-missing
-./scripts/capture-preview.sh /tmp/hex-microphone-confirmation.png settings --confirm-release-microphone
-./scripts/capture-preview.sh /tmp/hex-history-retention.png history --open-history-retention
-./scripts/capture-preview.sh /tmp/hex-modes.png modes
-./scripts/capture-preview.sh /tmp/hex-modes-collapsed.png modes --collapse-mode-processing
-./scripts/capture-preview.sh /tmp/hex-modes-picker.png modes --collapse-mode-processing --open-transformation-picker
-./scripts/capture-preview.sh /tmp/hex-modes-global.png modes --collapse-mode-processing --select-global-mode
-./scripts/capture-preview.sh /tmp/hex-voice-action-off.png voice-action
-./scripts/capture-preview.sh /tmp/hex-voice-action-unavailable.png voice-action --voice-action-enabled --opencode-unavailable
-HEX_PREVIEW_SKIP_BUILD=1 ./scripts/capture-preview.sh /tmp/hex-modes.png modes
+cargo run -- app -- --list-scenes
+cargo run -- app -- --snap /tmp/hex-settings.png --scene mac-settings
+cargo run -- app -- --snap /tmp/hex-modes.png --scene modes --theme light
+cargo run -- app -- --snap /tmp/hex-onboarding.png --scene mac-onboarding
 ./scripts/install-app.sh
 cargo fmt --check
 cargo test
@@ -639,34 +624,27 @@ git diff --check
 cd sdk/typescript && bun run check && bun run test && bun run build
 ```
 
-Use `scripts/capture-preview.sh` as the default desktop-UI iteration loop. It
-builds the release binary, launches one isolated deterministic preview, waits
-for that process's `Hex` window, captures only that window, and terminates the
-preview. Targets include `settings`, `modes`, `voice-action`, `commands`,
-`meetings`, `activity`, `onboarding`, `transcription-picker`, `hud-lab`,
-`dictation-hud`, and `meeting-offer` (with `--meeting-panel call-ended|ready`).
-Pass `--meetings-enabled` and `--screen-recording-missing` to Settings for the
-Meetings section. The `meetings` preview has sample meetings with notes and a
-transcript; add `--meeting-recording` for the live state,
-`--confirm-meeting-delete` for the delete confirmation, `--open-meeting-actions`
-for the overflow menu, or `--meetings-empty`. The Modes preview includes representative activation,
-correction, model-variant, and transformation data so it exercises the complete
-editor. Pass `--collapse-mode-processing` to expose the lower transformation
-and deletion states without scrolling. Use `--open-transformation-picker`,
-`--select-global-mode`, and `--opencode-unavailable` to capture those states
-directly instead of scripting pointer coordinates. After a successful build, set
-`HEX_PREVIEW_SKIP_BUILD=1` for repeated
-captures that do not require recompilation; `HEX_PREVIEW_BINARY` can override
-the release binary path. Keep release previews authoritative for production
-navigation because debug builds expose developer-only panes.
+Use Rune's headless renders as the desktop-UI iteration loop: `hex app --
+--snap <png> --scene <name>` draws one named fixture scene from `SCENES` in
+`src/rune_ui.rs` without starting the runtime, on every OS (`--list-scenes`
+lists them; `--theme light|dark`, `--size WxH`, and `--scale` adjust the
+render). Scenes cover every pane and state the goldens check: the Linux and
+Windows panes (`modes`, `voice-action`, `history`, `picker`, `onboarding`,
+`windows-settings`, …) and the macOS ones (`mac-settings`, `mac-commands`,
+`meetings*`, `mac-fun*`, `mac-hud-lab`, `mac-activity`, `mac-onboarding*`).
+`live` renders the running Linux Hex's real state. On a host without a GPU,
+render on lavapipe with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`.
+`cargo test rune_ui` compares the light and dark goldens in `tests/golden/`.
+A scene is a fixture, not native end-to-end proof; the meeting capsules and
+HUDs have no scene.
 
 The supported Linux beta and release host use x86_64 Arch Linux. Install its
 native build dependencies with:
 
 ```sh
 sudo pacman -S --needed base-devel git rustup python alsa-lib curl jq openssl xxd \
-  util-linux gtk3 gtk-layer-shell libappindicator-gtk3 libxkbcommon \
-  libxkbcommon-x11 libx11 libxcb openblas vulkan-headers vulkan-icd-loader \
+  util-linux glib2 libxkbcommon libxkbcommon-x11 libx11 libxcb openblas \
+  vulkan-headers vulkan-icd-loader \
   shaderc spirv-headers clang cmake pkgconf wl-clipboard wtype
 rustup default stable
 ```

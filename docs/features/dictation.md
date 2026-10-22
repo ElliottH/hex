@@ -14,9 +14,8 @@ were run for this rewrite.
 
 Settings shortcut capture persists the candidate before showing Saved. If the
 write fails, capture remains active with an error; retry or cancel it explicitly.
-`failed_shortcut_save_stays_in_capture_and_preserves_pending_edits` in
-[app_window.rs](../../src/app_window.rs) checks this with injected persistence
-failure, not a physical shortcut or installed-app disk failure.
+The GPUI regression that injected this failure went with GPUI; no Rune test
+injects a failed shortcut save yet.
 
 **Shortcut:** Option by default, after macOS permissions and the selected local
 model are ready. Commands and OpenCode are not required. Settings > Dictation
@@ -590,11 +589,11 @@ Linux now uses the same recording sounds with its own persisted Sound volume
 control; see [Linux feedback](README.md#other-platforms-and-consumers) for its
 entry points, timing, defaults, and verification limits.
 
-Check: [capture-preview.sh](../../scripts/capture-preview.sh), `dictation-hud`
-preview. It repeats the recording/processing sequence until the preview exits,
-so fullscreen and Space transitions can be checked without a ten-second deadline.
-This renders a real window with deterministic state; it does not prove that
-actual capture caused that state.
+Check: in a debug app, `hex dev hud recording|transcribing|processing|reset`
+or the HUD Lab pane drives the real HUD with deterministic state, so
+fullscreen and Space transitions can be checked. (The `dictation-hud` preview
+that looped the sequence went with GPUI.) This does not prove that actual
+capture caused that state.
 
 The macOS HUD is a click-through, nonactivating `NSPanel` with
 `CanJoinAllSpaces`, `CanJoinAllApplications`, and `FullScreenAuxiliary` collection

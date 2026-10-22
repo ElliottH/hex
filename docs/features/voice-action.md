@@ -22,7 +22,7 @@ Foreground text target -> Optional selection -> Hold shortcut -> Speak -> Releas
 
 Requires ordinary setup permissions, a local transcription model, and OpenCode
 with an available text model. Commands and its Moonshine model are not required.
-`render_voice_action` in [app_window.rs](../../src/app_window.rs) keeps the toggle
+[rune_ui/voice_action.rs](../../src/rune_ui/voice_action.rs) keeps the toggle
 reachable when OpenCode is unavailable; the pane offers setup/retry actions.
 HEX discovers `opencode2` and its managed service through
 [dictation_processor.rs](../../src/dictation_processor.rs), not a separate
@@ -68,9 +68,10 @@ Checks in [app_settings.rs](../../src/app_settings.rs):
 `voice_action_requires_explicit_opt_in_for_new_and_existing_settings`,
 `voice_action_settings_round_trip`, and
 `disabled_voice_action_preserves_its_binding_without_reserving_it`.
-Checks in [app_window.rs](../../src/app_window.rs):
+Checks in [rune_ui/voice_action.rs](../../src/rune_ui/voice_action.rs):
 `voice_action_opt_in_rejects_active_conflicts_without_rebinding` and
-`voice_action_toggle_preserves_configuration_and_can_always_disable`.
+`voice_action_toggle_preserves_configuration_and_can_always_disable`; the pane
+test `voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut`.
 These cover settings and conflict logic, not native shortcut registration.
 Active-capture cancellation is wired in [recognition.rs](../../src/recognition.rs)
 when the runtime edit binding becomes `None`; the settings tests alone do not
@@ -206,9 +207,8 @@ with a controlled opener, then native audio-onset evidence. See
 [Recovery](recovery.md#cold-voice-action); a successful HUD fixture does not
 establish equivalent audio onset.
 
-- **Preview limits:** [capture-preview.sh](../../scripts/capture-preview.sh)
-  provides `voice-action`, `--voice-action-enabled`, and `--opencode-unavailable`
-  fixtures. They render states, not selection-to-provider-to-paste execution.
+- **Scene limits:** the `voice-action`, `voice-action-off`,
+  `voice-action-unavailable`, and `voice-action-models` scenes are fixtures. They render states, not selection-to-provider-to-paste execution.
 - **Focus and provider limits:** the prompt asks for paste-ready text; tests do
   not guarantee a provider follows it. Moving focus while work is pending changes
   the eventual paste target. A failed action does not paste its local transcript.

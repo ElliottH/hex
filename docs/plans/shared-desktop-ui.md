@@ -1,25 +1,24 @@
 # Share The Desktop UI Across macOS, Windows, And Linux
 
-**Status:** Implemented. macOS, Windows, and Linux open the same `AppWindow`
-and read and write the same `settings.json`. Each OS supplies only its chrome
-and its backends.
+**Status:** Implemented, now on Rune. macOS, Windows, and Linux open the
+same window (`src/rune_ui.rs`) and read and write the same `settings.json`.
+Each OS supplies only its host and its native pieces; the GPUI `AppWindow`
+this plan first described is deleted (see [rune-ui.md](rune-ui.md)).
 
-## One Window, Per-OS Modules
+## One Window, Per-OS Hosts
 
-`src/app_window.rs` renders every pane. A `Capabilities` constant decides which
-panes and rows exist on an OS, so a missing capability omits a row instead of
-showing a disabled imitation. Each OS module provides the same free functions
-and `impl AppWindow` hooks:
+`src/rune_ui.rs` and its pane modules render every pane. `platform::Capabilities`
+decides which panes and rows exist on an OS, so a missing capability omits a
+row instead of showing a disabled imitation. Each OS connects the window to
+its runtime through a host module:
 
 ```text
-src/app_window.rs            shared panes, rows, and settings edits
-src/app_window/macos.rs      traffic-light chrome, permissions, Meetings,
-                             Commands, Sparkle, Dock icon
-src/app_window/windows.rs    40 px caption and Fluent icons, the listener host,
-                             tray, HUD, updater, keyboard-state shortcut capture
-src/app_window/linux.rs      the Settings client of hex.service: shortcut
-                             capture, model preparation, and settings reloads
-                             go through the service
+src/rune_ui/macos_host.rs    the menu-bar runtime: permissions, Meetings,
+                             Commands, Sparkle, Dock icon, chord capture
+src/rune_ui/windows_host.rs  the tray runtime: listener host, updater,
+                             keyboard-state shortcut capture, Launch at login
+src/rune_ui/linux_host.rs    the in-process Linux host: shortcut capture,
+                             model preparation, and settings adoption
 ```
 
 | Capability | macOS | Windows | Linux |

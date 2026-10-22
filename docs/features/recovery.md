@@ -358,7 +358,7 @@ did not verify the new visible warning or bare-Escape fallback.
 
 ```ts
 GUI startup -> require OS main thread -> initialize_layout // recover.keyboard-layout
-  -> publish complete snapshot BEFORE settings/workers/GPUI
+  -> publish complete snapshot BEFORE settings/workers/Rune
      ├── cached character -> keycode
      ├── missing ASCII character -> filled from ASCII-capable layout
      └── Command layer (UCKeyTranslate with cmdKey) -> separate map
@@ -374,7 +374,7 @@ Headless lookup without snapshot -> shared native lock -> current layout query
 Concurrent snapshot construction -> same lock          // serialized, not a separate race
 ```
 Sources: [keyboard.rs](../../src/keyboard.rs),
-[meeting_watcher.rs](../../src/meeting_watcher.rs).
+[macos_rune.rs](../../src/macos_rune.rs).
 The lock alone is not GUI thread safety: successful main-thread prewarming and
 pure cached misses prevent later GUI workers from querying native layout APIs.
 The GUI snapshot remains fixed until restart. CLI lookups without a snapshot

@@ -80,9 +80,10 @@ Checks: `a_browser_voice_note_is_not_offered_but_a_sustained_browser_call_is`,
 
 Sources: [meeting_detection.rs](../../src/meeting_detection.rs),
 [microphone_activity.rs](../../src/microphone_activity.rs),
-[context.rs](../../src/context.rs), and the `MeetingPanel` capsule in
+[context.rs](../../src/context.rs), the controller in
 [meeting_watcher.rs](../../src/meeting_watcher.rs) (which logs `INFO` when an
-offer is triggered, shown, dismissed, or times out).
+offer is triggered), and the offer capsule in
+[meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs).
 Checks: `resolves_unregistered_chromium_and_electron_audio_helpers_to_their_host_apps`,
 `resolves_helper_bundle_ids_when_parent_lookup_is_unavailable`,
 `attributes_safari_webkit_gpu_and_facetime_avconferenced_only_when_active`,
@@ -100,11 +101,8 @@ Brave WebRTC `getUserMedia({audio: true})` reproduction on Pro confirmed
 `NSRunningApplication == nil` before parent/bundle resolution and resolved to
 `com.brave.Browser` and `com.tinyspeck.slackmacgap` afterward.
 
-Preview: `scripts/capture-preview.sh OUT meeting-offer [--meeting-panel offer-more|offer-dismissed|recording|recording-expanded|recording-copied|call-ended|ready]` (alias `meeting-capsule`).
-In the live preview, the recording capsule's Open opens a Meetings preview
-window through the app's open path; on Pro, clicking it with cua-driver while
-the preview is inactive reproduced the deadlock before the fix and opens the
-window after it.
+The capsules have no `--snap` scene; the GPUI capsule previews went with
+GPUI.
 
 ### Record
 
@@ -119,16 +117,13 @@ Record (offer, menu bar "Record Meeting", Meetings pane, or voice command)
      └── Stop & Transcribe
      (Idle menu bar: "Record Meeting" + "Copy Last Meeting Transcript")
   -> Floating recording indicator (when Show recording indicator is on) // meetings.indicator
-     ├── Focus-free GPUI capsule that never becomes key; click-through outside the visible pill
-     ├── Drag anywhere -> snaps to nearest corner and saves recording_indicator_corner
-     ├── Compact pill: pulsing red dot (static under Reduce Motion) · tabular mm:ss · title
-     └── Hover expands actions (fixed-width inline "Copied" feedback):
-         ├── Copy new (N) -> copies turns since last Copy new or Option-Control-V;
-         │                   disabled when 0; advances shared cursor only on success
-         ├── Copy all -> echo-filtered live transcript as You/Them Markdown turns
-         ├── Open -> activates Hex, then opens the active meeting in the Meetings pane
-         │           (opening while inactive deadlocked GPUI before gpui 2e52b98)
-         └── Stop -> Stop & Transcribe
+     ├── Rune interactive overlay: a non-activating panel that never becomes key
+     ├── In the saved recording_indicator_corner
+     ├── Red dot · mm:ss · title
+     ├── Open -> activates Hex, then opens the active meeting in the Meetings pane
+     ├── Stop -> Stop & Transcribe
+     └── Not built on Rune: dragging to a corner, hover expansion, Copy new (N),
+         Copy all (the GPUI capsule had them; Option-Control-V still pastes new turns)
   -> Settings window may stay closed
 
 Detected app leaves the microphone for about 3 s     // meetings.call-ended
@@ -163,13 +158,7 @@ Checks: `call_end_is_reported_once_per_sustained_absence`,
 [meeting_tests.rs](../../src/meeting_tests.rs). Native menu-bar and capsule clicks
 are unverified.
 
-Capsule windows are borderless, shadowless, clear NSPanels (GPUI creates
-frameless pop-ups as titled panels whose window shadow outlined the full
-548 px window beneath the compact pill); only the pill draws a small shadow
-that fits its 4 px inset.
-
-Under Rune (`hex app` with `--features rune-ui`), the capsules are Rune
-overlays in [meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs):
+The capsules are Rune overlays in [meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs):
 interactive, non-activating `NSPanel`s at status level on every Space,
 fed by the controller events the menu-bar pump receives
 ([macos_rune.rs](../../src/macos_rune.rs)). The offer (20 s), "left the
@@ -410,18 +399,20 @@ Delete… (overflow menu) -> "Trash recording & Markdown" (or "Trash recording")
 ```
 
 Choice: Delete trashes the Markdown copy too, since it holds the transcript;
-both stay recoverable from the Trash. Sources: `render_meetings` in
-[app_window.rs](../../src/app_window.rs), `trash` / `rename` in
-[meeting.rs](../../src/meeting.rs). Checks:
+both stay recoverable from the Trash. Sources:
+[rune_ui/meetings.rs](../../src/rune_ui/meetings.rs), the requests in
+[rune_ui/macos_host.rs](../../src/rune_ui/macos_host.rs), and `trash` /
+`rename` in [meeting.rs](../../src/meeting.rs). Checks:
 `deleting_trashes_the_markdown_then_the_recording_and_refuses_while_recording`,
 `renaming_updates_the_manifest_and_an_unedited_markdown_heading`,
-`retitling_replaces_only_a_matching_first_heading`,
-`meeting_search_delete_and_rename_work_on_the_selected_meeting`, and the GPUI
-layout checks `meeting_turns_alternate_sides_inside_the_detail` and
-`meeting_overflow_menu_opens_beside_the_visible_actions`.
+`retitling_replaces_only_a_matching_first_heading`, and the Rune pane tests
+`meetings_select_search_and_copy_a_transcript`,
+`meetings_rename_from_the_title_field`,
+`deleting_a_meeting_takes_the_menu_then_a_confirmation`, and
+`the_overflow_menu_copies_the_summary_and_asks_for_new_notes`.
 
-Preview: `scripts/capture-preview.sh OUT meetings [--meeting-recording]
-[--confirm-meeting-delete] [--open-meeting-actions] [--meetings-empty]`.
+Scenes: `meetings`, `meetings-recording`, `meetings-actions`,
+`meetings-delete`, `meetings-rename`, `meetings-failed`, `meetings-empty`.
 
 Checks: `markdown_lists_metadata_and_labeled_turns` and
 `export_never_overwrites_and_uses_safe_names`.
@@ -638,10 +629,8 @@ Granola import: see [granola-import.md](../plans/granola-import.md).
 - Calendar titles (EventKit) are not implemented.
 - The live Moonshine draft needs the command model; without it, the pane shows
   rolling chunks only as they complete (about every 20–30 s).
-- Settings, capsule, and Meetings pane previews launched, but screenshot capture
-  failed on the build host (`could not create image from window`; the Studio
-  session was locked, `CGSSessionScreenIsLocked 1`). The redesigned pane is
-  verified only by GPUI layout checks, not visually.
+- The Meetings pane is verified by Rune goldens rendered offscreen (on Linux
+  and on hailmary's Metal), not on a Mac screen; the capsules have no golden.
 - Echo thresholds are tuned on two speaker-mode calls (2026-10-15 and
   2026-10-16), with six hand-labeled local utterances; other rooms, external
   speakers, and Bluetooth are unmeasured. The 2026-10-16 replay audio was lost

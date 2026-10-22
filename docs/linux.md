@@ -76,20 +76,18 @@ not a network API or the macOS embedded transcription SDK service. It carries
 only `Activate`, the shortcut commands, `Status`, and `Quit`; shortcut commands
 go straight from the socket to the listener, never through the window.
 
-For development, run `cargo run --release --features rune-ui` (the window's
-default toolkit is Rune on builds with `rune-ui`, GPUI otherwise; `hex app --ui
-gpui` picks GPUI when the launch becomes Hex). `hex dictate` remains an explicit
-foreground diagnostic listener and cannot coexist with Hex's listener. With
+For development, run `cargo run --release`. `hex dictate` remains an explicit
+foreground diagnostic listener without the window or HUD and cannot coexist
+with Hex's listener. With
 `HEX_APPLICATION_SUPPORT_DIR` set, launches never start, stop, or restart the
 installed user unit; they forward to the Hex using that data directory or
 become it. `HEX_SYSTEMD_UNIT` names another unit for isolated tests.
 `hex status --lines 40` retains the explicit diagnostic-log view.
 
-The Rune window runs on Rune's app lifetime (`rune::App`): Hex starts it
-without a window, each `Activate` opens or focuses it with the forwarded token
-(on Wayland through `xdg_activation_v1`; without a token most compositors only
+The window runs on Rune's app lifetime (`rune::App`): Hex starts it without a
+window, each `Activate` opens or focuses it with the forwarded token (on
+Wayland through `xdg_activation_v1`; without a token most compositors only
 mark it urgent), and closing it keeps the window's state for the next open.
-The GPUI window (`--ui gpui`) reopens too, but ignores activation tokens.
 
 ## Install A Published Build
 
@@ -108,7 +106,7 @@ To install the dependencies up front, or to inspect the installer before
 running it:
 
 ```sh
-sudo pacman -S --needed alsa-lib curl gtk3 gtk-layer-shell jq libappindicator-gtk3 \
+sudo pacman -S --needed alsa-lib curl glib2 jq \
   libxkbcommon libxkbcommon-x11 libx11 libxcb openblas openssl util-linux \
   vulkan-icd-loader wl-clipboard wtype xxd
 curl --proto '=https' --tlsv1.2 -fsSLO \
@@ -136,8 +134,8 @@ Install the native dependencies and, for a source build, the Rust toolchain:
 
 ```sh
 sudo pacman -S --needed base-devel git rustup python alsa-lib curl jq openssl xxd \
-  util-linux gtk3 gtk-layer-shell libappindicator-gtk3 libxkbcommon \
-  libxkbcommon-x11 libx11 libxcb openblas vulkan-headers vulkan-icd-loader \
+  util-linux glib2 libxkbcommon libxkbcommon-x11 libx11 libxcb openblas \
+  vulkan-headers vulkan-icd-loader \
   shaderc spirv-headers clang cmake pkgconf wl-clipboard wtype
 rustup default stable
 ```
@@ -153,11 +151,10 @@ cd hex
 ```
 
 Do not run the installer as root. It installs a user-local binary, desktop
-launcher, and autostart entry in the same managed layout as published builds,
-built with the Rune window (`--features rune-ui`, which needs access to the
-private Rune repository). Newer signed releases can therefore replace this
-installed source build through the in-app updater. With a custom
-`HEX_APPLICATION_SUPPORT_DIR`, `cargo run --release --features rune-ui` runs an
+launcher, and autostart entry in the same managed layout as published builds.
+Newer signed releases can therefore replace this installed source build
+through the in-app updater. With a custom
+`HEX_APPLICATION_SUPPORT_DIR`, `cargo run --release` runs an
 unmanaged development Hex instead; without one it forwards to the installed Hex.
 
 ## Dictate
@@ -265,8 +262,10 @@ background worker; unavailable audio output does not prevent dictation.
 
 Closing the window leaves Hex running on both X11 and Wayland. The
 recording/processing pill never takes focus or intercepts clicks, with or
-without the window: a layer-shell surface on Wayland, an override-redirect
-popup on X11. **Recording indicator** places it at the top or bottom of the
+without the window open: a Rune overlay that is a layer-shell surface on
+Wayland and an override-redirect window on X11. It needs the window's event
+loop, so it is unavailable when the window cannot start (no display or GPU)
+and in `hex dictate`. **Recording indicator** places it at the top or bottom of the
 screen, or turns it off.
 
 Insertion uses the clipboard and **Ctrl-V** for new installations. Enable
@@ -281,7 +280,7 @@ application (see [#24](https://github.com/anomalyco/hex/issues/24)).
 ## Native Wayland Requirements
 
 - Export the compositor's nonempty `WAYLAND_DISPLAY` in the launch environment.
-  HEX, GTK, and GPUI select the same native backend even when XWayland's
+  HEX and its window (winit) select the same native backend even when XWayland's
   `DISPLAY` is also present. `XDG_SESSION_TYPE` alone does not select Wayland.
 - Install `wl-clipboard` and `wtype`. The compositor must support their clipboard
   and virtual-keyboard protocols. There is no silent XWayland, direct-typing, or
@@ -318,7 +317,7 @@ Its first paste runs while another virtual keyboard holds Ctrl and Alt.
 It also starts an isolated Hex, opens its window through a second `hex app`
 (the window must belong to the same process), repeats paste while the window is
 open, closes the window, checks that the same process still answers, opens the
-window again (`HEX_WAYLAND_REOPEN=0` skips that for the Rune window), and quits. It requires the GTK development
+window again (`HEX_WAYLAND_REOPEN=0` skips that), and quits. It requires the GTK development
 libraries, Sway, `wl-clipboard`, `wtype`, `dbus-run-session`, and a Vulkan driver
 (Mesa's software driver is sufficient), and must run as a non-root user. It uses
 isolated app data and no microphone; CI runs it with the display-free suite and

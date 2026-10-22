@@ -5,7 +5,7 @@ MIT license, the same license as Hex. Hex depends on it as an ordinary public
 Git dependency:
 
 ```toml
-rune = { git = "https://github.com/anomalyco/rune.git", rev = "<sha>", optional = true }
+rune = { git = "https://github.com/anomalyco/rune.git", rev = "<sha>" }
 ```
 
 `rune-kit` and `rune-theme-opencode` use the same URL and rev.
@@ -36,9 +36,9 @@ rejected:
 
 - No credentials or SSH are needed. `.cargo/config.toml` no longer sets
   `net.git-fetch-with-cli`.
-- CI fetches Rune like any other crate. Check Linux also runs clippy and the
-  `rune_ui` tests with `--features rune-ui`. The check workflows run on pushes
-  to `rune-ui` as well as `main`.
+- CI fetches Rune like any other crate; Rune is an ordinary dependency (no
+  cargo feature), so every check builds and tests it. The check workflows run
+  on pushes to `rune-ui` as well as `main`.
 - Nix: `nix/package.nix` lists Rune's hash under `cargoLock.outputHashes` as
   `rune-0.0.1`. One entry covers every crate from the repository. **Every
   Rune pin bump must update it.** To get the new hash, set it to

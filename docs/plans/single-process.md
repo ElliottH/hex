@@ -1,9 +1,10 @@
 # One Hex Process Per User, Hosting Rune Windows
 
-**Status:** design for review on `rune-ui`. Nothing here is implemented.
-It depends on the Rune front end (`src/rune_ui*`,
-[`rune-ui.md`](rune-ui.md)) and on Rune core changes that need coordinating
-with Kit. Never merge this to `main` ahead of the Rune port.
+**Status:** implemented on `rune-ui` for every OS, and GPUI is deleted
+(see [`rune-ui.md`](rune-ui.md)); the sections below record the design and
+what each OS does. Linux has run in a real session; macOS has been compiled,
+tested, and launched without being seen; Windows has only been
+cross-compiled. Never merge this to `main` ahead of the real-window checks.
 
 **Goal:** Hex is one long-lived process per user and data root, on every OS:
 
@@ -15,9 +16,7 @@ with Kit. Never merge this to `main` ahead of the Rune port.
   `hex status`, `hex stop`) forward to the running process.
 - Closing the window leaves the process running.
 
-The engine is a library. Rune is the only UI. GPUI is legacy and is not
-ported further. It is deleted at the end of the port and gets no new
-patches.
+The engine is a library. Rune is the only UI; GPUI is deleted.
 
 ```ts
 hex (no instance)    -> become the instance (or the supervisor starts it) -> open window unless --background
@@ -27,7 +26,7 @@ close window         -> Rune window gone (or hidden); runtime, listener, HUD, mo
 quit                 -> explicit: tray / menu-bar Quit, "Quit Hex" in the window, `hex stop`
 ```
 
-## Today
+## Before the port (with GPUI)
 
 ### Linux: two processes
 
@@ -58,7 +57,7 @@ quit                 -> explicit: tray / menu-bar Quit, "Quit Hex" in the window
 - Linux was one process with a GTK tray until `9a11b5f`. A GTK thread beside
   a GPU UI loop in one process is proven.
 
-### macOS: one process (GPUI today)
+### macOS: one process
 
 - `Hex.app` is an `LSUIElement` menu-bar app (`Command::App` →
   `meeting_watcher::run`).
@@ -74,7 +73,7 @@ quit                 -> explicit: tray / menu-bar Quit, "Quit Hex" in the window
   (`dictation_indicator`), the meeting capsules, and the GPUI `Application`
   that owns the run loop.
 
-### Windows: one process (GPUI today)
+### Windows: one process
 
 - `windows_app::open` runs GPUI, the tray (`tray-icon`), a GPUI HUD window,
   and `WindowsDesktopHost` on the UI thread.
@@ -485,7 +484,7 @@ Keep the named event. It already gives single instance, the
 
 Rune's app lifetime landed (`a9cde14`/`a242f5a`, now `7eea3a3`) as
 `rune::App` + `AppHandle` rather than the `run_app`/`AppCx` sketch above.
-`hex app --ui rune` uses it in
+`hex app` uses it in
 [`windows_rune.rs`](../../src/windows_rune.rs) and
 [`rune_ui/windows_host.rs`](../../src/rune_ui/windows_host.rs):
 
@@ -508,8 +507,7 @@ Rune's app lifetime landed (`a9cde14`/`a242f5a`, now `7eea3a3`) as
   the window by title on the main thread before a frame.
 - Shortcut capture stays in the window (keyboard polling with the hook
   suppressed), not on the runtime.
-- No HUD: GPUI's HUD window needs GPUI's own event loop on the main thread,
-  and Rune has no overlay window kind.
+- The HUD is a Rune overlay (`windows_rune_hud.rs`) on the same loop.
 
 ## macOS under Rune
 
@@ -519,10 +517,10 @@ LaunchServices keeps single instance, and the status item stays native.
 
 [`macos_rune.rs`](../../src/macos_rune.rs) and
 [`rune_ui/macos_host.rs`](../../src/rune_ui/macos_host.rs); `hex app` runs
-it when built with `--features rune-ui` (`--ui gpui` keeps GPUI):
+it:
 
 - **Main thread.** `rune_ui::app().accessory()`, windowless (or open at
-  launch under GPUI's rule: setup or onboarding unfinished, or Show Dock
+  launch when setup or onboarding is unfinished, or Show Dock
   icon) and kept running. `App::accessory` (Rune `50d8d91`) builds winit's
   loop with the Accessory policy, no default menu, and no activation at
   launch.
@@ -561,17 +559,15 @@ it when built with `--features rune-ui` (`--ui gpui` keeps GPUI):
 - **Title bar.** Rune's macOS window has a transparent, full-size title
   bar; the sidebar starts below the traffic lights, and it and the pane
   header move the window (Rune `El::window_drag`, `ea6b513`).
-- **Not yet.**
-  - The meeting capsules (offer, recording, call ended, ready) are GPUI
-    windows and need GPUI's loop, which can't share the main thread with
-    Rune's. Offers are logged and time out; the menu bar still shows and
-    stops a recording. They need Rune's `Panel` kind (item 8), or an
-    AppKit panel hosting a Rune surface.
-  - The HUD stays a native NSPanel with its own Metal layer; moving it to
-    Rune needs the `Overlay` kind.
+- **Meeting capsules.** Offer, recording, call ended, and ready are Rune
+  interactive overlays (non-activating panels, `rune_ui/meeting_capsules.rs`)
+  fed from the controller events on the main loop. Copy new/all, hover
+  expansion, and dragging are not built.
+- **HUD.** It stays a native `NSPanel` with its own Metal layer and no GPUI
+  dependency; moving it to Rune would need a borderless, transparent,
+  click-through, all-spaces overlay.
 - **Verification.** Built with Command Line Tools only (no Xcode): a local
-  shim stubs the Metal shader compiles (GPUI's runtime shaders, an empty
-  HUD metallib) and Apple Intelligence's `@Generable` types. Release
+  shim stubs the HUD metallib and Apple Intelligence's `@Generable` types. Release
   builds need Xcode 26 as before. See `dev.rune-ui-macos` in the feature
   map for what was observed.
 - **CLI.** It already has a channel in `local_api`. A macOS `hex dictation
@@ -606,7 +602,7 @@ it when built with `--features rune-ui` (`--ui gpui` keeps GPUI):
 | 3 | Physical validation on niri (portal) and i3: relaunch focus with a token, close and reopen, logout, crash restart, update restart. | person |
 | 4 | Windows: runtime and `HostHandle`, Rune window with Hide, tray on `run_app`, named event to the proxy, HUD as an overlay or HWND-tweaked Rune window. Plus the Windows pane parity work in `rune-ui.md`. | `rune-ui` |
 | 5 | macOS: runtime out of `meeting_watcher`, reopen, status item beside `rune::App`, Rune window. Written (see [macOS under Rune](#macos-under-rune)); the capsules, the Rune HUD, and the Meetings pane's data remain. The HUD and capsules wait for the Rune `Overlay` and `Panel` kinds. Plus the macOS pane parity work in `rune-ui.md`. | `rune-ui` + Rune |
-| 6 | Delete GPUI: `app_window*`, `desktop_ui`, `design_tokens`, `text_input`, `desktop_transcription_picker`, `motion`, GPUI `windows_indicator` and `dictation_indicator`, the fork patch, the token lint. | `rune-ui` → main once Rune is public |
+| 6 | Delete GPUI: `app_window*`, `desktop_ui`, `design_tokens`, `text_input`, `desktop_transcription_picker`, `motion`, `windows_indicator`, `windows_ui`, the GTK HUD, the fork patch, the token lint. Done; the macOS `dictation_indicator` stays (pure Metal/AppKit). | `rune-ui` |
 
 Windows and macOS follow the port order in
 [`rune-ui.md`](rune-ui.md#order-to-port).

@@ -2,11 +2,11 @@
 
 HEX ships the macOS product loop: configurable hold-to-talk local dictation,
 explicit selected-text voice editing, optional context-aware OpenCode
-post-processing, a Metal HUD, bounded paste workers, settings, and a signed GPUI
+post-processing, a Metal HUD, bounded paste workers, settings, and a signed
 app bundle. Streaming commands are a disabled-by-default experimental opt-in;
 meetings remain a developer prototype until their product surface is redesigned.
 An x86_64 Arch/i3 X11 beta now provides hotkey dictation, automatic paste, a
-GPUI shell, and signed user-local updates; it does not yet include commands or
+Rune window, and signed user-local updates; it does not yet include commands or
 meetings. Native wlroots-compatible Wayland and Nix packaging are implemented
 and awaiting supported-host validation before release.
 The authenticated local transcription service now implements discovery,
@@ -16,6 +16,19 @@ entrypoints. Local Electron capture and native transcription have been exercised
 signed helper packaging and a signed first-consumer integration remain. Follow the
 [embedded desktop delivery plan](docs/plans/typescript-sdk.md); Apple Silicon
 macOS is the proposed first target, not a cross-platform availability promise.
+
+## Validate The Rune Desktop App
+
+The window, menu-bar and tray hosts, HUDs, meeting capsules, and onboarding now
+run only on Rune (`rune-ui` branch; GPUI is gone). Linux has been run in a real
+session; macOS has been compiled, tested, and launched without being seen on
+screen; Windows has only been cross-compiled. Before a release from this
+branch, a person runs each OS through the checklist in
+[the Rune port plan](docs/plans/rune-ui.md#needs-a-person-to-look), including
+the Windows x64 and ARM64 tray app, the macOS HUD and meeting capsules, and
+shortcut capture on every OS. Restore application icons in the Modes picker
+(removed with GPUI) on Rune's raster images, and add native file dialogs on
+macOS and Windows.
 
 ## Validate The macOS Release
 
@@ -163,7 +176,7 @@ gesture-decision tests do not establish those integrated transitions.
 
 ## Make Diagnostics Incremental
 
-Ratatui and GPUI now share a bounded incremental event reader with session and
+Ratatui and the Activity pane now share a bounded incremental event reader with session and
 partial-write handling, and observation writes run on a bounded background
 writer. Add heartbeat or process-liveness evidence so a crash cannot leave an
 old `Listening` event looking live.
@@ -175,7 +188,7 @@ changes but must not mutate compiled configuration automatically.
 
 Authenticated developer control now rides the existing loopback API through the
 debug-only `hex dev` subcommand: it inspects app state, drives semantic HUD
-scenarios, opens/focuses panes, and toggles command mode on the GPUI thread.
+scenarios, opens/focuses panes, and toggles command mode.
 Extend the same bounded typed channel with fixture-audio capture, microphone
 recovery, model switching, permission snapshots, deterministic screenshots,
 and assertions over capture/job/UI state. MCP may wrap this protocol later; it
