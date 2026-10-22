@@ -277,6 +277,7 @@ impl HostHandle {
     }
 
     /// The window's toolkit wakes on host changes through `waker`.
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
     pub(crate) fn set_waker(&self, waker: Waker) {
         *self.0.waker.lock().unwrap() = Some(waker);
     }
