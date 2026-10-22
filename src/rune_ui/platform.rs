@@ -11,7 +11,9 @@
 
 use super::meetings::Meeting;
 use crate::commands::CommandScope;
-use crate::hex_microphone::HexMicrophoneStatus;
+use crate::hex_microphone::{
+    DemoPlaybackTrack, DemoSnapshot, DemoSourceKind, HexMicrophoneStatus, TunedFilterConfig,
+};
 use crate::login_item::LoginItemStatus;
 use crate::onboarding::{Input, PermissionAction, PermissionKind, PermissionState, SetupStatus};
 
@@ -47,6 +49,13 @@ pub(super) struct Capabilities {
     pub(super) practice_dictation: bool,
     /// Sparkle offers a manual "Check now".
     pub(super) manual_update_check: bool,
+    /// The Fun pane: tuning and trying the Hex Microphone (macOS, while
+    /// its experiment is on).
+    pub(super) fun: bool,
+    /// The HUD Lab developer pane drives the dictation indicator (macOS).
+    pub(super) hud_lab: bool,
+    /// Modifier-only shortcuts can require the left or right key (macOS).
+    pub(super) modifier_sides: bool,
 }
 
 impl Capabilities {
@@ -62,6 +71,9 @@ impl Capabilities {
         hex_microphone: false,
         practice_dictation: false,
         manual_update_check: false,
+        fun: false,
+        hud_lab: false,
+        modifier_sides: false,
     };
 
     pub(super) const MACOS: Self = Self {
@@ -76,6 +88,9 @@ impl Capabilities {
         hex_microphone: true,
         practice_dictation: true,
         manual_update_check: true,
+        fun: true,
+        hud_lab: true,
+        modifier_sides: true,
     };
 
     pub(super) const WINDOWS: Self = Self {
@@ -90,6 +105,9 @@ impl Capabilities {
         hex_microphone: false,
         practice_dictation: false,
         manual_update_check: true,
+        fun: false,
+        hud_lab: false,
+        modifier_sides: false,
     };
 
     /// This OS's capabilities, with the rows its window host decides.
@@ -195,6 +213,87 @@ pub(super) struct PlatformState {
     pub(super) meeting_folder_error: Option<String>,
     /// The tour's relaunch failed; the person must reopen Hex.
     pub(super) relaunch_failed: bool,
+    /// Developer builds: the Activity and HUD Lab panes
+    /// (`crate::DEVELOPER_FEATURES_ENABLED` on a native host).
+    pub(super) developer: bool,
+    /// macOS 27 lists Accessibility as "Device Control and Data Access"
+    /// (`permission_guide::list_name`); the permission rows use that name.
+    pub(super) accessibility_renamed: bool,
+    /// The Hex Microphone's live filter tuning
+    /// (`hex_microphone::current_tuned_config`).
+    pub(super) tuning: TunedFilterConfig,
+    /// The Fun pane's try-it demo (`hex_microphone::demo_snapshot`); `None`
+    /// until the host has one. Refresh it every frame while it records or
+    /// plays (`DemoSnapshot::is_recording`, `playing`).
+    pub(super) demo: Option<DemoSnapshot>,
+    /// What HUD Lab shows on the dictation indicator. The pane edits it and
+    /// sends `PlatformRequest::ConfigureHud`; the host need not write it.
+    pub(super) hud: HudLab,
+    /// The dictation event log the Activity pane reads (`live.ndjson`);
+    /// `None` where the host keeps none.
+    pub(super) activity_log: Option<std::path::PathBuf>,
+}
+
+/// The dictation indicator's look, as `dictation_indicator::HudTuning`
+/// (macOS-only) has it. All values are the indicator's own units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct HudTuning {
+    /// 0, 1, or 2: moving light, meridians, ribbons.
+    pub(super) style: f32,
+    pub(super) line_count: f32,
+    pub(super) curvature: f32,
+    pub(super) speed: f32,
+    pub(super) sharpness: f32,
+    pub(super) glow: f32,
+    pub(super) depth: f32,
+    pub(super) light_angle: f32,
+    pub(super) outline: f32,
+}
+
+impl Default for HudTuning {
+    /// Style B, as `HudTuning::default()`.
+    fn default() -> Self {
+        Self {
+            style: 1.0,
+            line_count: 2.0,
+            curvature: 0.47,
+            speed: 17.08,
+            sharpness: 0.29,
+            glow: 0.77,
+            depth: 0.65,
+            light_angle: 0.35,
+            outline: 1.0,
+        }
+    }
+}
+
+/// The indicator state HUD Lab demonstrates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum HudDemo {
+    #[default]
+    Recording,
+    Transcribing,
+    Processing,
+}
+
+/// Everything HUD Lab drives: the tuning, the demonstrated state, and how
+/// many dictations wait behind it (0 through 3).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct HudLab {
+    pub(super) tuning: HudTuning,
+    pub(super) demo: HudDemo,
+    pub(super) queued: usize,
+}
+
+/// The Fun pane's demo controls (`hex_microphone`'s demo functions).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DemoRequest {
+    /// `start_demo_recording` (five seconds of the microphone).
+    Record,
+    StopRecording,
+    SelectSource(DemoSourceKind),
+    Play(DemoPlaybackTrack),
+    StopPlayback,
 }
 
 impl PlatformState {
@@ -217,6 +316,12 @@ impl PlatformState {
             notes: NotesAvailability::Available,
             meeting_folder_error: None,
             relaunch_failed: false,
+            developer: false,
+            accessibility_renamed: false,
+            tuning: TunedFilterConfig::default(),
+            demo: None,
+            hud: HudLab::default(),
+            activity_log: None,
         }
     }
 
@@ -288,6 +393,9 @@ impl PlatformState {
                 active_apps: vec!["Slack".into()],
                 action_state: crate::hex_microphone::DriverActionState::Idle,
             });
+        }
+        if caps.fun {
+            state.demo = Some(super::fun::preview_demo(false, None));
         }
         if caps.commands {
             state.commands = preview_commands();
@@ -390,6 +498,15 @@ pub(super) enum PlatformRequest {
     RetryCommandModel,
     /// Quit and reopen Hex so macOS applies new permissions.
     Relaunch,
+    /// Apply this tuning to the live Hex Microphone filter
+    /// (`hex_microphone::update_tuned_config`). The pane has already saved
+    /// the mode, comfort noise, and strength in `settings.json`.
+    SetTuning(TunedFilterConfig),
+    HexMicrophoneDemo(DemoRequest),
+    /// Show this on the dictation indicator: `DictationIndicatorEvent::
+    /// Configure` with the tuning, then `Reset` and the demonstrated state
+    /// with `queued` jobs behind it (GPUI's `apply_hud_lab`).
+    ConfigureHud(HudLab),
 }
 
 /// The host that performs [`PlatformRequest`]s and refreshes

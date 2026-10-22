@@ -62,7 +62,16 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
                 } else {
                     tr("Saved for when Voice Action is enabled")
                 }),
-                hotkey_control(ui, p, ShortcutTarget::VoiceAction),
+                rune::row()
+                    .key("voice-action-shortcut-control")
+                    .gap(8.0)
+                    .center_y()
+                    .children(super::platform_settings::side_selector(
+                        ui,
+                        p,
+                        ShortcutTarget::VoiceAction,
+                    ))
+                    .child(hotkey_control(ui, p, ShortcutTarget::VoiceAction)),
             )],
         ));
     }

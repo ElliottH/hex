@@ -741,7 +741,14 @@ Linux beta                               // not macOS feature parity
 │   └── X11 grab conflict / portal refusal -> Warn without stopping dictation
 ├── Voice Action (opt-in) -> Hold its shortcut or `hex voice-action` -> Instruction
 │   └── Selected text from the primary selection -> OpenCode -> Paste the reply
-├── X11 -> No tray or recording HUD; status and sounds remain available
+├── Recording HUD -> "Recording" pill on the top or bottom edge, "Transcribing"
+│   │   until accepted output finishes; Hidden position -> none   // linux.hud
+│   ├── rune-ui builds -> Rune overlay in Hex's process (linux_rune_hud)
+│   │   ├── Wayland -> layer-shell overlay layer, no keyboard, empty input region
+│   │   ├── X11 -> override-redirect window, empty input shape
+│   │   └── No layer-shell -> `hex status` reports the HUD limitation
+│   └── GPUI builds -> GTK thread (linux_desktop), same placement
+├── X11 -> No tray; status and sounds remain available
 ├── Microphone failure -> Listener exits, not macOS automatic recovery
 │   └── Overload (Xrun) glitch -> Logged; not a failure
 └── Paste -> Retain transcript clipboard, not restore previous contents
@@ -784,6 +791,16 @@ On 2026-10-22 the portal path was observed on niri with xdg-desktop-portal-gnome
 using synthetic uinput keys against an isolated service: granted triggers,
 hold and Escape while held, double-tap lock, Paste Last, and commands. A
 physical keyboard press has not been recorded.
+
+`linux.hud` on Rune: [linux_rune_hud.rs](../../src/linux_rune_hud.rs) keeps
+the listener's generation slot from `linux_desktop` (an old listener cannot hide
+a restarted HUD) and starts before the window's app exists. Observed on
+2026-10-22 in a headless sway on apollo (isolated data root, real microphone,
+`hex service`): `hex dictation start` showed the pill at the top edge and it
+was gone after `hex dictation stop` and transcription. The Rune overlay itself
+was also observed passing a virtual-pointer click through to the window below
+and leaving keyboard focus where it was (Rune `examples/background`). Not
+observed: X11 with Hex, niri, KWin, Mutter.
 
 See the [Linux guide](../linux.md), [linux_app.rs](../../src/linux_app.rs),
 [linux_portal.rs](../../src/linux_portal.rs), and
@@ -976,8 +993,9 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
 ├── Model and application searches: Up/Down highlight, Enter picks it
 ├── Not yet: app icons, right-click delete
 └── macOS/Windows surfaces as scenes too (Capabilities + preview data):
-    Commands, Meetings, permission rows, Launch at login, Dock icon,
-    Meetings and Hex microphone sections, the full tour
+    Commands, Meetings, Fun, HUD Lab, Activity, permission rows, Launch at
+    login, Dock icon, shortcut sides, Meetings and Hex microphone sections,
+    the full tour
 macOS `hex app` (--features rune-ui; `--ui gpui` keeps GPUI) -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── rune::App on the main thread: accessory, windowless unless setup/onboarding/Dock icon open it
 ├── Same AppKit loop: status item, Sparkle, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
@@ -1017,7 +1035,9 @@ saves; and, from macOS/Windows preview data, each OS's panes and rows, Launch
 at login, permission warnings, the command model notice, Meetings settings,
 the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
 search, copy, rename, start/stop, two-step trash, and the overflow menu, and
-the macOS tour's permissions, practice, and relaunch) and compare 45 offscreen
+the macOS tour's permissions, practice, and relaunch; Fun's modes, sliders,
+and demo requests, HUD Lab's indicator requests, Activity, and shortcut
+sides) and compare 53 offscreen
 GPU renders with [tests/golden](../../tests/golden). In these tests the macOS and
 Windows requests are recorded, never performed; the macOS native host
 (`dev.rune-ui-macos`) has no automated test of its own. They skip the goldens without a GPU

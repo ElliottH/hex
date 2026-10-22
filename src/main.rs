@@ -83,6 +83,8 @@ mod linux_migration;
 mod linux_paste;
 #[cfg(target_os = "linux")]
 mod linux_portal;
+#[cfg(all(target_os = "linux", feature = "rune-ui"))]
+mod linux_rune_hud;
 #[cfg(target_os = "linux")]
 mod linux_service;
 #[cfg(target_os = "linux")]

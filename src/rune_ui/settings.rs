@@ -677,7 +677,16 @@ pub(super) fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             "dictation-shortcut",
             tr("Dictation shortcut"),
             Some(tr("Click to record a new shortcut")),
-            hotkey_control(ui, p, ShortcutTarget::Dictation),
+            row()
+                .key("dictation-shortcut-control")
+                .gap(8.0)
+                .center_y()
+                .children(super::platform_settings::side_selector(
+                    ui,
+                    p,
+                    ShortcutTarget::Dictation,
+                ))
+                .child(hotkey_control(ui, p, ShortcutTarget::Dictation)),
         ));
     }
     section(p, "dictation", tr("Dictation"), rows)
@@ -937,6 +946,11 @@ pub(super) fn behavior_section(ui: &Ui, p: Paint) -> El {
             .key("paste-last-control")
             .gap(8.0)
             .center_y()
+            .children(super::platform_settings::side_selector(
+                ui,
+                p,
+                ShortcutTarget::PasteLast,
+            ))
             .child(hotkey_control(ui, p, ShortcutTarget::PasteLast));
         if settings.paste_last_hotkey.is_some() {
             control = control.child(button(

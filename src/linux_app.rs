@@ -347,6 +347,10 @@ pub fn run(
     // Before any thread can load a model or the window can create its GPU.
     crate::local_transcriber::initialize_backends();
     let enable_on_launch = settings.enable_on_launch;
+    #[cfg(feature = "rune-ui")]
+    if matches!(ui, WindowUi::Rune) {
+        crate::linux_rune_hud::enable();
+    }
     let mut host = LinuxDesktopHost::new(event_path, settings, error, update);
     if enable_on_launch {
         host.start();

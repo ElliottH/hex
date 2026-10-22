@@ -142,8 +142,16 @@ fn the_hex_microphone_section_saves_its_mode_and_drives_the_driver() {
         rt.state.settings.experimental.hex_microphone_mode,
         crate::voice_filter::VoiceFilterMode::Quiet
     );
+    assert!(matches!(
+        asked(&rt),
+        [PlatformRequest::SetTuning(cfg)]
+            if cfg.mode == crate::voice_filter::VoiceFilterMode::Quiet
+    ));
     tap(&mut rt, "hex-mic-driver/controls/uninstall");
-    assert_eq!(asked(&rt), [PlatformRequest::UninstallHexMicrophone]);
+    assert_eq!(
+        asked(&rt).last(),
+        Some(&PlatformRequest::UninstallHexMicrophone)
+    );
 }
 
 #[test]
@@ -419,4 +427,214 @@ fn platform_goldens() {
     check_golden("mac-onboarding-listening", true, PANE_SIZE);
     check_golden("mac-onboarding-reopen", false, PANE_SIZE);
     check_golden("mac-onboarding-done", true, PANE_SIZE);
+}
+
+#[test]
+fn fun_saves_the_mode_and_applies_the_tuning_live() {
+    use crate::voice_filter::VoiceFilterMode;
+    let mut rt = runtime("mac-fun", true, PANE_SIZE);
+    tap(&mut rt, "fun-mode/segment1");
+    assert_eq!(
+        rt.state.settings.experimental.hex_microphone_mode,
+        VoiceFilterMode::Muted
+    );
+    assert!(matches!(
+        asked(&rt),
+        [PlatformRequest::SetTuning(cfg)] if cfg.mode == VoiceFilterMode::Muted
+    ));
+    assert!(
+        rt.find("fun-comfort-noise").is_some(),
+        "Muted offers comfort noise"
+    );
+    tap(&mut rt, "fun-mode/segment3");
+    assert!(
+        rt.find("fun-slider-strength").is_none(),
+        "Normal has no sliders"
+    );
+}
+
+#[test]
+fn fun_sliders_set_the_filter_from_the_pointer() {
+    let mut rt = runtime("mac-fun", true, PANE_SIZE);
+    let before = rt.state.platform.tuning.muffled_wall_hz;
+    let (x, y) = rt.find("fun-slider-wall/track").unwrap();
+    rt.pointer_down(x + 140.0, y);
+    rt.pointer_up(x + 140.0, y);
+    settle(&mut rt);
+    let after = rt.state.platform.tuning.muffled_wall_hz;
+    assert!(after > before && after >= 2900.0, "{before} -> {after}");
+    assert!(matches!(
+        asked(&rt).last(),
+        Some(PlatformRequest::SetTuning(_))
+    ));
+    tap(&mut rt, "fun-reset-tuning");
+    assert_eq!(rt.state.platform.tuning.muffled_wall_hz, before);
+}
+
+#[test]
+fn try_it_records_and_plays_through_the_host() {
+    use platform::DemoRequest;
+    let mut rt = runtime("mac-fun", true, PANE_SIZE);
+    tap(&mut rt, "fun-demo-record");
+    tap(&mut rt, "fun-play-call-hears");
+    tap(&mut rt, "fun-demo-source/segment1");
+    assert_eq!(
+        asked(&rt),
+        [
+            PlatformRequest::HexMicrophoneDemo(DemoRequest::Record),
+            PlatformRequest::HexMicrophoneDemo(DemoRequest::Play(
+                crate::hex_microphone::DemoPlaybackTrack::CallHears
+            )),
+            PlatformRequest::HexMicrophoneDemo(DemoRequest::SelectSource(
+                crate::hex_microphone::DemoSourceKind::Recording
+            )),
+        ]
+    );
+    let mut rt = runtime("mac-fun-muted", true, PANE_SIZE);
+    tap(&mut rt, "fun-play-call-hears");
+    assert_eq!(
+        asked(&rt),
+        [PlatformRequest::HexMicrophoneDemo(
+            DemoRequest::StopPlayback
+        )]
+    );
+}
+
+#[test]
+fn settings_try_it_opens_fun() {
+    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
+    tap(&mut rt, "open-fun-pane");
+    assert_eq!(rt.state.pane, Pane::Fun);
+}
+
+#[test]
+fn developer_panes_show_only_in_developer_builds() {
+    let rt = runtime("mac-settings", true, PANE_SIZE);
+    assert!(rt.find("nav-hud-lab").is_none());
+    assert!(rt.find("nav-activity").is_none());
+    assert!(rt.find("nav-fun").is_some(), "the experiment is on");
+    let rt = runtime("mac-hud-lab", true, PANE_SIZE);
+    assert!(rt.find("nav-hud-lab").is_some());
+    assert!(rt.find("nav-activity").is_some());
+}
+
+#[test]
+fn hud_lab_drives_the_indicator() {
+    let mut rt = runtime("mac-hud-lab", true, PANE_SIZE);
+    tap(&mut rt, "hud-style2");
+    tap(&mut rt, "hud-demo/segment2");
+    let Some(PlatformRequest::ConfigureHud(lab)) = asked(&rt).last().cloned() else {
+        panic!("{:?}", asked(&rt));
+    };
+    assert_eq!(lab.tuning, hud_lab::style(2));
+    assert_eq!(lab.demo, platform::HudDemo::Processing);
+    assert_eq!(lab.queued, 2);
+    tap(&mut rt, "copy-hud-preset");
+    assert!(
+        rt.copy_request
+            .as_deref()
+            .is_some_and(|preset| preset.starts_with("hud-v1 style=2 lines=3"))
+    );
+    assert!(rt.state.hud_copied);
+}
+
+#[test]
+fn hud_lab_controls_round_trip() {
+    use hud_lab::Control;
+    let mut tuning = platform::HudTuning::default();
+    for control in [
+        Control::LineCount,
+        Control::Curvature,
+        Control::Speed,
+        Control::Blur,
+        Control::Glow,
+        Control::Depth,
+        Control::LightAngle,
+        Control::Outline,
+    ] {
+        control.set(&mut tuning, 0.6);
+        assert!((control.value(&tuning) - 0.6).abs() < 1e-4, "{control:?}");
+    }
+}
+
+#[test]
+fn activity_lists_events_and_shows_the_raw_one() {
+    let mut rt = runtime("mac-activity", true, PANE_SIZE);
+    assert!(texts(&rt).iter().any(|t| t == "Context changed to Slack"));
+    tap(&mut rt, "activity-event4");
+    assert_eq!(rt.state.activity.selected, Some(4));
+    assert!(
+        texts(&rt)
+            .iter()
+            .any(|t| t.contains("\"application\":\"Slack\""))
+    );
+}
+
+#[test]
+fn modifier_only_shortcuts_choose_their_side() {
+    use crate::app_settings::ModifierSide;
+    let mut rt = runtime("mac-settings-sides", true, (980.0, 2400.0));
+    tap(&mut rt, "dictation-side/segment2");
+    assert_eq!(
+        rt.state.settings.dictation_hotkey.modifiers.option,
+        Some(ModifierSide::Right)
+    );
+    // Key chords and Linux have no side choice.
+    let rt = runtime("mac-settings", true, (980.0, 2400.0));
+    assert!(rt.find("dictation-side").is_none());
+    let rt = runtime("portal", true, GOLDEN_SIZE);
+    assert!(rt.find("dictation-side").is_none());
+}
+
+#[test]
+fn a_side_that_would_collide_is_refused() {
+    use crate::app_settings::{HotkeyBinding, HotkeyModifiers, ModifierSide};
+    let mut ui = fixture(DesktopShortcuts::Registered);
+    let option = |side| HotkeyBinding {
+        modifiers: HotkeyModifiers {
+            option: Some(side),
+            ..HotkeyModifiers::default()
+        },
+        key: None,
+    };
+    ui.settings.dictation_hotkey = option(ModifierSide::Left);
+    ui.settings.paste_last_hotkey = Some(option(ModifierSide::Right));
+    assert!(
+        platform_settings::side_binding(
+            &ui.settings,
+            ShortcutTarget::Dictation,
+            ModifierSide::Right
+        )
+        .is_none()
+    );
+    assert!(
+        platform_settings::side_binding(
+            &ui.settings,
+            ShortcutTarget::Dictation,
+            ModifierSide::Left
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn macos_27_names_accessibility_as_system_settings_does() {
+    let rt = runtime("mac-settings-permissions", true, (980.0, 2400.0));
+    assert!(
+        texts(&rt)
+            .iter()
+            .any(|t| t == "Device Control and Data Access")
+    );
+}
+
+#[test]
+fn fun_goldens() {
+    for dark in [true, false] {
+        check_golden("mac-fun", dark, PANE_SIZE);
+        check_golden("mac-hud-lab", dark, PANE_SIZE);
+    }
+    check_golden("mac-fun-muted", true, PANE_SIZE);
+    check_golden("mac-fun-driver-missing", false, PANE_SIZE);
+    check_golden("mac-activity", false, PANE_SIZE);
+    check_golden("mac-settings-sides", true, PANE_SIZE);
 }
