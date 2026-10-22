@@ -9,15 +9,13 @@
 //! - The named event from `windows_app` keeps one app per session: a later
 //!   launch signals it and the running app shows its window.
 //!
-//! Rune's window closes the event loop when it closes, and has no hidden
-//! start. Until Rune has an app lifetime separate from windows
-//! (`docs/plans/single-process.md`), this module hides the window itself:
-//! it replaces the window procedure to turn WM_CLOSE into hiding, and hides
-//! the window right after creation for login launches.
+//! Rune's `App` keeps the loop, the state, and the hidden window alive
+//! after the window closes (`keep_running`), starts without a window for a
+//! login launch (`windowless`), and opens or quits from other threads
+//! through its `AppHandle`.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -26,13 +24,9 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, EnumThreadWindows, GWLP_WNDPROC, GetWindowTextW, IsIconic, IsWindowVisible,
-    PostMessageW, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
-    WM_CLOSE, WNDPROC,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetWindowTextW};
 
 use crate::app_settings::AppSettings;
 use crate::desktop_host::{
@@ -40,6 +34,7 @@ use crate::desktop_host::{
     DesktopTranscriptionSnapshot, DesktopUpdateStatus,
 };
 use crate::desktop_i18n::{tr, tr_fill};
+use crate::rune_ui::Ui;
 use crate::transcription_models::{ModelPreparationStage, TranscriptionModelId};
 use crate::transcription_preparation::TranscriptionPreparation;
 use crate::windows_app::WindowsDesktopHost;
@@ -136,12 +131,16 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bool) -> Result<()> {
+pub fn open(
+    event_path: PathBuf,
+    shutdown: &'static AtomicBool,
+    start_hidden: bool,
+    rune_args: Vec<String>,
+) -> Result<()> {
     let Some(instance) = crate::windows_app::AppInstance::claim(start_hidden)? else {
         return Ok(());
     };
     shutdown.store(false, Ordering::Relaxed);
-    START_HIDDEN.store(start_hidden, Ordering::Relaxed);
     let (settings, settings_error) = match AppSettings::load() {
         Ok(settings) => (settings, None),
         Err(error) => (
@@ -152,15 +151,33 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
             )),
         ),
     };
+    let mut app = crate::rune_ui::app().args(rune_args);
+    let window = app.handle();
+    // The tray rides the main thread's message pump, which Rune's loop runs.
+    match create_tray(window.clone()) {
+        Ok(tray) => {
+            app = if start_hidden {
+                app.windowless()
+            } else {
+                app.keep_running()
+            };
+            TRAY.with(|slot| *slot.borrow_mut() = Some(tray));
+        }
+        // Without a tray, closing the window quits: Hex must not run on
+        // with no way back to it.
+        Err(error) => {
+            tracing::warn!(%error, "Windows system tray is unavailable; closing Hex will quit");
+        }
+    }
     let (requests, receiver) = mpsc::channel();
     let shared = Arc::new(Shared::default());
-    let handle = RuntimeHandle {
-        requests: requests.clone(),
-        shared: shared.clone(),
-    };
     RUNTIME
-        .set(handle)
+        .set(RuntimeHandle {
+            requests: requests.clone(),
+            shared: shared.clone(),
+        })
         .map_err(|_| eyre!("the Hex runtime already started"))?;
+    let quit = window.clone();
     let runtime = std::thread::Builder::new()
         .name("hex-runtime".into())
         .spawn(move || {
@@ -171,19 +188,20 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
                 receiver,
                 &shared,
                 shutdown,
-            )
+            );
+            quit.quit();
         })?;
-    instance.forward_launches(|| {
-        show_window();
+    let relaunch = window.clone();
+    instance.forward_launches(move || {
+        relaunch.open();
         true
     });
-    // Returns when the window closes for real: Quit, or closing it without
-    // a tray.
-    crate::rune_ui::run();
-    QUITTING.store(true, Ordering::Relaxed);
+    // Returns on Quit, or when the window closes without a tray.
+    app.run();
     shutdown.store(true, Ordering::Relaxed);
     drop(requests);
     let _ = runtime.join();
+    TRAY.with(|slot| slot.borrow_mut().take());
     Ok(())
 }
 
@@ -205,6 +223,7 @@ fn run_runtime(
         host: WindowsDesktopHost::new(event_path, settings.clone(), settings_error, indicator),
         preparation: TranscriptionPreparation::default(),
         listen_after_setup: false,
+        quit: false,
     };
     // The microphone stays cold until first-run setup finishes.
     if settings.enable_on_launch {
@@ -224,7 +243,7 @@ fn run_runtime(
             runtime.handle(request);
             next = requests.try_recv().ok();
         }
-        if shutdown.load(Ordering::Relaxed) {
+        if shutdown.load(Ordering::Relaxed) || runtime.quit {
             break;
         }
         while indicator_events.try_recv().is_ok() {}
@@ -245,8 +264,6 @@ fn run_runtime(
         }
     }
     runtime.host.stop();
-    drop(runtime);
-    quit_window();
 }
 
 struct Runtime {
@@ -254,6 +271,8 @@ struct Runtime {
     preparation: TranscriptionPreparation,
     /// Enable on launch waits for first-run setup.
     listen_after_setup: bool,
+    /// Restarting into an update ends the app.
+    quit: bool,
 }
 
 impl Runtime {
@@ -307,7 +326,9 @@ impl Runtime {
             }
             DesktopAction::RestartIntoUpdate => {
                 if self.host.restart_into_update().is_ok() {
-                    quit_window();
+                    // Ends the app so the new version can take the named
+                    // event.
+                    self.quit = true;
                 }
             }
             // Windows saves shortcuts from the window.
@@ -371,61 +392,27 @@ impl Runtime {
 }
 
 // ---------------------------------------------------------------------------
-// Main thread: the window and the tray
-
-/// The Rune window's HWND once [`attach_window`] found it.
-static WINDOW: AtomicIsize = AtomicIsize::new(0);
-/// The window procedure the hide-on-close procedure forwards to.
-static ORIGINAL_PROC: AtomicIsize = AtomicIsize::new(0);
-/// Set to let WM_CLOSE through, which ends Rune's event loop.
-static QUITTING: AtomicBool = AtomicBool::new(false);
-static START_HIDDEN: AtomicBool = AtomicBool::new(false);
+// Main thread: the tray and the window icon
 
 thread_local! {
-    static TRAY: RefCell<Option<TrayIcon>> = const { RefCell::new(None) };
+    static TRAY: std::cell::RefCell<Option<TrayIcon>> = const { std::cell::RefCell::new(None) };
+    static ICON_SET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Called on the main thread once Rune created the window: gives it the
-/// app icon, adds the tray, makes close hide it while the tray exists, and
-/// hides it at once for a login launch. Does nothing without a window
-/// (headless snapshots) or outside [`open`].
-pub(crate) fn attach_window() {
-    if RUNTIME.get().is_none() || WINDOW.load(Ordering::Relaxed) != 0 {
+/// Gives the window the app icon once it exists. Rune's winit window has
+/// none and exposes no handle, so this finds it on the main thread by its
+/// title; closing only hides it, so once is enough.
+pub(crate) fn attach_window_icon() {
+    if RUNTIME.get().is_none() || ICON_SET.get() {
         return;
     }
-    let Some(hwnd) = find_window() else {
-        tracing::warn!("could not find the Hex window; closing it will quit Hex");
-        return;
-    };
-    WINDOW.store(hwnd as isize, Ordering::Relaxed);
-    crate::windows_ui::apply_window_icon(Some(hwnd));
-    match create_tray() {
-        Ok(tray) => {
-            TRAY.with(|slot| *slot.borrow_mut() = Some(tray));
-            // SAFETY: `hwnd` is this thread's live window; the replacement
-            // forwards every message it does not handle to the original.
-            unsafe {
-                let procedure: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
-                    hide_on_close;
-                let previous = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, procedure as usize as isize);
-                ORIGINAL_PROC.store(previous, Ordering::Relaxed);
-            }
-            if START_HIDDEN.load(Ordering::Relaxed) {
-                // SAFETY: see above.
-                unsafe { ShowWindow(hwnd, SW_HIDE) };
-            }
-        }
-        Err(error) => {
-            tracing::warn!(%error, "Windows system tray is unavailable; closing Hex will quit");
-        }
-    }
-    if QUITTING.load(Ordering::Relaxed) {
-        quit_window();
+    if let Some(hwnd) = find_window() {
+        crate::windows_ui::apply_window_icon(Some(hwnd));
+        ICON_SET.set(true);
     }
 }
 
-/// The top-level window titled "Hex" on this thread. Rune creates exactly
-/// one; the tray's message window does not exist yet.
+/// The top-level window titled "Hex" on this thread.
 fn find_window() -> Option<HWND> {
     unsafe extern "system" fn visit(hwnd: HWND, found: LPARAM) -> i32 {
         let mut title = [0u16; 8];
@@ -451,54 +438,7 @@ fn find_window() -> Option<HWND> {
     (!found.is_null()).then_some(found)
 }
 
-unsafe extern "system" fn hide_on_close(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    if message == WM_CLOSE && !QUITTING.load(Ordering::Relaxed) {
-        // SAFETY: `hwnd` is the window this procedure belongs to.
-        unsafe { ShowWindow(hwnd, SW_HIDE) };
-        return 0;
-    }
-    // SAFETY: ORIGINAL_PROC holds the procedure this one replaced.
-    unsafe {
-        let original: WNDPROC = std::mem::transmute(ORIGINAL_PROC.load(Ordering::Relaxed));
-        CallWindowProcW(original, hwnd, message, wparam, lparam)
-    }
-}
-
-/// Shows and focuses the window; safe from any thread.
-fn show_window() {
-    let hwnd = WINDOW.load(Ordering::Relaxed) as HWND;
-    if hwnd.is_null() {
-        return;
-    }
-    // SAFETY: these calls only send messages to the window, which lives
-    // until the process quits.
-    unsafe {
-        if IsIconic(hwnd) != 0 {
-            ShowWindow(hwnd, SW_RESTORE);
-        } else if IsWindowVisible(hwnd) == 0 {
-            ShowWindow(hwnd, SW_SHOW);
-        }
-        SetForegroundWindow(hwnd);
-    }
-}
-
-/// Closes the window for real, which ends Rune's loop and so the app; safe
-/// from any thread.
-fn quit_window() {
-    QUITTING.store(true, Ordering::Relaxed);
-    let hwnd = WINDOW.load(Ordering::Relaxed) as HWND;
-    if !hwnd.is_null() {
-        // SAFETY: posting to a window handle is thread-safe.
-        unsafe { PostMessageW(hwnd, WM_CLOSE, 0, 0) };
-    }
-}
-
-fn create_tray() -> Result<TrayIcon> {
+fn create_tray(window: rune::AppHandle<Ui>) -> Result<TrayIcon> {
     let menu = Menu::new();
     menu.append(&MenuItem::with_id("show", tr("Show Hex"), true, None))?;
     menu.append(&MenuItem::with_id(
@@ -508,17 +448,18 @@ fn create_tray() -> Result<TrayIcon> {
         None,
     ))?;
     menu.append(&MenuItem::with_id("quit", tr("Quit Hex"), true, None))?;
-    MenuEvent::set_event_handler(Some(|event: MenuEvent| match event.id.as_ref() {
-        "show" => show_window(),
+    let menu_window = window.clone();
+    MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.as_ref() {
+        "show" => menu_window.open(),
         "toggle" => {
             if let Some(runtime) = runtime() {
                 let _ = runtime.send(Request::ToggleListening);
             }
         }
-        "quit" => quit_window(),
+        "quit" => menu_window.quit(),
         _ => {}
     }));
-    TrayIconEvent::set_event_handler(Some(|event| {
+    TrayIconEvent::set_event_handler(Some(move |event| {
         if matches!(
             event,
             TrayIconEvent::Click {
@@ -527,7 +468,7 @@ fn create_tray() -> Result<TrayIcon> {
                 ..
             }
         ) {
-            show_window();
+            window.open();
         }
     }));
     Ok(TrayIconBuilder::new()
