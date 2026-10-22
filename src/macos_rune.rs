@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use block2::RcBlock;
@@ -42,9 +42,7 @@ use crate::desktop_host::{
 };
 use crate::dictation_indicator::{DictationIndicatorEvent, DictationIndicatorUi};
 use crate::meeting::MeetingRequest;
-use crate::meeting_watcher::{
-    ControllerCommand, ControllerEvent, ListenerConfig, MeetingMenuState,
-};
+use crate::meeting_watcher::{ControllerEvent, ListenerConfig, MeetingMenuState};
 use crate::recognition::RecognitionControl;
 use crate::rune_ui::{Destination, Ui};
 use crate::status_item::StatusItemAction;
@@ -107,7 +105,6 @@ pub(crate) enum ShortcutTarget {
 #[derive(Clone, PartialEq)]
 pub(crate) struct Published {
     pub(crate) listener: DesktopListenerSnapshot,
-    pub(crate) operation_error: Option<String>,
     pub(crate) transcription: DesktopTranscriptionSnapshot,
     pub(crate) update_status: DesktopUpdateStatus,
     pub(crate) settings: AppSettings,
@@ -178,7 +175,7 @@ impl RuntimeHandle {
 }
 
 static RUNTIME: OnceLock<RuntimeHandle> = OnceLock::new();
-static QUIT: OnceLock<rune::AppHandle<Ui>> = OnceLock::new();
+static WINDOW: OnceLock<rune::AppHandle<Ui>> = OnceLock::new();
 
 /// The running app's runtime; `None` outside [`run`] (headless snapshots).
 pub(crate) fn runtime() -> Option<RuntimeHandle> {
@@ -187,7 +184,7 @@ pub(crate) fn runtime() -> Option<RuntimeHandle> {
 
 /// Quits Hex from any thread.
 pub(crate) fn quit() {
-    if let Some(window) = QUIT.get() {
+    if let Some(window) = WINDOW.get() {
         window.quit();
     }
 }
@@ -205,32 +202,6 @@ pub(crate) fn window_closed() {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
-}
-
-struct Workers {
-    local_api: Option<crate::local_api::LocalApi>,
-    recognition: Option<JoinHandle<()>>,
-    controller: Option<JoinHandle<()>>,
-    runtime: Option<JoinHandle<()>>,
-}
-
-impl Workers {
-    fn join(mut self) {
-        if let Some(mut local_api) = self.local_api.take() {
-            local_api.shutdown();
-        }
-        for (name, worker) in [
-            ("recognition", self.recognition),
-            ("meeting controller", self.controller),
-            ("runtime", self.runtime),
-        ] {
-            if let Some(worker) = worker
-                && worker.join().is_err()
-            {
-                tracing::error!("{name} worker panicked during shutdown");
-            }
-        }
-    }
 }
 
 pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()> {
@@ -253,7 +224,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     let event_log = crate::events::EventLog::create(&event_path)?;
     let (developer_sender, developer_receiver) = mpsc::sync_channel(8);
     let (recognition_controls, recognition_control_receiver) = mpsc::sync_channel(8);
-    let local_api = crate::local_api::LocalApi::start(
+    let mut local_api = crate::local_api::LocalApi::start(
         event_log.clone(),
         crate::local_api::LocalApiOptions {
             developer_control: crate::DEVELOPER_FEATURES_ENABLED.then(|| developer_sender.clone()),
@@ -351,16 +322,9 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
                 (!setup_ready).then_some(recognition_start),
             )
         })?;
-    let workers = Workers {
-        local_api: Some(local_api),
-        recognition: Some(recognition),
-        controller: Some(controller),
-        runtime: Some(runtime),
-    };
-
     let mut app = crate::rune_ui::app().args(Vec::new()).accessory();
     let window = app.handle();
-    let _ = QUIT.set(window.clone());
+    let _ = WINDOW.set(window.clone());
     // The status item is created inside the loop; Hex can't run without a
     // way back to its window, so a failed item opens the window there.
     let open_at_launch = crate::meeting_watcher::should_open_app_on_launch(
@@ -378,7 +342,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         let window = window.clone();
         crate::rune_ui::meeting_capsules::MeetingCapsules::install(
             &mut app,
-            controller_commands.clone(),
+            controller_commands,
             move |entry| {
                 crate::app_settings::save_never_offer_meeting(entry.clone());
                 window.update(move |ui, _| crate::rune_ui::never_offer(ui, entry));
@@ -393,7 +357,6 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         indicator_events,
         status_actions: None,
         controller_events,
-        controller_commands,
         developer_calls: developer_receiver,
         meeting_state: MeetingMenuState::Idle,
         meeting_menu_at: Instant::now(),
@@ -412,7 +375,16 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         }
     });
     drop(requests);
-    workers.join();
+    local_api.shutdown();
+    for (name, worker) in [
+        ("recognition", recognition),
+        ("meeting controller", controller),
+        ("runtime", runtime),
+    ] {
+        if worker.join().is_err() {
+            tracing::error!("{name} worker panicked during shutdown");
+        }
+    }
     Ok(())
 }
 
@@ -551,7 +523,6 @@ impl Runtime {
                 warning: None,
                 shortcuts: DesktopShortcuts::Registered,
             },
-            operation_error: None,
             transcription: DesktopTranscriptionSnapshot {
                 downloaded_bytes: preparation.downloaded_bytes,
                 error: preparation.error.clone(),
@@ -586,7 +557,6 @@ struct Pump {
     indicator_events: Receiver<DictationIndicatorEvent>,
     status_actions: Option<Receiver<StatusItemAction>>,
     controller_events: Receiver<ControllerEvent>,
-    controller_commands: SyncSender<ControllerCommand>,
     developer_calls: Receiver<crate::developer_control::DeveloperCall>,
     meeting_state: MeetingMenuState,
     meeting_menu_at: Instant,
@@ -598,7 +568,7 @@ struct Pump {
 struct PumpState {
     pump: Pump,
     /// Created on the main thread, so it stays out of the `Send` [`Pump`].
-    indicator: Option<DictationIndicatorUi>,
+    indicator: DictationIndicatorUi,
     timer: Retained<NSTimer>,
     _menu_target: Retained<MenuTarget>,
 }
@@ -629,7 +599,7 @@ fn start_main_thread(mut pump: Pump) {
                 pump.status_actions.is_some(),
             ),
     );
-    let indicator = Some(DictationIndicatorUi::new());
+    let indicator = DictationIndicatorUi::new();
     let target = MenuTarget::new(mtm);
     install_main_menu(&target, mtm);
     // SAFETY: the target outlives the handler (kept in PUMP for the app's
@@ -694,20 +664,16 @@ fn show(window: &rune::AppHandle<Ui>, destination: Destination) {
 }
 
 impl Pump {
-    fn tick(&mut self, indicator: &mut Option<DictationIndicatorUi>) {
+    fn tick(&mut self, indicator: &mut DictationIndicatorUi) {
         if self.shutdown.load(Ordering::Relaxed) {
             self.runtime_cancel();
             self.window.quit();
             return;
         }
         while let Ok(event) = self.indicator_events.try_recv() {
-            if let Some(indicator) = indicator {
-                indicator.handle(event);
-            }
+            indicator.handle(event);
         }
-        if let Some(indicator) = indicator {
-            indicator.follow_pointer();
-        }
+        indicator.follow_pointer();
         while let Ok(call) = self.developer_calls.try_recv() {
             let reply = self.developer(call.command, indicator);
             let _ = call.reply.send(reply);
@@ -777,7 +743,7 @@ impl Pump {
                 }
             }
             StatusItemAction::StopMeeting => {
-                if let Err(error) = self.controller_commands.try_send(ControllerCommand::Stop) {
+                if let Err(error) = self.runtime.meeting(MeetingRequest::Stop) {
                     tracing::warn!(%error, "could not stop meeting from status item");
                 }
             }
@@ -840,7 +806,7 @@ impl Pump {
     fn developer(
         &mut self,
         command: crate::developer_control::DeveloperCommand,
-        indicator: &mut Option<DictationIndicatorUi>,
+        indicator: &mut DictationIndicatorUi,
     ) -> crate::developer_control::DeveloperReply {
         use crate::developer_control::{
             DeveloperCommand, DeveloperHudState, DeveloperPane, DeveloperReply,
@@ -852,28 +818,23 @@ impl Pump {
                 commands_enabled: crate::app_settings::commands_enabled(),
             },
             DeveloperCommand::Hud { state } => {
-                let mut send = |event| {
-                    if let Some(indicator) = indicator.as_mut() {
-                        indicator.handle(event);
-                    }
-                };
-                send(DictationIndicatorEvent::Reset);
+                indicator.handle(DictationIndicatorEvent::Reset);
                 match state {
                     DeveloperHudState::Reset => {}
                     DeveloperHudState::Recording => {
-                        send(DictationIndicatorEvent::Started);
-                        send(DictationIndicatorEvent::Meter {
+                        indicator.handle(DictationIndicatorEvent::Started);
+                        indicator.handle(DictationIndicatorEvent::Meter {
                             average: 0.08,
                             peak: 0.42,
                         });
                     }
                     DeveloperHudState::Transcribing => {
-                        send(DictationIndicatorEvent::Submitted { job_id: 0 });
-                        send(DictationIndicatorEvent::Transcribing { job_id: 0 });
+                        indicator.handle(DictationIndicatorEvent::Submitted { job_id: 0 });
+                        indicator.handle(DictationIndicatorEvent::Transcribing { job_id: 0 });
                     }
                     DeveloperHudState::Processing => {
-                        send(DictationIndicatorEvent::Submitted { job_id: 0 });
-                        send(DictationIndicatorEvent::Processing { job_id: 0 });
+                        indicator.handle(DictationIndicatorEvent::Submitted { job_id: 0 });
+                        indicator.handle(DictationIndicatorEvent::Processing { job_id: 0 });
                     }
                 }
                 DeveloperReply::Ok
@@ -976,7 +937,7 @@ impl MenuTarget {
 }
 
 fn with_window(f: impl FnOnce(&rune::AppHandle<Ui>)) {
-    if let Some(window) = QUIT.get() {
+    if let Some(window) = WINDOW.get() {
         f(window);
     }
 }

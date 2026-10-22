@@ -32,11 +32,11 @@ pub(super) enum Target {
 }
 
 pub(super) struct Models {
-    pub(super) state: ModelCatalogState,
+    state: ModelCatalogState,
     receiver: Option<Receiver<ModelCatalogState>>,
     retry_at: Instant,
     /// The open model popover's search field.
-    pub(super) search: TextEdit,
+    search: TextEdit,
     highlight: Highlight,
 }
 
@@ -54,11 +54,18 @@ impl Default for Models {
 
 impl Models {
     pub(super) fn load() -> Self {
-        Self {
-            receiver: Some(start_model_catalog_load()),
-            retry_at: Instant::now() + OPENCODE_INSTALL_RETRY_INTERVAL,
-            ..Self::default()
-        }
+        let mut models = Self::default();
+        models.start_load();
+        models
+    }
+
+    fn start_load(&mut self) {
+        self.retry_at = Instant::now() + OPENCODE_INSTALL_RETRY_INTERVAL;
+        self.receiver = Some(start_model_catalog_load());
+    }
+
+    fn query(&self) -> String {
+        self.search.text.trim().to_lowercase()
     }
 
     /// Adopts a finished load; retries a missing `opencode2` now and then.
@@ -75,8 +82,7 @@ impl Models {
             && matches!(self.state, ModelCatalogState::Missing)
             && Instant::now() >= self.retry_at
         {
-            self.retry_at = Instant::now() + OPENCODE_INSTALL_RETRY_INTERVAL;
-            self.receiver = Some(start_model_catalog_load());
+            self.start_load();
         }
         false
     }
@@ -86,8 +92,7 @@ impl Models {
             return;
         }
         self.state = ModelCatalogState::Loading;
-        self.retry_at = Instant::now() + OPENCODE_INSTALL_RETRY_INTERVAL;
-        self.receiver = Some(start_model_catalog_load());
+        self.start_load();
     }
 
     pub(super) fn available(&self) -> bool {
@@ -224,7 +229,7 @@ pub(super) fn on_key(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
     if ui.open != Some(Menu::Model) {
         return false;
     }
-    let query = ui.models.search.text.trim().to_lowercase();
+    let query = ui.models.query();
     let count = ui
         .models
         .catalog()
@@ -332,21 +337,17 @@ pub(super) fn rows(ui: &Ui, p: Paint, target: Target, layer: &mut Vec<El>) -> Ve
         Some(&description),
         control,
     )];
-    let variants = ui
-        .models
-        .catalog()
+    let catalog = ui.models.catalog();
+    let variants = catalog
         .map(|catalog| model_variants(catalog, model))
         .unwrap_or_default();
     if !variants.is_empty() {
         let effective = variant.or_else(|| {
-            model
-                .is_none()
-                .then(|| {
-                    ui.models
-                        .catalog()
-                        .and_then(|catalog| catalog.default_variant.as_deref())
-                })
-                .flatten()
+            if model.is_none() {
+                catalog.and_then(|catalog| catalog.default_variant.as_deref())
+            } else {
+                None
+            }
         });
         let mut options = vec![tr("Default").to_string()];
         options.extend(variants);
@@ -385,7 +386,7 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
         .leading_icon(p.k.glyph.search)
         .on_edit(|ui: &mut Ui| &mut ui.models.search)
         .on_submit(move |ui: &mut Ui, _: &mut Tx| {
-            let query = ui.models.search.text.trim().to_lowercase();
+            let query = ui.models.query();
             let picked = ui.models.catalog().and_then(|catalog| {
                 let keys = filtered_model_keys(catalog, &query);
                 let index = ui.models.highlight.index(&query, keys.len())?;
@@ -402,7 +403,7 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
         return col().key("model-picker-body").child(search);
     };
     let (current, _) = selected(&ui.settings, target);
-    let query = ui.models.search.text.trim().to_lowercase();
+    let query = ui.models.query();
     let keys = filtered_model_keys(catalog, &query);
     let highlighted = ui.models.highlight.index(&query, keys.len());
     if keys.is_empty() {

@@ -40,27 +40,6 @@ impl IndicatorState {
     }
 }
 
-/// The newest listener's report; an older listener's reports stop counting.
-#[derive(Default)]
-struct IndicatorSlot {
-    generation: u64,
-    state: IndicatorState,
-}
-
-impl IndicatorSlot {
-    fn acquire(&mut self) -> u64 {
-        self.generation += 1;
-        self.state = IndicatorState::Hidden;
-        self.generation
-    }
-
-    fn set(&mut self, generation: u64, state: IndicatorState) {
-        if self.generation == generation {
-            self.state = state;
-        }
-    }
-}
-
 /// A listener's handle on the HUD; dropping it hides what it reported.
 pub(crate) struct LinuxIndicator {
     generation: Option<u64>,
@@ -86,19 +65,31 @@ impl Drop for LinuxIndicator {
 }
 
 #[derive(Default)]
-pub(crate) struct Hud {
+struct Hud {
     state: IndicatorState,
 }
 
-#[derive(Default)]
+/// The newest listener's report; an older listener's reports stop counting.
 struct Slot {
-    indicator: IndicatorSlot,
+    generation: u64,
+    state: IndicatorState,
     position: IndicatorPosition,
     /// What the overlay was last asked to show.
     shown: Option<(IndicatorState, IndicatorPosition)>,
 }
 
-static SLOT: Mutex<Option<Slot>> = Mutex::new(None);
+impl Slot {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            state: IndicatorState::Hidden,
+            position: IndicatorPosition::Top,
+            shown: None,
+        }
+    }
+}
+
+static SLOT: Mutex<Slot> = Mutex::new(Slot::new());
 static OVERLAY: OnceLock<OverlayHandle<Hud>> = OnceLock::new();
 
 /// Adds the HUD overlay to the window's app and shows the latest report.
@@ -121,30 +112,31 @@ pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) {
     }
 }
 
-fn lock() -> std::sync::MutexGuard<'static, Option<Slot>> {
+fn lock() -> std::sync::MutexGuard<'static, Slot> {
     SLOT.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 fn acquire(position: IndicatorPosition) -> u64 {
     let mut slot = lock();
-    let slot = slot.get_or_insert_default();
     slot.position = position;
-    slot.indicator.acquire()
+    slot.generation += 1;
+    slot.state = IndicatorState::Hidden;
+    slot.generation
 }
 
 fn set(generation: u64, state: IndicatorState) {
     let mut slot = lock();
-    slot.get_or_insert_default()
-        .indicator
-        .set(generation, state);
-    apply(&mut slot);
+    if slot.generation == generation {
+        slot.state = state;
+        apply(&mut slot);
+    }
 }
 
-fn apply(slot: &mut Option<Slot>) {
-    let (Some(slot), Some(overlay)) = (slot.as_mut(), OVERLAY.get()) else {
+fn apply(slot: &mut Slot) {
+    let Some(overlay) = OVERLAY.get() else {
         return;
     };
-    let desired = (slot.indicator.state, slot.position);
+    let desired = (slot.state, slot.position);
     if slot.shown == Some(desired) {
         return;
     }

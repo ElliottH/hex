@@ -40,7 +40,7 @@ const UNIT: &str = "hex.service";
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Request {
+pub(crate) enum Request {
     /// A relaunch: open or focus the window when `show`. A launcher's
     /// activation token rides along for the compositor.
     Activate {
@@ -57,17 +57,17 @@ pub enum Request {
 
 /// What a launcher handed the process that asked for the window.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Activation {
+pub(crate) struct Activation {
     /// Wayland `xdg_activation_v1` token (`XDG_ACTIVATION_TOKEN`).
-    pub token: Option<String>,
+    pub(crate) token: Option<String>,
     /// X11 startup notification id (`DESKTOP_STARTUP_ID`).
-    pub startup_id: Option<String>,
+    pub(crate) startup_id: Option<String>,
 }
 
 impl Activation {
     /// Takes this process's activation environment so nothing it starts
     /// reuses a token meant for one window.
-    pub fn take_from_environment() -> Self {
+    pub(crate) fn take_from_environment() -> Self {
         let take = |key: &str| {
             let value = std::env::var(key).ok().filter(|value| !value.is_empty());
             // Called on the main thread before Hex starts any other thread.
@@ -81,36 +81,27 @@ impl Activation {
     }
 }
 
-/// A shortcut Settings records for the listener.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ShortcutTarget {
-    #[default]
-    Dictation,
-    PasteLast,
-    VoiceAction,
-}
-
 /// What `hex status` prints and every reply carries.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Status {
-    pub desktop: DesktopSnapshot,
-    pub settings: crate::app_settings::AppSettings,
-    pub editing: bool,
-    pub hud_limitation: Option<String>,
-    pub window_open: bool,
-    pub pid: u32,
-    pub session: Session,
+pub(crate) struct Status {
+    pub(crate) desktop: DesktopSnapshot,
+    pub(crate) settings: crate::app_settings::AppSettings,
+    pub(crate) editing: bool,
+    pub(crate) hud_limitation: Option<String>,
+    pub(crate) window_open: bool,
+    pub(crate) pid: u32,
+    pub(crate) session: Session,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Session {
+pub(crate) struct Session {
     backend: String,
     display: String,
     runtime: String,
 }
 
 impl Session {
-    pub fn current() -> Self {
+    pub(crate) fn current() -> Self {
         let session = crate::linux_session::LinuxSession::detect();
         Self {
             backend: session.as_str().into(),
@@ -128,13 +119,16 @@ impl Session {
 /// Where the socket hands a `hex` shortcut command: the running listener's
 /// queue, once it reports its session.
 #[derive(Clone)]
-pub struct ShortcutRoute {
-    pub commands: SyncSender<ShortcutCommand>,
-    pub voice_action: bool,
+pub(crate) struct ShortcutRoute {
+    pub(crate) commands: SyncSender<ShortcutCommand>,
+    pub(crate) voice_action: bool,
 }
 
 /// Routes one command, failing fast when nothing listens.
-pub fn route_shortcut(route: Option<&ShortcutRoute>, command: ShortcutCommand) -> Result<()> {
+pub(crate) fn route_shortcut(
+    route: Option<&ShortcutRoute>,
+    command: ShortcutCommand,
+) -> Result<()> {
     let route = route
         .ok_or_else(|| eyre!("Hex is not listening; enable it in Settings or run `hex start`"))?;
     if command.is_voice_action() && !route.voice_action {
@@ -150,14 +144,14 @@ pub fn route_shortcut(route: Option<&ShortcutRoute>, command: ShortcutCommand) -
 /// latest status and the listener's command queue, both published by the
 /// host thread.
 #[derive(Default)]
-pub struct Published {
-    pub status: Mutex<Option<Status>>,
-    pub shortcuts: Mutex<Option<ShortcutRoute>>,
+pub(crate) struct Published {
+    pub(crate) status: Mutex<Option<Status>>,
+    pub(crate) shortcuts: Mutex<Option<ShortcutRoute>>,
 }
 
 /// Requests for the main thread, which owns the window.
 #[derive(Debug)]
-pub enum Control {
+pub(crate) enum Control {
     Activate(Activation),
     Quit,
 }
@@ -263,7 +257,7 @@ fn write_all(stream: &mut UnixStream, mut bytes: &[u8], deadline: Instant) -> Re
 
 /// Why a request did not reach a current instance.
 #[derive(Debug)]
-pub enum RequestError {
+pub(crate) enum RequestError {
     /// Nothing listens on the socket.
     NotRunning,
     /// An older Hex (the service/Settings protocol) owns the socket.
@@ -306,7 +300,7 @@ fn connect() -> std::result::Result<UnixStream, RequestError> {
 }
 
 /// Sends one request to the running instance. Never starts one.
-pub fn request(request: Request) -> std::result::Result<Status, RequestError> {
+pub(crate) fn request(request: Request) -> std::result::Result<Status, RequestError> {
     let mut stream = connect()?;
     write_frame(
         &mut stream,
@@ -328,7 +322,7 @@ pub fn request(request: Request) -> std::result::Result<Status, RequestError> {
         .ok_or_else(|| RequestError::Failed(eyre!("Invalid Hex reply")))
 }
 
-pub struct Server {
+pub(crate) struct Server {
     path: PathBuf,
     inode: u64,
     listener: Option<UnixListener>,
@@ -340,7 +334,7 @@ pub struct Server {
 
 impl Server {
     /// Claims the data root. Fails when another instance holds it.
-    pub fn bind() -> Result<Self> {
+    pub(crate) fn bind() -> Result<Self> {
         if unsafe { libc::geteuid() } == 0 {
             bail!("Run Hex as a desktop user, never root");
         }
@@ -369,7 +363,7 @@ impl Server {
 
     /// Starts answering once the host has published its first status.
     /// `Quit` sets `shutdown`, which the host thread drains on.
-    pub fn serve(
+    pub(crate) fn serve(
         &mut self,
         published: Arc<Published>,
         control: SyncSender<Control>,
@@ -514,7 +508,7 @@ impl Drop for Server {
 
 /// Tells systemd (`Type=notify`) the socket answers. Without
 /// `NOTIFY_SOCKET` (no unit, or an older `Type=simple` unit) it does nothing.
-pub fn notify(state: &str) {
+pub(crate) fn notify(state: &str) {
     let Some(path) = std::env::var_os("NOTIFY_SOCKET") else {
         return;
     };
@@ -546,7 +540,7 @@ fn unit() -> String {
 /// installed (by the installer or Home Manager) and this process uses the
 /// default data root. `HEX_SYSTEMD_UNIT` names another unit, for isolated
 /// tests with a custom data root.
-pub fn supervised() -> bool {
+fn supervised() -> bool {
     if std::env::var_os("HEX_APPLICATION_SUPPORT_DIR").is_some()
         && std::env::var_os("HEX_SYSTEMD_UNIT").is_none()
     {
@@ -613,16 +607,33 @@ fn wait_ready() -> Result<Status> {
 }
 
 /// What a launch found.
-pub enum Launch {
+pub(crate) enum Launch {
     /// The running instance took the request.
     Forwarded,
     /// Nothing runs and no unit supervises Hex: this process becomes it.
     BecomeInstance,
 }
 
+/// After losing the data root to a concurrent launch, waits for that
+/// instance to answer.
+pub(crate) fn another_instance_answers() -> bool {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if request(Request::Status).is_ok() {
+            return true;
+        }
+        if crate::instance::acquire("service").is_ok() {
+            // Nobody holds the root: the failure was this process's own.
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 /// `hex`, `hex app`, and `hex start`: forward to the running instance, start
 /// the systemd unit, or tell the caller to become the instance.
-pub fn launch(activation: &Activation, show: bool) -> Result<Launch> {
+pub(crate) fn launch(activation: &Activation, show: bool) -> Result<Launch> {
     let activate = || Request::Activate {
         activation: activation.clone(),
         show,
@@ -657,7 +668,7 @@ pub fn launch(activation: &Activation, show: bool) -> Result<Launch> {
 }
 
 /// `hex quit` and `hex stop`.
-pub fn quit() -> Result<()> {
+pub(crate) fn quit() -> Result<()> {
     match request(Request::Quit) {
         Ok(_) => Ok(()),
         // An older service stops through its unit.
@@ -667,7 +678,7 @@ pub fn quit() -> Result<()> {
     }
 }
 
-pub fn restart() -> Result<()> {
+pub(crate) fn restart() -> Result<()> {
     if !supervised() {
         bail!("Only Hex started by its systemd unit restarts; run `hex quit`, then launch it");
     }
@@ -678,7 +689,7 @@ pub fn restart() -> Result<()> {
     systemctl(&["restart"])
 }
 
-pub fn schedule_restart() -> Result<()> {
+pub(crate) fn schedule_restart() -> Result<()> {
     systemctl(&["--no-block", "restart"])
 }
 

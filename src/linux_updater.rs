@@ -8,21 +8,20 @@ use fs2::FileExt;
 use semver::Version;
 
 use crate::self_update::{
-    MAX_FEED_BYTES, PUBLIC_KEY, UpdateTarget, download, read_bounded, validate_manifest,
-    verify_artifact, verify_feed,
+    MAX_FEED_BYTES, PUBLIC_KEY, RELEASE_BASE, UpdateTarget, download, read_bounded,
+    validate_manifest, verify_artifact, verify_feed,
 };
 
-const UPDATE_URL: &str = "https://downloads.hex.kitlangton.dev/linux-update.json";
-const RELEASE_ORIGIN: &str = "https://downloads.hex.kitlangton.dev/releases/";
+const FEED: &str = "linux-update.json";
 const TARGET: UpdateTarget = UpdateTarget {
     target: "x86_64-unknown-linux-gnu",
     artifact_suffix: "x86_64-linux",
 };
 
 #[derive(Clone)]
-pub struct InstalledUpdate(PathBuf);
+pub(crate) struct InstalledUpdate(PathBuf);
 
-pub fn managed_install() -> bool {
+pub(crate) fn managed_install() -> bool {
     // geteuid has no preconditions and does not mutate process state.
     let user = unsafe { libc::geteuid() };
     if user == 0 {
@@ -49,7 +48,7 @@ pub fn managed_install() -> bool {
             .all(|path| safe_owned_directory(path, user))
 }
 
-pub fn install_latest() -> Result<Option<InstalledUpdate>> {
+pub(crate) fn install_latest() -> Result<Option<InstalledUpdate>> {
     if !managed_install() {
         return Ok(None);
     }
@@ -67,7 +66,8 @@ pub fn install_latest() -> Result<Option<InstalledUpdate>> {
     lock.try_lock_exclusive()
         .wrap_err("another Linux update is already in progress")?;
     let feed_path = updates.join("linux-update.json.partial");
-    download(UPDATE_URL, &feed_path, MAX_FEED_BYTES)?;
+    let feed_url = format!("{RELEASE_BASE}/{FEED}");
+    download(&feed_url, &feed_path, MAX_FEED_BYTES)?;
     let feed = read_bounded(&feed_path, MAX_FEED_BYTES)?;
     let _ = fs::remove_file(&feed_path);
     let manifest = verify_feed(&feed, &PUBLIC_KEY)?;
@@ -80,7 +80,7 @@ pub fn install_latest() -> Result<Option<InstalledUpdate>> {
         return Ok(None);
     }
 
-    let artifact_url = format!("{RELEASE_ORIGIN}{}", manifest.artifact);
+    let artifact_url = format!("{RELEASE_BASE}/releases/{}", manifest.artifact);
     let partial = updates.join("update.download");
     download(&artifact_url, &partial, manifest.bytes)?;
     let activation = (|| {
@@ -95,7 +95,7 @@ pub fn install_latest() -> Result<Option<InstalledUpdate>> {
     Ok(Some(InstalledUpdate(executable)))
 }
 
-pub fn relaunch(update: &InstalledUpdate) -> Result<()> {
+pub(crate) fn relaunch(update: &InstalledUpdate) -> Result<()> {
     if !update.0.is_file() {
         bail!("the prepared HEX update is no longer installed");
     }

@@ -12,10 +12,9 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use gio::prelude::FileExt;
 use glib::{ToVariant, Variant};
 
-const DESKTOP: &str = "org.freedesktop.portal.Desktop";
-const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
+use crate::linux_portal::{CALL_TIMEOUT_MS, DESKTOP, DESKTOP_PATH, connect_bus};
+
 const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
-const CALL_TIMEOUT_MS: i32 = 5_000;
 
 type Response = Rc<RefCell<Option<(u32, HashMap<String, Variant>)>>>;
 
@@ -27,21 +26,7 @@ pub(crate) struct Filter {
 
 /// Opens one file. `Ok(None)` when the person closed the dialog.
 pub(crate) fn open_file(title: &str, accept: &str, filters: &[Filter]) -> Result<Option<PathBuf>> {
-    let address = gio::dbus_address_get_for_bus_sync(gio::BusType::Session, gio::Cancellable::NONE)
-        .map_err(|error| eyre!("no session bus for the file chooser: {error}"))?;
-    let connection = gio::DBusConnection::for_address_sync(
-        &address,
-        gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
-            | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
-        None,
-        gio::Cancellable::NONE,
-    )
-    .map_err(|error| eyre!("could not reach the session bus: {error}"))?;
-    let sender = connection
-        .unique_name()
-        .ok_or_else(|| eyre!("the session bus gave Hex no name"))?
-        .trim_start_matches(':')
-        .replace('.', "_");
+    let (connection, sender) = connect_bus()?;
     let token = format!("hex{}_file", std::process::id());
     let request = format!("{DESKTOP_PATH}/request/{sender}/{token}");
     let context = glib::MainContext::new();
@@ -87,6 +72,7 @@ pub(crate) fn open_file(title: &str, accept: &str, filters: &[Filter]) -> Result
         }
     })();
     connection.signal_unsubscribe(subscription);
+    let _ = connection.close_sync(gio::Cancellable::NONE);
     result
 }
 

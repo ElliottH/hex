@@ -2,7 +2,7 @@
 //! that turns spoken instructions into paste-ready text. Enabling checks the
 //! saved shortcut against the others first.
 
-use rune::{El, col};
+use rune::{El, col, row};
 
 use super::ShortcutTarget;
 use super::Ui;
@@ -84,7 +84,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
                 } else {
                     tr("Saved for when Voice Action is enabled")
                 }),
-                rune::row()
+                row()
                     .key("voice-action-shortcut-control")
                     .gap(8.0)
                     .center_y()

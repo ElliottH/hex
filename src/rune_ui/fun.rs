@@ -25,7 +25,7 @@ const WAVE_HEIGHT: f32 = 28.0;
 
 /// A tunable of the live filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Tunable {
+enum Tunable {
     Strength,
     MuffledWall,
     MuffledRoom,
@@ -57,7 +57,7 @@ impl Tunable {
     }
 
     /// Where the value sits on the slider, and how it reads.
-    pub(super) fn position(self, cfg: &TunedFilterConfig) -> (f32, String) {
+    fn position(self, cfg: &TunedFilterConfig) -> (f32, String) {
         let norm = |v: f64, min: f64, max: f64| ((v - min) / (max - min)).clamp(0.0, 1.0) as f32;
         match self {
             Self::Strength => (
@@ -108,7 +108,7 @@ impl Tunable {
     }
 
     /// Sets the value from a slider position, rounded to the tunable's step.
-    pub(super) fn apply(self, cfg: &mut TunedFilterConfig, position: f32) {
+    fn apply(self, cfg: &mut TunedFilterConfig, position: f32) {
         let t = f64::from(position.clamp(0.0, 1.0));
         let lerp = |min: f64, max: f64| min + (max - min) * t;
         match self {
@@ -157,17 +157,9 @@ pub(super) fn mode_description(mode: VoiceFilterMode) -> &'static str {
 
 /// The pane's own state: the last mode other than Normal, whose sliders
 /// stay in place while Normal is chosen.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct FunPane {
-    pub(super) last_mode: VoiceFilterMode,
-}
-
-impl Default for FunPane {
-    fn default() -> Self {
-        Self {
-            last_mode: VoiceFilterMode::Muffled,
-        }
-    }
+    last_mode: VoiceFilterMode,
 }
 
 /// Saves a mode, comfort noise, or strength and applies the tuning live.
@@ -450,8 +442,25 @@ fn try_it(ui: &Ui, p: Paint) -> El {
                 )
             }),
     );
-    let playing_call = demo.playing == Some(DemoPlaybackTrack::CallHears);
-    let playing_you = demo.playing == Some(DemoPlaybackTrack::You);
+    let play_button = |key: &str, label: &str, kind: ButtonKind, track: DemoPlaybackTrack| {
+        let playing = demo.playing == Some(track);
+        button(
+            p,
+            key,
+            if playing { tr("Stop") } else { label },
+            kind,
+            move |ui: &mut Ui, _| {
+                ask_demo(
+                    ui,
+                    if playing {
+                        DemoRequest::StopPlayback
+                    } else {
+                        DemoRequest::Play(track)
+                    },
+                );
+            },
+        )
+    };
     let play = row()
         .key("play")
         .gap(8.0)
@@ -461,45 +470,17 @@ fn try_it(ui: &Ui, p: Paint) -> El {
             row()
                 .key("buttons")
                 .gap(8.0)
-                .child(button(
-                    p,
+                .child(play_button(
                     "fun-play-call-hears",
-                    if playing_call {
-                        tr("Stop")
-                    } else {
-                        tr("Play what call hears")
-                    },
+                    tr("Play what call hears"),
                     ButtonKind::Primary,
-                    move |ui: &mut Ui, _| {
-                        ask_demo(
-                            ui,
-                            if playing_call {
-                                DemoRequest::StopPlayback
-                            } else {
-                                DemoRequest::Play(DemoPlaybackTrack::CallHears)
-                            },
-                        )
-                    },
+                    DemoPlaybackTrack::CallHears,
                 ))
-                .child(button(
-                    p,
+                .child(play_button(
                     "fun-play-you",
-                    if playing_you {
-                        tr("Stop")
-                    } else {
-                        tr("Play your voice")
-                    },
+                    tr("Play your voice"),
                     ButtonKind::Secondary,
-                    move |ui: &mut Ui, _| {
-                        ask_demo(
-                            ui,
-                            if playing_you {
-                                DemoRequest::StopPlayback
-                            } else {
-                                DemoRequest::Play(DemoPlaybackTrack::You)
-                            },
-                        )
-                    },
+                    DemoPlaybackTrack::You,
                 )),
         )
         .child(

@@ -3,7 +3,7 @@
 //! runs the recorder, reports when the call app leaves, and starts notes. The
 //! menu bar and the meeting capsules show its events.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -99,179 +99,17 @@ pub(crate) fn controller_loop(
                 MeetingRequest::Summarize(id) => ControllerCommand::Summarize(id),
             });
         for command in commands.try_iter().take(8).chain(requested_commands) {
-            match command {
-                ControllerCommand::Record(_) if !enabled => {
-                    tracing::warn!("ignored a meeting recording request while meetings are off");
-                }
-                ControllerCommand::Record(candidate) if recording.is_none() => {
-                    let stop = Arc::new(AtomicBool::new(false));
-                    let worker_stop = stop.clone();
-                    let (update_sender, updates) = mpsc::sync_channel(4);
-                    let start = candidate.recording_start();
-                    let worker_project_root = project_root.clone();
-                    let worker = thread::spawn(move || {
-                        meeting::record(
-                            start,
-                            &worker_stop,
-                            &worker_project_root,
-                            Some(update_sender),
-                        )
-                    });
-                    let _ = events.send(ControllerEvent::Starting);
-                    recording = Some(ActiveRecording {
-                        title: candidate.title,
-                        application: candidate.application,
-                        app_label: candidate.source.label().into(),
-                        presence: CallPresence::default(),
-                        stop,
-                        updates,
-                        reported_started: false,
-                        worker,
-                    });
-                }
-                ControllerCommand::Stop => {
-                    if let Some(active) = &recording
-                        && !active.stop.swap(true, Ordering::Relaxed)
-                    {
-                        let _ = events.send(ControllerEvent::Transcribing);
-                    }
-                }
-                ControllerCommand::Open(id) => {
-                    let _ = events.send(ControllerEvent::OpenMeeting(id));
-                }
-                ControllerCommand::Summarize(id) => start_notes(id, &events),
-                ControllerCommand::Dismiss | ControllerCommand::Record(_) => {}
-            }
+            handle_command(&mut recording, command, enabled, &project_root, &events);
         }
 
-        if let Some(active) = &mut recording {
-            for update in active.updates.try_iter() {
-                match update {
-                    meeting::RecordingUpdate::Started { id, title } => {
-                        active.reported_started = true;
-                        active.title = title.clone();
-                        if !active.stop.load(Ordering::Relaxed) {
-                            let _ = events.send(ControllerEvent::RecordingStarted { id, title });
-                        }
-                    }
-                    meeting::RecordingUpdate::Retitled { title } => {
-                        active.title = title.clone();
-                        let _ = events.send(ControllerEvent::Retitled { title });
-                    }
-                    meeting::RecordingUpdate::Transcribing => {
-                        if !active.stop.swap(true, Ordering::Relaxed) {
-                            let _ = events.send(ControllerEvent::Transcribing);
-                        }
-                    }
-                }
-            }
-        }
+        poll_recording(&mut recording, &events)?;
 
-        if recording
-            .as_ref()
-            .is_some_and(|active| active.worker.is_finished())
+        if recording.is_none()
+            && enabled
+            && !detect_meeting(&mut detector, &mut observed_microphone_apps, &events)
         {
-            let active = recording
-                .take()
-                .ok_or_else(|| eyre!("recording disappeared"))?;
-            let event = match active.worker.join() {
-                Ok(Ok(manifest)) => {
-                    if manifest.status == meeting::MeetingStatus::Complete
-                        && meeting::notes_wanted()
-                    {
-                        start_notes(manifest.id.clone(), &events);
-                    }
-                    ControllerEvent::Finished(Box::new(manifest))
-                }
-                Ok(Err(error)) => ControllerEvent::Failed {
-                    title: active.title,
-                    error: error.to_string(),
-                },
-                Err(_) => ControllerEvent::Failed {
-                    title: active.title,
-                    error: "meeting recorder panicked".into(),
-                },
-            };
-            let _ = events.send(event);
-        }
-
-        if let Some(active) = &mut recording
-            && active.reported_started
-            && !active.stop.load(Ordering::Relaxed)
-            && let Some(application) = active.application.as_deref()
-        {
-            // A failed query must not end the controller while it owns a recording.
-            let present = match active_microphone_applications() {
-                Ok(applications) => applications
-                    .iter()
-                    .any(|candidate| candidate.canonical_bundle_id() == Some(application)),
-                Err(error) => {
-                    tracing::warn!(%error, "could not inspect microphone activity during a meeting");
-                    true
-                }
-            };
-            if active.presence.observe(present) {
-                tracing::info!(application, "meeting application released the microphone");
-                let _ = events.send(ControllerEvent::CallEnded {
-                    app: active.app_label.clone(),
-                });
-            }
-        }
-
-        if recording.is_none() && enabled {
-            let microphone_apps = match active_microphone_applications() {
-                Ok(applications) => applications,
-                Err(error) => {
-                    tracing::warn!(%error, "could not inspect microphone activity");
-                    thread::sleep(Duration::from_secs(2));
-                    continue;
-                }
-            };
-            let observed = microphone_apps
-                .iter()
-                .map(|application| (application.pid, application.bundle_id.clone()))
-                .collect::<Vec<_>>();
-            if observed != observed_microphone_apps {
-                let applications = microphone_apps
-                    .iter()
-                    .map(|application| {
-                        format!(
-                            "{} ({}, pid {})",
-                            application.name, application.bundle_id, application.pid
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                tracing::info!(?applications, "microphone application activity changed");
-                observed_microphone_apps = observed;
-            }
-            let application = microphone_apps
-                .into_iter()
-                .filter(|application| application.is_supported_meeting_app())
-                .min_by_key(|application| application.detection_priority());
-            let context = match application.as_ref().and_then(|application| {
-                application
-                    .is_browser()
-                    .then(|| application.canonical_bundle_id())
-                    .flatten()
-                    .filter(|bundle_id| !detector.is_application_snoozed(bundle_id))
-            }) {
-                Some(bundle_id) => {
-                    ContextSnapshot::capture_for_meeting(bundle_id).unwrap_or_default()
-                }
-                None => ContextSnapshot::default(),
-            };
-            let silenced = crate::app_settings::meeting_never_offer_keys();
-            let candidate = application
-                .and_then(|application| candidate_from_microphone(&application, &context))
-                .filter(|candidate| !candidate.is_silenced(&silenced));
-            if let Some(candidate) = detector.observe(candidate) {
-                tracing::info!(
-                    source = candidate.source.label(),
-                    title = candidate.title,
-                    "meeting recording offer triggered"
-                );
-                let _ = events.send(ControllerEvent::Offer(candidate));
-            }
+            thread::sleep(Duration::from_secs(2));
+            continue;
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -286,19 +124,200 @@ pub(crate) fn controller_loop(
     Ok(())
 }
 
+fn handle_command(
+    recording: &mut Option<ActiveRecording>,
+    command: ControllerCommand,
+    enabled: bool,
+    project_root: &Path,
+    events: &SyncSender<ControllerEvent>,
+) {
+    match command {
+        ControllerCommand::Record(_) if !enabled => {
+            tracing::warn!("ignored a meeting recording request while meetings are off");
+        }
+        ControllerCommand::Record(candidate) if recording.is_none() => {
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = stop.clone();
+            let (update_sender, updates) = mpsc::sync_channel(4);
+            let start = candidate.recording_start();
+            let worker_project_root = project_root.to_path_buf();
+            let worker = thread::spawn(move || {
+                meeting::record(
+                    start,
+                    &worker_stop,
+                    &worker_project_root,
+                    Some(update_sender),
+                )
+            });
+            let _ = events.send(ControllerEvent::Starting);
+            *recording = Some(ActiveRecording {
+                title: candidate.title,
+                application: candidate.application,
+                app_label: candidate.source.label().into(),
+                presence: CallPresence::default(),
+                stop,
+                updates,
+                reported_started: false,
+                worker,
+            });
+        }
+        ControllerCommand::Stop => {
+            if let Some(active) = recording.as_ref()
+                && !active.stop.swap(true, Ordering::Relaxed)
+            {
+                let _ = events.send(ControllerEvent::Transcribing);
+            }
+        }
+        ControllerCommand::Open(id) => {
+            let _ = events.send(ControllerEvent::OpenMeeting(id));
+        }
+        ControllerCommand::Summarize(id) => start_notes(id, events),
+        ControllerCommand::Dismiss | ControllerCommand::Record(_) => {}
+    }
+}
+
+fn poll_recording(
+    recording: &mut Option<ActiveRecording>,
+    events: &SyncSender<ControllerEvent>,
+) -> Result<()> {
+    if let Some(active) = recording.as_mut() {
+        for update in active.updates.try_iter() {
+            match update {
+                meeting::RecordingUpdate::Started { id, title } => {
+                    active.reported_started = true;
+                    active.title = title.clone();
+                    if !active.stop.load(Ordering::Relaxed) {
+                        let _ = events.send(ControllerEvent::RecordingStarted { id, title });
+                    }
+                }
+                meeting::RecordingUpdate::Retitled { title } => {
+                    active.title = title.clone();
+                    let _ = events.send(ControllerEvent::Retitled { title });
+                }
+                meeting::RecordingUpdate::Transcribing => {
+                    if !active.stop.swap(true, Ordering::Relaxed) {
+                        let _ = events.send(ControllerEvent::Transcribing);
+                    }
+                }
+            }
+        }
+    }
+
+    if recording
+        .as_ref()
+        .is_some_and(|active| active.worker.is_finished())
+    {
+        let active = recording
+            .take()
+            .ok_or_else(|| eyre!("recording disappeared"))?;
+        let event = match active.worker.join() {
+            Ok(Ok(manifest)) => {
+                if manifest.status == meeting::MeetingStatus::Complete && meeting::notes_wanted() {
+                    start_notes(manifest.id.clone(), events);
+                }
+                ControllerEvent::Finished(Box::new(manifest))
+            }
+            Ok(Err(error)) => ControllerEvent::Failed {
+                title: active.title,
+                error: error.to_string(),
+            },
+            Err(_) => ControllerEvent::Failed {
+                title: active.title,
+                error: "meeting recorder panicked".into(),
+            },
+        };
+        let _ = events.send(event);
+    }
+
+    if let Some(active) = recording.as_mut()
+        && active.reported_started
+        && !active.stop.load(Ordering::Relaxed)
+        && let Some(application) = active.application.as_deref()
+    {
+        // A failed query must not end the controller while it owns a recording.
+        let present = match active_microphone_applications() {
+            Ok(applications) => applications
+                .iter()
+                .any(|candidate| candidate.canonical_bundle_id() == Some(application)),
+            Err(error) => {
+                tracing::warn!(%error, "could not inspect microphone activity during a meeting");
+                true
+            }
+        };
+        if active.presence.observe(present) {
+            tracing::info!(application, "meeting application released the microphone");
+            let _ = events.send(ControllerEvent::CallEnded {
+                app: active.app_label.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn detect_meeting(
+    detector: &mut MeetingDetector,
+    observed_microphone_apps: &mut Vec<(i32, String)>,
+    events: &SyncSender<ControllerEvent>,
+) -> bool {
+    let microphone_apps = match active_microphone_applications() {
+        Ok(applications) => applications,
+        Err(error) => {
+            tracing::warn!(%error, "could not inspect microphone activity");
+            return false;
+        }
+    };
+    let observed = microphone_apps
+        .iter()
+        .map(|application| (application.pid, application.bundle_id.clone()))
+        .collect::<Vec<_>>();
+    if observed != *observed_microphone_apps {
+        let applications = microphone_apps
+            .iter()
+            .map(|application| {
+                format!(
+                    "{} ({}, pid {})",
+                    application.name, application.bundle_id, application.pid
+                )
+            })
+            .collect::<Vec<_>>();
+        tracing::info!(?applications, "microphone application activity changed");
+        *observed_microphone_apps = observed;
+    }
+    let application = microphone_apps
+        .into_iter()
+        .filter(|application| application.is_supported_meeting_app())
+        .min_by_key(|application| application.detection_priority());
+    let context = match application.as_ref().and_then(|application| {
+        application
+            .is_browser()
+            .then(|| application.canonical_bundle_id())
+            .flatten()
+            .filter(|bundle_id| !detector.is_application_snoozed(bundle_id))
+    }) {
+        Some(bundle_id) => ContextSnapshot::capture_for_meeting(bundle_id).unwrap_or_default(),
+        None => ContextSnapshot::default(),
+    };
+    let silenced = crate::app_settings::meeting_never_offer_keys();
+    let candidate = application
+        .and_then(|application| candidate_from_microphone(&application, &context))
+        .filter(|candidate| !candidate.is_silenced(&silenced));
+    if let Some(candidate) = detector.observe(candidate) {
+        tracing::info!(
+            source = candidate.source.label(),
+            title = candidate.title,
+            "meeting recording offer triggered"
+        );
+        let _ = events.send(ControllerEvent::Offer(candidate));
+    }
+    true
+}
+
 /// Writes notes on a background thread; the UI refreshes from the manifest
 /// whether generation succeeds or fails.
 fn start_notes(id: String, events: &SyncSender<ControllerEvent>) {
     let finished = events.clone();
-    let reload_id = id.clone();
     if meeting::spawn_summary(id, move |result| {
-        let manifest = match result {
-            Ok(manifest) => Some(manifest),
-            Err(_) => meeting::list()
-                .ok()
-                .and_then(|meetings| meetings.into_iter().find(|item| item.id == reload_id)),
-        };
-        if let Some(manifest) = manifest {
+        if let Ok(manifest) = result {
             let _ = finished.send(ControllerEvent::NotesFinished(Box::new(manifest)));
         }
     }) {

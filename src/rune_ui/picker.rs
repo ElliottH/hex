@@ -10,7 +10,9 @@ use rune_kit::{Badge, ButtonSize, IconButton, IconButtonVariant, Progress};
 
 use super::Request;
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button};
+use super::controls::{ButtonKind, Paint, button};
+use super::lists::error_panel;
+use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::transcription_models::{
     self, ModelDefinition, ModelPreparationStage, ModelRuntime, TranscriptionModelId,
@@ -48,27 +50,36 @@ impl Picker {
             None => transcription_models::is_installed(model, language),
         }
     }
+
+    pub(super) fn selected_installed(&self, settings: &AppSettings) -> bool {
+        transcription_models::validate(&settings.transcription)
+            .is_ok_and(|model| self.installed(model, &settings.transcription.language))
+    }
+
+    fn set_language(&mut self, language: Option<String>) {
+        self.language = language;
+        self.clear_deletion();
+    }
+
+    fn clear_deletion(&mut self) {
+        self.deletion = None;
+        self.deletion_error = None;
+    }
 }
 
 pub(super) fn open(ui: &mut Ui, language: String) {
     ui.open = None;
-    ui.picker.language = Some(language);
-    ui.picker.deletion = None;
-    ui.picker.deletion_error = None;
+    ui.picker.set_language(Some(language));
 }
 
 pub(super) fn close(ui: &mut Ui) {
-    ui.picker.language = None;
-    ui.picker.deletion = None;
-    ui.picker.deletion_error = None;
+    ui.picker.set_language(None);
 }
 
 fn select_language(ui: &mut Ui, language: String) {
     if ui.picker.language.as_deref() != Some(&language) {
         cancel(ui);
-        ui.picker.language = Some(language);
-        ui.picker.deletion = None;
-        ui.picker.deletion_error = None;
+        ui.picker.set_language(Some(language));
     }
 }
 
@@ -79,8 +90,7 @@ fn cancel(ui: &mut Ui) {
 }
 
 fn choose(ui: &mut Ui, model: &'static ModelDefinition, language: String) {
-    ui.picker.deletion = None;
-    ui.picker.deletion_error = None;
+    ui.picker.clear_deletion();
     let installed = ui.picker.installed(model, &language);
     if transcription_selection_is_active(&ui.settings.transcription, model, &language, installed) {
         close(ui);
@@ -142,7 +152,7 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
     let mut models = col().key("models").gap(8.0);
     let transcription = ui.view.as_ref().map(|view| &view.transcription);
     if let Some(error) = transcription.and_then(|t| t.error.clone()) {
-        models = models.child(error_card(
+        models = models.child(error_panel(
             p,
             "install-error",
             tr("Model could not be installed."),
@@ -150,7 +160,7 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
         ));
     }
     if let Some(error) = &ui.picker.deletion_error {
-        models = models.child(error_card(
+        models = models.child(error_panel(
             p,
             "delete-error",
             tr("Model could not be deleted."),
@@ -244,30 +254,6 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
     )
 }
 
-fn error_card(p: Paint, key: &str, title: &str, error: &str) -> El {
-    let danger = &p.k.c.danger;
-    col()
-        .key(key)
-        .padding(12.0)
-        .gap(4.0)
-        .radius(p.k.radius.md)
-        .fill(danger.bg)
-        .border(p.hair, danger.border)
-        .child(
-            text(title)
-                .key("title")
-                .font(p.k.ty.ui_medium)
-                .color(danger.fg),
-        )
-        .child(
-            text(error)
-                .key("error")
-                .font(DESCRIPTION)
-                .color(p.text())
-                .wrap(),
-        )
-}
-
 enum Status {
     Active,
     Available {
@@ -342,7 +328,6 @@ fn model_card(
         .collect::<Vec<_>>()
         .join(" · ");
     let mut actions = row().key("actions").gap(8.0).center_y();
-    let lang = language.to_string();
     match &status {
         Status::Active => {
             actions = actions.child(
@@ -378,6 +363,7 @@ fn model_card(
                     move |ui: &mut Ui, _| delete(ui, model),
                 ));
             }
+            let lang = language.to_string();
             actions = actions.child(button(
                 p,
                 "choose-model",

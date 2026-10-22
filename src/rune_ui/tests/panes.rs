@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::login_item::LoginItemStatus;
-use crate::onboarding::{PermissionAction, PermissionKind, Practice, Step};
+use crate::onboarding::{Input, Observation, PermissionAction, PermissionKind, Practice, Step};
 use platform::{MeetingRequest, PlatformHost, PlatformRequest};
 
 fn asked(rt: &Runtime<Ui>) -> &[PlatformRequest] {
@@ -17,10 +17,6 @@ fn asked(rt: &Runtime<Ui>) -> &[PlatformRequest] {
 fn refresh(rt: &mut Runtime<Ui>) {
     rt.invalidate();
     settle(rt);
-}
-
-fn texts(rt: &Runtime<Ui>) -> Vec<String> {
-    rt.elements().into_iter().filter_map(|e| e.text).collect()
 }
 
 #[test]
@@ -357,8 +353,8 @@ fn the_mac_tour_asks_each_permission_then_practices() {
     settle(&mut rt);
     assert_eq!(rt.state.tour.as_ref().unwrap().flow.step(), Step::TryIt);
     assert!(rt.find("tour-skip").is_some(), "practice can be skipped");
-    onboarding::observe(&mut rt.state, crate::onboarding::Observation::Started);
-    onboarding::observe(&mut rt.state, crate::onboarding::Observation::Pasted);
+    onboarding::input(&mut rt.state, Input::Dictation(Observation::Started));
+    onboarding::input(&mut rt.state, Input::Dictation(Observation::Pasted));
     refresh(&mut rt);
     assert_eq!(
         rt.state.tour.as_ref().unwrap().flow.view().practice,
@@ -373,7 +369,12 @@ fn the_mac_tour_asks_each_permission_then_practices() {
 #[test]
 fn a_listener_that_will_not_start_relaunches_once_then_asks_to_reopen() {
     let mut rt = runtime("mac-onboarding-try", true, PANE_SIZE);
-    onboarding::listener_failed(&mut rt.state, true);
+    onboarding::input(
+        &mut rt.state,
+        Input::ListenerFailed {
+            relaunch_allowed: true,
+        },
+    );
     assert_eq!(asked(&rt), [PlatformRequest::Relaunch]);
     let mut rt = runtime("mac-onboarding-reopen", true, PANE_SIZE);
     tap(&mut rt, "tour-reopen");
@@ -542,16 +543,7 @@ fn hud_lab_drives_the_indicator() {
 fn hud_lab_controls_round_trip() {
     use hud_lab::Control;
     let mut tuning = platform::HudTuning::default();
-    for control in [
-        Control::LineCount,
-        Control::Curvature,
-        Control::Speed,
-        Control::Blur,
-        Control::Glow,
-        Control::Depth,
-        Control::LightAngle,
-        Control::Outline,
-    ] {
+    for (control, _, _) in Control::ALL {
         control.set(&mut tuning, 0.6);
         assert!((control.value(&tuning) - 0.6).abs() < 1e-4, "{control:?}");
     }

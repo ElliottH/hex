@@ -8,11 +8,11 @@ use std::time::{Duration, Instant};
 
 use crate::voice_filter::{DictationSpan, HexMicEngine, ModeSpec, StageSpec, VoiceFilterMode};
 
-pub const HEX_MICROPHONE_NAME: &str = "Hex Microphone";
-pub const HEX_MICROPHONE_UID: &str = "com.kitlangton.hex.microphone";
-pub const HEX_MICROPHONE_SINK_NAME: &str = "Hex Microphone (Internal Sink)";
-pub const HEX_MICROPHONE_SINK_UID: &str = "com.kitlangton.hex.microphone.sink";
-pub const HEX_MICROPHONE_SAMPLE_RATE: u32 = 48_000;
+const HEX_MICROPHONE_NAME: &str = "Hex Microphone";
+const HEX_MICROPHONE_UID: &str = "com.kitlangton.hex.microphone";
+const HEX_MICROPHONE_SINK_NAME: &str = "Hex Microphone (Internal Sink)";
+const HEX_MICROPHONE_SINK_UID: &str = "com.kitlangton.hex.microphone.sink";
+const HEX_MICROPHONE_SAMPLE_RATE: u32 = 48_000;
 
 /// Capacity of the lock-free capture-to-sink ring buffer in 48 kHz mono samples (~341 ms).
 const RING_CAPACITY: usize = 16_384;
@@ -28,7 +28,7 @@ pub fn is_hex_virtual_device_name(name: &str) -> bool {
 }
 
 /// Lock-free single-producer single-consumer ring buffer for real-time audio handoff.
-pub struct HexMicRingBuffer {
+struct HexMicRingBuffer {
     buffer: [UnsafeCell<f32>; RING_CAPACITY],
     write_pos: AtomicUsize,
     read_pos: AtomicUsize,
@@ -38,14 +38,8 @@ pub struct HexMicRingBuffer {
 
 unsafe impl Sync for HexMicRingBuffer {}
 
-impl Default for HexMicRingBuffer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl HexMicRingBuffer {
-    pub const fn new() -> Self {
+    const fn new() -> Self {
         Self {
             buffer: [const { UnsafeCell::new(0.0) }; RING_CAPACITY],
             write_pos: AtomicUsize::new(0),
@@ -55,13 +49,13 @@ impl HexMicRingBuffer {
         }
     }
 
-    pub fn clear(&self) {
+    fn clear(&self) {
         let w = self.write_pos.load(Ordering::Relaxed);
         self.read_pos.store(w, Ordering::Release);
     }
 
     /// Pushes samples from the producer without blocking or allocating.
-    pub fn push_slice(&self, samples: &[f32]) {
+    fn push_slice(&self, samples: &[f32]) {
         if samples.is_empty() {
             return;
         }
@@ -95,7 +89,7 @@ impl HexMicRingBuffer {
 
     /// Pulls `dst.len()` samples for the real-time consumer without blocking.
     /// Zero-fills on underflow and skips ahead if queued latency exceeds `MAX_RING_LATENCY_FRAMES`.
-    pub fn pop_slice(&self, dst: &mut [f32]) -> usize {
+    fn pop_slice(&self, dst: &mut [f32]) -> usize {
         let needed = dst.len();
         if needed == 0 {
             return 0;
@@ -131,14 +125,14 @@ impl HexMicRingBuffer {
     }
 
     #[cfg(test)]
-    pub fn queued_frames(&self) -> usize {
+    fn queued_frames(&self) -> usize {
         let write = self.write_pos.load(Ordering::Acquire);
         let read = self.read_pos.load(Ordering::Acquire);
         write.wrapping_sub(read).min(RING_CAPACITY)
     }
 
     #[cfg(test)]
-    pub fn underflows(&self) -> u64 {
+    fn underflows(&self) -> u64 {
         self.underflows.load(Ordering::Relaxed)
     }
 }
@@ -247,9 +241,9 @@ impl TunedFilterConfig {
         spec
     }
 
-    pub fn build_engine(&self, sr: f64) -> HexMicEngine {
+    fn build_engine(&self) -> HexMicEngine {
         let spec = self.build_mode_spec();
-        let mut engine = HexMicEngine::new(sr, &spec);
+        let mut engine = HexMicEngine::new(f64::from(HEX_MICROPHONE_SAMPLE_RATE), &spec);
         engine.set_strength(f64::from(self.strength));
         engine
     }
@@ -278,7 +272,7 @@ pub fn update_tuned_config(mutate: impl FnOnce(&mut TunedFilterConfig)) {
             return;
         };
         mutate(&mut guard);
-        guard.build_engine(f64::from(HEX_MICROPHONE_SAMPLE_RATE))
+        guard.build_engine()
     };
     if let Ok(mut slot) = pending_engine_lock().lock() {
         *slot = Some(next_engine);
@@ -396,14 +390,14 @@ fn set_driver_action_state(state: DriverActionState) {
     *guard = state;
 }
 
-pub fn current_driver_action_state() -> DriverActionState {
+fn current_driver_action_state() -> DriverActionState {
     driver_action_lock()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
 }
 
-pub fn driver_action_in_progress() -> bool {
+fn driver_action_in_progress() -> bool {
     matches!(
         current_driver_action_state(),
         DriverActionState::Installing | DriverActionState::Uninstalling
@@ -434,7 +428,7 @@ impl HexMicrophoneStatus {
     }
 }
 
-pub fn driver_bundle_installed() -> bool {
+fn driver_bundle_installed() -> bool {
     std::path::Path::new(INSTALLED_DRIVER_PATH).exists()
 }
 
@@ -470,7 +464,7 @@ fn validate_driver_bundle(bundle_dir: &std::path::Path) -> Result<String, String
         .ok_or_else(|| "Driver Info.plist is missing or invalid".into())
 }
 
-pub fn bundled_driver_path() -> Option<PathBuf> {
+fn bundled_driver_path() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(contents_dir) = exe.parent().and_then(|p| p.parent())
@@ -489,7 +483,7 @@ pub fn bundled_driver_path() -> Option<PathBuf> {
         .find(|candidate| validate_driver_bundle(candidate).is_ok())
 }
 
-pub fn bundled_driver_version() -> String {
+fn bundled_driver_version() -> String {
     static CACHED: OnceLock<String> = OnceLock::new();
     CACHED
         .get_or_init(|| {
@@ -500,7 +494,7 @@ pub fn bundled_driver_version() -> String {
         .clone()
 }
 
-pub fn installed_driver_version() -> Option<String> {
+fn installed_driver_version() -> Option<String> {
     read_driver_bundle_version(std::path::Path::new(INSTALLED_DRIVER_PATH))
 }
 
@@ -526,6 +520,39 @@ fn classify_osascript_failure(stderr: &str, stdout: &str) -> DriverActionState {
     DriverActionState::Failed(cleaned.chars().take(140).collect())
 }
 
+#[cfg(target_os = "macos")]
+fn run_driver_osascript(
+    script: &str,
+    arg: Option<&std::path::Path>,
+    settled: impl Fn(&HexMicrophoneStatus) -> bool,
+    done: impl FnOnce() -> DriverActionState,
+) -> DriverActionState {
+    let mut command = std::process::Command::new("/usr/bin/osascript");
+    command.arg("-e").arg(script);
+    if let Some(arg) = arg {
+        command.arg(arg);
+    }
+    match command.output() {
+        Ok(out) if out.status.success() => {
+            crate::audio::notify_audio_service_restarted();
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while Instant::now() < deadline {
+                if settled(&status()) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            crate::audio::notify_audio_service_restarted();
+            done()
+        }
+        Ok(out) => classify_osascript_failure(
+            &String::from_utf8_lossy(&out.stderr),
+            &String::from_utf8_lossy(&out.stdout),
+        ),
+        Err(error) => DriverActionState::Failed(error.to_string()),
+    }
+}
+
 pub fn install_driver_async() {
     #[cfg(target_os = "macos")]
     {
@@ -549,35 +576,17 @@ pub fn install_driver_async() {
                         return;
                     }
                 };
-                let output = std::process::Command::new("/usr/bin/osascript")
-                    .arg("-e")
-                    .arg(INSTALL_DRIVER_APPLESCRIPT)
-                    .arg(&src_bundle)
-                    .output();
-                match output {
-                    Ok(out) if out.status.success() => {
-                        crate::audio::notify_audio_service_restarted();
-                        let deadline = std::time::Instant::now() + Duration::from_secs(4);
-                        while std::time::Instant::now() < deadline {
-                            let st = status();
-                            if st.driver_loaded {
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(100));
-                        }
-                        crate::audio::notify_audio_service_restarted();
-                        let final_version = installed_driver_version().unwrap_or(version);
-                        set_driver_action_state(DriverActionState::DoneInstalled(final_version));
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        set_driver_action_state(classify_osascript_failure(&stderr, &stdout));
-                    }
-                    Err(error) => {
-                        set_driver_action_state(DriverActionState::Failed(error.to_string()));
-                    }
-                }
+                let state = run_driver_osascript(
+                    INSTALL_DRIVER_APPLESCRIPT,
+                    Some(&src_bundle),
+                    |st| st.driver_loaded,
+                    || {
+                        DriverActionState::DoneInstalled(
+                            installed_driver_version().unwrap_or(version),
+                        )
+                    },
+                );
+                set_driver_action_state(state);
             });
     }
 }
@@ -592,33 +601,13 @@ pub fn uninstall_driver_async() {
         let _ = thread::Builder::new()
             .name("hex-mic-uninstall".into())
             .spawn(|| {
-                let output = std::process::Command::new("/usr/bin/osascript")
-                    .arg("-e")
-                    .arg(UNINSTALL_DRIVER_APPLESCRIPT)
-                    .output();
-                match output {
-                    Ok(out) if out.status.success() => {
-                        crate::audio::notify_audio_service_restarted();
-                        let deadline = std::time::Instant::now() + Duration::from_secs(4);
-                        while std::time::Instant::now() < deadline {
-                            let st = status();
-                            if !st.driver_bundle_installed && !st.driver_loaded {
-                                break;
-                            }
-                            thread::sleep(Duration::from_millis(100));
-                        }
-                        crate::audio::notify_audio_service_restarted();
-                        set_driver_action_state(DriverActionState::DoneUninstalled);
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        let stdout = String::from_utf8_lossy(&out.stdout);
-                        set_driver_action_state(classify_osascript_failure(&stderr, &stdout));
-                    }
-                    Err(error) => {
-                        set_driver_action_state(DriverActionState::Failed(error.to_string()));
-                    }
-                }
+                let state = run_driver_osascript(
+                    UNINSTALL_DRIVER_APPLESCRIPT,
+                    None,
+                    |st| !st.driver_bundle_installed && !st.driver_loaded,
+                    || DriverActionState::DoneUninstalled,
+                );
+                set_driver_action_state(state);
             });
     }
 }
@@ -762,17 +751,7 @@ fn schedule_demo_recompute() {
                     {
                         None
                     } else {
-                        let samples = match guard.source {
-                            DemoSourceKind::Example => guard.example_samples.clone(),
-                            DemoSourceKind::Recording => {
-                                if guard.recorded_samples.is_empty() {
-                                    guard.example_samples.clone()
-                                } else {
-                                    guard.recorded_samples.clone()
-                                }
-                            }
-                        };
-                        Some((guard.source, samples))
+                        Some((guard.source, guard.active_samples().to_vec()))
                     }
                 }) else {
                     continue;
@@ -811,6 +790,16 @@ struct DemoBuffers {
     peaks_you: Vec<f32>,
     peaks_call: Vec<f32>,
     processed_samples: Vec<f32>,
+}
+
+impl DemoBuffers {
+    fn active_samples(&self) -> &[f32] {
+        if self.source == DemoSourceKind::Recording && !self.recorded_samples.is_empty() {
+            &self.recorded_samples
+        } else {
+            &self.example_samples
+        }
+    }
 }
 
 static DEMO_BUFFERS: OnceLock<Mutex<DemoBuffers>> = OnceLock::new();
@@ -899,27 +888,21 @@ fn compute_peaks(samples: &[f32], bars: usize) -> Vec<f32> {
 
 fn recompute_demo_cache(buffers: &mut DemoBuffers) {
     let cfg = current_tuned_config();
-    let active_samples = match buffers.source {
-        DemoSourceKind::Example => &buffers.example_samples,
-        DemoSourceKind::Recording => {
-            if buffers.recorded_samples.is_empty() {
-                &buffers.example_samples
-            } else {
-                &buffers.recorded_samples
-            }
-        }
-    };
+    let active_samples = buffers.active_samples();
     let span = span_for_source(buffers.source, active_samples.len());
     let spec = cfg.build_mode_spec();
-    buffers.processed_samples = crate::voice_filter::render(
+    let processed_samples = crate::voice_filter::render(
         active_samples,
         f64::from(HEX_MICROPHONE_SAMPLE_RATE),
         &spec,
         &[span],
         f64::from(cfg.strength),
     );
-    buffers.peaks_you = compute_peaks(active_samples, WAVEFORM_BARS);
-    buffers.peaks_call = compute_peaks(&buffers.processed_samples, WAVEFORM_BARS);
+    let peaks_you = compute_peaks(active_samples, WAVEFORM_BARS);
+    let peaks_call = compute_peaks(&processed_samples, WAVEFORM_BARS);
+    buffers.processed_samples = processed_samples;
+    buffers.peaks_you = peaks_you;
+    buffers.peaks_call = peaks_call;
     buffers.cached_mode = Some(cfg);
     buffers.cached_source = Some(buffers.source);
 }
@@ -1003,16 +986,7 @@ pub fn play_demo_track(track: DemoPlaybackTrack) {
         }
         match track {
             DemoPlaybackTrack::CallHears => guard.processed_samples.clone(),
-            DemoPlaybackTrack::You => match guard.source {
-                DemoSourceKind::Example => guard.example_samples.clone(),
-                DemoSourceKind::Recording => {
-                    if guard.recorded_samples.is_empty() {
-                        guard.example_samples.clone()
-                    } else {
-                        guard.recorded_samples.clone()
-                    }
-                }
-            },
+            DemoPlaybackTrack::You => guard.active_samples().to_vec(),
         }
     };
     if samples.is_empty() {
@@ -1117,25 +1091,14 @@ pub fn demo_snapshot() -> DemoSnapshot {
         };
     };
 
-    if guard.cached_mode.is_none() || std::env::var_os("HEX_PREVIEW_BEFORE").is_some() {
-        if guard.cached_mode.as_ref() != Some(&cfg) || guard.cached_source != Some(guard.source) {
-            recompute_demo_cache(&mut guard);
-        }
+    if guard.cached_mode.is_none() {
+        recompute_demo_cache(&mut guard);
     } else if guard.cached_mode.as_ref() != Some(&cfg) || guard.cached_source != Some(guard.source)
     {
         schedule_demo_recompute();
     }
 
-    let sample_len = match guard.source {
-        DemoSourceKind::Example => guard.example_samples.len(),
-        DemoSourceKind::Recording => {
-            if guard.recorded_samples.is_empty() {
-                guard.example_samples.len()
-            } else {
-                guard.recorded_samples.len()
-            }
-        }
-    };
+    let sample_len = guard.active_samples().len();
     let duration_ms =
         ((sample_len as f64) * 1000.0 / f64::from(HEX_MICROPHONE_SAMPLE_RATE)).round() as u32;
     let span = span_for_source(guard.source, sample_len);
@@ -1284,13 +1247,13 @@ mod macos_hal {
         }
     }
 
-    pub(super) fn device_is_alive(device_id: AudioObjectID) -> bool {
+    fn device_flag(device_id: AudioObjectID, selector: AudioObjectPropertySelector) -> bool {
         let address = AudioObjectPropertyAddress {
-            m_selector: K_AUDIO_DEVICE_PROPERTY_DEVICE_IS_ALIVE,
+            m_selector: selector,
             m_scope: K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
             m_element: K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
         };
-        let mut alive: u32 = 0;
+        let mut value: u32 = 0;
         let mut size = size_of::<u32>() as u32;
         let status = unsafe {
             AudioObjectGetPropertyData(
@@ -1299,31 +1262,21 @@ mod macos_hal {
                 0,
                 ptr::null(),
                 &mut size,
-                (&raw mut alive).cast::<c_void>(),
+                (&raw mut value).cast::<c_void>(),
             )
         };
-        status == 0 && alive != 0
+        status == 0 && value != 0
+    }
+
+    pub(super) fn device_is_alive(device_id: AudioObjectID) -> bool {
+        device_flag(device_id, K_AUDIO_DEVICE_PROPERTY_DEVICE_IS_ALIVE)
     }
 
     pub(super) fn device_is_running_somewhere(device_id: AudioObjectID) -> bool {
-        let address = AudioObjectPropertyAddress {
-            m_selector: K_AUDIO_DEVICE_PROPERTY_DEVICE_IS_RUNNING_SOMEWHERE,
-            m_scope: K_AUDIO_OBJECT_PROPERTY_SCOPE_GLOBAL,
-            m_element: K_AUDIO_OBJECT_PROPERTY_ELEMENT_MAIN,
-        };
-        let mut running: u32 = 0;
-        let mut size = size_of::<u32>() as u32;
-        let status = unsafe {
-            AudioObjectGetPropertyData(
-                device_id,
-                &address,
-                0,
-                ptr::null(),
-                &mut size,
-                (&raw mut running).cast::<c_void>(),
-            )
-        };
-        status == 0 && running != 0
+        device_flag(
+            device_id,
+            K_AUDIO_DEVICE_PROPERTY_DEVICE_IS_RUNNING_SOMEWHERE,
+        )
     }
 
     fn set_preferred_buffer_size(device_id: AudioObjectID, frames: u32) {
@@ -1438,7 +1391,7 @@ mod macos_hal {
 
             let cfg = current_tuned_config();
             let mut io_ctx = Box::new(IoContext {
-                engine: cfg.build_engine(f64::from(HEX_MICROPHONE_SAMPLE_RATE)),
+                engine: cfg.build_engine(),
             });
 
             let mut proc_id: AudioDeviceIOProcID = ptr::null_mut();
@@ -1664,11 +1617,8 @@ mod tests {
             "HexMicrophoneDriverCreate symbol must exist"
         );
 
-        // StartIO on Sink (3) and Mic (2), write 256 frames (5.33 ms at 48 kHz), read 256 frames.
+        // StartIO on Sink (4) and Mic (2), write 256 frames (5.33 ms at 48 kHz), read 256 frames.
         // Verify bit-exact transfer and < 20 ms latency.
-        let g_driver_sym = CString::new("gDriverRef").unwrap();
-        let _ = g_driver_sym;
-        // Call Initialize, StartIO, DoIOOperation via a small C-ABI wrapper or directly through the vtable:
         unsafe extern "C" {
             fn CFUUIDGetConstantUUIDWithBytes(
                 alloc: *const c_void,
