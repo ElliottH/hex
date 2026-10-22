@@ -623,7 +623,7 @@ fn main() -> Result<()> {
             preview_dictation,
         } => {
             let _instance = instance::acquire("listener")?;
-            hex_microphone::ensure_service_started();
+            hex_microphone::host_service();
             let launch = if preview_dictation {
                 meeting_watcher::Launch::DictationHudPreview
             } else {
@@ -789,7 +789,7 @@ fn main() -> Result<()> {
         Command::Listen { device } => {
             let _instance = instance::acquire("listener")?;
             let settings = app_settings::AppSettings::load()?;
-            hex_microphone::ensure_service_started();
+            hex_microphone::host_service();
             let events = events::EventLog::create(&event_path)?;
             let history = match history::History::open_default(settings.history_retention) {
                 Ok(history) => Some(history),

@@ -282,7 +282,9 @@ impl DictationWorker {
                         }
                     }
                 });
-                Some(Arc::new(engine))
+                let engine = Arc::new(engine);
+                engine.share();
+                Some(engine)
             }
             Err(error) => {
                 let _ = event_sender.send(WorkerEvent::ModelFailed(error.to_string()));
@@ -777,6 +779,22 @@ impl Drop for DictationInference {
 pub(crate) fn dictation_busy() -> bool {
     DICTATION_INFERENCE.load(Ordering::Acquire) > 0
         || crate::recording_environment::intentional_recording_active()
+}
+
+/// Runs `work` at utility QoS on the dictation inference thread, then
+/// restores its user-interactive class.
+pub(crate) fn at_background_priority<R>(work: impl FnOnce() -> R) -> R {
+    const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
+    const QOS_CLASS_UTILITY: u32 = 0x11;
+    unsafe extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+    }
+    // SAFETY: These configure only the calling thread using the public macOS
+    // pthread QoS API. Relative priority zero is valid for both classes.
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0) };
+    let result = work();
+    unsafe { pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) };
+    result
 }
 
 /// Runs the calling thread at utility QoS for background transcription.

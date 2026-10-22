@@ -141,7 +141,8 @@ While recording                                      // meetings.rolling
   -> 16 kHz streaming resampler -> chunker + echo envelope
      ├── First pause after 20 s (pause segmenter) -> chunk boundary
      └── No pause by 30 s -> hard cut; next chunk overlaps 2 s
-  -> Utility-QoS worker transcribes a chunk only while dictation is idle
+  -> Each chunk runs on dictation's loaded model, only while dictation is idle
+     └── A dictation request or live stream came first -> retried once idle
   -> Timed words -> sentences (punctuation or a 600 ms pause)
   -> transcript.rolling.ndjson: per-track coverage line, then entries
      ├── You entries publish only once the system track is transcribed past them
@@ -155,12 +156,19 @@ Stop & Transcribe
   -> Join on one timeline -> Echo suppression -> Final publication
 ```
 
-Design choice: a separate session of the selected model at utility QoS, loaded
-lazily on the first completed chunk, rather than a job class inside the dictation
-inference worker. Before each chunk it waits (up to 20 s per chunk) while
-`parakeet::dictation_busy()` reports an intentional capture or dictation
-inference. A chunk already running can still delay a dictation job by roughly
-one chunk's inference time, and the second model stays resident while recording.
+Design choice: chunks are background jobs on the dictation transcription engine
+(`TranscriptionEngine::background`), using whatever model dictation has loaded,
+rather than a second copy of the model (about 0.7 GB). Before each chunk the
+meeting waits (up to 20 s per chunk) while `parakeet::dictation_busy()` reports
+an intentional capture or dictation inference. A job never interrupts a live
+stream: one that arrives during a stream, or after a newer dictation request
+was sent, is turned away and retried 250 ms later, once dictation is idle. A
+chunk already running cannot be aborted (transcribe.cpp ignores its cancel
+callback on Metal), so a dictation request that lands mid-chunk waits for it:
+up to about 0.3 s for a 30 s chunk on the Pro. The job runs at utility QoS on
+the engine thread, which returns to user-interactive afterwards. Apple Speech runs outside the process, so with
+Apple Speech selected, and in a process without the engine (the CLI), the
+meeting loads its own transcriber as before.
 
 Seams: segments starting before the middle of an overlap belong to the earlier
 chunk, and repeated words (two to twelve) at the join are removed.
@@ -176,6 +184,28 @@ Command recognizer             115% of a core -> 22%
   └── update p50 21 -> 41 ms, p95 67 -> 127 ms (200 ms update interval)
 Rolling Parakeet               well under 1 s of compute per minute of audio
 ```
+
+Memory: observed 2026-10-22 on the Pro with an opt-in harness that runs the
+production writer, live draft, rolling, and final transcription against a
+recorded call replayed in real time (10 min), beside the warm dictation engine
+and the command recognizer, with a dictation every 30 s. It feeds packets
+directly, not through capture.
+
+```ts
+                        separate model    shared engine
+Idle app                   1531 MB           1506 MB
+Meeting peak               2808 MB           2072 MB
+After the meeting          1902 MB           1960 MB   // the draft's Moonshine
+Dictation finish, median     92 ms             94 ms
+Final transcript           202 entries, word for word identical
+```
+
+The live draft keeps its own Moonshine (about 0.4 GB). Two streams added to the
+command recognizer's transcriber dropped 553–631 draft packets per run, against
+none alone: Moonshine 0.0.71 keeps one streaming state per transcriber, so every
+switch between streams re-decodes the current segment. Its memory stays resident
+after the meeting until the last Moonshine unloads; `malloc_zone_pressure_relief`
+returned nothing.
 
 ### Echo Suppression
 
@@ -554,6 +584,12 @@ Granola import: see [granola-import.md](../plans/granola-import.md).
 - The live draft judges a Moonshine line whole: a line that mixes bleed with
   the user's own sentence stays hidden until rolling covers it.
 - The CPU change was measured on the Studio, not on the Pro during a call.
+- The shared-engine memory numbers come from the harness, not a recording in
+  the app with real capture and hotkey dictations.
+- The live draft's Moonshine (about 0.4 GB) is not shared or released while the
+  command recognizer stays loaded. Moonshine 0.1.5 changes the ORT session
+  setup but still keeps one streaming state per transcriber and breaks the C
+  API (header 30000); unmeasured.
 - Apple SpeechTranscriber for the live draft is evaluated, not implemented:
   [meeting-live-transcription.md](../plans/meeting-live-transcription.md).
 - Why the rolling worker stalled for over a minute on the Pro is unknown; slow

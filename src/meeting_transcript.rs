@@ -47,6 +47,8 @@ const SLOW_CHUNK: Duration = Duration::from_secs(5);
 /// A source whose untranscribed backlog exceeds this falls back to the WAV.
 const MAX_PENDING_CHUNKS: usize = 24;
 const DICTATION_WAIT: Duration = Duration::from_secs(20);
+/// Pause before retrying a chunk that dictation preempted.
+const PREEMPTED_RETRY: Duration = Duration::from_millis(250);
 const ECHO_WINDOW_MS: u64 = 1_500;
 /// Word-level segments closer than this are judged together.
 const UTTERANCE_GAP_MS: u64 = 700;
@@ -449,6 +451,110 @@ fn wait_for_dictation() {
     }
 }
 
+/// Transcribes meeting chunks. In the app this borrows the dictation
+/// engine's loaded model between dictations, at utility QoS, so a meeting
+/// never loads a second copy. A process without an engine, such as the CLI,
+/// loads its own.
+pub(super) struct ChunkModel {
+    selection: TranscriptionSelection,
+    owned: Option<Transcriber>,
+    unavailable: bool,
+}
+
+enum Chunked {
+    Done(Transcript),
+    /// A dictation request or live stream came first; retry once it is idle.
+    Preempted,
+    /// No model could be loaded.
+    Unavailable(color_eyre::Report),
+}
+
+impl ChunkModel {
+    pub(super) fn new(selection: TranscriptionSelection) -> Self {
+        Self {
+            selection,
+            owned: None,
+            unavailable: false,
+        }
+    }
+
+    /// Fails with the chunk's own transcription error.
+    fn transcribe(&mut self, samples: &[f32]) -> Result<Chunked> {
+        let engine = crate::transcription_engine::TranscriptionEngine::shared();
+        if let Some(engine) = &engine
+            && let Some(result) = Self::transcribe_shared(engine, samples)
+        {
+            self.owned = None;
+            return result;
+        }
+        // In the app, follow dictation's current choice, such as Apple Speech.
+        let selection = if engine.is_some() {
+            crate::app_settings::transcription_selection().1
+        } else {
+            self.selection.clone()
+        };
+        drop(engine);
+        if self
+            .owned
+            .as_ref()
+            .is_some_and(|model| !model.matches_selection(&selection))
+        {
+            self.owned = None;
+            self.unavailable = false;
+        }
+        if self.unavailable {
+            return Ok(Chunked::Unavailable(eyre!(
+                "meeting transcriber is unavailable"
+            )));
+        }
+        let model = match load_model(&mut self.owned, &selection) {
+            Ok(model) => model,
+            Err(error) => {
+                self.unavailable = true;
+                return Ok(Chunked::Unavailable(error));
+            }
+        };
+        model
+            .transcribe_segments(samples.to_vec())
+            .map(Chunked::Done)
+    }
+
+    /// `None` when the engine has no GGUF model loaded.
+    fn transcribe_shared(
+        engine: &crate::transcription_engine::TranscriptionEngine,
+        samples: &[f32],
+    ) -> Option<Result<Chunked>> {
+        let samples = samples.to_vec();
+        let ran = engine.background(move |model| {
+            // Apple Speech runs outside this process, so a meeting keeps its
+            // own rather than queue dictation behind it.
+            let transcriber = model
+                .active()
+                .filter(|model| matches!(model, Transcriber::Gguf(_)))?;
+            Some(crate::parakeet::at_background_priority(|| {
+                transcriber.transcribe_segments(samples)
+            }))
+        });
+        match ran {
+            Ok(None) => Some(Ok(Chunked::Preempted)),
+            Ok(Some(Some(result))) => Some(result.map(Chunked::Done)),
+            Ok(Some(None)) | Err(_) => None,
+        }
+    }
+
+    /// Transcribes `samples`, waiting out dictation as often as it preempts.
+    fn transcribe_blocking(&mut self, samples: &[f32]) -> Result<Transcript> {
+        loop {
+            wait_for_dictation();
+            match self.transcribe(samples)? {
+                Chunked::Done(transcript) => return Ok(transcript),
+                Chunked::Preempted => thread::sleep(PREEMPTED_RETRY),
+                Chunked::Unavailable(error) => return Err(error),
+            }
+        }
+    }
+}
+
 fn load_model<'a>(
     model: &'a mut Option<Transcriber>,
     selection: &TranscriptionSelection,
@@ -538,7 +644,7 @@ impl RollingFeed {
 pub(super) struct RollingOutcome {
     tracks: [Option<TrackTranscript>; 2],
     envelope: EchoEnvelope,
-    model: Option<Transcriber>,
+    model: ChunkModel,
 }
 
 impl Rolling {
@@ -582,7 +688,7 @@ fn run_rolling(
     let mut tracks: [Option<RollingTrack>; 2] = [None, None];
     let mut pending: VecDeque<(usize, Chunk)> = VecDeque::new();
     let mut envelope = EchoEnvelope::default();
-    let mut model = None;
+    let mut model = ChunkModel::new(selection.clone());
     let mut model_failed = false;
     loop {
         let mut disconnected = false;
@@ -599,14 +705,12 @@ fn run_rolling(
         if disconnected {
             break;
         }
-        if !pending.is_empty() && !model_failed && !crate::parakeet::dictation_busy() {
-            transcribe_pending(
-                &mut tracks,
-                &mut pending,
-                &mut model,
-                &mut model_failed,
-                selection,
-            );
+        // A preempted chunk falls through to the wait below before retrying.
+        if !pending.is_empty()
+            && !model_failed
+            && !crate::parakeet::dictation_busy()
+            && transcribe_pending(&mut tracks, &mut pending, &mut model, &mut model_failed)
+        {
             write_rolling_snapshot(directory, &tracks, &envelope);
             continue;
         }
@@ -645,13 +749,9 @@ fn run_rolling(
     }
     while !pending.is_empty() && !model_failed {
         wait_for_dictation();
-        transcribe_pending(
-            &mut tracks,
-            &mut pending,
-            &mut model,
-            &mut model_failed,
-            selection,
-        );
+        if !transcribe_pending(&mut tracks, &mut pending, &mut model, &mut model_failed) {
+            thread::sleep(PREEMPTED_RETRY);
+        }
     }
     let [system, microphone] = tracks;
     let complete = |track: Option<RollingTrack>, index: usize| {
@@ -717,33 +817,39 @@ fn ingest(
     }
 }
 
+/// Transcribes the oldest pending chunk. Returns `false`, keeping the chunk,
+/// when dictation preempted it.
 fn transcribe_pending(
     tracks: &mut [Option<RollingTrack>; 2],
     pending: &mut VecDeque<(usize, Chunk)>,
-    model: &mut Option<Transcriber>,
+    model: &mut ChunkModel,
     model_failed: &mut bool,
-    selection: &TranscriptionSelection,
-) {
+) -> bool {
     let Some((index, chunk)) = pending.pop_front() else {
-        return;
+        return true;
     };
     let Some(track) = tracks[index].as_mut() else {
-        return;
+        return true;
     };
-    track.pending = track.pending.saturating_sub(1);
     if track.failed {
-        return;
+        track.pending = track.pending.saturating_sub(1);
+        return true;
     }
-    let model = match load_model(model, selection) {
-        Ok(model) => model,
-        Err(error) => {
+    let started = Instant::now();
+    let result = match model.transcribe(&chunk.samples) {
+        Ok(Chunked::Done(transcript)) => Ok(transcript),
+        Ok(Chunked::Preempted) => {
+            pending.push_front((index, chunk));
+            return false;
+        }
+        Ok(Chunked::Unavailable(error)) => {
             tracing::warn!(%error, "rolling meeting transcription could not load the model");
             *model_failed = true;
-            return;
+            return true;
         }
+        Err(error) => Err(error),
     };
-    let started = Instant::now();
-    let result = model.transcribe_segments(chunk.samples.clone());
+    track.pending = track.pending.saturating_sub(1);
     if started.elapsed() > SLOW_CHUNK {
         tracing::warn!(
             elapsed_ms = started.elapsed().as_millis() as u64,
@@ -759,6 +865,7 @@ fn transcribe_pending(
             pending.retain(|(source, _)| *source != index);
         }
     }
+    true
 }
 
 /// Meeting-timeline milliseconds through which each source's rolling
@@ -898,7 +1005,11 @@ pub(super) fn transcribe(
     crate::parakeet::deprioritize_background_thread();
     let (mut rolled, mut envelope, mut model) = match rolling {
         Some(outcome) => (outcome.tracks, outcome.envelope, outcome.model),
-        None => ([None, None], EchoEnvelope::default(), None),
+        None => (
+            [None, None],
+            EchoEnvelope::default(),
+            ChunkModel::new(selection.clone()),
+        ),
     };
     let mut tracks = Vec::new();
     for (source, track) in [
@@ -912,7 +1023,6 @@ pub(super) fn transcribe(
                 envelope.clear(source);
                 transcribe_file(
                     &mut model,
-                    selection,
                     &directory.join(&track.file),
                     source,
                     origin_ms,
@@ -936,8 +1046,7 @@ pub(super) fn transcribe(
 }
 
 fn transcribe_file(
-    model: &mut Option<Transcriber>,
-    selection: &TranscriptionSelection,
+    model: &mut ChunkModel,
     path: &Path,
     source: MeetingSource,
     origin_ms: u64,
@@ -956,8 +1065,7 @@ fn transcribe_file(
     let mut block = Vec::with_capacity(source_rate as usize);
     let mut fed = 0;
     let mut transcribe_chunk = |chunk: Chunk, transcript: &mut TrackTranscript| -> Result<()> {
-        wait_for_dictation();
-        let result = load_model(model, selection)?.transcribe_segments(chunk.samples.clone())?;
+        let result = model.transcribe_blocking(&chunk.samples)?;
         transcript.accept(&chunk, result);
         Ok(())
     };

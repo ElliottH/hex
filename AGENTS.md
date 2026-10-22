@@ -89,7 +89,8 @@ substitute for source inspection or a second roadmap.
   whole-clip runs, and (macOS) model loads and switches. The capture owns its
   `LiveStream` and hands it to the finished clip; finishing returns a
   `PendingTranscript` whose wait enforces the stream deadline and falls back to
-  the whole clip.
+  the whole clip. On macOS it also runs background work (meeting chunks) that
+  yields to any dictation request sent before it starts.
 - `transcription_preparation`: application-owned model preparation shared by
   Settings and the menu bar, with one worker, latest-choice pending admission,
   cancellation fences, and an installed-only path that never downloads a model.
@@ -218,7 +219,8 @@ substitute for source inspection or a second roadmap.
   artifacts, Screen Recording permission checks, final local-model publication,
   the user-facing Markdown copy, and recovery.
 - `meeting_transcript`: streaming 16 kHz resampling, pause-aware overlapping
-  chunks, the utility-QoS rolling transcriber that yields to dictation, seam
+  chunks transcribed as background work on the dictation engine's loaded model
+  (a process without the engine, such as the CLI, loads its own), seam
   deduplication, echo suppression, and Markdown rendering.
 - `meeting_live`: bounded dual-stream Moonshine draft transcription,
   byte-offset transcript tailing, and the echo-filtered live view.
@@ -424,11 +426,16 @@ CoreAudio formats, AppleScript details, or event serialization.
   detected call app leaves the microphone, offer `Keep Recording` or
   `Stop & Transcribe`; never stop automatically. An active recording stays
   visible and stoppable from the menu bar without the Settings window.
-- Meeting transcription never blocks dictation: it runs on its own model session
-  at utility QoS, waits while an intentional dictation capture or dictation
-  inference is active, and keeps its queue (one-second audio blocks) and chunk
-  backlog bounded; a source that falls behind keeps what it transcribed and is
-  rebuilt from its WAV after Stop.
+- Meeting transcription defers to dictation and never loads a second copy of
+  the model: each chunk runs on the dictation engine's loaded model at utility
+  QoS, waits while an intentional dictation capture or dictation inference is
+  active, never interrupts a live stream, and is retried when a dictation
+  request was sent first. A chunk already running cannot be aborted on Metal,
+  so it can delay a dictation by one chunk's inference. It uses whatever model
+  dictation has loaded, so a model switch applies from the next chunk; Apple
+  Speech and a process without the engine use their own transcriber. Its queue
+  (one-second audio blocks) and chunk backlog stay bounded; a source that falls
+  behind keeps what it transcribed and is rebuilt from its WAV after Stop.
 - Meeting recording prevents idle sleep but does not apply dictation mute or
   pause-media behavior.
 - Apple Intelligence meeting notes run only after final publication, on a
