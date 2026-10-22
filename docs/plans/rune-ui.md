@@ -78,14 +78,14 @@ runs inside the Hex process (it is the default `hex` window on builds with
 `rune-ui`) and holds a `linux_app::HostHandle`: edits save `settings.json`
 through `HostHandle::save_settings`, which adopts them at once; listening,
 shortcuts, models, and updates are direct `HostRequest`s (`Desktop(…)`,
-`CaptureShortcut`, `SetShortcut`, `CancelShortcut`, `ChooseModel`,
+`CaptureShortcutFor`, `SetShortcut`, `CancelShortcut`, `ChooseModel`,
 `CancelModel`); the host thread wakes the window when its state changes, and
 History shares the host's store. Settings the host saved (a prepared model, a
 recorded shortcut) are adopted only when the host's copy changes, so a stale
-snapshot never reverts a fresh edit. Rune runs one window per event loop
-today, so the window opens once per process (at startup or on the first
-`Activate`) until Rune's windowless app lifetime lands; its timed redraws
-(drafts, retries) ride a quarter-second tick until `Tx::wake_after` exists. Text fields are drafts saved when
+snapshot never reverts a fresh edit. The window runs on `rune::App`
+(`windowless`, `on_close`, `AppHandle::activate`/`open`/`quit`) from
+`rune_ui::run_app`; its timed redraws (drafts, retries) ride a quarter-second
+tick while the window is open, until `Tx::wake_after` exists. Text fields are drafts saved when
 typing pauses for 250 ms (GPUI's debounce) or when the pane or mode changes.
 The pure helpers both front ends need (OpenCode catalog loading and copy,
 model presentation, Voice Action enablement, transformation reordering) are
@@ -195,8 +195,6 @@ session):
 - **Keyboard navigation** in menus, the model search, and the application
   search (arrow keys move a highlight in GPUI); Enter picks the first match.
 - **Modal focus trap** for the picker; the scrim blocks presses only.
-- Reopening and focusing the window in the same process, and consuming the
-  forwarded activation token: waits for Rune's windowless app lifetime.
 
 ## Rune changes (all on Rune `main`)
 
@@ -212,7 +210,7 @@ Built in Hex for now, to move when Rune has them: the picker's modal scrim
 (Kit's `motion-focus` agent is adding dialog, scrim, and focus trap), the
 searchable model popover (a `List` with search exists in rune-kit; a
 combobox component would replace Hex's), and the 250 ms draft debounce
-(polls on the service client's 4 Hz wakeups; a `Tx::wake_after` timer would
+(rides a 4 Hz tick while the window is open; a `Tx::wake_after` timer would
 make it exact).
 
 ## Every GPUI surface and what it needs

@@ -85,10 +85,11 @@ installed user unit; they forward to the Hex using that data directory or
 become it. `HEX_SYSTEMD_UNIT` names another unit for isolated tests.
 `hex status --lines 40` retains the explicit diagnostic-log view.
 
-The Rune window cannot yet reopen in the same process: Rune runs one window per
-event loop until its windowless app lifetime lands, so after closing the Rune
-window a launch only logs that it cannot reopen it. Quit and launch Hex again.
-The GPUI window (`--ui gpui`) reopens.
+The Rune window runs on Rune's app lifetime (`rune::App`): Hex starts it
+without a window, each `Activate` opens or focuses it with the forwarded token
+(on Wayland through `xdg_activation_v1`; without a token most compositors only
+mark it urgent), and closing it keeps the window's state for the next open.
+The GPUI window (`--ui gpui`) reopens too, but ignores activation tokens.
 
 ## Install A Published Build
 

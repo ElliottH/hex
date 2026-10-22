@@ -818,10 +818,13 @@ the single-instance socket and systemd lifecycle in
 observations. `hex app --hidden` and `hex start` start Hex without the window;
 `hex stop` equals `hex quit`. Closing the window does not mean Disable; the
 Settings card's Enable/Disable controls the listener, Quit Hex the process. No
-root daemon or new input grants. **Known gap:** the Rune window cannot reopen in
-the same process until Rune's windowless app lifetime lands; the GPUI window
-(`--ui gpui`) reopens. Activation tokens are forwarded but not yet consumed by
-either window.
+root daemon or new input grants. The Rune window runs on Rune's app lifetime:
+it opens or focuses with the forwarded activation token and keeps its state
+across close and reopen. The GPUI window (`--ui gpui`) reopens but ignores the
+token. Observed in a headless sway on apollo on 2026-10-22 with
+[test-wayland-paste.sh](../../scripts/test-wayland-paste.sh) for both toolkits
+(open in the same process, close, still answering, reopen, quit); not yet on
+niri, KWin, Mutter, or i3.
 
 Listener starts consume the host's settings snapshot; the foreground
 `hex dictate` command loads its own snapshot once. Invalid startup settings leave
@@ -837,7 +840,12 @@ audio device; it passed on apollo (Arch, niri) on 2026-10-22.
 `commands_route_only_to_a_started_listener`, and
 `adopting_saved_settings_restarts_only_for_listener_settings` use controlled
 runtime workers. The virtual-microphone and Wayland scripts open the window
-through a second launch; neither has run since the single-process change.
+through a second launch; the Wayland script passed on apollo (headless sway,
+`WLR_RENDERER=gles2`, Rune and GPUI builds), the X11 virtual-microphone script
+has not run since the single-process change. A throwaway `Type=notify` user unit
+on apollo (`HEX_SYSTEMD_UNIT`) started ready through `hex start`, restarted
+after SIGABRT and SIGKILL without a window, stopped cleanly on
+`systemctl stop` and `hex quit`, and an older `Type=simple` unit still started.
 These checks do not establish a physical desktop logout, cross-version signed
 update, or microphone/target-app success on the user's devices.
 
