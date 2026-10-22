@@ -383,13 +383,13 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> El {
         ));
     }
     rows.push(try_it(ui, p));
-    let content = col()
-        .key("content")
-        .px(24.0)
-        .pt(8.0)
-        .pb(24.0)
-        .gap(24.0)
-        .child(card(p, "fun-hex-microphone", rows));
+    let content =
+        col()
+            .key("content")
+            .px(24.0)
+            .pt(4.0)
+            .gap(24.0)
+            .child(card(p, "fun-hex-microphone", rows));
     super::scroll_body("fun-scroll", content)
 }
 

@@ -220,7 +220,6 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
                 .grow(1.0)
                 .shrink()
                 .px(24.0)
-                .pb(16.0)
                 .child(detail_header(
                     detail_title(p, &crate::app_window::event_summary(event)),
                     Vec::new(),

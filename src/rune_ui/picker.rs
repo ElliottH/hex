@@ -184,6 +184,8 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
         .radius(p.k.radius.xl)
         .fill(c.bg_base)
         .border(p.hair, c.border_weak)
+        // Children sit inside the border, so their fills never paint over it.
+        .padding(p.hair)
         .clip_soft(0.0)
         // Presses inside the panel stay inside.
         .on_press(|_: &mut Ui| {})
@@ -195,13 +197,17 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
                 .grow(1.0)
                 .shrink()
                 .child(
+                    // The deep fill follows the panel's rounded bottom-left
+                    // corner: Rune clips children to a rectangle, not to
+                    // their parent's radius.
                     col()
                         .key("language-column")
                         .w(220.0)
                         .h_full()
-                        .padding(12.0)
+                        .pt(8.0)
+                        .corners([0.0, 0.0, 0.0, (p.k.radius.xl - p.hair).max(0.0)])
                         .fill(c.bg_deep)
-                        .child(super::scroll_body("language-scroll", languages)),
+                        .child(super::scroll_body("language-scroll", languages.px(12.0))),
                 )
                 .child(
                     col()
@@ -209,8 +215,8 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
                         .grow(1.0)
                         .shrink()
                         .h_full()
-                        .padding(16.0)
-                        .child(super::scroll_body("model-scroll", models)),
+                        .pt(12.0)
+                        .child(super::scroll_body("model-scroll", models.px(16.0))),
                 ),
         );
     for shadow in &p.k.elevation.overlay {

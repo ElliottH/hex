@@ -779,7 +779,6 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
         .grow(1.0)
         .shrink()
         .px(24.0)
-        .pb(16.0)
         .child(detail_header(title, meta, actions))
         .child(super::scroll_body("meeting-transcript", body))
 }

@@ -308,7 +308,7 @@ pub(super) fn close_menu(ui: &mut Ui) {
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     use super::platform_settings as os;
     let caps = ui.platform.caps;
-    let mut content = col().key("content").px(24.0).pt(8.0).pb(24.0).gap(24.0);
+    let mut content = col().key("content").px(24.0).pt(4.0).gap(24.0);
     content = content
         .children(os::permissions_section(ui, p))
         .children(os::command_model_notice(ui, p))

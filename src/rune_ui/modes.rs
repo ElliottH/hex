@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rune::{Cursor, Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, spacer, text};
+use rune::{Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, spacer, text};
 use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
 
 use super::Ui;
@@ -579,7 +579,6 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         .h_full()
         .pl(16.0)
         .pr(8.0)
-        .pb(16.0)
         .child(super::scroll_body("modes-scroll", list));
     let body = row()
         .key("modes-body")
@@ -639,12 +638,7 @@ fn mode_row(
 fn detail(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let selection = ui.modes.selected;
     let current = mode(&ui.settings, selection);
-    let mut content = col()
-        .key("mode-detail-content")
-        .px(24.0)
-        .pt(4.0)
-        .pb(24.0)
-        .gap(16.0);
+    let mut content = col().key("mode-detail-content").px(24.0).gap(16.0);
     content = content.child(basics(ui, p, selection, current));
     content = content.child(
         text(tr("Text processing"))
@@ -1156,11 +1150,6 @@ fn transformations(ui: &Ui, p: Paint, current: &DictationMode) -> El {
             .w(20.0)
             .h_full()
             .center()
-            .cursor(if dragging.is_some() {
-                Cursor::Grabbing
-            } else {
-                Cursor::Grab
-            })
             .on_drag(move |ui: &mut Ui, d: &mut Drag, _: &mut Tx| {
                 drag_transformation(ui, &dragged, index, pitch, d)
             })

@@ -178,7 +178,7 @@ pub(crate) enum Destination {
 
 /// Shows `destination` in the window (the caller opens it).
 #[cfg(target_os = "macos")]
-pub(crate) fn show(ui: &mut Ui, destination: Destination) {
+pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
     let pane = match &destination {
         Destination::Settings | Destination::Models => Pane::Settings,
         Destination::Meetings(_) => Pane::Meetings,
@@ -188,7 +188,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination) {
         Destination::History => Pane::History,
     };
     if pane.shown(ui) {
-        ui.select_pane(pane);
+        ui.select_pane(pane, tx);
     }
     match destination {
         Destination::Models => {
@@ -599,10 +599,12 @@ impl Ui {
         }
     }
 
-    fn select_pane(&mut self, pane: Pane) {
+    /// Switches panes at once: the new pane replaces the old without a fade.
+    fn select_pane(&mut self, pane: Pane, tx: &mut Tx) {
         if self.pane == pane {
             return;
         }
+        tx.instant();
         self.flush_drafts();
         settings::cancel_capture(self);
         self.open = None;
@@ -733,6 +735,8 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .radius(p.k.radius.lg)
         .fill(p.k.c.bg_base)
         .border(p.hair, p.k.c.border_weak)
+        // Children sit inside the border, so their fills never paint over it.
+        .padding(p.hair)
         .clip_soft(0.0)
         .child(pane_header(p, ui.pane.title(), actions))
         .child(body);
@@ -824,7 +828,7 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
         .radius(p.k.radius.md)
         .hover(c.hover)
         .press(c.pressed)
-        .on_press(move |ui: &mut Ui| ui.select_pane(pane))
+        .on_press_tx(move |ui: &mut Ui, tx: &mut Tx| ui.select_pane(pane, tx))
         .child(icon(pane.icon(), 16.0).key("icon").color(if on {
             c.icon_base
         } else {
@@ -887,17 +891,24 @@ fn pane_header(p: Paint, title: &str, actions: Vec<El>) -> El {
         .children(actions)
 }
 
-/// A vertically scrolling pane body with Settings' column inset.
+/// How far a scroll body's top and bottom edges fade out.
+const SCROLL_FADE: (f32, f32) = (4.0, 24.0);
+
+/// A vertically scrolling body whose edges fade out. At rest its content
+/// sits clear of the fades, so the first and last borders, rings, and fills
+/// are never cut; content needing room beside the edges (bordered cards)
+/// pads itself horizontally.
 fn scroll_body(key: &str, content: El) -> El {
+    let (top, bottom) = SCROLL_FADE;
     col()
         .key(key)
         .grow(1.0)
         .shrink()
-        .clip_fade(0.0, 4.0, 0.0, 24.0)
+        .clip_fade(0.0, top, 0.0, bottom)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(content)
+        .child(col().key("inset").pt(top).pb(bottom).child(content))
 }
 
 // ---------------------------------------------------------------------------
