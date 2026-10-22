@@ -61,9 +61,26 @@ static HISTORY_ICON: Icon = Icon {
     body: include_str!("../assets/icons/history.svg"),
 };
 
+#[cfg(target_os = "linux")]
 pub(crate) fn run() {
     rune::set_app_id("hex");
-    rune::run(spec());
+    rune::App::new(spec()).run();
+}
+
+/// The window as a Rune app whose lifetime the caller chooses.
+#[cfg(target_os = "windows")]
+pub(crate) fn app() -> rune::App<Ui> {
+    rune::App::new(spec()).on_close(on_close)
+}
+
+/// Closing the window saves pending text edits and stops a shortcut
+/// recording, as leaving a pane does.
+#[cfg(target_os = "windows")]
+fn on_close(ui: &mut Ui, _: &mut Tx) {
+    ui.flush_drafts();
+    settings::cancel_capture(ui);
+    ui.open = None;
+    picker::close(ui);
 }
 
 fn spec() -> AppSpec<Ui> {

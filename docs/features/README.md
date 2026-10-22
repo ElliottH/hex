@@ -942,9 +942,9 @@ Linux `hex app --ui rune` (--features rune-ui) -> the Linux window on Rune // de
 Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
-├── Close hides the window (WM_CLOSE intercepted); Quit or no tray ends the process
+├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
 ├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
-└── Not yet: HUD (no Rune overlay window), custom caption, website rules, hidden start without a flash
+└── Not yet: HUD (no Rune overlay window), custom caption, website rules
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
