@@ -7,9 +7,9 @@
 //! that cannot stream always takes the offline path. Commands are handled in
 //! order on one thread, because a live stream holds the model's compute lease.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -326,7 +326,8 @@ impl TranscriptionEngine {
 }
 
 #[cfg(target_os = "macos")]
-static SHARED: Mutex<std::sync::Weak<TranscriptionEngine>> = Mutex::new(std::sync::Weak::new());
+static SHARED: std::sync::Mutex<std::sync::Weak<TranscriptionEngine>> =
+    std::sync::Mutex::new(std::sync::Weak::new());
 
 impl Drop for TranscriptionEngine {
     fn drop(&mut self) {
