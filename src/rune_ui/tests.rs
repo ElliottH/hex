@@ -11,7 +11,7 @@ const PANE_SIZE: (f32, f32) = (980.0, 760.0);
 const GOLDEN_SCALE: f32 = 2.0;
 
 fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
-    let mut state = Ui::with(AppSettings::default(), Service::fixture(), None);
+    let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()), None);
     let (_, apply) = SCENES
         .iter()
         .find(|(name, _)| *name == scene)
@@ -29,18 +29,15 @@ fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
     rt
 }
 
-fn sent(rt: &Runtime<Ui>) -> &[HostRequest] {
+fn sent(rt: &Runtime<Ui>) -> &[Request] {
     match &rt.state.service {
-        Service::Fixture { sent, .. } => sent,
+        Service::Fixture(sent) => sent,
         _ => panic!("fixtures never reach a host"),
     }
 }
 
 fn saved(rt: &Runtime<Ui>) -> usize {
-    match &rt.state.service {
-        Service::Fixture { saved, .. } => *saved,
-        _ => panic!("fixtures never reach a host"),
-    }
+    rt.state.saved
 }
 
 /// Presses an element by key and lets every animation settle.
@@ -99,10 +96,7 @@ fn toggles_save_through_the_host() {
 fn quit_hex_in_the_sidebar_asks_the_host_to_quit() {
     let mut rt = runtime("portal", true, PANE_SIZE);
     tap(&mut rt, "quit");
-    assert!(matches!(
-        rt.state.service,
-        Service::Fixture { quit: true, .. }
-    ));
+    assert!(rt.state.quit_requested);
 }
 
 #[test]
@@ -111,7 +105,7 @@ fn enabling_sends_the_listener_action() {
     tap(&mut rt, "toggle-listening");
     assert!(matches!(
         sent(&rt),
-        [HostRequest::Desktop(DesktopAction::StartListening)]
+        [Request::Desktop(DesktopAction::StartListening)]
     ));
 }
 
@@ -132,7 +126,7 @@ fn recording_a_shortcut_sends_the_chord_to_the_host() {
     tap(&mut rt, "dictation-hotkey");
     assert!(matches!(
         sent(&rt),
-        [HostRequest::CaptureShortcut(ShortcutTarget::Dictation)]
+        [Request::CaptureShortcutFor(ShortcutTarget::Dictation)]
     ));
     key(&mut rt, Key::Text("d".into()), Mods::default());
     assert!(matches!(
@@ -149,7 +143,7 @@ fn recording_a_shortcut_sends_the_chord_to_the_host() {
         ..Mods::default()
     };
     key(&mut rt, Key::Command('d'), mods);
-    let Some(HostRequest::SetShortcut { target, shortcut }) = sent(&rt).last() else {
+    let Some(Request::SetShortcut { target, shortcut }) = sent(&rt).last() else {
         panic!("no shortcut sent: {:?}", sent(&rt));
     };
     assert_eq!(*target, ShortcutTarget::Dictation);
@@ -163,7 +157,7 @@ fn escape_cancels_a_shortcut_recording() {
     let mut rt = runtime("capturing", true, GOLDEN_SIZE);
     key(&mut rt, Key::Escape, Mods::default());
     assert_eq!(rt.state.capture, Capture::Idle);
-    assert!(matches!(sent(&rt), [HostRequest::CancelShortcut]));
+    assert!(matches!(sent(&rt), [Request::CancelShortcut]));
 }
 
 #[test]
@@ -388,7 +382,7 @@ fn the_transcription_picker_asks_the_service_for_a_model() {
     tap(&mut rt, "model2/top/actions/choose-model");
     assert!(matches!(
         sent(&rt),
-        [HostRequest::ChooseModel {
+        [Request::ChooseModel {
             model: TranscriptionModelId::WhisperLargeV3Turbo,
             ..
         }]
@@ -403,7 +397,7 @@ fn the_transcription_picker_asks_the_service_for_a_model() {
 fn a_download_in_progress_can_be_cancelled() {
     let mut rt = runtime("picker-downloading", true, PANE_SIZE);
     tap(&mut rt, "model1/top/actions/cancel-model");
-    assert!(matches!(sent(&rt), [HostRequest::CancelModel]));
+    assert!(matches!(sent(&rt), [Request::CancelModel]));
 }
 
 #[test]
@@ -420,7 +414,7 @@ fn onboarding_downloads_the_model_through_the_service() {
     tap(&mut rt, "tour-continue");
     assert!(matches!(
         sent(&rt),
-        [HostRequest::ChooseModel {
+        [Request::ChooseModel {
             model: TranscriptionModelId::ParakeetUnifiedEnglish,
             ..
         }]

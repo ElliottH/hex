@@ -168,11 +168,13 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let event_path = log_dir.join("live.ndjson");
-    let result = (|| match Cli::parse().command.unwrap_or(Command::App {
+    let command = Cli::parse().command.unwrap_or(Command::App {
         hidden: false,
         ui: None,
         rune_args: Vec::new(),
-    }) {
+    });
+    let client = command.is_client();
+    let result = (|| match command {
         Command::App { rune_args, .. } if !rune_args.is_empty() => render_rune(rune_args),
         Command::App { hidden, ui, .. } => launch(&activation, !hidden, ui, event_path, shutdown),
         Command::Start => launch(&activation, false, None, event_path, shutdown),
@@ -274,7 +276,30 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         },
     })();
     crate::linux_desktop::shutdown();
-    result
+    match result {
+        // A keybinding or script wants one line, not a report.
+        Err(error) if client => {
+            eprintln!("hex: {error:#}");
+            std::process::exit(1);
+        }
+        result => result,
+    }
+}
+
+impl Command {
+    /// Commands that only talk to the running Hex or its systemd unit.
+    fn is_client(&self) -> bool {
+        matches!(
+            self,
+            Self::Stop
+                | Self::Quit
+                | Self::Restart
+                | Self::Dictation { .. }
+                | Self::VoiceAction { .. }
+                | Self::PasteLast
+                | Self::Status { lines: None }
+        )
+    }
 }
 
 /// Asks the running Hex; never starts one, so a keybinding fails fast.

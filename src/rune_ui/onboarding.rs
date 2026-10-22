@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 use rune::{El, col, el, row, text};
 use rune_kit::Progress;
 
+use super::Request;
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, keycaps, setting_row};
 use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
-use crate::linux_app::HostRequest;
 use crate::onboarding::{Effect, Flow, Input, ItemStatus, ModelProgress, SetupItem, Step, View};
 
 const WIDTH: f32 = 520.0;
@@ -121,7 +121,7 @@ fn apply(ui: &mut Ui, effect: Effect) {
         Effect::DownloadModel => {
             if crate::transcription_models::validate(&ui.settings.transcription).is_ok() {
                 let selection = ui.settings.transcription.clone();
-                ui.send(HostRequest::ChooseModel {
+                ui.send(Request::ChooseModel {
                     model: selection.model,
                     language: selection.language,
                 });

@@ -671,7 +671,10 @@ pub fn restart() -> Result<()> {
     if !supervised() {
         bail!("Only Hex started by its systemd unit restarts; run `hex quit`, then launch it");
     }
-    write_session_environment()?;
+    // Without a desktop (over SSH), keep the one Hex last ran in.
+    if graphical_session() || !session_environment_path()?.exists() {
+        write_session_environment()?;
+    }
     systemctl(&["restart"])
 }
 
@@ -732,12 +735,18 @@ fn session_environment(get: impl Fn(&str) -> Option<String>) -> Result<String> {
     Ok(body)
 }
 
+fn graphical_session() -> bool {
+    ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|key| !std::env::var(key).unwrap_or_default().is_empty())
+}
+
+fn session_environment_path() -> Result<PathBuf> {
+    Ok(crate::app_paths::support_dir()?.join("session.env"))
+}
+
 fn write_session_environment() -> Result<()> {
-    if std::env::var("DISPLAY").unwrap_or_default().is_empty()
-        && std::env::var("WAYLAND_DISPLAY")
-            .unwrap_or_default()
-            .is_empty()
-    {
+    if !graphical_session() {
         bail!("Start Hex from your graphical login session");
     }
     let directory = crate::app_paths::support_dir()?;
@@ -752,7 +761,7 @@ fn write_session_environment() -> Result<()> {
     let result = (|| -> Result<()> {
         file.write_all(body.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&temporary, directory.join("session.env"))?;
+        fs::rename(&temporary, session_environment_path()?)?;
         Ok(())
     })();
     if result.is_err() {

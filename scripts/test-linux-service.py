@@ -134,11 +134,14 @@ with tempfile.TemporaryDirectory(prefix="hex-instance-", dir=os.environ.get("TMP
         assert printed.returncode == 0, printed.stderr
         printed = json.loads(printed.stdout)
         assert printed["pid"] == instance.pid
-        assert printed["desktop"]["listener"]["shortcuts"] == "Registered"
+        # No listener has registered shortcuts, so none is claimed, not even X11's.
+        assert printed["desktop"]["listener"]["shortcuts"] == "Unregistered"
 
-        # Keybinding commands need a listening Hex; they fail fast without one.
+        # Keybinding commands need a listening Hex; they fail fast without one,
+        # with one line rather than an error report.
         refused = run("dictation", "toggle")
         assert refused.returncode != 0 and "not listening" in refused.stderr, refused.stderr
+        assert refused.stderr.startswith("hex: ") and refused.stderr.count("\n") == 1, refused.stderr
 
         # Version 1 (service/Settings) clients get a version error, not a hang.
         with connection() as client:
@@ -159,6 +162,7 @@ with tempfile.TemporaryDirectory(prefix="hex-instance-", dir=os.environ.get("TMP
         assert path.exists()
         missing = run("paste-last")
         assert missing.returncode != 0 and "not running" in missing.stderr, missing.stderr
+        assert missing.stderr.count("\n") == 1, missing.stderr
 
         # Two racing launches produce one instance; the other forwards and exits 0.
         first, second = spawn("start"), spawn("start")

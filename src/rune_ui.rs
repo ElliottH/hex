@@ -1,16 +1,19 @@
-//! The Linux window on Rune, the default on builds with `rune-ui`.
+//! The experimental Rune front end for Linux and Windows (`hex app --ui rune`).
 //!
-//! It runs in the Hex process beside the host (`linux_app::HostHandle`):
-//! edits save `settings.json` through the host, which adopts them at once,
-//! and listening, shortcuts, models, and updates are direct host requests.
-//! The host wakes the window when its state changes. It has the same panes
-//! Linux shows in GPUI (Settings, Modes, Voice Action, History), the
-//! transcription picker, and first-run setup, drawn with `rune-kit`'s
-//! components in OpenCode's design language (`rune-theme-opencode`), not
-//! Hex's GPUI design tokens.
+//! The window talks to a host in the same process: on Linux the dictation
+//! host beside it (`linux_host`, the default window on `rune-ui` builds); on
+//! Windows the runtime thread `windows_rune` starts (`windows_host`). Either
+//! way it saves `settings.json` through the host, which adopts it, and sends
+//! the same requests for listening, shortcuts, models, and updates. It has the panes GPUI shows
+//! there (Settings, Modes, Voice Action, History), the transcription picker,
+//! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
+//! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
 
 mod controls;
 mod history;
+#[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
+#[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
+mod host;
 mod models;
 mod modes;
 mod onboarding;
@@ -18,7 +21,7 @@ mod picker;
 mod settings;
 mod voice_action;
 
-use std::sync::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rune::{AppSpec, Cx, El, Icon, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, text};
@@ -29,10 +32,9 @@ use crate::desktop_host::{
     DesktopTranscriptionSnapshot, DesktopUpdateStatus,
 };
 use crate::desktop_i18n::{tr, tr_fill};
-use crate::linux_app::{HostHandle, HostRequest};
-use crate::linux_service::{Activation, ShortcutTarget};
 use crate::transcription_models::TranscriptionModelId;
 use controls::Paint;
+use host::{Backend, Request, ShortcutTarget};
 use settings::Capture;
 
 /// How long typing pauses before a text field's edit is saved, as in GPUI.
@@ -59,29 +61,28 @@ static HISTORY_ICON: Icon = Icon {
     body: include_str!("../assets/icons/history.svg"),
 };
 
-/// The host the next window opens on; `AppSpec::init` takes no arguments.
-static HOST: Mutex<Option<HostHandle>> = Mutex::new(None);
+#[cfg(target_os = "windows")]
+pub(crate) fn run() {
+    rune::set_app_id("hex");
+    rune::run(spec());
+}
 
-/// Opens the window beside `host` and returns when it closes. The seam
-/// `linux_app::run_windows` drives; Rune's windowless app lifetime will let
-/// it reopen and focus the window and consume `activation`.
-pub(crate) fn run_window(host: HostHandle, _activation: Activation) {
-    struct Closed;
-    impl Drop for Closed {
-        fn drop(&mut self) {
-            HOST.lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take();
-        }
-    }
-    *HOST.lock().unwrap() = Some(host);
-    let _closed = Closed;
+/// Opens the Linux window beside `host` and returns when it closes: the
+/// window side of `linux_app`'s seam. Rune's windowless app lifetime will
+/// let the seam reopen and focus it and consume `activation`.
+#[cfg(target_os = "linux")]
+pub(crate) fn run_window(
+    host: crate::linux_app::HostHandle,
+    activation: crate::linux_service::Activation,
+) {
+    let _open = host::open(host, activation);
     rune::set_app_id("hex");
     rune::run(spec());
 }
 
 /// `hex app -- --snap out.png --scene …`: a headless render of a fixture
-/// scene, or `live` for the running Hex's status.
+/// scene, or `live` for the running Hex's `hex status`.
+#[cfg(target_os = "linux")]
 pub(crate) fn render() {
     rune::run(spec());
 }
@@ -103,34 +104,27 @@ fn spec() -> AppSpec<Ui> {
 
 /// Where the window sends its requests.
 enum Service {
-    Live(HostHandle),
+    /// Not connected yet: `setup` connects unless a scene chose a fixture.
+    Pending,
+    Live(Box<Backend>),
     /// Snapshots and tests: requests are recorded, never sent.
-    Fixture {
-        sent: Vec<HostRequest>,
-        /// Settings saves.
-        saved: usize,
-        quit: bool,
-    },
+    Fixture(Vec<Request>),
 }
 
-impl Service {
-    fn fixture() -> Self {
-        Self::Fixture {
-            sent: Vec::new(),
-            saved: 0,
-            quit: false,
-        }
-    }
+/// The host's latest state.
+struct HostState {
+    view: ServiceView,
+    settings: AppSettings,
 }
 
-/// What the window shows of the host, from its latest snapshot.
+/// What the window shows of the service, from its latest snapshot.
 #[derive(Clone, PartialEq)]
 struct ServiceView {
     listener: DesktopListenerSnapshot,
     operation_error: Option<String>,
     transcription: DesktopTranscriptionSnapshot,
     update_status: DesktopUpdateStatus,
-    /// The host is recording or saving a shortcut.
+    /// The service is recording or saving a shortcut.
     editing: bool,
 }
 
@@ -196,9 +190,11 @@ pub(crate) struct Ui {
     settings: AppSettings,
     service: Service,
     view: Option<ServiceView>,
-    /// A save, policy change, or host request that failed here.
+    /// A save or policy change that failed here.
     error: Option<String>,
-    /// The settings the host last reported, to adopt only its changes.
+    /// Why the client cannot reach the service.
+    connection_error: Option<String>,
+    /// The settings the service last reported, to adopt only its changes.
     service_settings: Option<AppSettings>,
     pane: Pane,
     open: Option<Menu>,
@@ -207,7 +203,7 @@ pub(crate) struct Ui {
     confirm_release: bool,
     capture: Capture,
     hints: TextEdit,
-    /// The model the host was last seen preparing, and since when.
+    /// The model the service was last seen preparing, and since when.
     preparing: Option<(TranscriptionModelId, Instant)>,
     /// When a text field last changed without being saved.
     draft_since: Option<Instant>,
@@ -217,23 +213,26 @@ pub(crate) struct Ui {
     modes: modes::ModesPane,
     picker: picker::Picker,
     tour: Option<onboarding::Tour>,
+    /// Windows' startup registration; `None` where Hex has no such row.
+    launch_at_login: Option<Result<bool, String>>,
+    /// Settings saves and Quit Hex a fixture recorded.
+    saved: usize,
+    quit_requested: bool,
 }
 
 impl Ui {
     fn load() -> Self {
-        let Some(host) = HOST.lock().unwrap().clone() else {
-            // A headless render (`--snap`) without a scene shows defaults.
-            return fixture(DesktopShortcuts::Registered);
+        let (settings, error) = match AppSettings::load() {
+            Ok(settings) => (settings, None),
+            Err(error) => (AppSettings::default(), Some(format!("{error:#}"))),
         };
-        let snapshot = host.snapshot();
-        crate::desktop_i18n::apply(snapshot.settings.ui_language.as_deref());
-        let history = host.history();
-        let mut ui = Self::with(snapshot.settings, Service::Live(host), None);
-        ui.history = history::HistoryPane::shared(history);
+        crate::desktop_i18n::apply(settings.ui_language.as_deref());
+        let mut ui = Self::with(settings, Service::Pending, error);
+        ui.history = history::HistoryPane::shared(host::history(ui.settings.history_retention));
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
         ui.tour = onboarding::Tour::start(&ui.settings);
-        poll(&mut ui, 0.0, &mut Tx::default());
+        ui.launch_at_login = host::launch_at_login();
         ui
     }
 
@@ -245,6 +244,7 @@ impl Ui {
             service,
             view: None,
             error,
+            connection_error: None,
             service_settings: None,
             pane: Pane::Settings,
             open: None,
@@ -260,6 +260,9 @@ impl Ui {
             modes,
             picker: picker::Picker::default(),
             tour: None,
+            launch_at_login: None,
+            saved: 0,
+            quit_requested: false,
         }
     }
 
@@ -267,19 +270,20 @@ impl Ui {
         matches!(self.service, Service::Live(_))
     }
 
-    fn send(&mut self, request: HostRequest) {
+    fn send(&mut self, request: Request) {
         match &mut self.service {
-            Service::Live(host) => {
-                if let Err(error) = host.request(request) {
+            Service::Live(client) => {
+                if let Err(error) = client.send(request) {
                     self.error = Some(format!("{error:#}"));
                 }
             }
-            Service::Fixture { sent, .. } => sent.push(request),
+            Service::Fixture(sent) => sent.push(request),
+            Service::Pending => {}
         }
     }
 
-    /// Saves the change through the host, which adopts it at once. A failed
-    /// save leaves the shown settings alone.
+    /// Saves `settings.json` through the host, which adopts the change. A
+    /// failed save leaves the shown settings alone.
     fn update(&mut self, change: impl FnOnce(&mut AppSettings)) -> bool {
         let mut candidate = self.drafted();
         change(&mut candidate);
@@ -288,13 +292,14 @@ impl Ui {
 
     fn commit(&mut self, candidate: AppSettings) -> bool {
         match &mut self.service {
-            Service::Live(host) => {
-                if let Err(error) = host.save_settings(candidate.clone()) {
+            Service::Live(backend) => {
+                if let Err(error) = backend.save(&candidate) {
                     self.error = Some(format!("{error:#}"));
                     return false;
                 }
             }
-            Service::Fixture { saved, .. } => *saved += 1,
+            Service::Fixture(_) => self.saved += 1,
+            Service::Pending => {}
         }
         self.error = None;
         self.settings = candidate;
@@ -350,9 +355,8 @@ impl Ui {
         self.shortcuts() != Some(&DesktopShortcuts::Commands)
     }
 
-    /// Adopts settings the host saved (a prepared model, a recorded
-    /// shortcut), unless they are the stale copy of an edit this window just
-    /// made.
+    /// Adopts settings another client or the service saved, unless they are
+    /// the stale copy of an edit this window just made.
     fn adopt(&mut self, service: AppSettings) {
         if self.service_settings.as_ref() == Some(&service) {
             return;
@@ -371,13 +375,14 @@ impl Ui {
         self.service_settings = Some(service);
     }
 
-    /// Saves pending edits, then lets the host drain its work and exit.
+    /// Saves pending edits, then lets the host finish its work and exit.
     fn quit(&mut self) {
         self.flush_drafts();
         settings::cancel_capture(self);
         match &mut self.service {
-            Service::Live(host) => host.quit(),
-            Service::Fixture { quit, .. } => *quit = true,
+            Service::Live(backend) => backend.quit(),
+            Service::Fixture(_) => self.quit_requested = true,
+            Service::Pending => {}
         }
     }
 
@@ -416,26 +421,15 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn setup(ui: &mut Ui, waker: Waker) {
-    if let Service::Live(host) = &ui.service {
-        let tick = waker.clone();
-        host.window_opened(waker);
-        // Drafts, the OpenCode retry, and the setup beat are timed; until
-        // Rune has `wake_after`, a quarter-second tick redraws them.
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(DRAFT_DELAY);
-                if HOST.lock().unwrap().is_none() {
-                    break;
-                }
-                tick();
-            }
-        });
+    if matches!(ui.service, Service::Pending) {
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
+        ui.service = Service::Live(Box::new(Backend::connect(wake)));
     }
 }
 
-/// Runs before every frame: adopts host changes, follows shortcut capture,
-/// model preparation, the OpenCode catalog, history, and setup, and saves
-/// paused text edits. True when anything shown changed.
+/// Runs before every frame: adopts service updates, follows shortcut
+/// capture, model preparation, the OpenCode catalog, history, and setup, and
+/// saves paused text edits. True when anything shown changed.
 fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     let now = Instant::now();
     let mut changed = settings::advance_capture(ui);
@@ -443,27 +437,26 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.models.poll(ui.live());
     changed |= ui.history.poll(ui.pane == Pane::History);
     changed |= ui.modes.poll(ui.live());
-    if let Service::Live(host) = &ui.service {
-        if host.finished() {
-            // Quit drained the host; Rune cannot end its event loop from
-            // here until its windowless app lifetime lands.
-            std::process::exit(0);
+    if let Service::Live(backend) = &mut ui.service {
+        backend.refresh();
+        let error = backend.error();
+        let (view, settings) = match backend.state() {
+            Some(state) => (Some(state.view), Some(state.settings)),
+            None => (None, None),
+        };
+        if error != ui.connection_error {
+            ui.connection_error = error;
+            changed = true;
         }
-        let snapshot = host.snapshot();
-        let view = Some(ServiceView {
-            listener: snapshot.desktop.listener.clone(),
-            operation_error: snapshot.desktop.operation_error.clone(),
-            transcription: snapshot.desktop.transcription.clone(),
-            update_status: snapshot.desktop.update_status,
-            editing: snapshot.editing,
-        });
         if view != ui.view {
             ui.view = view;
             changed = true;
         }
-        let before = ui.settings.clone();
-        ui.adopt(snapshot.settings);
-        changed |= before != ui.settings;
+        if let Some(settings) = settings {
+            let before = ui.settings.clone();
+            ui.adopt(settings);
+            changed |= before != ui.settings;
+        }
     }
     let preparing = ui
         .view
@@ -523,17 +516,18 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
     for pane in Pane::ALL {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
-    let update = matches!(
-        ui.view.as_ref().map(|view| view.update_status),
-        Some(DesktopUpdateStatus::ReadyToRestart)
-    )
-    .then(|| {
+    let action = match ui.view.as_ref().map(|view| view.update_status) {
+        Some(DesktopUpdateStatus::ReadyToRestart) => Some(DesktopAction::RestartIntoUpdate),
+        Some(DesktopUpdateStatus::Available) => Some(DesktopAction::OpenUpdate),
+        _ => None,
+    };
+    let update = action.map(|action| {
         controls::button(
             p,
             "sidebar-update",
             tr("Update"),
             controls::ButtonKind::Secondary,
-            |ui: &mut Ui, _| ui.send(HostRequest::Desktop(DesktopAction::RestartIntoUpdate)),
+            move |ui: &mut Ui, _| ui.send(Request::Desktop(action.clone())),
         )
     });
     col()
@@ -548,7 +542,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         .child(nav)
         .child(el().key("spacer").grow(1.0))
         .children(update)
-        .child(quit_item(p))
+        .children(host::QUIT_IN_WINDOW.then(|| quit_item(p)))
         .child(
             text(tr_fill("Version {}", env!("CARGO_PKG_VERSION")))
                 .key("version")
@@ -655,28 +649,19 @@ fn scroll_body(key: &str, content: El) -> El {
 type Scene = (&'static str, fn(&mut Ui));
 
 const SCENES: &[Scene] = &[
-    // The running Hex's real state, for headless snapshots and scripts
-    // (`--snap`), read through `hex status`.
+    // The running service's real state, for headless snapshots and scripts
+    // (`--snap`): waits for its first snapshot instead of drawing
+    // "Connecting…" at virtual time zero.
     ("live", |ui| {
-        *ui = fixture(DesktopShortcuts::Registered);
-        match crate::linux_service::request(crate::linux_service::Request::Status) {
-            Ok(status) => {
-                crate::desktop_i18n::apply(status.settings.ui_language.as_deref());
-                ui.view = Some(ServiceView {
-                    listener: status.desktop.listener,
-                    operation_error: status.desktop.operation_error,
-                    transcription: status.desktop.transcription,
-                    update_status: status.desktop.update_status,
-                    editing: status.editing,
-                });
-                ui.settings = status.settings;
-                ui.modes.reload(&ui.settings);
-            }
-            Err(error) => {
-                ui.view = None;
-                ui.error = Some(error.to_string());
-            }
+        *ui = Ui::load();
+        let mut backend = Backend::connect(Arc::new(|| {}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while backend.state().is_none() && backend.error().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(25));
+            backend.refresh();
         }
+        ui.service = Service::Live(Box::new(backend));
+        poll(ui, 0.0, &mut Tx::default());
     }),
     ("portal", |ui| *ui = fixture(portal_shortcuts())),
     ("commands", |ui| *ui = fixture(DesktopShortcuts::Commands)),
@@ -788,7 +773,7 @@ fn portal_shortcuts() -> DesktopShortcuts {
     ])
 }
 
-/// Deterministic settings and host state matching a typical Wayland
+/// Deterministic settings and service state matching a typical Wayland
 /// desktop with the shortcuts portal.
 fn fixture(shortcuts: DesktopShortcuts) -> Ui {
     crate::desktop_i18n::apply(Some("en"));
@@ -805,7 +790,7 @@ fn fixture(shortcuts: DesktopShortcuts) -> Ui {
         paste_with_shift: true,
         ..AppSettings::default()
     };
-    let mut ui = Ui::with(settings, Service::fixture(), None);
+    let mut ui = Ui::with(settings, Service::Fixture(Vec::new()), None);
     ui.models = models::Models::fixture();
     ui.picker.installed = Some(vec![TranscriptionModelId::ParakeetUnifiedEnglish]);
     ui.view = Some(ServiceView {
@@ -829,5 +814,5 @@ fn fixture(shortcuts: DesktopShortcuts) -> Ui {
     ui
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;

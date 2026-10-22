@@ -727,12 +727,15 @@ Linux beta                               // not macOS feature parity
 │   ├── Wayland + GlobalShortcuts portal -> Desktop grants the triggers
 │   │   ├── Settings shows the granted trigger (GNOME/KDE may assign another)
 │   │   └── Refused shortcut -> "Not granted" + error; the rest keep working
-│   └── Wayland without the portal -> Bind `hex` commands in the desktop
-│       └── Settings hides shortcut rows and lists the commands
+│   ├── Wayland without the portal -> Bind `hex` commands in the desktop
+│   │   └── Settings hides shortcut rows and lists the commands
+│   └── Listener starting or stopped -> `hex status` reports Unregistered,
+│       never the X11 mode
 ├── hex dictation start|stop|toggle|cancel, hex voice-action start|stop|toggle,
 │   hex paste-last -> Same events as a shortcut       // linux.commands
 │   ├── Idempotent: start while recording / stop while idle -> Nothing
-│   └── Hex missing or not listening -> Clear error, non-zero exit
+│   └── Hex missing or not listening -> One-line error, non-zero exit
+│       // as for hex quit|restart|status
 ├── Escape -> Cancel active capture, not newest accepted job
 │   ├── Bound only while recording (portal: own session, also with held modifiers)
 │   └── X11 grab conflict / portal refusal -> Warn without stopping dictation
@@ -803,6 +806,7 @@ Linux process                            // maintain.linux-service
 │   └── Uncommitted shortcut capture -> Cancel and restore the prior listening state
 ├── Crash -> systemd Restart=on-failure -> Hex without a window
 ├── Update -> Restart the unit -> Hex reopens the window
+├── hex restart without a display (SSH) -> Keep the saved session.env
 └── Window fails (no display, no GPU) -> Logged; Hex keeps running
 ```
 
@@ -839,7 +843,10 @@ update, or microphone/target-app success on the user's devices.
 
 `malformed_settings_cannot_start_even_after_dismissing_the_error` in
 [linux_app.rs](../../src/linux_app.rs) checks the failure gate and recovery after a
-simulated successful settings commit. It has **not been executed on Linux**.
+simulated successful settings commit. It selects a model never installed on
+Linux, so the resumed start stops at `Model required` instead of opening the
+microphone on a machine with the real model; it passed on apollo on 2026-10-22
+beside the live service.
 `listener_startup_ignores_the_previous_session_until_a_new_one_arrives` checks the
 listener owner's startup observation and stop signal; the exact production owner
 and test passed in an isolated standard-library-only Rust harness on macOS. That
@@ -859,6 +866,7 @@ Linux Settings > Sound volume             // dictate.feedback.linux; X11 + Wayla
 
 Capture                                  // hex app and hex dictate
 ├── Shortcut starts capture -> Queue start sound immediately, before audio arrives
+├── Hold passes 300 ms -> While dictating mute/pause begins, never at the press
 ├── Finish retained recording -> Stop sound at the release, while the 200 ms
 │   tail is still captured; a muted output unmutes first   // dictate.stop-tone
 │   └── Clip turns out near-silent -> Stop sound already played, nothing pasted
@@ -875,7 +883,10 @@ nonblocking. Output preparation failures are
 logged without blocking dictation. The Settings window saves the volume to
 `settings.json` and the service reloads it without restarting the listener. The start sound does not wait
 for the 300 ms capture-retention threshold; input delivery and audio-device
-latency still apply.
+latency still apply. **While dictating** mute or pause does: the audio loop
+requests it when the capture's audio reaches 300 ms past the press, and not
+during a release tail. Until 2026-10-22 the service muted at the press. This
+ordering is checked by reading the loop, not by a test or a muted device.
 
 Checks: `bundled_recording_sounds_decode_without_an_audio_device` and
 `feedback_admission_never_waits_for_playback` in the player, plus
@@ -943,6 +954,12 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
 └── Not yet: app file chooser, app icons, drag reorder, right-click delete
+Windows `hex app --ui rune` (--features rune-ui) -> one tray process, Rune window // dev.rune-ui-windows
+├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
+├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
+├── Close hides the window (WM_CLOSE intercepted); Quit or no tray ends the process
+├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
+└── Not yet: HUD (no Rune overlay window), custom caption, website rules, hidden start without a flash
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -967,6 +984,12 @@ adapter and do not prove a real window, input method, or physical shortcut.
 Before the single-process change, a headless script against an isolated
 service saved a new mode, a correction, and Voice Action. See
 [the Rune port plan](../plans/rune-ui.md) for what was observed.
+
+`dev.rune-ui-windows` lives in [windows_rune.rs](../../src/windows_rune.rs) and
+[rune_ui/windows_host.rs](../../src/rune_ui/windows_host.rs). It has only
+been cross-compiled (`cargo xwin check` and `clippy -D warnings` for
+`x86_64-pc-windows-msvc`, with the transcribe.cpp build stubbed out); it has
+never run on Windows, and no test covers it.
 
 `incremental_projection_matches_snapshot_after_updates_and_partial_writes` in
 [meeting_live.rs](../../src/meeting_live.rs) compares the incremental transcript
