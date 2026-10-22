@@ -35,11 +35,7 @@ enum Command {
         /// Start the resident listener without showing the Settings window.
         #[arg(long)]
         hidden: bool,
-        /// Which front end draws the window: GPUI or the experimental Rune
-        /// (`--features rune-ui`).
-        #[arg(long, value_enum, default_value = "gpui")]
-        ui: AppUi,
-        /// Arguments for the Rune front end, such as `--snap out.png --scene modes`.
+        /// Arguments for a headless render, such as `--snap out.png --scene modes`.
         #[arg(last = true)]
         rune_args: Vec<String>,
     },
@@ -75,12 +71,6 @@ enum Command {
         #[command(subcommand)]
         command: ModelCommand,
     },
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum AppUi {
-    Gpui,
-    Rune,
 }
 
 #[derive(Subcommand)]
@@ -150,7 +140,6 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
     // Parse first so `--version` and `--help` exit without creating app data.
     let command = Cli::parse().command.unwrap_or(Command::App {
         hidden: false,
-        ui: AppUi::Gpui,
         rune_args: Vec::new(),
     });
     let log_dir = crate::app_paths::logs_dir()?;
@@ -169,19 +158,15 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
 
     let event_path = log_dir.join("live.ndjson");
     match command {
-        Command::App {
-            hidden,
-            ui,
-            rune_args,
-        } => {
-            // Rune's snapshot flags print to the terminal that ran them.
-            if rune_args.is_empty() {
-                detach_from_console();
+        Command::App { hidden, rune_args } => {
+            // A headless render (`--snap`) draws fixtures without starting
+            // the runtime and prints to the terminal that ran it.
+            if !rune_args.is_empty() {
+                crate::rune_ui::app().args(rune_args).run();
+                return Ok(());
             }
-            match ui {
-                AppUi::Gpui => crate::windows_app::open(event_path, shutdown, hidden),
-                AppUi::Rune => open_rune(event_path, shutdown, hidden, rune_args),
-            }
+            detach_from_console();
+            crate::windows_rune::open(event_path, shutdown, hidden)
         }
         Command::Listen { device, selection } => {
             shutdown.store(false, Ordering::Relaxed);
@@ -225,27 +210,6 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Status { lines } => print_status(&event_path, lines),
         Command::Model { command } => run_model_command(command, shutdown),
     }
-}
-
-/// Rune reads its own flags (`--snap`, `--scene`, …) from the process
-/// arguments; a headless run draws fixtures without starting the runtime.
-#[cfg(feature = "rune-ui")]
-fn open_rune(
-    event_path: PathBuf,
-    shutdown: &'static AtomicBool,
-    hidden: bool,
-    rune_args: Vec<String>,
-) -> Result<()> {
-    if !rune_args.is_empty() {
-        crate::rune_ui::app().args(rune_args).run();
-        return Ok(());
-    }
-    crate::windows_rune::open(event_path, shutdown, hidden, rune_args)
-}
-
-#[cfg(not(feature = "rune-ui"))]
-fn open_rune(_: PathBuf, _: &'static AtomicBool, _: bool, _: Vec<String>) -> Result<()> {
-    bail!("this Hex was built without the Rune front end; rebuild with `--features rune-ui`")
 }
 
 fn detach_from_console() {

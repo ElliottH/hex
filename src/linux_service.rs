@@ -622,7 +622,7 @@ pub enum Launch {
 
 /// `hex`, `hex app`, and `hex start`: forward to the running instance, start
 /// the systemd unit, or tell the caller to become the instance.
-pub fn launch(activation: &Activation, show: bool, supervise: bool) -> Result<Launch> {
+pub fn launch(activation: &Activation, show: bool) -> Result<Launch> {
     let activate = || Request::Activate {
         activation: activation.clone(),
         show,
@@ -630,15 +630,15 @@ pub fn launch(activation: &Activation, show: bool, supervise: bool) -> Result<La
     };
     match request(activate()) {
         Ok(status) if status.session == Session::current() => return Ok(Launch::Forwarded),
-        Ok(_) if supervise && supervised() => {
+        Ok(_) if supervised() => {
             // Hand the instance over to this desktop session.
             restart()?;
         }
         Ok(_) => {
             bail!("Hex is running in another desktop session; run `hex quit`, then launch it again")
         }
-        Err(RequestError::Outdated) if supervise && supervised() => restart()?,
-        Err(RequestError::NotRunning) if supervise && supervised() => {
+        Err(RequestError::Outdated) if supervised() => restart()?,
+        Err(RequestError::NotRunning) if supervised() => {
             write_session_environment()?;
             systemctl(&["start"])?;
         }

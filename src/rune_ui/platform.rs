@@ -26,7 +26,6 @@ pub(super) enum Os {
 
 /// What the runtime can do. A missing capability omits its pane or row; the
 /// window never shows an imitation of a feature the runtime cannot perform.
-/// Mirrors GPUI's `app_window::Capabilities` for the rows Rune draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Capabilities {
     pub(super) os: Os,
@@ -505,7 +504,7 @@ pub(super) enum PlatformRequest {
     HexMicrophoneDemo(DemoRequest),
     /// Show this on the dictation indicator: `DictationIndicatorEvent::
     /// Configure` with the tuning, then `Reset` and the demonstrated state
-    /// with `queued` jobs behind it (GPUI's `apply_hud_lab`).
+    /// with `queued` jobs behind it.
     ConfigureHud(HudLab),
 }
 

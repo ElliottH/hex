@@ -12,7 +12,7 @@ impl LinuxSession {
     }
 
     fn from_wayland_display(display: Option<&OsStr>) -> Self {
-        // Match GPUI's backend selection, including Wayland with XWayland present.
+        // Match winit's (Rune's) backend selection, including Wayland with XWayland present.
         if display.is_some_and(|display| !display.is_empty()) {
             Self::Wayland
         } else {
@@ -37,7 +37,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_selection_matches_gpui_without_mutating_the_environment() {
+    fn backend_selection_matches_winit_without_mutating_the_environment() {
         for display in [None, Some(OsStr::new(""))] {
             assert_eq!(
                 LinuxSession::from_wayland_display(display),

@@ -1,9 +1,8 @@
 //! The local transcription picker: a modal with languages on the left and
-//! that language's recommended models on the right, as GPUI's
-//! `desktop_transcription_picker`. Choosing a model asks the service to
-//! download, verify, and load it (`ChooseModel`); its progress comes back in
-//! the service snapshot, and the service saves the selection when it is
-//! ready. Downloaded models other than the active one can be deleted after a
+//! that language's recommended models on the right. Choosing a model asks
+//! the service to download, verify, and load it (`ChooseModel`); its
+//! progress comes back in the service snapshot, and the service saves the
+//! selection when it is ready. Downloaded models other than the active one can be deleted after a
 //! confirmation.
 
 use rune::{El, col, el, row, text};
@@ -13,13 +12,23 @@ use super::Request;
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button};
 use crate::desktop_i18n::{tr, tr_fill};
-use crate::desktop_transcription_picker::transcription_selection_is_active;
 use crate::transcription_models::{
     self, ModelDefinition, ModelPreparationStage, ModelRuntime, TranscriptionModelId,
+    TranscriptionSelection,
 };
 
 const MODAL_WIDTH: f32 = 780.0;
 const MODAL_HEIGHT: f32 = 520.0;
+
+/// A model and language is the active selection only once it is installed.
+fn transcription_selection_is_active(
+    selection: &TranscriptionSelection,
+    model: &ModelDefinition,
+    language: &str,
+    installed: bool,
+) -> bool {
+    installed && selection.model == model.id && selection.language == language
+}
 
 #[derive(Default)]
 pub(super) struct Picker {
@@ -514,5 +523,29 @@ pub(super) fn fixture(ui: &mut Ui, downloading: Option<TranscriptionModelId>) {
         view.transcription.downloaded_bytes = bytes * 37 / 100;
         view.transcription.preparation_stage = Some(ModelPreparationStage::Downloading);
         ui.preparing = Some((model, std::time::Instant::now()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_transcription_model_is_not_active_until_installed() {
+        let selection = TranscriptionSelection::default();
+        let model = transcription_models::definition(selection.model);
+
+        assert!(!transcription_selection_is_active(
+            &selection,
+            model,
+            &selection.language,
+            false
+        ));
+        assert!(transcription_selection_is_active(
+            &selection,
+            model,
+            &selection.language,
+            true
+        ));
     }
 }

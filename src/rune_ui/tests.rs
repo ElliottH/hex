@@ -416,7 +416,6 @@ fn a_chosen_file_joins_the_catalog_and_the_mode() {
         name: "helix".into(),
         bundle_id: None,
         path: "/usr/bin/helix".into(),
-        icon: None,
     };
     modes::chosen_application(&mut rt.state, Ok(Some(application)));
     assert!(

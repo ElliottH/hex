@@ -8,8 +8,8 @@
 //! The pump in `macos_rune` forwards controller events on the main thread;
 //! buttons send `ControllerCommand`s back to the controller.
 //!
-//! Not yet ported from the GPUI capsules: "Copy new" / "Copy all" from the
-//! live transcript, hover expansion, and dragging the recording capsule.
+//! Not yet built: "Copy new" / "Copy all" from the live transcript, hover
+//! expansion, and dragging the recording capsule.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -21,14 +21,17 @@ use rune_kit::{Button, ButtonSize, ButtonVariant};
 
 use super::controls::{Paint, status_dot};
 use crate::app_settings::NeverOfferMeeting;
-use crate::design_tokens::{
-    MEETING_PANEL_HEIGHT, MEETING_PANEL_WIDTH, RECORDING_PANEL_HEIGHT, RECORDING_PANEL_WIDTH,
-};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::meeting::{self, MeetingManifest};
 use crate::meeting_detection::MeetingCandidate;
 use crate::meeting_watcher::{ControllerCommand, ControllerEvent};
 
+/// The offer, call ended, and ready capsules.
+const MEETING_PANEL_WIDTH: f32 = 420.0;
+const MEETING_PANEL_HEIGHT: f32 = 64.0;
+/// The recording capsule.
+const RECORDING_PANEL_WIDTH: f32 = 548.0;
+const RECORDING_PANEL_HEIGHT: f32 = 48.0;
 const OFFER_TIMEOUT: Duration = Duration::from_secs(20);
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const WINDOW_MARGIN: f32 = 12.0;
@@ -154,7 +157,7 @@ impl MeetingCapsules {
         }
     }
 
-    /// Mirrors the GPUI watcher's handling of each controller event.
+    /// Shows, updates, or closes a capsule for each controller event.
     pub(crate) fn event(&mut self, event: &ControllerEvent) {
         match event {
             ControllerEvent::Offer(candidate) => {

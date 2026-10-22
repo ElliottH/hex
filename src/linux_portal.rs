@@ -12,8 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use gtk::gio;
-use gtk::glib::{self, ToVariant, Variant, variant::ObjectPath};
+use glib::{ToVariant, Variant, variant::ObjectPath};
 
 const DESKTOP: &str = "org.freedesktop.portal.Desktop";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -211,7 +210,7 @@ impl Portal {
         callback: impl Fn(&Variant) + 'static,
     ) -> Result<gio::SignalSubscriptionId> {
         // Callbacks run in the thread-default context at subscription,
-        // which `events` iterates; never the GTK thread's default context.
+        // which `events` iterates; never the main thread's default context.
         self.context
             .with_thread_default(|| {
                 self.connection.signal_subscribe(

@@ -1,6 +1,6 @@
 //! The Windows window's host: the runtime thread `windows_rune` starts in
 //! this process, which owns the listener, model preparation, and updates.
-//! Shortcut capture stays in the window, as in GPUI: it polls the keyboard
+//! Shortcut capture stays in the window: it polls the keyboard
 //! state, because a modifier-only chord such as Ctrl+Win never reaches the
 //! window as a key event.
 
@@ -29,7 +29,7 @@ pub(super) const TERMINAL_PASTE: bool = false;
 /// The window offers Quit Hex beside the tray's.
 pub(super) const QUIT_IN_WINDOW: bool = true;
 
-/// How often shortcut capture samples the keyboard, as in GPUI.
+/// How often shortcut capture samples the keyboard.
 const CHORD_POLL: Duration = Duration::from_millis(16);
 
 pub(super) struct Backend {

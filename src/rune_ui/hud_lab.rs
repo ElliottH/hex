@@ -2,7 +2,7 @@
 //! style, the state it shows and how many dictations wait behind it, and
 //! drag the look's sliders; every change goes to the indicator as
 //! `PlatformRequest::ConfigureHud`. Copy preset copies the tuning as one
-//! line. Developer copy is English, as in GPUI.
+//! line. Developer copy is English.
 
 use rune::{El, Tx, col, row, text};
 
@@ -78,7 +78,7 @@ impl Control {
     }
 }
 
-/// The three styles' starting tunings, as GPUI's `select_hud_style`.
+/// The three styles' starting tunings.
 pub(super) fn style(index: usize) -> HudTuning {
     match index {
         0 => HudTuning {

@@ -12,9 +12,9 @@ use crate::audio::{CaptureInstant, RecoveringAudioInput, RecoveringAudioInputEve
 use crate::dictation::{DictationCapture, Finish, POST_RELEASE_TAIL};
 use crate::events::{DictationPhase, EventLog, TranscriptPhase, VoiceEvent, VoiceState, now_ms};
 use crate::feedback::{self, Tone};
-use crate::linux_desktop::LinuxIndicator;
 use crate::linux_input::{HotkeyEvent, HotkeyStatus, LinuxHotkeyMonitor, ShortcutCommand};
 use crate::linux_paste::LinuxPaster;
+use crate::linux_rune_hud::LinuxIndicator;
 use crate::local_transcriber::LocalTranscriber;
 use crate::transcription_engine::{PendingTranscript, TranscriptionEngine};
 

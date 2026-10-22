@@ -23,7 +23,7 @@ use crate::voice_filter::{DictationSpan, VoiceFilterMode};
 const SLIDER_WIDTH: f32 = 300.0;
 const WAVE_HEIGHT: f32 = 28.0;
 
-/// A tunable of the live filter, as GPUI's `FunSlider`.
+/// A tunable of the live filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tunable {
     Strength,
@@ -107,7 +107,7 @@ impl Tunable {
         }
     }
 
-    /// Sets the value from a slider position, rounded as GPUI rounds it.
+    /// Sets the value from a slider position, rounded to the tunable's step.
     pub(super) fn apply(self, cfg: &mut TunedFilterConfig, position: f32) {
         let t = f64::from(position.clamp(0.0, 1.0));
         let lerp = |min: f64, max: f64| min + (max - min) * t;
@@ -156,7 +156,7 @@ pub(super) fn mode_description(mode: VoiceFilterMode) -> &'static str {
 }
 
 /// The pane's own state: the last mode other than Normal, whose sliders
-/// stay in place while Normal is chosen (as in GPUI).
+/// stay in place while Normal is chosen.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct FunPane {
     pub(super) last_mode: VoiceFilterMode,

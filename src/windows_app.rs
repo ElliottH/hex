@@ -1,10 +1,8 @@
-//! The Windows lifecycle around the shared app window: the tray, the HUD
-//! window, and the listener host, which outlive the window while Hex hides
-//! in the tray. The window itself is `app_window`.
+//! The Windows listener host, which outlives the window while Hex hides in
+//! the tray, and the single-instance claim for the login session. The tray
+//! and the window are `windows_rune`.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, RwLock};
@@ -13,29 +11,17 @@ use std::time::{Duration, Instant};
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
-use gpui::{App, Application, Timer, Window, prelude::*};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem};
-use tray_icon::{
-    Icon, MouseButton as TrayMouseButton, MouseButtonState, TrayIcon, TrayIconBuilder,
-    TrayIconEvent,
-};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, RECT, WAIT_OBJECT_0,
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, INFINITE, SetEvent, WaitForSingleObject,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, GWL_EXSTYLE, GetSystemMetrics, GetWindowLongPtrW,
-    HWND_TOPMOST, SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, SystemParametersInfoW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-};
+use windows_sys::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
 
 use crate::app_settings::{AppSettings, IndicatorPosition};
 use crate::desktop_activity::DesktopActivity;
-use crate::desktop_i18n::{tr, tr_fill};
+use crate::desktop_i18n::tr_fill;
 use crate::events::{EventReader, TranscriptPhase, VoiceEvent};
 use crate::history::History;
 
@@ -60,7 +46,7 @@ pub(crate) struct WindowsDesktopHost {
     settings: AppSettings,
     history: Option<History>,
     last_dictation: Arc<Mutex<Option<String>>>,
-    indicator: crate::windows_indicator::WindowsIndicatorSender,
+    indicator: crate::windows_rune_hud::WindowsIndicatorSender,
     mode_runtime: Arc<RwLock<crate::dictation_modes::ModeRuntime>>,
     transformations: Arc<crate::personal_commands::TransformationClient>,
     personal_commands: Option<crate::personal_commands::PersonalCommands>,
@@ -77,12 +63,6 @@ pub(crate) struct ListenerState {
     pub(crate) status: String,
     pub(crate) last_failure: Option<String>,
     pub(crate) error: Option<String>,
-}
-
-enum TrayCommand {
-    Show,
-    ToggleListening,
-    Quit,
 }
 
 /// Names the event that marks the running Hex app in this login session.
@@ -151,308 +131,6 @@ impl AppInstance {
     }
 }
 
-pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bool) -> Result<()> {
-    let Some(instance) = AppInstance::claim(start_hidden)? else {
-        return Ok(());
-    };
-    shutdown.store(false, Ordering::Relaxed);
-    let (tray_sender, tray_commands) = mpsc::channel();
-    let relaunch = tray_sender.clone();
-    instance.forward_launches(move || relaunch.send(TrayCommand::Show).is_ok());
-    let (indicator_sender, indicator_events) = crate::windows_indicator::channel();
-    let (settings, settings_error) = match AppSettings::load() {
-        Ok(settings) => (settings, None),
-        Err(error) => (
-            AppSettings::default(),
-            Some(tr_fill(
-                "Could not load settings: {}",
-                &format!("{error:#}"),
-            )),
-        ),
-    };
-    let listen_on_launch = settings.enable_on_launch;
-    let indicator_position = settings.indicator_position;
-    Application::new().run(move |cx: &mut App| {
-        cx.bind_keys(crate::text_input::key_bindings());
-        let host = Rc::new(RefCell::new(WindowsDesktopHost::new(
-            event_path.clone(),
-            settings.clone(),
-            settings_error.clone(),
-            indicator_sender.clone(),
-        )));
-        // The microphone stays cold until first-run setup finishes.
-        let setup_done = crate::onboarding::completion_recorded();
-        if listen_on_launch && setup_done {
-            host.borrow_mut().start();
-        }
-        let window = crate::app_window::open(
-            event_path.clone(),
-            host.clone(),
-            listen_on_launch && !setup_done,
-            cx,
-        )
-        .expect("could not open the Hex window");
-        let (indicator, indicator_hwnd, indicator_scale) = match cx
-            .open_window(crate::windows_indicator::window_options(cx), |_, cx| {
-                cx.new(|_| crate::windows_indicator::WindowsIndicator::new())
-            }) {
-            Ok(indicator_window) => {
-                let indicator = indicator_window.update(cx, |_, _, cx| cx.entity()).ok();
-                let placement = indicator_window
-                    .update(cx, |_, window, _| {
-                        (windows_hwnd(window), window.scale_factor())
-                    })
-                    .ok();
-                let hwnd = placement.and_then(|(hwnd, _)| hwnd);
-                let scale_factor = placement.map_or(1.0, |(_, scale_factor)| scale_factor);
-                configure_indicator_window(hwnd, scale_factor, indicator_position);
-                (indicator, hwnd, scale_factor)
-            }
-            Err(error) => {
-                tracing::warn!(%error, "Windows dictation HUD is unavailable");
-                (None, None, 1.0)
-            }
-        };
-        let tray = match create_tray(tray_sender.clone()) {
-            Ok(tray) => Some(tray),
-            Err(error) => {
-                tracing::warn!(%error, "Windows system tray is unavailable; closing Hex will quit");
-                None
-            }
-        };
-        let close_to_tray = tray.is_some();
-        let hwnd = window
-            .update(cx, |_, window, _| windows_hwnd(window))
-            .ok()
-            .flatten();
-        crate::windows_ui::apply_window_icon(hwnd);
-        let indicator_host = host.clone();
-        cx.spawn(async move |cx| {
-            // The pump is the HUD's display link: it forwards dictation
-            // events, steps the springs once per tick, and keeps the OS
-            // window on screen exactly while the model says the HUD is
-            // visible, through transcription and the exit animation.
-            let mut shown = false;
-            loop {
-                Timer::after(Duration::from_millis(16)).await;
-                let Some(indicator) = &indicator else {
-                    while indicator_events.try_recv().is_ok() {}
-                    continue;
-                };
-                while let Ok(event) = indicator_events.try_recv() {
-                    if indicator
-                        .update(cx, |indicator, _| indicator.handle(event))
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                let Ok(visible) = indicator.update(cx, |indicator, cx| indicator.tick(cx)) else {
-                    return;
-                };
-                let position = indicator_host.borrow().indicator_position();
-                let show = visible && position != IndicatorPosition::Hidden;
-                if show != shown {
-                    if show {
-                        position_indicator_window(indicator_hwnd, indicator_scale, position);
-                    }
-                    set_window_visible(indicator_hwnd, show);
-                    shown = show;
-                }
-            }
-        })
-        .detach();
-        let lifecycle_host = host.clone();
-        cx.spawn(async move |cx| {
-            loop {
-                Timer::after(Duration::from_millis(250)).await;
-                while let Ok(command) = tray_commands.try_recv() {
-                    match command {
-                        TrayCommand::Show => {
-                            set_window_visible(hwnd, true);
-                            let _ = window.update(cx, |_, window, _| window.activate_window());
-                        }
-                        TrayCommand::ToggleListening => {
-                            let mut host = lifecycle_host.borrow_mut();
-                            if host.is_running() {
-                                host.stop();
-                            } else {
-                                host.start();
-                            }
-                        }
-                        TrayCommand::Quit => {
-                            lifecycle_host.borrow_mut().stop();
-                            let _ = cx.update(|cx| cx.quit());
-                            return;
-                        }
-                    }
-                }
-                if shutdown.load(Ordering::Relaxed) {
-                    lifecycle_host.borrow_mut().stop();
-                    let _ = cx.update(|cx| cx.quit());
-                    return;
-                }
-                lifecycle_host.borrow_mut().refresh();
-            }
-        })
-        .detach();
-        let close_host = host.clone();
-        window
-            .update(cx, |_, window, cx| {
-                if close_to_tray {
-                    window.on_window_should_close(cx, move |_, _| {
-                        set_window_visible(hwnd, false);
-                        false
-                    });
-                } else {
-                    // Without a tray, closing must quit the whole app; the
-                    // hidden HUD window would otherwise keep it alive.
-                    window.on_window_should_close(cx, move |_, cx| {
-                        close_host.borrow_mut().stop();
-                        cx.quit();
-                        true
-                    });
-                }
-                window.activate_window();
-            })
-            .ok();
-        if start_hidden && close_to_tray {
-            set_window_visible(hwnd, false);
-        }
-        cx.on_app_quit(move |_| {
-            let _keep_alive = (&tray, &host);
-            async {}
-        })
-        .detach();
-    });
-    Ok(())
-}
-
-fn create_tray(commands: mpsc::Sender<TrayCommand>) -> Result<TrayIcon> {
-    let menu = Menu::new();
-    let show = MenuItem::with_id("show", tr("Show Hex"), true, None);
-    let toggle = MenuItem::with_id("toggle", tr("Enable / Disable Hex"), true, None);
-    let quit = MenuItem::with_id("quit", tr("Quit Hex"), true, None);
-    menu.append(&show)?;
-    menu.append(&toggle)?;
-    menu.append(&quit)?;
-
-    let menu_commands = commands.clone();
-    MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        let command = match event.id.as_ref() {
-            "show" => Some(TrayCommand::Show),
-            "toggle" => Some(TrayCommand::ToggleListening),
-            "quit" => Some(TrayCommand::Quit),
-            _ => None,
-        };
-        if let Some(command) = command {
-            let _ = menu_commands.send(command);
-        }
-    }));
-    TrayIconEvent::set_event_handler(Some(move |event| {
-        if matches!(
-            event,
-            TrayIconEvent::Click {
-                button: TrayMouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            }
-        ) {
-            let _ = commands.send(TrayCommand::Show);
-        }
-    }));
-
-    Ok(TrayIconBuilder::new()
-        .with_tooltip(tr("Hex Dictation"))
-        .with_icon(tray_icon()?)
-        .with_menu(Box::new(menu))
-        // Left click shows the window (handled above); only right click
-        // opens the menu. The crate default menus on both buttons.
-        .with_menu_on_left_click(false)
-        .build()?)
-}
-
-pub(crate) fn tray_icon() -> Result<Icon> {
-    Ok(Icon::from_rgba(
-        crate::windows_ui::tray_icon_rgba(),
-        crate::windows_ui::TRAY_ICON_SIZE,
-        crate::windows_ui::TRAY_ICON_SIZE,
-    )?)
-}
-
-fn windows_hwnd(window: &Window) -> Option<HWND> {
-    let handle = HasWindowHandle::window_handle(window).ok()?;
-    match handle.as_raw() {
-        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as HWND),
-        _ => None,
-    }
-}
-
-fn set_window_visible(hwnd: Option<HWND>, visible: bool) {
-    if let Some(hwnd) = hwnd {
-        unsafe {
-            ShowWindow(hwnd, if visible { SW_SHOW } else { SW_HIDE });
-        }
-    }
-}
-
-fn configure_indicator_window(hwnd: Option<HWND>, scale_factor: f32, position: IndicatorPosition) {
-    let Some(hwnd) = hwnd else {
-        return;
-    };
-    unsafe {
-        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
-            (style | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) as isize,
-        );
-        ShowWindow(hwnd, SW_HIDE);
-    }
-    crate::windows_ui::disable_window_tint(hwnd);
-    crate::windows_ui::strip_popup_chrome(hwnd);
-    position_indicator_window(Some(hwnd), scale_factor, position);
-}
-
-/// GPUI defers popup placement until the first activation, but the HUD is
-/// shown without ever being activated; place the pill-sized bounds explicitly
-/// in physical pixels or the window keeps its huge creation-default rectangle.
-fn position_indicator_window(hwnd: Option<HWND>, scale_factor: f32, position: IndicatorPosition) {
-    let Some(hwnd) = hwnd else {
-        return;
-    };
-    let width = (crate::windows_indicator::WINDOW_WIDTH * scale_factor).round() as i32;
-    let height = (crate::windows_indicator::WINDOW_HEIGHT * scale_factor).round() as i32;
-    unsafe {
-        let x = (GetSystemMetrics(SM_CXSCREEN) - width) / 2;
-        let y = match position {
-            IndicatorPosition::Bottom => {
-                let mut work_area = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-                let bottom =
-                    if SystemParametersInfoW(SPI_GETWORKAREA, 0, (&raw mut work_area).cast(), 0)
-                        != 0
-                    {
-                        work_area.bottom
-                    } else {
-                        GetSystemMetrics(SM_CYSCREEN)
-                    };
-                bottom
-                    - height
-                    - (crate::windows_indicator::BOTTOM_OFFSET * scale_factor).round() as i32
-            }
-            IndicatorPosition::Top | IndicatorPosition::Hidden => {
-                (crate::windows_indicator::TOP_OFFSET * scale_factor).round() as i32
-            }
-        };
-        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
-    }
-}
-
 use crate::windows_dictation::voice_action_model;
 
 /// The settings a running listener captured when it started; a change
@@ -477,7 +155,7 @@ impl WindowsDesktopHost {
         event_path: PathBuf,
         settings: AppSettings,
         settings_error: Option<String>,
-        indicator: crate::windows_indicator::WindowsIndicatorSender,
+        indicator: crate::windows_rune_hud::WindowsIndicatorSender,
     ) -> Self {
         crate::desktop_i18n::apply(settings.ui_language.as_deref());
         let mut event_reader = EventReader::open(&event_path);
@@ -603,16 +281,10 @@ impl WindowsDesktopHost {
         self.listener_result.is_some()
     }
 
-    pub(crate) fn history(&self) -> Option<History> {
-        self.history.clone()
-    }
-
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
     pub(crate) fn settings(&self) -> &AppSettings {
         &self.settings
     }
 
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
     pub(crate) fn clear_error(&mut self) {
         self.error = None;
     }

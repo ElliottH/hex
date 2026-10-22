@@ -744,11 +744,6 @@ pub fn request_microphone() {
     }
 }
 
-/// The system's Reduce Motion setting (or `HEX_REDUCE_MOTION` override).
-pub fn reduce_motion() -> bool {
-    crate::motion::reduced_motion()
-}
-
 /// Reopens the installed app once this process exits. Returns false outside
 /// an app bundle (a development binary), where the person reopens Hex.
 #[cfg(target_os = "macos")]

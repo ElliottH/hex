@@ -1,5 +1,4 @@
-//! Hex on macOS with the Rune window (`hex app`, built with
-//! `--features rune-ui`): one menu-bar process.
+//! Hex on macOS (`hex app`): one menu-bar process.
 //!
 //! - The main thread runs Rune's event loop (`rune::App`, windowless and
 //!   kept running, as an accessory app) and, beside it on the same AppKit
@@ -10,7 +9,7 @@
 //!   setup is ready, and publishes the listener, model, update, and settings
 //!   state the window shows ([`RuntimeHandle`]).
 //! - The listener (`recognition::listen`), the meeting controller, and the
-//!   local API keep their own threads, as under GPUI.
+//!   local API keep their own threads.
 //!
 //! Closing the window hides it; Quit (menu bar, ⌘Q, `hex` local API shutdown
 //! or Ctrl-C) ends the loop, then stops and joins everything.
@@ -685,7 +684,7 @@ fn window_visible() -> bool {
 /// Opens the window at `destination`, in front of the app that was active.
 fn show(window: &rune::AppHandle<Ui>, destination: Destination) {
     window.update(move |ui, _| crate::rune_ui::show(ui, destination));
-    // An open window always shows the Dock icon, as under GPUI: hiding it
+    // An open window always shows the Dock icon: hiding it
     // would deactivate Hex and drop the window behind other apps.
     crate::app_settings::set_dock_icon_visible(true);
     if let Some(mtm) = MainThreadMarker::new() {
@@ -982,7 +981,7 @@ fn with_window(f: impl FnOnce(&rune::AppHandle<Ui>)) {
     }
 }
 
-/// The menu bar while the window is active, as GPUI's: Hex, File, Window.
+/// The menu bar while the window is active: Hex, File, Window.
 /// Rune draws no Edit menu items, so ⌘C/⌘V reach its text fields as keys.
 fn install_main_menu(target: &MenuTarget, mtm: MainThreadMarker) {
     let main = NSMenu::new(mtm);

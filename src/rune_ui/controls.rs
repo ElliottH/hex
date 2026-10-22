@@ -1,8 +1,7 @@
 //! Settings controls on `rune-kit`, themed with OpenCode's design language
 //! (`rune-theme-opencode`): the card, row, switch, segmented control,
 //! select-style menus, buttons, keycaps, tag, note, and text field. Colours,
-//! type, radii, elevation, and motion come from the kit's tokens, never from
-//! Hex's GPUI design tokens.
+//! type, radii, elevation, and motion come from the kit's tokens.
 
 use rune::{Color, El, TextEdit, TextStyle, Tx, col, el, row, text};
 use rune_kit::{
@@ -19,7 +18,7 @@ const ROW_HEIGHT_DESCRIBED: f32 = 56.0;
 const SELECT_WIDTH: f32 = 220.0;
 /// Narrower than this, a row moves its control below the copy instead of
 /// squeezing the description to a word per line (tiling desktops ignore
-/// GPUI's 860 px minimum width).
+/// the window's 860 px minimum width).
 const COPY_MIN_WIDTH: f32 = 100.0;
 
 /// Everything a control needs to paint itself.
@@ -384,7 +383,7 @@ pub(super) fn text_field(
 
 /// The keyboard highlight in a search popover's results: Up and Down move
 /// it, Enter picks it, and it returns to the first result whenever the query
-/// changes, as in GPUI.
+/// changes.
 #[derive(Default)]
 pub(super) struct Highlight {
     query: String,

@@ -68,7 +68,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed git rustup python alsa-lib curl jq openssl \
-            xxd file binutils util-linux gtk3 gtk-layer-shell libappindicator-gtk3 \
+            xxd file binutils util-linux glib2 \
             libxkbcommon libxkbcommon-x11 libx11 libxcb libxcursor libxi libxrandr \
             fontconfig freetype2 wayland systemd-libs openblas vulkan-headers \
             vulkan-icd-loader shaderc spirv-headers clang cmake pkgconf
@@ -161,15 +161,6 @@ jobs:
             "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc",
             "CL=/EHsc"
           ) | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Locate the GPUI shader compiler
-        shell: pwsh
-        run: |
-          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter fxc.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\(x64|arm64)\\' } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1
-          if (-not $fxc) { throw "fxc.exe was not found in the Windows SDK" }
-          "GPUI_FXC_PATH=$($fxc.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build
         shell: bash
         run: |

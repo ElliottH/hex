@@ -404,10 +404,6 @@ impl HotkeyBinding {
             .collect()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.modifiers.is_empty() && self.key.is_none()
-    }
-
     pub fn runtime(&self) -> RuntimeHotkey {
         RuntimeHotkey {
             modifiers: self.modifiers,
@@ -429,6 +425,41 @@ impl HotkeyBinding {
             _ => false,
         };
         same_key && modifiers_overlap(self.modifiers, other.modifiers)
+    }
+
+    /// The one side every modifier of a modifier-only binding shares, or
+    /// none for key chords and mixed sides.
+    pub fn standalone_side(&self) -> Option<ModifierSide> {
+        if self.key.is_some() {
+            return None;
+        }
+        let mut sides = [
+            self.modifiers.control,
+            self.modifiers.option,
+            self.modifiers.shift,
+            self.modifiers.command,
+        ]
+        .into_iter()
+        .flatten();
+        let first = sides.next()?;
+        sides.all(|side| side == first).then_some(first)
+    }
+
+    /// Moves a modifier-only binding to `side`; key chords are unchanged.
+    pub fn set_standalone_side(&mut self, side: ModifierSide) {
+        if self.standalone_side().is_none() {
+            return;
+        }
+        for current in [
+            &mut self.modifiers.control,
+            &mut self.modifiers.option,
+            &mut self.modifiers.shift,
+            &mut self.modifiers.command,
+        ] {
+            if current.is_some() {
+                *current = Some(side);
+            }
+        }
     }
 }
 
@@ -1459,19 +1490,6 @@ pub fn meeting_indicator_corner() -> MeetingIndicatorCorner {
     MeetingIndicatorCorner::decode(MEETING_INDICATOR_CORNER.load(Ordering::Acquire))
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn save_meeting_indicator_corner(corner: MeetingIndicatorCorner) {
-    MEETING_INDICATOR_CORNER.store(corner as u8, Ordering::Release);
-    if let Ok(mut settings) = AppSettings::load()
-        && settings.meetings.recording_indicator_corner != corner
-    {
-        settings.meetings.recording_indicator_corner = corner;
-        if let Err(error) = settings.save() {
-            tracing::warn!(%error, "could not persist meeting recording indicator corner");
-        }
-    }
-}
-
 /// Keys of the websites and apps that never get a recording offer.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn meeting_never_offer_keys() -> Vec<String> {
@@ -2498,5 +2516,51 @@ mod tests {
         settings.voice_action.enabled = false;
         assert!(settings.runtime_hotkeys().edit.is_none());
         assert_eq!(settings.edit_hotkey, saved_binding);
+    }
+
+    #[test]
+    fn side_selection_changes_modifier_only_bindings_and_ignores_key_chords() {
+        let mut standalone = HotkeyBinding {
+            modifiers: HotkeyModifiers {
+                option: Some(ModifierSide::Left),
+                command: Some(ModifierSide::Left),
+                ..Default::default()
+            },
+            key: None,
+        };
+        assert_eq!(standalone.standalone_side(), Some(ModifierSide::Left));
+        standalone.set_standalone_side(ModifierSide::Right);
+        assert_eq!(
+            standalone.modifiers,
+            HotkeyModifiers {
+                option: Some(ModifierSide::Right),
+                command: Some(ModifierSide::Right),
+                ..Default::default()
+            }
+        );
+
+        let mixed = HotkeyBinding {
+            modifiers: HotkeyModifiers {
+                option: Some(ModifierSide::Left),
+                command: Some(ModifierSide::Right),
+                ..Default::default()
+            },
+            key: None,
+        };
+        assert_eq!(mixed.standalone_side(), None);
+
+        let mut chord = HotkeyBinding {
+            modifiers: HotkeyModifiers {
+                option: Some(ModifierSide::Left),
+                ..Default::default()
+            },
+            key: Some(HotkeyKey {
+                code: 0,
+                label: "A".into(),
+            }),
+        };
+        assert_eq!(chord.standalone_side(), None);
+        chord.set_standalone_side(ModifierSide::Right);
+        assert_eq!(chord.modifiers.option, Some(ModifierSide::Left));
     }
 }

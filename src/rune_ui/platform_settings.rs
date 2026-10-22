@@ -16,7 +16,6 @@ use super::controls::{
 use super::lists::{PermissionControl, Tone, permission_control, small_button, tone_tag};
 use super::platform::{MeetingRequest, NotesAvailability, PlatformRequest};
 use crate::app_settings::{AppSettings, HotkeyBinding, ModifierSide};
-use crate::app_window::{set_standalone_modifier_side, standalone_modifier_side};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::hex_microphone::DriverActionState;
 use crate::login_item::LoginItemStatus;
@@ -523,8 +522,7 @@ pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
     setting_row(p, "hex-mic-driver", title, Some(&description), controls)
 }
 
-/// Experimental: Hex Microphone, while its experiment is on. The Fun pane
-/// it links to in GPUI is not ported, so "Try it" is omitted.
+/// Experimental: Hex Microphone, while its experiment is on.
 pub(super) fn hex_microphone_section(ui: &Ui, p: Paint) -> Option<El> {
     if !ui.platform.caps.hex_microphone || !ui.settings.experimental.hex_microphone_available() {
         return None;
@@ -598,31 +596,16 @@ fn binding(settings: &AppSettings, target: ShortcutTarget) -> Option<&HotkeyBind
 }
 
 /// `target`'s modifier-only shortcut moved to `side`, unless that collides
-/// with another shortcut (as GPUI's `hotkey_side_binding`).
+/// with another shortcut.
 pub(super) fn side_binding(
     settings: &AppSettings,
     target: ShortcutTarget,
     side: ModifierSide,
 ) -> Option<HotkeyBinding> {
     let mut candidate = binding(settings, target)?.clone();
-    standalone_modifier_side(&candidate)?;
-    set_standalone_modifier_side(&mut candidate, side);
-    let mut others = Vec::new();
-    if target != ShortcutTarget::Dictation {
-        others.push(settings.dictation_hotkey.clone());
-    }
-    if target != ShortcutTarget::VoiceAction && settings.voice_action.enabled {
-        others.push(settings.edit_hotkey.clone());
-    }
-    if target != ShortcutTarget::PasteLast
-        && let Some(paste) = &settings.paste_last_hotkey
-    {
-        others.push(paste.clone());
-    }
-    if settings.meetings.available() {
-        others.push(HotkeyBinding::paste_meeting_default());
-    }
-    (!crate::app_settings::hotkey_conflicts(&candidate, others)).then_some(candidate)
+    candidate.standalone_side()?;
+    candidate.set_standalone_side(side);
+    (!super::settings::conflicts(settings, target, &candidate)).then_some(candidate)
 }
 
 const SIDES: [ModifierSide; 3] = [
@@ -637,7 +620,7 @@ pub(super) fn side_selector(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option
     if !ui.platform.caps.modifier_sides {
         return None;
     }
-    let side = standalone_modifier_side(binding(&ui.settings, target)?)?;
+    let side = binding(&ui.settings, target)?.standalone_side()?;
     let key = match target {
         ShortcutTarget::Dictation => "dictation-side",
         ShortcutTarget::PasteLast => "paste-last-side",

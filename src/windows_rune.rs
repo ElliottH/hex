@@ -1,5 +1,4 @@
-//! Hex on Windows with the Rune window (`hex app --ui rune`, built with
-//! `--features rune-ui`): one tray process per login session.
+//! Hex on Windows: one tray process per login session.
 //!
 //! - The main thread runs Rune's event loop, the window, and the tray
 //!   (`tray-icon` rides winit's Win32 message pump on that thread).
@@ -24,9 +23,13 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use windows_sys::Win32::Foundation::{HWND, LPARAM};
+use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetWindowTextW};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumThreadWindows, GWLP_HINSTANCE, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW,
+    ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW, SM_CXICON, SM_CXSMICON,
+    SM_CYICON, SM_CYSMICON, SendMessageW, WM_SETICON,
+};
 
 use crate::app_settings::{AppSettings, IndicatorPosition};
 use crate::desktop_host::{
@@ -40,6 +43,10 @@ use crate::transcription_preparation::TranscriptionPreparation;
 use crate::windows_app::WindowsDesktopHost;
 use crate::windows_updater::UpdateCheck;
 
+/// The tray icon: the app icon pre-rendered to raw 32×32 RGBA at build time
+/// from app/AppIcon.icon/Assets/Image.png (full color, so both taskbar
+/// themes use the same pixels).
+const TRAY_ICON_SIZE: u32 = 32;
 /// How often the runtime refreshes the listener while nothing is asked.
 const RUNTIME_TICK: Duration = Duration::from_millis(250);
 
@@ -133,12 +140,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-pub fn open(
-    event_path: PathBuf,
-    shutdown: &'static AtomicBool,
-    start_hidden: bool,
-    rune_args: Vec<String>,
-) -> Result<()> {
+pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bool) -> Result<()> {
     let Some(instance) = crate::windows_app::AppInstance::claim(start_hidden)? else {
         return Ok(());
     };
@@ -153,7 +155,7 @@ pub fn open(
             )),
         ),
     };
-    let mut app = crate::rune_ui::app().args(rune_args);
+    let mut app = crate::rune_ui::app().args(Vec::new());
     let window = app.handle();
     // The tray rides the main thread's message pump, which Rune's loop runs.
     match create_tray(window.clone()) {
@@ -223,7 +225,7 @@ fn run_runtime(
 ) {
     // The HUD thread owns the indicator and ends with the host's sender; the
     // settings' position reaches it through `position`.
-    let (indicator, indicator_events) = crate::windows_indicator::channel();
+    let (indicator, indicator_events) = crate::windows_rune_hud::channel();
     let position = Arc::new(AtomicU8::new(settings.indicator_position as u8));
     let hud_position = position.clone();
     let _hud = std::thread::Builder::new()
@@ -426,8 +428,35 @@ pub(crate) fn attach_window_icon() {
         return;
     }
     if let Some(hwnd) = find_window() {
-        crate::windows_ui::apply_window_icon(Some(hwnd));
+        apply_window_icon(hwnd);
         ICON_SET.set(true);
+    }
+}
+
+/// Gives the window the executable's embedded icon (resource 1, see
+/// build.rs) for the taskbar, Alt-Tab, and the caption, so they match the
+/// exe in Explorer and Task Manager. Windows picks the frame that fits each
+/// size and DPI.
+fn apply_window_icon(hwnd: HWND) {
+    const APP_ICON: u16 = 1;
+    unsafe {
+        let module = GetWindowLongPtrW(hwnd, GWLP_HINSTANCE) as HINSTANCE;
+        for (kind, width, height) in [
+            (ICON_SMALL, SM_CXSMICON, SM_CYSMICON),
+            (ICON_BIG, SM_CXICON, SM_CYICON),
+        ] {
+            let icon = LoadImageW(
+                module,
+                APP_ICON as usize as *const u16,
+                IMAGE_ICON,
+                GetSystemMetrics(width),
+                GetSystemMetrics(height),
+                LR_DEFAULTCOLOR,
+            );
+            if !icon.is_null() {
+                SendMessageW(hwnd, WM_SETICON, kind as usize, icon as isize);
+            }
+        }
     }
 }
 
@@ -492,7 +521,11 @@ fn create_tray(window: rune::AppHandle<Ui>) -> Result<TrayIcon> {
     }));
     Ok(TrayIconBuilder::new()
         .with_tooltip(tr("Hex Dictation"))
-        .with_icon(crate::windows_app::tray_icon()?)
+        .with_icon(tray_icon::Icon::from_rgba(
+            include_bytes!("../resources/windows/tray-32.rgba").to_vec(),
+            TRAY_ICON_SIZE,
+            TRAY_ICON_SIZE,
+        )?)
         .with_menu(Box::new(menu))
         // Left click shows the window (handled above); only right click
         // opens the menu.

@@ -54,7 +54,7 @@ fn scope_label(scope: &CommandScope) -> String {
     }
 }
 
-/// The task heading a command is listed under, as GPUI groups them.
+/// The task heading a command is listed under.
 fn task_label(task: &str) -> &str {
     match task {
         "Voice control" => tr("Voice control"),

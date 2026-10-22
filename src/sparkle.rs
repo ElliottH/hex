@@ -209,10 +209,6 @@ pub fn status() -> UpdateStatus {
     }
 }
 
-pub fn clear_confirmation() {
-    clear_status(&UPDATE_STATUS, UpdateStatus::UpToDate);
-}
-
 fn begin_check(status: &AtomicU8, can_check: bool, session_in_progress: bool) {
     // An existing session may only be focused, and resuming a deferred install
     // need not emit didFindValidUpdate again. Neither should erase its result.

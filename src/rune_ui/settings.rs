@@ -231,6 +231,19 @@ pub(super) fn validate(
     binding: &HotkeyBinding,
 ) -> Result<(), &'static str> {
     host::validate_hotkey(target, binding)?;
+    if conflicts(settings, target, binding) {
+        return Err(tr("Already in use"));
+    }
+    Ok(())
+}
+
+/// Whether `binding` overlaps a shortcut `target` must not share: the other
+/// active shortcuts and, where meetings exist (macOS), meeting paste.
+pub(super) fn conflicts(
+    settings: &AppSettings,
+    target: ShortcutTarget,
+    binding: &HotkeyBinding,
+) -> bool {
     let mut others = Vec::new();
     if target != ShortcutTarget::Dictation {
         others.push(settings.dictation_hotkey.clone());
@@ -243,10 +256,10 @@ pub(super) fn validate(
     {
         others.push(paste.clone());
     }
-    if crate::app_settings::hotkey_conflicts(binding, others) {
-        return Err(tr("Already in use"));
+    if cfg!(target_os = "macos") && settings.meetings.available() {
+        others.push(HotkeyBinding::paste_meeting_default());
     }
-    Ok(())
+    crate::app_settings::hotkey_conflicts(binding, others)
 }
 
 pub(super) fn desktop_shortcut(binding: &HotkeyBinding) -> DesktopShortcut {

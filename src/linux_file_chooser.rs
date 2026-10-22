@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
-use gtk::gio::{self, prelude::FileExt};
-use gtk::glib::{self, ToVariant, Variant};
+use gio::prelude::FileExt;
+use glib::{ToVariant, Variant};
 
 const DESKTOP: &str = "org.freedesktop.portal.Desktop";
 const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";

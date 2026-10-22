@@ -187,7 +187,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
             .press(c.pressed)
             .on_press(move |ui: &mut Ui| ui.activity.selected = Some(index))
             .child(
-                text(crate::app_window::event_summary(event))
+                text(crate::desktop_activity::event_summary(event))
                     .key("summary")
                     .font(if boundary {
                         p.k.ty.small_medium
@@ -222,7 +222,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
                 .px(24.0)
                 .pb(16.0)
                 .child(detail_header(
-                    detail_title(p, &crate::app_window::event_summary(event)),
+                    detail_title(p, &crate::desktop_activity::event_summary(event)),
                     Vec::new(),
                     Vec::new(),
                 ))

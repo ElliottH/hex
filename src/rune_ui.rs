@@ -1,15 +1,13 @@
-//! The experimental Rune front end (`hex app --ui rune`, and `hex app` on
-//! macOS when built with `--features rune-ui`).
+//! Hex's window on every OS, on Rune.
 //!
 //! The window talks to a host in the same process: on Linux the dictation
-//! host beside it (`linux_host`, the default window on `rune-ui` builds); on
-//! Windows and macOS the runtime thread `windows_rune` or `macos_rune`
-//! starts (`windows_host`, `macos_host`). Either way it saves
-//! `settings.json` through the host, which adopts it, and sends the same
-//! requests for listening, shortcuts, models, and updates. It has the panes GPUI shows
-//! there (Settings, Modes, Voice Action, History), the transcription picker,
-//! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
-//! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
+//! host beside it (`linux_host`); on Windows and macOS the runtime thread
+//! `windows_rune` or `macos_rune` starts (`windows_host`, `macos_host`).
+//! Either way it saves `settings.json` through the host, which adopts it,
+//! and sends the same requests for listening, shortcuts, models, and
+//! updates. `platform::Capabilities` decides which panes and rows each OS
+//! shows. Everything is drawn with `rune-kit`'s components in OpenCode's
+//! design language (`rune-theme-opencode`); see `docs/design-system.md`.
 
 mod activity;
 mod commands;
@@ -50,7 +48,7 @@ use controls::Paint;
 use host::{Backend, Request, ShortcutTarget};
 use settings::Capture;
 
-/// How long typing pauses before a text field's edit is saved, as in GPUI.
+/// How long typing pauses before a text field's edit is saved.
 const DRAFT_DELAY: Duration = Duration::from_millis(250);
 
 static SETTINGS_ICON: Icon = Icon {
@@ -226,7 +224,7 @@ fn spec() -> AppSpec<Ui> {
     AppSpec {
         title: "Hex",
         size: (980.0, 760.0),
-        // GPUI's minimum: narrower windows crowd the sidebar and rows.
+        // Narrower windows crowd the sidebar and rows.
         min_size: Some((860.0, 560.0)),
         init: Ui::load,
         view,

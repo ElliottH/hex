@@ -860,7 +860,7 @@ fn key_down(key: u16) -> bool {
 }
 
 /// One step of the settings-pane chord capture. The UI polls this on a
-/// timer instead of listening to gpui keystrokes because dictation
+/// timer instead of listening to window keystrokes because dictation
 /// bindings can be modifier-only chords (for example Ctrl+Win), which
 /// never produce a keystroke event.
 pub(crate) enum ChordPoll {

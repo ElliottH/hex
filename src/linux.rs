@@ -26,10 +26,7 @@ enum Command {
         /// Start Hex in the background without opening the window.
         #[arg(long)]
         hidden: bool,
-        /// The window toolkit, when this process becomes Hex.
-        #[arg(long, value_enum)]
-        ui: Option<SettingsUi>,
-        /// Arguments for a headless Rune render, such as `--snap out.png --scene dark`.
+        /// Arguments for a headless render, such as `--snap out.png --scene dark`.
         #[arg(last = true)]
         rune_args: Vec<String>,
     },
@@ -83,40 +80,6 @@ enum Command {
     },
 }
 
-#[cfg(feature = "rune-ui")]
-fn render_rune(_: Vec<String>) -> Result<()> {
-    // Rune reads its own flags (`--snap`, `--scene`, …) from the process arguments.
-    crate::rune_ui::render();
-    Ok(())
-}
-
-#[cfg(not(feature = "rune-ui"))]
-fn render_rune(_: Vec<String>) -> Result<()> {
-    color_eyre::eyre::bail!(
-        "this Hex was built without the Rune front end; rebuild with `--features rune-ui`"
-    )
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-enum SettingsUi {
-    Gpui,
-    Rune,
-}
-
-impl SettingsUi {
-    fn window(self) -> Result<crate::linux_app::WindowUi> {
-        match self {
-            Self::Gpui => Ok(crate::linux_app::WindowUi::Gpui),
-            #[cfg(feature = "rune-ui")]
-            Self::Rune => Ok(crate::linux_app::WindowUi::Rune),
-            #[cfg(not(feature = "rune-ui"))]
-            Self::Rune => color_eyre::eyre::bail!(
-                "this Hex was built without the Rune front end; rebuild with `--features rune-ui`"
-            ),
-        }
-    }
-}
-
 #[derive(Subcommand)]
 enum DictationAction {
     /// Start recording; does nothing while recording. Bind to a key press.
@@ -154,14 +117,6 @@ enum ModelCommand {
 }
 
 pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
-    // This is the Linux entry point, before signal handlers or any worker threads.
-    // GTK and GPUI must connect to the same display backend.
-    unsafe {
-        std::env::set_var(
-            "GDK_BACKEND",
-            crate::linux_session::LinuxSession::detect().as_str(),
-        );
-    }
     let activation = crate::linux_service::Activation::take_from_environment();
     color_eyre::install()?;
     let log_dir = crate::app_paths::init_process_logging(shutdown)?;
@@ -170,21 +125,19 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
     let event_path = log_dir.join("live.ndjson");
     let command = Cli::parse().command.unwrap_or(Command::App {
         hidden: false,
-        ui: None,
         rune_args: Vec::new(),
     });
     let client = command.is_client();
     let result = (|| match command {
-        Command::App { rune_args, .. } if !rune_args.is_empty() => render_rune(rune_args),
-        Command::App { hidden, ui, .. } => launch(&activation, !hidden, ui, event_path, shutdown),
-        Command::Start => launch(&activation, false, None, event_path, shutdown),
+        // Rune reads its own flags (`--snap`, `--scene`, …) from the process arguments.
+        Command::App { rune_args, .. } if !rune_args.is_empty() => {
+            crate::rune_ui::render();
+            Ok(())
+        }
+        Command::App { hidden, .. } => launch(&activation, !hidden, event_path, shutdown),
+        Command::Start => launch(&activation, false, event_path, shutdown),
         Command::Service => {
-            match crate::linux_app::run(
-                crate::linux_app::WindowUi::default_for_build(),
-                event_path,
-                shutdown,
-                None,
-            ) {
+            match crate::linux_app::run(event_path, shutdown, None) {
                 // A unit start that lost the race to another launch has nothing to do.
                 Err(_) if another_instance_answers() => Ok(()),
                 result => result,
@@ -275,7 +228,6 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
             }
         },
     })();
-    crate::linux_desktop::shutdown();
     match result {
         // A keybinding or script wants one line, not a report.
         Err(error) if client => {
@@ -326,25 +278,18 @@ fn another_instance_answers() -> bool {
 }
 
 /// Forwards to the running Hex, starts its systemd unit, or becomes Hex.
-/// Choosing a toolkit with `--ui` skips the unit, which runs the default.
 fn launch(
     activation: &Activation,
     show: bool,
-    ui: Option<SettingsUi>,
     event_path: PathBuf,
     shutdown: &'static AtomicBool,
 ) -> Result<()> {
-    let window = match ui {
-        Some(ui) => ui.window()?,
-        None => crate::linux_app::WindowUi::default_for_build(),
-    };
     loop {
-        match crate::linux_service::launch(activation, show, ui.is_none())? {
+        match crate::linux_service::launch(activation, show)? {
             Launch::Forwarded => return Ok(()),
             Launch::BecomeInstance => {}
         }
         match crate::linux_app::run(
-            window,
             event_path.clone(),
             shutdown,
             show.then(|| activation.clone()),

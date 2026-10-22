@@ -383,7 +383,6 @@ pub enum DriverActionState {
     Failed(String),
 }
 
-static DRIVER_ACTION_SEQ: AtomicU64 = AtomicU64::new(0);
 static DRIVER_ACTION_STATE: OnceLock<Mutex<DriverActionState>> = OnceLock::new();
 
 fn driver_action_lock() -> &'static Mutex<DriverActionState> {
@@ -395,7 +394,6 @@ fn set_driver_action_state(state: DriverActionState) {
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     *guard = state;
-    DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
 }
 
 pub fn current_driver_action_state() -> DriverActionState {
@@ -403,10 +401,6 @@ pub fn current_driver_action_state() -> DriverActionState {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-}
-
-pub fn driver_action_seq() -> u64 {
-    DRIVER_ACTION_SEQ.load(Ordering::Acquire)
 }
 
 pub fn driver_action_in_progress() -> bool {
@@ -749,18 +743,6 @@ pub fn demo_recompute_is_running() -> bool {
     DEMO_RECOMPUTE_RUNNING.load(Ordering::Acquire) || DEMO_RECOMPUTE_DIRTY.load(Ordering::Acquire)
 }
 
-pub fn prewarm_demo_async() {
-    if DEMO_BUFFERS.get().is_some() {
-        return;
-    }
-    let _ = thread::Builder::new()
-        .name("hex-mic-demo-init".into())
-        .spawn(|| {
-            let _ = demo_buffers_lock();
-            DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
-        });
-}
-
 fn schedule_demo_recompute() {
     DEMO_RECOMPUTE_DIRTY.store(true, Ordering::Release);
     if DEMO_RECOMPUTE_RUNNING.swap(true, Ordering::AcqRel) {
@@ -814,7 +796,6 @@ fn schedule_demo_recompute() {
                     guard.peaks_call = peaks_call;
                     guard.cached_mode = Some(cfg);
                     guard.cached_source = Some(source);
-                    DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
                 }
             }
             DEMO_RECOMPUTE_RUNNING.store(false, Ordering::Release);
@@ -1008,7 +989,6 @@ pub fn stop_demo_playback() {
     }
     DEMO_PLAYBACK_GEN.fetch_add(1, Ordering::AcqRel);
     DEMO_PLAYING_TRACK.store(0, Ordering::Release);
-    DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
 }
 
 pub fn play_demo_track(track: DemoPlaybackTrack) {
@@ -1055,7 +1035,6 @@ pub fn play_demo_track(track: DemoPlaybackTrack) {
         let Ok(mut sink) = rodio::DeviceSinkBuilder::open_default_sink() else {
             if DEMO_PLAYBACK_GEN.load(Ordering::Acquire) == generation {
                 DEMO_PLAYING_TRACK.store(0, Ordering::Release);
-                DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
             }
             return;
         };
@@ -1079,29 +1058,6 @@ pub fn play_demo_track(track: DemoPlaybackTrack) {
         if DEMO_PLAYBACK_GEN.load(Ordering::Acquire) == generation {
             DEMO_PLAYBACK_PROGRESS_BITS.store(1.0_f32.to_bits(), Ordering::Release);
             DEMO_PLAYING_TRACK.store(0, Ordering::Release);
-            DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
-        }
-    });
-}
-
-pub fn simulate_silent_demo_playback(duration: Duration) {
-    let generation = DEMO_PLAYBACK_GEN.fetch_add(1, Ordering::AcqRel) + 1;
-    DEMO_PLAYBACK_START_NS.store(demo_now_ns(), Ordering::Release);
-    DEMO_PLAYBACK_DURATION_NS.store(duration.as_nanos() as u64, Ordering::Release);
-    DEMO_PLAYBACK_PROGRESS_BITS.store(0.0_f32.to_bits(), Ordering::Release);
-    DEMO_PLAYING_TRACK.store(1, Ordering::Release);
-    thread::spawn(move || {
-        let started = Instant::now();
-        while started.elapsed() < duration {
-            if DEMO_PLAYBACK_GEN.load(Ordering::Acquire) != generation {
-                return;
-            }
-            thread::sleep(Duration::from_millis(16));
-        }
-        if DEMO_PLAYBACK_GEN.load(Ordering::Acquire) == generation {
-            DEMO_PLAYBACK_PROGRESS_BITS.store(1.0_f32.to_bits(), Ordering::Release);
-            DEMO_PLAYING_TRACK.store(0, Ordering::Release);
-            DRIVER_ACTION_SEQ.fetch_add(1, Ordering::AcqRel);
         }
     });
 }

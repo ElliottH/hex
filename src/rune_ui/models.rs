@@ -1,8 +1,8 @@
 //! The OpenCode model catalog and the model and thinking pickers that Voice
-//! Action and each mode's rewriting share, with GPUI's behavior: the catalog
-//! loads off the UI thread, a missing `opencode2` is retried at a coarse
-//! interval, failures wait for an explicit retry, and choosing a model also
-//! picks its recommended thinking variant.
+//! Action and each mode's rewriting share: the catalog loads off the UI
+//! thread, a missing `opencode2` is retried at a coarse interval, failures
+//! wait for an explicit retry, and choosing a model also picks its
+//! recommended thinking variant.
 
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -14,13 +14,13 @@ use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, setting
 use super::modes::Selection;
 use super::{Menu, Ui};
 use crate::app_settings::AppSettings;
-use crate::app_window::{
+use crate::desktop_i18n::{tr, tr_fill};
+use crate::dictation_processor::{ModelCatalog, ModelChoice};
+use crate::opencode_catalog::{
     ModelCatalogState, OPENCODE_INSTALL_RETRY_INTERVAL, OpenCodeFeature, filtered_model_keys,
     model_presentation, model_variants, open_opencode_beta_docs, opencode_unavailable_copy,
     start_model_catalog_load,
 };
-use crate::desktop_i18n::{tr, tr_fill};
-use crate::dictation_processor::{ModelCatalog, ModelChoice};
 
 const MODEL_FIELD_WIDTH: f32 = 240.0;
 

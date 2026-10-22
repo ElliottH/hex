@@ -1,26 +1,89 @@
-//! The Linux recording HUD on Rune (`rune-ui` builds): the same focus-free
-//! pill the GTK HUD in `linux_desktop` draws, as a Rune overlay in the
-//! window's process. Rune makes it a layer-shell surface on Wayland (overlay
-//! layer, no keyboard, empty input region) and an override-redirect window
-//! with an empty input shape on X11, so it never takes focus or a click.
+//! The Linux recording HUD: a focus-free "Recording"/"Transcribing" pill as
+//! a Rune overlay in the Hex process. Rune makes it a layer-shell surface on
+//! Wayland (overlay layer, no keyboard, empty input region) and an
+//! override-redirect window with an empty input shape on X11, so it never
+//! takes focus or a click.
 //!
 //! It only observes: the listener reports its capture and pending output
 //! through `LinuxIndicator`, which never waits on the HUD. The listener can
 //! start before the window's app exists, so reports are kept here and the
 //! overlay shows the latest one once `install` adds it.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use rune::{Availability, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, row, text};
 
 use crate::app_settings::IndicatorPosition;
-use crate::linux_desktop::{IndicatorSlot, IndicatorState};
 
-/// Distance between the HUD and the screen edge it sits on (as the GTK HUD).
+/// Distance between the HUD and the screen edge it sits on.
 const EDGE_MARGIN: f32 = 16.0;
 /// Wide enough for the longest translated label in the pill.
 const SIZE: (f32, f32) = (280.0, 44.0);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum IndicatorState {
+    #[default]
+    Hidden,
+    Recording,
+    Processing,
+}
+
+impl IndicatorState {
+    fn for_capture(recording: bool, pending: usize) -> Self {
+        if recording {
+            Self::Recording
+        } else if pending > 0 {
+            Self::Processing
+        } else {
+            Self::Hidden
+        }
+    }
+}
+
+/// The newest listener's report; an older listener's reports stop counting.
+#[derive(Default)]
+struct IndicatorSlot {
+    generation: u64,
+    state: IndicatorState,
+}
+
+impl IndicatorSlot {
+    fn acquire(&mut self) -> u64 {
+        self.generation += 1;
+        self.state = IndicatorState::Hidden;
+        self.generation
+    }
+
+    fn set(&mut self, generation: u64, state: IndicatorState) {
+        if self.generation == generation {
+            self.state = state;
+        }
+    }
+}
+
+/// A listener's handle on the HUD; dropping it hides what it reported.
+pub(crate) struct LinuxIndicator {
+    generation: Option<u64>,
+}
+
+impl LinuxIndicator {
+    pub(crate) fn new(position: IndicatorPosition) -> Self {
+        let generation = (position != IndicatorPosition::Hidden).then(|| acquire(position));
+        Self { generation }
+    }
+
+    pub(crate) fn update(&self, recording: bool, pending: usize) {
+        if let Some(generation) = self.generation {
+            set(generation, IndicatorState::for_capture(recording, pending));
+        }
+    }
+}
+
+impl Drop for LinuxIndicator {
+    fn drop(&mut self) {
+        self.update(false, 0);
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Hud {
@@ -35,19 +98,8 @@ struct Slot {
     shown: Option<(IndicatorState, IndicatorPosition)>,
 }
 
-static ENABLED: AtomicBool = AtomicBool::new(false);
 static SLOT: Mutex<Option<Slot>> = Mutex::new(None);
 static OVERLAY: OnceLock<OverlayHandle<Hud>> = OnceLock::new();
-
-/// Routes `LinuxIndicator` here instead of the GTK HUD. Call before the
-/// listener starts.
-pub(crate) fn enable() {
-    ENABLED.store(true, Ordering::Release);
-}
-
-pub(crate) fn enabled() -> bool {
-    ENABLED.load(Ordering::Acquire)
-}
 
 /// Adds the HUD overlay to the window's app and shows the latest report.
 pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) {
@@ -73,16 +125,14 @@ fn lock() -> std::sync::MutexGuard<'static, Option<Slot>> {
     SLOT.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// A new listener's claim on the HUD; an older listener's reports stop
-/// counting.
-pub(crate) fn acquire(position: IndicatorPosition) -> u64 {
+fn acquire(position: IndicatorPosition) -> u64 {
     let mut slot = lock();
     let slot = slot.get_or_insert_default();
     slot.position = position;
     slot.indicator.acquire()
 }
 
-pub(crate) fn set(generation: u64, state: IndicatorState) {
+fn set(generation: u64, state: IndicatorState) {
     let mut slot = lock();
     slot.get_or_insert_default()
         .indicator
@@ -133,7 +183,7 @@ fn view(hud: &Hud, _: &mut Cx<Hud>) -> El {
         IndicatorState::Processing => "Transcribing",
         _ => "Recording",
     });
-    // The GTK HUD's pill: #171717 on a #292929 hairline, #eeeeee 600 13px.
+    // A dark pill in either appearance: #171717 on a #292929 hairline, #eeeeee 600 13px.
     row().key("hud").w_full().h_full().center().child(
         row()
             .key("pill")

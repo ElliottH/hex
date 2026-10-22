@@ -23,7 +23,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize};
 use objc2_quartz_core::CALayer;
 
 use crate::app_settings::IndicatorPosition;
-use crate::motion::{Spec, Spring, reduced_motion};
+use crate::spring::{REDUCED_FADE, Spec, Spring, reduced_motion};
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -363,12 +363,6 @@ impl MetalIndicator {
             self.position_on_pointer_screen();
             self.window.orderFrontRegardless();
             self.ordered = true;
-            if std::env::var_os("HEX_RECORD_HUD_WINDOW").is_some() {
-                let num = self.window.windowNumber();
-                if num > 0 {
-                    crate::motion::maybe_start_self_window_recorder(Some(num as u32));
-                }
-            }
             tracing::info!("Metal dictation indicator shown");
         }
         self.ensure_display_link(true);
@@ -964,11 +958,8 @@ impl MetalRenderer {
                 self.average.jump(self.target_average);
                 self.peak.jump(self.target_peak);
             } else {
-                self.opacity.step_to(
-                    if visible { 1.0 } else { 0.0 },
-                    crate::motion::presets::REDUCED_FADE,
-                    dt,
-                );
+                self.opacity
+                    .step_to(if visible { 1.0 } else { 0.0 }, REDUCED_FADE, dt);
             }
             self.visual_scale.jump(1.0);
             self.softness.jump(0.0);
@@ -1053,7 +1044,7 @@ impl MetalRenderer {
         command_buffer.commit();
 
         let exit_spec = if reduce {
-            crate::motion::presets::REDUCED_FADE
+            REDUCED_FADE
         } else {
             Spec::from_omega(EXIT_ANGULAR_FREQUENCY)
         };

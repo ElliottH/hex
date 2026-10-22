@@ -3,7 +3,7 @@
 //! update, and settings state, plus the OS-only work the panes ask for
 //! (permissions, the login item, Hex Microphone, meetings, commands).
 //!
-//! Shortcut capture stays in the window, as in GPUI: an AppKit local event
+//! Shortcut capture stays in the window: an AppKit local event
 //! monitor records the chord, because a modifier-only binding such as Option
 //! or Fn never reaches Rune as a key event. The listener's event tap is
 //! suspended meanwhile so the current binding can be recorded again.
@@ -47,7 +47,7 @@ pub(super) const RECORDS_KEY_EVENTS: bool = false;
 /// Sparkle offers "Check now".
 pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 pub(super) const TERMINAL_PASTE: bool = false;
-/// Quit Hex lives in the menu bar and the app menu (⌘Q), as under GPUI.
+/// Quit Hex lives in the menu bar and the app menu (⌘Q).
 pub(super) const QUIT_IN_WINDOW: bool = false;
 
 /// How often the native host re-reads permissions and driver state.
@@ -213,9 +213,9 @@ impl Drop for ChordWatch {
     }
 }
 
-/// Turns key and modifier events into a binding the way GPUI's Settings
-/// does: a key with its held modifiers, or the most modifiers held at once
-/// when they are all released without a key.
+/// Turns key and modifier events into a binding: a key with its held
+/// modifiers, or the most modifiers held at once when they are all released
+/// without a key.
 #[derive(Default)]
 struct ChordCapture {
     peak: HotkeyModifiers,
@@ -300,7 +300,7 @@ fn is_function_key(label: &str) -> bool {
         .is_some_and(|number| (1..=20).contains(&number))
 }
 
-/// The key a virtual key code records, labeled as GPUI's Settings labels it.
+/// The key a virtual key code records, and its label.
 fn hotkey_key(code: u16, characters: Option<&str>) -> Result<HotkeyKey, &'static str> {
     let special = match code {
         49 => Some("Space"),
@@ -589,9 +589,9 @@ impl NativeHost for MacHost {
         let mut changed = false;
         if let Some(login) = &mut self.login {
             match login.poll() {
-                Ok(Some(response)) => {
+                Ok(Some(result)) => {
                     self.login_checking = false;
-                    match response.result {
+                    match result {
                         Ok(status) => {
                             state.login_item = Some(status);
                             state.login_item_error = None;
@@ -812,7 +812,7 @@ fn pane_meeting(meeting: &crate::meeting::query::Meeting, now_ms: u64) -> Meetin
     }
 }
 
-/// Speaker turns, marking silences of 30 s or more, as GPUI's transcript.
+/// Speaker turns, marking silences of 30 s or more.
 fn turns(entries: &[crate::meeting::TranscriptEntry]) -> Vec<Turn> {
     let mut previous_end: Option<u64> = None;
     crate::meeting::coalesce_transcript(entries.iter().cloned())
@@ -912,8 +912,7 @@ fn save_meetings_folder(folder: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-/// Shows HUD Lab's tuning and demonstrated state on the dictation HUD, as
-/// GPUI's `apply_hud_lab`.
+/// Shows HUD Lab's tuning and demonstrated state on the dictation HUD.
 fn configure_hud(runtime: &RuntimeHandle, lab: HudLab) {
     use crate::dictation_indicator::{DictationIndicatorEvent as Event, HudTuning};
     let t = lab.tuning;
@@ -983,7 +982,7 @@ fn open_path(path: &std::path::Path) {
     }
 }
 
-/// The catalog group GPUI shows for a compiled command.
+/// The catalog group a compiled command is listed under.
 fn command_task(command: &CommandInfo) -> String {
     if let Some(group) = &command.group {
         return group.clone();

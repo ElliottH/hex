@@ -1,4 +1,4 @@
-//! The first-run tour, driven by the same `onboarding::Flow` as GPUI's.
+//! The first-run tour, driven by `onboarding::Flow`.
 //!
 //! What it shows follows [`Capabilities`](super::platform::Capabilities):
 //! macOS asks for every privacy permission on one screen (with the System
@@ -8,8 +8,8 @@
 //! permissions, and this window cannot observe a practice dictation there,
 //! so their steps are Welcome, the speech model download, and Done.
 //!
-//! GPUI animates the welcome and done art on a loop and pulses the
-//! listening dot; Rune has no looping animation yet, so they are static.
+//! The welcome and done art and the listening dot are static until Rune
+//! has looping animation.
 
 use std::time::{Duration, Instant};
 
@@ -370,8 +370,7 @@ fn title(p: Paint, title: &str, body: Option<String>) -> El {
         }))
 }
 
-/// The shortcut as large keycaps inside a ring of sound, held still where
-/// GPUI loops it.
+/// The shortcut as large keycaps inside a ring of sound.
 fn hero(p: Paint, parts: &[String]) -> El {
     let c = &p.k.c;
     let caps = row()
@@ -786,7 +785,7 @@ fn set_downloaded(ui: &mut Ui, percent: u64) {
 }
 
 /// The macOS tour's states, walked as a person would so the page dots and
-/// the download match what they see (GPUI's `OnboardingPreview`).
+/// the download match what they see.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum MacStep {
     Welcome,

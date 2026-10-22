@@ -61,7 +61,6 @@ in
       (package: builtins.elem "${lib.getLib package}/lib" (lib.splitString ":" shell.LD_LIBRARY_PATH))
       [
         pkgs.vulkan-loader
-        pkgs.gtk-layer-shell
         pkgs.wayland
         pkgs.libxkbcommon
       ];

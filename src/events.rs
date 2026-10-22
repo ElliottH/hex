@@ -421,7 +421,7 @@ impl EventReader {
     }
 
     /// Takes the events read so far, so the next `refresh` yields only newer ones.
-    #[cfg(all(target_os = "macos", feature = "rune-ui"))]
+    #[cfg(target_os = "macos")]
     pub fn drain(&mut self) -> impl Iterator<Item = VoiceEvent> + '_ {
         self.events.drain(..)
     }
@@ -430,6 +430,7 @@ impl EventReader {
         self.events.iter().rev().take(limit).cloned().collect()
     }
 
+    #[cfg(test)]
     pub fn current_context(&self) -> Option<&(Option<String>, Option<String>)> {
         self.current_context.as_ref()
     }

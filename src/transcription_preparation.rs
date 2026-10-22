@@ -16,8 +16,6 @@ type Prepare = dyn Fn(&TranscriptionSelection, bool, &AtomicBool, &AtomicU64) ->
 #[derive(Clone)]
 pub struct TranscriptionPreparation(Rc<RefCell<State>>);
 
-impl gpui::Global for TranscriptionPreparation {}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PreparationStatus {
     pub model: Option<TranscriptionModelId>,

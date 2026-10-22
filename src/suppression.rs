@@ -114,11 +114,6 @@ impl InputEvent {
     }
 }
 
-pub fn physical_modifier_flags() -> u64 {
-    // SAFETY: HID state is a process-independent CoreGraphics query.
-    unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct ObservedInputEvent {
     sequence: u64,

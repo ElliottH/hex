@@ -256,8 +256,8 @@ pub(super) enum PermissionControl {
 }
 
 /// The one control every permission uses, in the tour and in Settings:
-/// Allow, a dot while macOS is asked, then a green Allowed. GPUI pulses the
-/// dot; Rune has no looping animation yet, so it is steady.
+/// Allow, a dot while macOS is asked, then a green Allowed. The dot is
+/// steady until Rune has looping animation.
 pub(super) fn permission_control(
     p: Paint,
     key: &str,

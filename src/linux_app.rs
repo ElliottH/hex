@@ -1,9 +1,9 @@
 //! The one Linux Hex process: the dictation host (listener, shortcut
 //! registration, model preparation, updates, History writes, paste), the
-//! single-instance socket, the GTK HUD thread, and the window, opened on
-//! demand and closed without stopping anything.
+//! single-instance socket, and the window and HUD, opened on demand and
+//! closed without stopping anything.
 //!
-//! Threads: the main thread runs the window toolkit; the host thread
+//! Threads: the main thread runs Rune's event loop; the host thread
 //! refreshes [`LinuxDesktopHost`] every 20 ms and publishes its status;
 //! the socket's workers answer `hex` commands from that published status
 //! and hand shortcut commands straight to the listener.
@@ -39,24 +39,6 @@ const REOPEN_MARKER: &str = "reopen-window";
 type ListenerResult = std::result::Result<(), String>;
 type PreparationResult = std::result::Result<PreparedTranscription, String>;
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
-
-/// The window toolkit the process hosts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WindowUi {
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
-    Rune,
-    Gpui,
-}
-
-impl WindowUi {
-    pub(crate) fn default_for_build() -> Self {
-        if cfg!(feature = "rune-ui") {
-            Self::Rune
-        } else {
-            Self::Gpui
-        }
-    }
-}
 
 struct PreparedTranscription {
     selection: crate::transcription_models::TranscriptionSelection,
@@ -253,7 +235,6 @@ impl HostHandle {
 
     /// Saves the window's settings, then adopts them. A failed save leaves
     /// the host's settings alone.
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
     pub(crate) fn save_settings(&self, settings: AppSettings) -> Result<()> {
         settings.save()?;
         self.lock().adopt_settings(settings);
@@ -261,23 +242,12 @@ impl HostHandle {
         Ok(())
     }
 
-    /// Adopts settings the window already saved.
-    pub(crate) fn adopt_settings(&self, settings: AppSettings) {
-        self.lock().adopt_settings(settings);
-        self.wake();
-    }
-
-    pub(crate) fn event_path(&self) -> PathBuf {
-        self.lock().event_path.clone()
-    }
-
     /// The host's retained-history store; one store per process.
     pub(crate) fn history(&self) -> Option<crate::history::History> {
         self.lock().output.history.clone()
     }
 
-    /// The window's toolkit wakes on host changes through `waker`.
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    /// The window wakes on host changes through `waker`.
     pub(crate) fn set_waker(&self, waker: Waker) {
         *self.0.waker.lock().unwrap() = Some(waker);
     }
@@ -286,7 +256,6 @@ impl HostHandle {
         self.0.window_open.store(open, Ordering::Release);
     }
 
-    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
     pub(crate) fn window_open(&self) -> bool {
         self.0.window_open.load(Ordering::Acquire)
     }
@@ -313,7 +282,7 @@ impl HostHandle {
             desktop: snapshot.desktop,
             settings: snapshot.settings,
             editing: snapshot.editing,
-            hud_limitation: crate::linux_desktop::hud_limitation(),
+            hud_limitation: crate::linux_rune_hud::limitation(),
             window_open: self.0.window_open.load(Ordering::Acquire),
             pid: std::process::id(),
             session: linux_service::Session::current(),
@@ -322,10 +291,9 @@ impl HostHandle {
 }
 
 /// Becomes the Linux instance: claims the data root, starts the host, and
-/// runs the window toolkit on this (the main) thread until `hex quit`, a
-/// signal, or the window's Quit. `activation` opens the window at once.
+/// runs the window's event loop on this (the main) thread until `hex quit`,
+/// a signal, or the window's Quit. `activation` opens the window at once.
 pub fn run(
-    ui: WindowUi,
     event_path: PathBuf,
     shutdown: &'static AtomicBool,
     activation: Option<Activation>,
@@ -347,10 +315,6 @@ pub fn run(
     // Before any thread can load a model or the window can create its GPU.
     crate::local_transcriber::initialize_backends();
     let enable_on_launch = settings.enable_on_launch;
-    #[cfg(feature = "rune-ui")]
-    if matches!(ui, WindowUi::Rune) {
-        crate::linux_rune_hud::enable();
-    }
     let mut host = LinuxDesktopHost::new(event_path, settings, error, update);
     if enable_on_launch {
         host.start();
@@ -371,7 +335,7 @@ pub fn run(
     };
     let reopen = take_reopen_marker();
     let first = activation.or(reopen.then(Activation::default));
-    run_windows(ui, &host, requests, first, shutdown);
+    run_window(&host, requests, first, shutdown);
     shutdown.store(true, Ordering::Release);
     let _ = worker.join();
     Ok(())
@@ -426,154 +390,27 @@ fn run_host(
     drop(server);
 }
 
-/// The one seam between the process and its window toolkit, on the main
-/// thread until Hex quits. `first` opens the window at once.
-fn run_windows(
-    ui: WindowUi,
+/// The one seam between the process and its window, on the main thread
+/// until Hex quits. `first` opens the window at once. A missing display or
+/// GPU fails the window, never Hex.
+fn run_window(
     host: &HostHandle,
     requests: Receiver<Control>,
     first: Option<Activation>,
     shutdown: &'static AtomicBool,
 ) {
-    match ui {
-        #[cfg(feature = "rune-ui")]
-        WindowUi::Rune => {
-            // A missing display or GPU fails the window, never Hex.
-            let app = host.clone();
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::rune_ui::run_app(app, requests, first)
-            }))
-            .is_err()
-            {
-                tracing::error!("the Hex window failed; Hex keeps running without it");
-                host.set_window_open(false);
-                while !shutdown.load(Ordering::Acquire) {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-        }
-        #[cfg(not(feature = "rune-ui"))]
-        WindowUi::Rune => {
-            let _ = (first, shutdown);
-            while let Ok(Control::Activate(_)) = requests.recv() {}
-        }
-        WindowUi::Gpui => run_gpui_windows(host, requests, first, shutdown),
-    }
-}
-
-/// GPUI on Linux ends its loop with the last window, so it runs once per
-/// opened window and the main thread waits for requests in between.
-fn run_gpui_windows(
-    host: &HostHandle,
-    mut requests: Receiver<Control>,
-    mut next: Option<Activation>,
-    shutdown: &'static AtomicBool,
-) {
-    loop {
-        if next.take().is_some() {
-            host.set_window_open(true);
-            let (quit, returned) = run_gpui_window(host, requests, shutdown);
-            requests = returned;
-            host.window_closed();
-            if quit {
-                break;
-            }
-        }
-        if shutdown.load(Ordering::Acquire) {
-            break;
-        }
-        match requests.recv() {
-            Ok(Control::Activate(activation)) => next = Some(activation),
-            Ok(Control::Quit) | Err(_) => break,
+    let app = host.clone();
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::rune_ui::run_app(app, requests, first)
+    }))
+    .is_err()
+    {
+        tracing::error!("the Hex window failed; Hex keeps running without it");
+        host.set_window_open(false);
+        while !shutdown.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
-}
-
-/// Runs GPUI for one window. GPUI on Linux ends its loop with the last
-/// window, so closing it quits the loop. Returns whether Hex should quit,
-/// and the request queue the window borrowed.
-fn run_gpui_window(
-    host: &HostHandle,
-    requests: Receiver<Control>,
-    shutdown: &'static AtomicBool,
-) -> (bool, Receiver<Control>) {
-    use gpui::{App, Application, Timer};
-    let quit = Arc::new(AtomicBool::new(false));
-    let (forward, forwarded) = mpsc::channel::<Control>();
-    // GPUI's executor polls a channel of its own; the relay feeds it.
-    let relay_stop = Arc::new(AtomicBool::new(false));
-    let relay = {
-        let relay_stop = relay_stop.clone();
-        std::thread::spawn(move || {
-            while !relay_stop.load(Ordering::Acquire) {
-                match requests.recv_timeout(Duration::from_millis(100)) {
-                    Ok(request) => {
-                        if forward.send(request).is_err() {
-                            break;
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-            requests
-        })
-    };
-    let host = host.clone();
-    let quitting = quit.clone();
-    Application::new().run(move |cx: &mut App| {
-        cx.bind_keys(crate::text_input::key_bindings());
-        let window = match crate::app_window::open(host.clone(), cx) {
-            Ok(window) => window,
-            Err(error) => {
-                tracing::error!(%error, "could not open the Hex window");
-                cx.quit();
-                return;
-            }
-        };
-        window
-            .update(cx, |_, window, cx| {
-                window.set_window_title("Hex");
-                // Quit without letting GPUI close the window here: on Wayland
-                // it destroys the Vulkan surface at once, and a configure the
-                // compositor queued behind the close (as sway does when it
-                // retiles) then resizes the destroyed surface and segfaults.
-                // Quitting stops the event loop after this dispatch instead.
-                window.on_window_should_close(cx, |_, cx| {
-                    cx.quit();
-                    false
-                });
-                window.activate_window();
-            })
-            .ok();
-        cx.spawn(async move |cx| {
-            loop {
-                Timer::after(Duration::from_millis(50)).await;
-                while let Ok(request) = forwarded.try_recv() {
-                    match request {
-                        Control::Activate(_) => {
-                            let _ = window.update(cx, |_, window, _| window.activate_window());
-                        }
-                        Control::Quit => {
-                            quitting.store(true, Ordering::Release);
-                            let _ = cx.update(|cx| cx.quit());
-                            return;
-                        }
-                    }
-                }
-                if shutdown.load(Ordering::Acquire) {
-                    quitting.store(true, Ordering::Release);
-                    let _ = cx.update(|cx| cx.quit());
-                    return;
-                }
-            }
-        })
-        .detach();
-        cx.activate(true);
-    });
-    relay_stop.store(true, Ordering::Release);
-    let requests = relay.join().expect("the window request relay panicked");
-    (quit.load(Ordering::Acquire), requests)
 }
 
 fn reopen_marker() -> Option<PathBuf> {

@@ -1,6 +1,6 @@
 //! The Modes pane: the Global mode and custom modes chosen by the frontmost
 //! application, each with corrections, optional OpenCode rewriting, and
-//! TypeScript transformations, as in GPUI. Text fields are drafts saved when
+//! TypeScript transformations. Text fields are drafts saved when
 //! typing pauses; every other edit saves at once and asks the service to
 //! reload.
 
@@ -16,9 +16,9 @@ use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, card, note, setting_row};
 use super::models::{self, Target};
 use crate::app_settings::{AppSettings, DictationMode};
-use crate::app_window::{OpenCodeFeature, reorder_transformation};
 use crate::application_catalog::InstalledApplication;
 use crate::desktop_i18n::{tr, tr_fill, tr_named};
+use crate::opencode_catalog::OpenCodeFeature;
 use crate::personal_commands::{HostState, StatusSnapshot, StatusTransformation};
 use crate::text_replacements::TextReplacement;
 
@@ -449,7 +449,7 @@ fn choose_application(ui: &mut Ui) {
     ui.modes.chooser = Some(receiver);
 }
 
-/// Adds what the file chooser returned, as GPUI does: the application joins
+/// Adds what the file chooser returned: the application joins
 /// the catalog and the selected mode.
 pub(super) fn poll_chooser(ui: &mut Ui) -> bool {
     let Some(result) = ui.modes.chooser.as_ref().and_then(|r| r.try_recv().ok()) else {
@@ -514,6 +514,19 @@ fn drag_transformation(ui: &mut Ui, id: &str, start: usize, pitch: f32, d: &Drag
             }
         }
     }
+}
+
+/// Moves `id` to `target_index`; false when it is missing or already there.
+fn reorder_transformation(values: &mut Vec<String>, id: &str, target_index: usize) -> bool {
+    let Some(from) = values.iter().position(|candidate| candidate == id) else {
+        return false;
+    };
+    if from == target_index {
+        return false;
+    }
+    let value = values.remove(from);
+    values.insert(target_index.min(values.len()), value);
+    true
 }
 
 fn provision_workspace(ui: &mut Ui) {
@@ -1316,7 +1329,7 @@ impl Ui {
 // Fixture
 
 /// Representative modes: a chat mode with corrections, rewriting, and
-/// transformations, and an empty one, as the GPUI Modes preview shows.
+/// transformations, and an empty one.
 pub(super) fn fixture(ui: &mut Ui) {
     let mut chat = ui.settings.dictation_processing.default_mode.clone();
     chat.name = "Chat".into();
@@ -1355,7 +1368,6 @@ pub(super) fn fixture(ui: &mut Ui) {
         name: name.into(),
         bundle_id: None,
         path: PathBuf::from(path),
-        icon: None,
     };
     ui.modes.applications = Applications::Loaded(vec![
         app("Firefox", "/usr/share/applications/firefox.desktop"),
@@ -1369,4 +1381,26 @@ pub(super) fn fixture(ui: &mut Ui) {
     ]);
     ui.modes.select(Selection::Custom(0));
     ui.modes.editor = Editor::of(mode(&ui.settings, Selection::Custom(0)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reorder_transformation;
+
+    #[test]
+    fn transformations_reorder_in_both_directions() {
+        let mut transformations = vec!["one".to_string(), "two".into(), "three".into()];
+        assert!(reorder_transformation(&mut transformations, "one", 2));
+        assert_eq!(transformations, ["two", "three", "one"]);
+        assert!(reorder_transformation(&mut transformations, "one", 0));
+        assert_eq!(transformations, ["one", "two", "three"]);
+    }
+
+    #[test]
+    fn transformation_reorder_ignores_same_position_and_missing_ids() {
+        let mut transformations = vec!["one".to_string(), "two".into()];
+        assert!(!reorder_transformation(&mut transformations, "one", 0));
+        assert!(!reorder_transformation(&mut transformations, "missing", 1));
+        assert_eq!(transformations, ["one", "two"]);
+    }
 }

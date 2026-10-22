@@ -1,7 +1,6 @@
 //! The Voice Action pane: the opt-in, its shortcut, and the OpenCode model
 //! that turns spoken instructions into paste-ready text. Enabling checks the
-//! saved shortcut against the others first, as GPUI does; the shortcut is
-//! recorded through the service like every Linux shortcut.
+//! saved shortcut against the others first.
 
 use rune::{El, col};
 
@@ -10,14 +9,37 @@ use super::Ui;
 use super::controls::{Paint, card, note, section, setting_row, toggle_row};
 use super::models::{self, Target};
 use super::settings::{cancel_capture, hotkey_control};
-use crate::app_window::{OpenCodeFeature, set_voice_action_enabled, voice_action_description};
+use crate::app_settings::AppSettings;
 use crate::desktop_i18n::tr;
+use crate::opencode_catalog::OpenCodeFeature;
+
+fn description(enabled: bool) -> &'static str {
+    if enabled {
+        tr("Use the shortcut below with OpenCode to run spoken instructions")
+    } else {
+        tr("Off by default. Its saved shortcut is not reserved until you enable Voice Action.")
+    }
+}
+
+/// Turns Voice Action on or off; enabling fails while its saved shortcut
+/// collides with another, and leaves the shortcut as it is.
+fn set_enabled(settings: &mut AppSettings, enabled: bool) -> Result<(), &'static str> {
+    if enabled
+        && super::settings::conflicts(settings, ShortcutTarget::VoiceAction, &settings.edit_hotkey)
+    {
+        return Err(tr(
+            "The Voice Action shortcut is already in use. Change it below or change the other shortcut before enabling Voice Action.",
+        ));
+    }
+    settings.voice_action.enabled = enabled;
+    Ok(())
+}
 
 fn toggle(ui: &mut Ui) {
     cancel_capture(ui);
     let enabled = !ui.settings.voice_action.enabled;
     let mut candidate = ui.drafted();
-    match set_voice_action_enabled(&mut candidate, enabled) {
+    match set_enabled(&mut candidate, enabled) {
         Ok(()) => {
             if ui.commit(candidate) {
                 ui.voice_action_error = None;
@@ -36,7 +58,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         p,
         "voice-action-enabled",
         tr("Enable Voice Action"),
-        voice_action_description(enabled),
+        description(enabled),
         enabled,
         toggle,
     )];
@@ -83,4 +105,74 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         content = content.child(section(p, "processing", tr("Processing"), rows));
     }
     super::scroll_body("scroll", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_settings::HotkeyBinding;
+
+    #[test]
+    fn voice_action_defaults_off_and_explains_its_inactive_shortcut() {
+        let settings = AppSettings::default();
+        assert!(!settings.voice_action.enabled);
+        let off = description(settings.voice_action.enabled);
+        assert!(off.contains("Off by default"));
+        assert!(off.contains("not reserved"));
+
+        let on = description(true);
+        assert!(on.contains("OpenCode"));
+        assert!(!on.contains("not reserved"));
+    }
+
+    #[test]
+    fn voice_action_opt_in_rejects_active_conflicts_without_rebinding() {
+        let defaults = AppSettings::default();
+        let mut active = vec![
+            defaults.dictation_hotkey,
+            defaults.paste_last_hotkey.unwrap(),
+        ];
+        if cfg!(target_os = "macos") && crate::DEVELOPER_FEATURES_ENABLED {
+            active.push(HotkeyBinding::paste_meeting_default());
+        }
+        for binding in active {
+            let mut settings = AppSettings {
+                edit_hotkey: binding,
+                ..AppSettings::default()
+            };
+            let before = serde_json::to_value(&settings).unwrap();
+            let error = set_enabled(&mut settings, true).unwrap_err();
+
+            assert!(error.contains("already in use"));
+            assert!(error.contains("Change it below"));
+            assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn voice_action_toggle_preserves_configuration_and_can_always_disable() {
+        let mut settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "voice_action": {
+                "model": "example/saved-model",
+                "variant": "high",
+                "deadline_seconds": 45
+            },
+            "edit_hotkey": {
+                "modifiers": { "control": "left" }
+            }
+        }))
+        .unwrap();
+        assert!(!settings.voice_action.enabled);
+        let mut expected = serde_json::to_value(&settings).unwrap();
+        for enabled in [true, false] {
+            set_enabled(&mut settings, enabled).unwrap();
+            expected["voice_action"]["enabled"] = serde_json::json!(enabled);
+            assert_eq!(serde_json::to_value(&settings).unwrap(), expected);
+        }
+
+        set_enabled(&mut settings, true).unwrap();
+        settings.dictation_hotkey = settings.edit_hotkey.clone();
+        set_enabled(&mut settings, false).unwrap();
+        assert!(!settings.voice_action.enabled);
+    }
 }

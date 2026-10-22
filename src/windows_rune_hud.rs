@@ -1,4 +1,4 @@
-//! The Windows dictation HUD on Rune (`rune-ui` builds): the shared indicator
+//! The Windows dictation HUD: the shared indicator
 //! model and the CPU port of the macOS shader (`desktop_indicator_shader`),
 //! drawn as `rune::Pixels` in a Rune overlay: a topmost tool window that
 //! never activates and lets every click through.
@@ -8,18 +8,44 @@
 //! shades each frame, and hands it to the overlay, which only draws. The
 //! listener never waits on it.
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 use rune::{Cx, El, OverlayHandle, OverlaySpec, Pixels, ScreenEdge, el};
 
 use crate::app_settings::IndicatorPosition;
-use crate::desktop_indicator_model::{IndicatorModel, WINDOW_HEIGHT, WINDOW_WIDTH};
-use crate::windows_indicator::{BOTTOM_OFFSET, TOP_OFFSET, WindowsIndicatorEvent};
+use crate::desktop_indicator_model::{
+    DictationIndicatorEvent, IndicatorModel, WINDOW_HEIGHT, WINDOW_WIDTH,
+};
+
+pub(crate) use crate::desktop_indicator_model::DictationIndicatorEvent as WindowsIndicatorEvent;
 
 const FRAME: Duration = Duration::from_millis(16);
-/// The shader's backing scale, as the GPUI HUD renders it.
+/// The shader's backing scale, matching the macOS HUD's Retina rendering.
 const BACKING_SCALE: f32 = 2.0;
+const TOP_OFFSET: f32 = crate::desktop_indicator_model::TOP_OFFSET as f32;
+const BOTTOM_OFFSET: f32 = 24.0;
+
+/// How the listener reports captures to the HUD; sending never waits.
+#[derive(Clone)]
+pub(crate) struct WindowsIndicatorSender(Sender<WindowsIndicatorEvent>);
+
+impl WindowsIndicatorSender {
+    pub(crate) fn send(&self, event: WindowsIndicatorEvent) {
+        let _ = self.0.send(event);
+    }
+
+    pub(crate) fn meter(&self, samples: &[f32]) {
+        if let Some(event) = DictationIndicatorEvent::meter(samples) {
+            self.send(event);
+        }
+    }
+}
+
+pub(crate) fn channel() -> (WindowsIndicatorSender, Receiver<WindowsIndicatorEvent>) {
+    let (sender, receiver) = mpsc::channel();
+    (WindowsIndicatorSender(sender), receiver)
+}
 
 pub(crate) struct Hud {
     pixels: Pixels,
