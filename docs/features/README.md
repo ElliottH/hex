@@ -847,6 +847,7 @@ Linux Settings > Sound volume             // dictate.feedback.linux; X11 + Wayla
 
 Capture                                  // hex app and hex dictate
 ├── Shortcut starts capture -> Queue start sound immediately, before audio arrives
+├── Hold passes 300 ms -> While dictating mute/pause begins, never at the press
 ├── Finish retained recording -> Stop sound at the release, while the 200 ms
 │   tail is still captured; a muted output unmutes first   // dictate.stop-tone
 │   └── Clip turns out near-silent -> Stop sound already played, nothing pasted
@@ -863,7 +864,10 @@ nonblocking. Output preparation failures are
 logged without blocking dictation. The Settings window saves the volume to
 `settings.json` and the service reloads it without restarting the listener. The start sound does not wait
 for the 300 ms capture-retention threshold; input delivery and audio-device
-latency still apply.
+latency still apply. **While dictating** mute or pause does: the audio loop
+requests it when the capture's audio reaches 300 ms past the press, and not
+during a release tail. Until 2026-10-22 the service muted at the press. This
+ordering is checked by reading the loop, not by a test or a muted device.
 
 Checks: `bundled_recording_sounds_decode_without_an_audio_device` and
 `feedback_admission_never_waits_for_playback` in the player, plus

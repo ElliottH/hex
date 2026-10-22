@@ -340,7 +340,6 @@ pub fn run(
                     } else {
                         continue;
                     }
-                    suppressor.suppress();
                     events.dictation(DictationPhase::Started, "")?;
                     emit_state(&mut events, VoiceState::Dictating, &device_label)?;
                 }
@@ -453,7 +452,10 @@ pub fn run(
                     }
                 }
                 capture.ingest(&samples, captured_through);
-                capture.become_intentional(captured_through);
+                if capture.become_intentional(captured_through) && finishing.is_none() {
+                    // Ordinary shortcut chords and short taps never mute or pause.
+                    suppressor.suppress();
+                }
                 stream_when_due(&mut capture, &engine, toggle);
             }
             RecoveringAudioInputEvent::Timeout => {}

@@ -164,7 +164,8 @@ OpenCode, and pastes the reply.
 **Microphone mode** can release the microphone between dictations; it then opens
 on the shortcut press without pre-roll. **While dictating** can mute the default
 output through `wpctl` (PipeWire) or `pactl` (PulseAudio), or pause playing
-MPRIS media players over D-Bus; HEX restores only what it changed.
+MPRIS media players over D-Bus, once the hold passes 300 ms, so shortcut chords
+and short taps never do; HEX restores only what it changed.
 Cancelling shortcut capture preserves the old binding unless the new binding
 has already been saved; listening resumes only if it was previously running.
 
