@@ -306,15 +306,25 @@ pub(super) fn close_menu(ui: &mut Ui) {
 /// Whether Hex listens, how to dictate, and the one way to change it.
 /// The Settings pane's scrolling body.
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    use super::platform_settings as os;
+    let caps = ui.platform.caps;
     let mut content = col().key("content").px(24.0).pt(8.0).pb(24.0).gap(24.0);
-    content = content.child(listener_card(ui, p));
+    content = content
+        .children(os::permissions_section(ui, p))
+        .children(os::command_model_notice(ui, p))
+        .children(os::error_section(ui, p));
+    if caps.listener_control {
+        content = content.child(listener_card(ui, p));
+    }
     if let Some(shortcuts) = desktop_shortcuts(ui, p) {
         content = content.child(shortcuts);
     }
     content = content
         .child(dictation_section(ui, p, layer))
         .child(behavior_section(ui, p))
-        .child(application_section(ui, p, layer));
+        .children(os::meetings_section(ui, p))
+        .child(application_section(ui, p, layer))
+        .children(os::hex_microphone_section(ui, p));
     super::scroll_body("scroll", content)
 }
 
@@ -909,7 +919,7 @@ pub(super) fn behavior_section(ui: &Ui, p: Paint) -> El {
             },
         ),
     ));
-    if host::TERMINAL_PASTE {
+    if ui.platform.caps.terminal_paste {
         rows.push(toggle_row(
             p,
             "terminal-paste",
@@ -992,34 +1002,21 @@ pub(super) fn release_confirmation(ui: &Ui, p: Paint) -> El {
 
 pub(super) fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let settings = &ui.settings;
-    let mut rows = Vec::new();
-    if let Some(launch) = &ui.launch_at_login {
+    let mut rows = super::platform_settings::launch_at_login_rows(ui, p);
+    if ui.platform.caps.listener_control {
         rows.push(toggle_row(
             p,
-            "launch-at-login",
-            tr("Launch at login"),
-            tr("Start Hex when you log in"),
-            launch.as_ref().is_ok_and(|enabled| *enabled),
+            "enable-on-launch",
+            tr("Enable on launch"),
+            tr("Turn Hex on in every app whenever it opens"),
+            settings.enable_on_launch,
             |ui: &mut Ui| {
-                let enabled = !matches!(ui.launch_at_login, Some(Ok(true)));
-                ui.launch_at_login = Some(host::set_launch_at_login(enabled));
+                let enabled = !ui.settings.enable_on_launch;
+                ui.update(|settings| settings.enable_on_launch = enabled);
             },
         ));
-        if let Err(error) = launch {
-            rows.push(note("launch-at-login-error", error, p.danger()));
-        }
     }
-    rows.push(toggle_row(
-        p,
-        "enable-on-launch",
-        tr("Enable on launch"),
-        tr("Turn Hex on in every app whenever it opens"),
-        settings.enable_on_launch,
-        |ui: &mut Ui| {
-            let enabled = !ui.settings.enable_on_launch;
-            ui.update(|settings| settings.enable_on_launch = enabled);
-        },
-    ));
+    rows.extend(super::platform_settings::dock_icon_row(ui, p));
     let language = tr(crate::desktop_i18n::choice_name(
         settings.ui_language.as_deref(),
     ));
@@ -1107,6 +1104,7 @@ pub(super) fn software_update(ui: &Ui, p: Paint) -> Option<El> {
             .font(DESCRIPTION)
             .color(p.muted())
     };
+    let manual = ui.platform.caps.manual_update_check;
     let check_now = |p: Paint| {
         button(
             p,
@@ -1119,8 +1117,8 @@ pub(super) fn software_update(ui: &Ui, p: Paint) -> Option<El> {
     Some(match ui.view.as_ref()?.update_status {
         DesktopUpdateStatus::Unavailable => return None,
         DesktopUpdateStatus::Checking => status(tr("Checking")),
-        DesktopUpdateStatus::Current if host::MANUAL_UPDATE_CHECK => check_now(p),
-        DesktopUpdateStatus::Failed if host::MANUAL_UPDATE_CHECK => check_now(p),
+        DesktopUpdateStatus::Current if manual => check_now(p),
+        DesktopUpdateStatus::Failed if manual => check_now(p),
         DesktopUpdateStatus::Current => status(tr("Up to date")),
         DesktopUpdateStatus::Failed => status(tr("Check failed; retrying later")),
         DesktopUpdateStatus::Available => button(

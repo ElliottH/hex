@@ -71,9 +71,15 @@ src/rune_ui/models.rs          OpenCode catalog, model + thinking pickers   492
 src/rune_ui/history.rs         History pane                                 502
 src/rune_ui/modes.rs           Modes pane                                  1329
 src/rune_ui/picker.rs          transcription picker modal                   518
-src/rune_ui/onboarding.rs      first-run setup                              397
-src/rune_ui/controls.rs        rows, cards, selects, buttons on rune-kit    377
-src/rune_ui/tests.rs           27 tests incl. 19 goldens                    597
+src/rune_ui/onboarding.rs      first-run tour (Linux setup, full macOS)     897
+src/rune_ui/controls.rs        rows, cards, selects, buttons on rune-kit    383
+src/rune_ui/platform.rs        Capabilities, OS-only state, requests        409
+src/rune_ui/platform_settings.rs  macOS/Windows Settings rows             583
+src/rune_ui/commands.rs        Commands pane (macOS)                        392
+src/rune_ui/meetings.rs        Meetings pane (macOS beta)                   963
+src/rune_ui/lists.rs           list/detail pieces, tags, permission control 320
+src/rune_ui/tests.rs           Linux tests and goldens                      599
+src/rune_ui/tests/panes.rs     macOS/Windows surface tests and goldens      422
 src/linux_file_chooser.rs      the FileChooser portal ("Choose a file…")    163
 ```
 
@@ -97,7 +103,58 @@ shared from `app_window` rather than copied.
 | History | Search, retention select, two-step Clear all, detail with Copy (Rune's clipboard request) and Delete, latency and processing facts; follows new dictations while shown | [light](rune-ui/hex-rune-shell-history-light.png) / [dark](rune-ui/hex-rune-shell-history-dark.png) |
 | Modes | Global + custom modes; name; applications with a searchable picker and the cross-mode conflict check; corrections; OpenCode rewriting (model, thinking, deadline, instructions); applications from the desktop's file chooser ("Choose a file…"); transformations with add, drag to reorder, remove, and the TypeScript workspace status/setup; two-step delete | [light](rune-ui/hex-rune-shell-modes-light.png) / [dark](rune-ui/hex-rune-shell-modes-dark.png), [pickers open](rune-ui/hex-rune-shell-modes-picker-light.png) |
 | Transcription picker | Modal over a scrim: languages, model cards with recommendation and streaming badges, metrics, Use/Download/Cancel/Delete (two-step), download/verify/load progress from the service snapshot, install and delete errors | [light](rune-ui/hex-rune-shell-picker-light.png) / [dark](rune-ui/hex-rune-shell-picker-dark.png), [downloading](rune-ui/hex-rune-shell-picker-downloading-dark.png) |
-| Setup | `onboarding::Flow` without permissions or practice (Linux has neither): Welcome, the model download through the service with progress and retry, Done with the shortcut tips; records completion when the model is ready | [welcome](rune-ui/hex-rune-shell-onboarding-dark.png), [download light](rune-ui/hex-rune-shell-onboarding-setup-light.png) / [dark](rune-ui/hex-rune-shell-onboarding-setup-dark.png) |
+| Setup | `onboarding::Flow` without permissions or practice (Linux has neither): Welcome, the model download through the service with progress and retry, Done with the shortcut tips; records completion when the model is ready | goldens `rune-onboarding-dark`, `rune-onboarding-setup-{light,dark}` |
+
+### macOS and Windows surfaces, rendered on Linux
+
+The panes macOS and Windows add are ported and run on Linux from preview
+data, so they compile, test, and golden-render on apollo. None has run on
+macOS or Windows. Windows' Launch at login row is live through
+`host::set_launch_at_login` (the Windows host's Run key); every other
+macOS-only surface has no native host yet, and Hex cannot be compiled for
+macOS here (hailmary refuses SSH). `rune_ui` compiles for Linux and Windows
+(`main.rs`), not macOS, so these modules cannot break the macOS build.
+
+- **`platform::Capabilities`** mirrors GPUI's `app_window::Capabilities` for
+  the rows Rune draws (`LINUX`, `MACOS`, `WINDOWS`; `current()` by
+  `cfg!`). Navigation and Settings read it: Commands and Meetings panes
+  (macOS; Meetings also needs `settings.meetings.available()`), the listener
+  card and Enable on launch (Linux, Windows), Terminal paste (Linux), Launch
+  at login (macOS, Windows), Show Dock icon, permission warnings, Meetings
+  and Experimental: Hex microphone sections, Sparkle's Check now (macOS).
+- **`platform::PlatformState`** is the OS-only data the panes show:
+  `SetupStatus` and which permissions were asked, System Audio, the login
+  item status (or checking/unavailable), the Hex Microphone driver status,
+  the command model state, the merged command catalog and workspace state,
+  the current context, Apple Intelligence availability, folder and relaunch
+  errors. Meetings arrive as `meetings::Meeting` values (titles, day and
+  clock strings, status, notes, errors, coalesced turns) because
+  `meeting.rs` is macOS-only.
+- **`platform::PlatformRequest`** is every action they take: permission
+  request or guide, System Audio, login item set/open settings, driver
+  install/uninstall, meeting start/stop/rename/trash/summarize/reveal/folder,
+  commands config create/open, command model retry, update check, relaunch.
+  `PlatformHost::Fixture` records them for scenes and tests; `Native(Box<dyn
+  NativeHost>)` is the seam a macOS/Windows host implements (`send` and a
+  `poll` that refreshes `PlatformState`). Settings edits (Dock icon, meeting
+  toggles, Hex Microphone mode, commands opt-in) still go through
+  `Ui::update` and `settings.json`; a native host must apply their side
+  effects (Dock policy, `hex_microphone::update_tuned_config`) when settings
+  change.
+
+| Surface | Status | Goldens (`tests/golden/rune-*.png`) |
+| --- | --- | --- |
+| Commands | Catalog grouped by task, search over phrase/aliases/description/task/scope, detail (task, context, aliases, current context), Create/Edit config, Copy agent prompt, the opt-in with the keep-microphone-ready confirmation, the command model notice with Retry and Turn off commands | `mac-commands-{light,dark}`, `mac-commands-confirm-light` |
+| Meetings | Day-grouped list with status tags and row Copy, search over title/app/summary/transcript, detail with notes, live/draft/final/recovered transcript as turns with pauses, errors, Copy transcript, Rename (field, Save, Cancel, Escape), overflow menu (Copy summary, Reveal, Summarize/Regenerate, Delete…), two-step trash ("Trash recording & Markdown"), Start recording / Stop & transcribe with elapsed time, empty and runtime-error states | `meetings-{light,dark}`, `meetings-recording-{light,dark}`, `meetings-actions-dark`, `meetings-delete-light`, `meetings-rename-dark`, `meetings-empty-light` |
+| Settings, macOS | Permissions needed (Allow, a steady dot while asked, Allowed), the command model notice, Meetings section (opt-in, System Audio permission, indicator, folder Reveal/choose, Never offer with Remove, Apple Intelligence notes with availability copy), Launch at login (switch or Open settings when approval is needed, checking/unavailable), Show Dock icon, Check now, Experimental: Hex microphone (driver install/update/uninstall states, mode, comfort noise); no listener card or Terminal paste | `mac-settings-{light,dark}`, `mac-settings-permissions-dark` |
+| Settings, Windows | Listener card, Launch at login, Enable on launch; no Terminal paste or desktop shortcuts | `windows-settings-light` |
+| Tour, macOS | Welcome (static keycap art), Setup with Microphone/Input Monitoring/Accessibility rows (Allow, waiting, refused → System Settings guide, Allowed), the background download beside the step dots (progress, ready, stopped + Retry), the relaunch notice, Give it a try with the practice field and every practice state (waiting, listening, too short, nothing heard, failed, landed, reopen Hex), Skip, Done with the menu-bar send-off; Windows uses the system-tray send-off | `mac-onboarding*` (10 states) |
+
+Not ported: the Fun pane and its "Try it" row, Activity, and HUD Lab
+(developer panes; they need custom vector drawing for waveforms and
+meters), the left/right modifier-side controls for macOS shortcuts, the
+macOS 27 "Device Control and Data Access" name for Accessibility (the host
+should supply it), and every native host.
 
 Run it: `cargo run --release --features rune-ui -- app --ui rune`. Headless:
 `hex app --ui rune -- --snap out.png --scene modes --theme light`. Scenes:
@@ -105,13 +162,21 @@ Run it: `cargo run --release --features rune-ui -- app --ui rune`. Headless:
 `commands`, `disabled`, `capturing`, `chinese`, `menus`, `voice-action`,
 `voice-action-off`, `voice-action-unavailable`, `voice-action-models`,
 `history`, `history-empty`, `modes`, `modes-global`, `modes-picker`, `picker`,
-`picker-downloading`, `onboarding`, `onboarding-setup`.
+`picker-downloading`, `onboarding`, `onboarding-setup`. macOS and Windows
+preview scenes: `mac-settings`, `mac-settings-permissions`,
+`windows-settings`, `mac-commands`, `mac-commands-confirm`, `meetings`,
+`meetings-recording`, `meetings-actions`, `meetings-delete`,
+`meetings-rename`, `meetings-failed`, `meetings-empty`, `mac-onboarding`,
+`mac-onboarding-setup`, `mac-onboarding-progress`, `mac-onboarding-denied`,
+`mac-onboarding-download-failed`, `mac-onboarding-try`,
+`mac-onboarding-listening`, `mac-onboarding-landed`, `mac-onboarding-reopen`,
+`mac-onboarding-done`.
 
-Checks: `cargo test --features rune-ui rune_ui`. 26 tests drive the Rune
+Checks: `cargo test --features rune-ui rune_ui`. 45 tests drive the Rune
 runtime headlessly without a GPU (navigation, every pane's edits and the
-requests they send, drafts, conflicts, the picker, setup); `goldens` renders
-19 PNGs offscreen (`tests/golden/rune-*.png`, every pane light and dark) and
-skips without a GPU adapter. `HEX_UPDATE_GOLDENS=1` rewrites them. Goldens
+requests they send, drafts, conflicts, the picker, setup, and the macOS and
+Windows surfaces from preview data); `goldens` and `platform_goldens` render
+45 PNGs offscreen (`tests/golden/rune-*.png`) and skip without a GPU adapter. `HEX_UPDATE_GOLDENS=1` rewrites them. Goldens
 were written on apollo (RADV); lavapipe renders the same within tolerance.
 
 ### Observed on Linux
@@ -225,16 +290,16 @@ Sizes are current GPUI lines. Effort is focused agent-days with review.
 
 | Surface | Today | Status / Rune needs | Effort left |
 | --- | --- | --- | --- |
-| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS adds permissions rows, Launch at login, Dock icon, Meetings and Hex Microphone sections | 1.5 |
+| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS rows (permissions, Launch at login, Dock icon, Meetings and Hex Microphone sections) ported behind `Capabilities` and rendered from preview data, with no macOS host; modifier sides remain | 1 |
 | Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS needs its traffic-light inset | 1 |
 | Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); Windows prepares in-process through `transcription_preparation` on its runtime thread (type-checked only); macOS likewise, to do | 0.5 |
 | Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus icons and the context menu; macOS adds website rules (Brave) | 3 |
 | Voice Action | ~500 | Done on Linux | 0.5 |
 | History | ~250 | Done | 0 |
-| Commands (macOS) | ~400 | Catalog list, status rows | 2 |
-| Meetings pane (macOS, beta) | ~1k | Transcript reader, rename/delete confirmation, overflow menus | 5 |
-| Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Custom vector drawing (waveforms, meters) | 4 (or drop debug panes) |
-| Onboarding tour | `app_window/tour.rs` (1.1k) | Linux done; macOS adds permission rows, the System Settings guide, relaunch, and the practice dictation; animated art needs looping tracks | 3 |
+| Commands (macOS) | ~400 | Ported, rendered on Linux from preview data; needs the macOS host (catalog, workspace, model status) | 0.5 |
+| Meetings pane (macOS, beta) | ~1k | Ported, rendered on Linux from preview data; needs the macOS host (store listing, transcript reader, controller requests, live refresh) | 1.5 |
+| Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Hex Microphone Settings section ported; Fun, Activity, HUD Lab deferred (custom vector drawing for waveforms, meters) | 4 (or drop debug panes) |
+| Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; macOS needs the host to feed permissions and practice observations and perform guide/relaunch requests; art is static until looping tracks exist | 1 |
 | Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order | Rune core |
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Window kind: borderless, transparent, click-through, non-activating, all spaces | 4 |
 | HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) | 2 |
