@@ -12,11 +12,11 @@
 mod commands;
 mod controls;
 mod history;
-mod lists;
-mod meetings;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
 #[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
 mod host;
+mod lists;
+mod meetings;
 mod models;
 mod modes;
 mod onboarding;
@@ -360,8 +360,10 @@ impl Ui {
     /// Asks the OS host for something only it can do.
     fn ask(&mut self, request: platform::PlatformRequest) {
         // Windows writes its Run key from the window's own process.
-        if let (platform::PlatformHost::None, platform::PlatformRequest::SetLaunchAtLogin(enabled)) =
-            (&self.host, &request)
+        if let (
+            platform::PlatformHost::None,
+            platform::PlatformRequest::SetLaunchAtLogin(enabled),
+        ) = (&self.host, &request)
         {
             let result = host::set_launch_at_login(*enabled);
             self.platform.set_login_item(Some(result));
