@@ -15,11 +15,9 @@
 //! Closing the window hides it; Quit (menu bar, ⌘Q, `hex` local API shutdown
 //! or Ctrl-C) ends the loop, then stops and joins everything.
 //!
-//! Not under Rune yet: the meeting capsules (offer, recording, call ended,
-//! ready). They are GPUI windows, and GPUI's loop can't share the main
-//! thread with Rune's. The menu bar still shows and stops a recording, and
-//! offers are logged and left to time out. They need a Rune panel window
-//! kind (`docs/plans/single-process.md`).
+//! The meeting capsules (offer, call ended, ready, recording) are Rune
+//! overlays (`rune_ui::meeting_capsules`): non-activating panels fed from
+//! the controller events here.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -377,8 +375,20 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     } else {
         app.windowless()
     };
+    let capsules = {
+        let window = window.clone();
+        crate::rune_ui::meeting_capsules::MeetingCapsules::install(
+            &mut app,
+            controller_commands.clone(),
+            move |entry| {
+                crate::app_settings::save_never_offer_meeting(entry.clone());
+                window.update(move |ui, _| crate::rune_ui::never_offer(ui, entry));
+            },
+        )
+    };
     let pump = Pump {
         window: window.clone(),
+        capsules,
         runtime: handle,
         shutdown,
         indicator_events,
@@ -571,6 +581,7 @@ impl Runtime {
 
 struct Pump {
     window: rune::AppHandle<Ui>,
+    capsules: crate::rune_ui::meeting_capsules::MeetingCapsules,
     runtime: RuntimeHandle,
     shutdown: &'static AtomicBool,
     indicator_events: Receiver<DictationIndicatorEvent>,
@@ -789,14 +800,9 @@ impl Pump {
     }
 
     fn controller_event(&mut self, event: ControllerEvent) {
+        self.capsules.event(&event);
         match event {
-            ControllerEvent::Offer(candidate) => {
-                tracing::info!(
-                    source = candidate.source.label(),
-                    title = %candidate.title,
-                    "meeting offer not shown: the Rune window has no meeting capsule yet"
-                );
-            }
+            ControllerEvent::Offer(_) => {}
             ControllerEvent::Starting => self.meeting_state = MeetingMenuState::Starting,
             ControllerEvent::RecordingStarted { title, .. } => {
                 self.meeting_state = MeetingMenuState::Recording {

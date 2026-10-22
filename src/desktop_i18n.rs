@@ -596,6 +596,19 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Start recording", ["Rozpocznij nagrywanie", "开始录音", "録音を開始", "Aufnahme starten", "Empezar a grabar"]),
     ("Starting…", ["Uruchamianie…", "正在启动…", "開始中…", "Wird gestartet…", "Iniciando…"]),
     ("Stop & transcribe", ["Zatrzymaj i transkrybuj", "停止并转写", "停止して文字起こし", "Stoppen und transkribieren", "Detener y transcribir"]),
+    ("Never offer for {}?", ["Nigdy nie proponować dla {}?", "不再为 {} 提示？", "{} では今後提案しませんか？", "Für {} nie mehr anbieten?", "¿No ofrecer nunca para {}?"]),
+    ("You can undo this in Settings › Meetings.", ["Możesz to cofnąć w Ustawienia › Spotkania.", "你可以在“设置 › 会议”中撤销。", "設定 › ミーティングで元に戻せます。", "Du kannst das unter Einstellungen › Meetings rückgängig machen.", "Puedes deshacerlo en Ajustes › Reuniones."]),
+    ("Not now", ["Nie teraz", "以后再说", "今はしない", "Nicht jetzt", "Ahora no"]),
+    ("Record", ["Nagrywaj", "录制", "録音", "Aufnehmen", "Grabar"]),
+    ("Record locally? Tell participants.", ["Nagrywać lokalnie? Poinformuj uczestników.", "在本机录制？请告知参与者。", "このMacで録音しますか？参加者に伝えてください。", "Lokal aufnehmen? Sag es den Teilnehmenden.", "¿Grabar en local? Avisa a los participantes."]),
+    ("{} left the call", ["{} opuścił rozmowę", "{} 已离开通话", "{} が通話を終了しました", "{} hat den Anruf verlassen", "{} salió de la llamada"]),
+    ("Hex is still recording.", ["Hex nadal nagrywa.", "Hex 仍在录制。", "Hex はまだ録音中です。", "Hex nimmt weiter auf.", "Hex sigue grabando."]),
+    ("Keep recording", ["Nagrywaj dalej", "继续录制", "録音を続ける", "Weiter aufnehmen", "Seguir grabando"]),
+    ("Markdown not saved: {}", ["Nie zapisano Markdown: {}", "未保存 Markdown：{}", "Markdown を保存できませんでした: {}", "Markdown nicht gespeichert: {}", "No se guardó el Markdown: {}"]),
+    ("Saved in Meetings", ["Zapisano w Spotkaniach", "已保存到会议", "ミーティングに保存しました", "In Meetings gespeichert", "Guardado en Reuniones"]),
+    ("Meeting transcript ready", ["Transkrypcja spotkania gotowa", "会议转写已就绪", "ミーティングの文字起こしができました", "Meeting-Transkript fertig", "Transcripción de la reunión lista"]),
+    ("Ready · {}", ["Gotowe · {}", "已就绪 · {}", "完了 · {}", "Fertig · {}", "Lista · {}"]),
+    ("Open", ["Otwórz", "打开", "開く", "Öffnen", "Abrir"]),
     ("Finalizing…", ["Kończenie…", "正在完成…", "仕上げ中…", "Wird abgeschlossen…", "Finalizando…"]),
     ("Failed", ["Niepowodzenie", "失败", "失敗", "Fehlgeschlagen", "Fallido"]),
     ("Interrupted", ["Przerwano", "已中断", "中断", "Unterbrochen", "Interrumpido"]),
@@ -907,6 +920,7 @@ mod tests {
         include_str!("rune_ui/fun.rs"),
         include_str!("rune_ui/hud_lab.rs"),
         include_str!("rune_ui/activity.rs"),
+        include_str!("rune_ui/meeting_capsules.rs"),
     ];
 
     /// The string literals passed to `tr`, `tr_fill`, and `tr_named`.

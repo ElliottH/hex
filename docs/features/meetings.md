@@ -168,6 +168,20 @@ frameless pop-ups as titled panels whose window shadow outlined the full
 548 px window beneath the compact pill); only the pill draws a small shadow
 that fits its 4 px inset.
 
+Under Rune (`hex app` with `--features rune-ui`), the capsules are Rune
+overlays in [meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs):
+interactive, non-activating `NSPanel`s at status level on every Space,
+fed by the controller events the menu-bar pump receives
+([macos_rune.rs](../../src/macos_rune.rs)). The offer (20 s), "left the
+call", ready (15 s, Copy / Reveal, notes refresh) and a recording capsule
+(title, elapsed time, Open, Stop, in the configured corner) are ported.
+Not ported yet: Copy new / Copy all, hover expansion, and dragging the
+recording capsule. A "Never offer" choice is saved and also written into
+the window's live settings. Compiled with clippy `-D warnings` on
+hailmary; never seen on screen (the Mac sits at its login window), so
+clicks and non-activation are unverified. Rune's panel itself was observed
+there at level 25 with the right bounds.
+
 ### Transcribe
 
 ```ts

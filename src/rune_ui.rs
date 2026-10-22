@@ -22,6 +22,8 @@ mod history;
 mod host;
 mod hud_lab;
 mod lists;
+#[cfg(target_os = "macos")]
+pub(crate) mod meeting_capsules;
 mod meetings;
 mod models;
 mod modes;
@@ -196,6 +198,13 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination) {
         Destination::Meetings(Some(id)) => ui.meetings.select(id),
         _ => {}
     }
+}
+
+/// A capsule's "Never offer" choice, kept in the window's live settings so its
+/// next save doesn't drop it.
+#[cfg(target_os = "macos")]
+pub(crate) fn never_offer(ui: &mut Ui, entry: crate::app_settings::NeverOfferMeeting) {
+    crate::app_settings::insert_never_offer(&mut ui.settings.meetings, entry);
 }
 
 /// A meeting recording could not start or finish; the Meetings pane says why.

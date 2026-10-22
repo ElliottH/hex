@@ -332,7 +332,7 @@ Sizes are current GPUI lines.
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Kept as is under Rune (native NSPanel driven from a main-loop timer); moving it needs a window kind: borderless, transparent, click-through, non-activating, all spaces |
 | HUD, Windows | `windows_indicator.rs` (151) + GPUI | Written on Rune (`windows_rune_hud.rs`: shared model + CPU shader into `rune::Pixels` in an `App::overlay`); type-checked only |
 | HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Done on Rune (`linux_rune_hud.rs`, Rune's `App::overlay`: layer-shell on Wayland, override-redirect on X11); GPUI builds keep GTK |
-| Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Off under Rune (GPUI's loop can't share the main thread): offers are logged; needs a panel window kind, focus-free buttons, live waveform |
+| Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Written on Rune (`rune_ui/meeting_capsules.rs`, interactive `App::overlay` = non-activating NSPanel): offer, call ended, ready, recording (Open/Stop); Copy new/all, hover expansion and drag not yet; compiled only |
 | Mac menu bar | `status_item.rs` (AppKit) | Stays native, installed beside `rune::App` on the main thread (`macos_rune.rs`) |
 | Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on the main thread beside `rune::App` (`keep_running`, `windowless` for `--hidden`, `AppHandle` open/quit); type-checked only |
 | Windows chrome | `windows_ui.rs` (311) | Custom title bar hit-testing |
@@ -355,8 +355,8 @@ Sizes are current GPUI lines.
    (`AppSpec::min_size`, `1f6fbd0`) and edge overlays (`App::overlay`,
    `2f338f3`: Wayland layer-shell, X11 override-redirect, a macOS
    status-level window that never becomes key, a Windows no-activate tool
-   window) landed. Still open: an interactive non-activating panel for the
-   meeting capsules.
+   window), interactive non-activating panels (`3a5fbca`) and `El::pixels`
+   (`50207c3`) landed.
 4. **Keyboard**: key-up and modifier-only events, left/right modifier sides,
    physical key codes, Globe/Fn (macOS shortcuts).
 5. **Raster images** (app icons). Vector shapes landed (`rune::Shape`,
