@@ -214,13 +214,6 @@ impl MeetingsPane {
         self.error = None;
     }
 
-    /// A recording that could not start or finish.
-    pub(super) fn failed(&mut self, error: String) {
-        self.start_pending = false;
-        self.stop_pending = false;
-        self.runtime_error = Some(error);
-    }
-
     pub(super) fn select(&mut self, id: String) {
         if self.selected.as_deref() != Some(id.as_str()) {
             self.renaming = None;

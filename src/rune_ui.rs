@@ -201,7 +201,9 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination) {
 /// A meeting recording could not start or finish; the Meetings pane says why.
 #[cfg(target_os = "macos")]
 pub(crate) fn meeting_failed(ui: &mut Ui, error: String) {
-    ui.meetings.failed(error);
+    ui.meetings.start_pending = false;
+    ui.meetings.stop_pending = false;
+    ui.meetings.runtime_error = Some(error);
 }
 
 /// `hex app -- --snap out.png --scene …`: a headless render of a fixture
