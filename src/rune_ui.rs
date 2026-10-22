@@ -510,7 +510,7 @@ impl Ui {
 /// Shortcut recording takes every key; otherwise Escape closes the picker
 /// or the open menu.
 fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
-    if settings::on_key(ui, event, tx) {
+    if settings::on_key(ui, event, tx) || models::on_key(ui, event) || modes::on_key(ui, event) {
         return true;
     }
     if event.key != rune::Key::Escape {

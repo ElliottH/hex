@@ -269,6 +269,34 @@ fn choosing_an_opencode_model_saves_it() {
 }
 
 #[test]
+fn arrow_keys_move_the_search_highlight_and_enter_picks_it() {
+    let mut rt = runtime("voice-action-models", true, PANE_SIZE);
+    tap(&mut rt, "model-search");
+    key(&mut rt, Key::Down, Mods::default());
+    key(&mut rt, Key::Down, Mods::default());
+    key(&mut rt, Key::Up, Mods::default());
+    key(&mut rt, Key::Enter, Mods::default());
+    assert_eq!(
+        rt.state.settings.voice_action.model.as_deref(),
+        Some("anthropic/claude-sonnet-4-5")
+    );
+    assert_eq!(rt.state.open, None);
+
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    tap(&mut rt, "application-search");
+    // Visual Studio Code, WezTerm (Terminal's), Zed.
+    for _ in 0..3 {
+        key(&mut rt, Key::Down, Mods::default());
+    }
+    key(&mut rt, Key::Enter, Mods::default());
+    assert!(
+        rt.state.settings.dictation_processing.modes[0]
+            .applications
+            .contains(&"Zed".to_string())
+    );
+}
+
+#[test]
 fn opencode_missing_offers_setup_instead_of_models() {
     let rt = runtime("voice-action-unavailable", true, PANE_SIZE);
     assert!(rt.find("opencode-unavailable").is_some());

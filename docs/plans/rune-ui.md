@@ -266,8 +266,11 @@ session):
 - **Spinners and pulses**: no looping animation yet (the recording pulse on
   the shortcut recorder and the indeterminate "Loading model" bar are static;
   the loading label still counts seconds).
-- **Keyboard navigation** in menus, the model search, and the application
-  search (arrow keys move a highlight in GPUI); Enter picks the first match.
+- **Keyboard navigation** in rune-kit menus and selects (microphone,
+  language, retention, thinking): Kit's `motion-focus` agent is adding the
+  focus model and arrow keys. The model and application searches already
+  move a highlight with Up and Down and pick it with Enter, as in GPUI
+  (Hex-side, `controls::Highlight`; a rune-kit combobox would replace it).
 - **Modal focus trap** for the picker; the scrim blocks presses only.
 
 ## Rune changes (all on Rune `main`)

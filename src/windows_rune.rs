@@ -67,6 +67,8 @@ pub(crate) enum Request {
     ReloadSettings,
     /// The tray's Enable / Disable Hex.
     ToggleListening,
+    /// The window's Quit Hex: stop the listener, then end the app.
+    Quit,
 }
 
 /// A shortcut the listener registers.
@@ -271,7 +273,7 @@ struct Runtime {
     preparation: TranscriptionPreparation,
     /// Enable on launch waits for first-run setup.
     listen_after_setup: bool,
-    /// Restarting into an update ends the app.
+    /// Quit Hex or restarting into an update ends the app.
     quit: bool,
 }
 
@@ -301,6 +303,7 @@ impl Runtime {
                 self.preparation.start(selection, false);
             }
             Request::CancelModel => self.preparation.cancel(),
+            Request::Quit => self.quit = true,
             Request::ReloadSettings => match AppSettings::load() {
                 Ok(settings) => self.host.apply_settings(&settings),
                 Err(error) => tracing::warn!(%error, "could not reload settings"),
