@@ -19,13 +19,12 @@ audio=$3
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
 work=$(mktemp -d)
 listener=
-app=
 target=
 pulse=
 finish() {
   status=$?
   trap - EXIT INT TERM
-  for pid in "$app" "$listener" "$target" "$pulse"; do
+  for pid in "$listener" "$target" "$pulse"; do
     if [[ -n "$pid" ]]; then kill "$pid" 2>/dev/null || true; fi
   done
   for ((attempt = 0; attempt < 100; attempt++)); do
@@ -82,13 +81,10 @@ for ((attempt = 0; attempt < 1200; attempt++)); do
   sleep 0.05
 done
 grep -q 'HEX dictation is ready' "$work/listener.log"
-# Settings is a client; the complete dictation below runs after that client exits.
-"$binary" app >"$work/app.log" 2>&1 &
-app=$!
-xdotool search --sync --onlyvisible --all --pid "$app" --name '^HEX$' >/dev/null
-kill -TERM "$app"
-wait "$app"
-app=
+# A second launch forwards to the running Hex, which opens its window; the
+# complete dictation below runs beside it in the same process.
+"$binary" app >"$work/app.log" 2>&1
+xdotool search --sync --onlyvisible --all --pid "$listener" --name '^HEX$' >/dev/null
 kill -0 "$listener"
 # Holds the shortcut over the speech, then waits until the target holds
 # `$1` transcripts of it.
@@ -132,4 +128,4 @@ wait "$listener"
 listener=
 outputs=$(pactl list short source-outputs)
 test -z "$outputs"
-echo 'Linux service dictation (whole clip and live stream) after Settings exits and orderly shutdown passed.'
+echo 'Linux dictation (whole clip and live stream) beside the window and orderly shutdown passed.'

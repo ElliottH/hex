@@ -555,9 +555,6 @@ LaunchServices keeps single instance, and the status item stays native.
 - **Rune churn.** Kit's agents push to Rune's `main` daily. Agree the
   `run_app`, `AppProxy`, and `WindowSpec` surface with Kit before Hex builds
   on it, and pin the commit as today.
-- **Private dependency.** Rune is a private Git dependency, which already
-  blocks merging `rune-ui` ([`rune-ui.md` Risks](rune-ui.md#risks)). Single
-  process inherits that blocker.
 - **Session environment.** A window in the systemd process misses anything
   not imported (cursor theme, IME, locale, icons). Extend `SESSION_KEYS`
   and check on real desktops.

@@ -128,9 +128,14 @@ pub(crate) struct RuntimeHandle {
     shared: Arc<Shared>,
     meeting_requests: SyncSender<MeetingRequest>,
     recognition_controls: SyncSender<RecognitionControl>,
+    history: Option<crate::history::History>,
 }
 
 impl RuntimeHandle {
+    pub(crate) fn history(&self) -> Option<crate::history::History> {
+        self.history.clone()
+    }
+
     pub(crate) fn send(&self, request: Request) -> Result<()> {
         self.requests
             .send(request)
@@ -313,6 +318,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         shared: shared.clone(),
         meeting_requests: meeting_requests.clone(),
         recognition_controls: recognition_controls.clone(),
+        history: history.clone(),
     };
     RUNTIME
         .set(handle.clone())

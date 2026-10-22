@@ -1,55 +1,155 @@
-//! The Linux window's host: a client of the per-user `hex.service`, which
-//! owns the listener, shortcuts, models, and updates.
+//! The Linux window's host: the dictation host in this process
+//! (`linux_app::HostHandle`), which owns the listener, shortcuts, models,
+//! History, and updates. A headless render without one reads the running
+//! Hex's `hex status` instead.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use color_eyre::Result;
+use color_eyre::eyre::eyre;
 
 use super::{HostState, ServiceView};
-use crate::app_settings::HotkeyBinding;
+use crate::app_settings::{AppSettings, HotkeyBinding};
 use crate::desktop_i18n::tr;
+use crate::linux_app::HostHandle;
+pub(super) use crate::linux_app::HostRequest as Request;
 use crate::linux_input::LinuxHotkey;
-use crate::linux_service::Client;
-pub(super) use crate::linux_service::{Request, ShortcutTarget};
+pub(super) use crate::linux_service::ShortcutTarget;
 
-/// The service registers recorded shortcuts (`SetShortcut`) and saves them.
+/// The host registers recorded shortcuts (`SetShortcut`) and saves them.
 pub(super) const HOST_SAVES_SHORTCUTS: bool = true;
 /// Settings records shortcuts from the window's key events.
 pub(super) const RECORDS_KEY_EVENTS: bool = true;
-/// The service checks for updates on its own schedule.
+/// The host checks for updates on its own schedule.
 pub(super) const MANUAL_UPDATE_CHECK: bool = false;
 /// X11 and portal shortcuts paste with Ctrl+V; terminals want Ctrl+Shift+V.
 pub(super) const TERMINAL_PASTE: bool = true;
+/// Linux has no tray, so the window offers Quit Hex.
+pub(super) const QUIT_IN_WINDOW: bool = true;
+/// Drafts, the OpenCode retry, and the setup beat are timed; until Rune has
+/// `wake_after`, a tick redraws them while the window is open.
+const TICK: Duration = Duration::from_millis(250);
 
-pub(super) struct Backend(Client);
+/// The host the window's app runs beside; `AppSpec::init` and `setup` take
+/// no arguments.
+static HOST: Mutex<Option<HostHandle>> = Mutex::new(None);
+
+/// Clears the host when the app returns, even after a panic.
+pub(super) struct Installed;
+
+impl Drop for Installed {
+    fn drop(&mut self) {
+        HOST.lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
+}
+
+pub(super) fn install(host: HostHandle) -> Installed {
+    *HOST.lock().unwrap() = Some(host);
+    Installed
+}
+
+fn current() -> Option<HostHandle> {
+    HOST.lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
+pub(super) enum Backend {
+    Host(HostHandle),
+    /// `--snap --scene live` from a separate process.
+    Status(Option<Box<crate::linux_service::Status>>, Option<String>),
+}
 
 impl Backend {
     pub(super) fn connect(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
-        Self(Client::with_waker(wake))
+        let Some(host) = current() else {
+            let mut backend = Self::Status(None, None);
+            backend.refresh();
+            return backend;
+        };
+        host.set_waker(wake.clone());
+        let ticking = host.clone();
+        std::thread::spawn(move || {
+            while current().is_some() {
+                std::thread::sleep(TICK);
+                if ticking.window_open() {
+                    wake();
+                }
+            }
+        });
+        Self::Host(host)
     }
 
     pub(super) fn send(&mut self, request: Request) -> Result<()> {
-        self.0.send(request)
+        match self {
+            Self::Host(host) => host.request(request),
+            Self::Status(..) => Err(eyre!("This window only shows `hex status`")),
+        }
+    }
+
+    /// Saves through the host, which adopts the settings at once.
+    pub(super) fn save(&mut self, settings: &AppSettings) -> Result<()> {
+        match self {
+            Self::Host(host) => host.save_settings(settings.clone()),
+            Self::Status(..) => Err(eyre!("This window only shows `hex status`")),
+        }
+    }
+
+    /// The host drains its work, then asks the app to quit.
+    pub(super) fn quit(&mut self) {
+        if let Self::Host(host) = self {
+            host.quit();
+        }
+    }
+
+    pub(super) fn closed(&mut self) {
+        if let Self::Host(host) = self {
+            host.window_closed();
+        }
     }
 
     pub(super) fn refresh(&mut self) {
-        self.0.refresh();
+        match self {
+            Self::Host(_) => {}
+            Self::Status(status, error) => {
+                match crate::linux_service::request(crate::linux_service::Request::Status) {
+                    Ok(state) => (*status, *error) = (Some(Box::new(state)), None),
+                    Err(failure) => (*status, *error) = (None, Some(failure.to_string())),
+                }
+            }
+        }
     }
 
     pub(super) fn error(&self) -> Option<String> {
-        self.0.error.clone()
+        match self {
+            Self::Host(_) => None,
+            Self::Status(_, error) => error.clone(),
+        }
     }
 
     pub(super) fn state(&self) -> Option<HostState> {
-        self.0.state.as_ref().map(|state| HostState {
+        let (desktop, settings, editing) = match self {
+            Self::Host(host) => {
+                let snapshot = host.snapshot();
+                (snapshot.desktop, snapshot.settings, snapshot.editing)
+            }
+            Self::Status(status, _) => {
+                let status = *status.clone()?;
+                (status.desktop, status.settings, status.editing)
+            }
+        };
+        Some(HostState {
             view: ServiceView {
-                listener: state.desktop.listener.clone(),
-                operation_error: state.desktop.operation_error.clone(),
-                transcription: state.desktop.transcription.clone(),
-                update_status: state.desktop.update_status,
-                editing: state.capturing || state.editing,
+                listener: desktop.listener,
+                operation_error: desktop.operation_error,
+                transcription: desktop.transcription,
+                update_status: desktop.update_status,
+                editing,
             },
-            settings: state.settings.clone(),
+            settings,
         })
     }
 
@@ -57,6 +157,11 @@ impl Backend {
     pub(super) fn take_chord(&mut self) -> Option<super::settings::Chord> {
         None
     }
+}
+
+/// The host's History store: one store per process.
+pub(super) fn history(_: crate::history::HistoryRetention) -> Option<crate::history::History> {
+    current()?.history()
 }
 
 pub(super) fn validate_hotkey(

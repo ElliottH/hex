@@ -1,11 +1,12 @@
-//! Linux parts of the app window. Settings is its own process: it edits
-//! `settings.json` and asks `hex.service`, which owns the listener, shortcut
-//! registration, the HUD, and updates, to reload it over the service socket.
+//! Linux parts of the app window (`hex app --ui gpui`). The window runs in
+//! the Hex process beside the host that owns the listener, shortcut
+//! registration, the HUD, and updates, and calls it directly.
 
 use super::*;
 use crate::desktop_host::{DesktopAction, DesktopShortcut, DesktopShortcuts, DesktopUpdateStatus};
+use crate::linux_app::{HostHandle, HostRequest, HostSnapshot};
 use crate::linux_input::LinuxHotkey;
-use crate::linux_service::{Client, Request, ShortcutTarget};
+use crate::linux_service::ShortcutTarget;
 
 pub(super) const CAPABILITIES: Capabilities = Capabilities {
     meetings: false,
@@ -31,13 +32,13 @@ pub(super) const CAPABILITIES: Capabilities = Capabilities {
     practice_dictation: false,
 };
 
-/// The window records the chord from its key events; the service registers
+/// The window records the chord from its key events; the host registers
 /// it on X11 or asks the desktop's shortcuts portal for it on Wayland.
 pub(super) fn records_key_events() -> bool {
     true
 }
 
-/// The service checks for updates on its own schedule.
+/// The host checks for updates on its own schedule.
 /// How the Modes pane describes website rules; `None` hides them where
 /// the listener can't read the browser's address.
 pub(super) const WEB_PAGES_DESCRIPTION: Option<&str> = None;
@@ -52,20 +53,22 @@ pub(super) const CHOOSE_APPLICATION_FILE: &str = "Choose a file…";
 
 pub(super) const MANUAL_UPDATE_CHECK: bool = false;
 
-pub(super) struct Args;
+pub(super) struct Args(pub(super) HostHandle);
 
 pub(super) struct Platform {
-    client: Client,
-    /// What the window last showed of the service, to redraw only on change.
+    host: HostHandle,
+    state: Option<HostSnapshot>,
+    error: Option<String>,
+    /// What the window last showed of the host, to redraw only on change.
     shown: Option<(crate::desktop_host::DesktopSnapshot, Option<String>)>,
     capture: CapturePhase,
-    /// The shortcut the service is recording or saving.
+    /// The shortcut the host is recording or saving.
     capture_target: ShortcutTarget,
-    /// The model the service is preparing, and since when.
+    /// The model the host is preparing, and since when.
     preparing: Option<(crate::transcription_models::TranscriptionModelId, Instant)>,
 }
 
-/// The service registers every shortcut.
+/// The host registers every shortcut.
 fn shortcut_target(kind: HotkeyKind) -> Option<ShortcutTarget> {
     match kind {
         HotkeyKind::Dictation => Some(ShortcutTarget::Dictation),
@@ -74,26 +77,28 @@ fn shortcut_target(kind: HotkeyKind) -> Option<ShortcutTarget> {
     }
 }
 
-/// The service's side of a shortcut change the window asked for.
+/// The host's side of a shortcut change the window asked for.
 #[derive(Clone, Copy, PartialEq)]
 enum CapturePhase {
     Idle,
-    /// Asked; the service has not reported the edit yet.
+    /// Asked; the host has not reported the edit yet.
     Requested(Instant),
-    /// The service is recording or saving the shortcut.
+    /// The host is recording or saving the shortcut.
     Editing,
 }
 
 impl Platform {
     pub(super) fn new(
-        _: Args,
+        Args(host): Args,
         _: Option<&AppWindowPreview>,
         _: &AppSettings,
         _: &StatusSnapshot,
         _: &mut Context<AppWindow>,
     ) -> Self {
         Self {
-            client: Client::new(),
+            state: Some(host.snapshot()),
+            host,
+            error: None,
             shown: None,
             capture: CapturePhase::Idle,
             capture_target: ShortcutTarget::Dictation,
@@ -102,17 +107,10 @@ impl Platform {
     }
 }
 
-/// Opens the shared window in the Settings process.
-pub fn open(event_path: PathBuf, cx: &mut App) -> gpui::Result<WindowHandle<AppWindow>> {
-    // The service records dictations; this process reads and edits the
-    // same file, rereading it whenever the service wrote.
-    let retention = AppSettings::load()
-        .map(|settings| settings.history_retention)
-        .unwrap_or_default();
-    let history = crate::history::History::open_default(retention)
-        .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
-        .ok();
-    open_new(event_path, history, None, Args, cx)
+/// Opens the shared window beside the host.
+pub fn open(host: HostHandle, cx: &mut App) -> gpui::Result<WindowHandle<AppWindow>> {
+    let history = host.history();
+    open_new(host.event_path(), history, None, Args(host), cx)
 }
 
 pub(super) fn window_options(options: WindowOptions) -> WindowOptions {
@@ -144,8 +142,8 @@ pub(super) fn caption(_: &mut Window) -> Option<AnyElement> {
     None
 }
 
-/// The service keeps its shortcut registered while Settings records one;
-/// the chord it already owns reaches the service, not this window.
+/// The listener keeps its shortcut registered while the window records one;
+/// the chord it already owns reaches the listener, not this window.
 pub(super) fn set_hotkey_capture_active(_: bool) {}
 
 pub(super) fn hotkey_modifiers(modifiers: GpuiModifiers) -> HotkeyModifiers {
@@ -180,8 +178,8 @@ pub(super) fn validate_hotkey(
 impl AppWindow {
     pub(super) fn poll_platform(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
-        // Settings prepares the model, saves it, and the service loads it
-        // when it reloads settings.
+        // The window prepares the model, saves it, and the host loads it
+        // when it adopts the settings.
         if !self.preview
             && let Some(result) = self.transcription_preparation.poll()
         {
@@ -193,15 +191,14 @@ impl AppWindow {
             self.poll_transcription_download();
             changed = true;
         }
-        self.platform.client.refresh();
+        self.platform.state = Some(self.platform.host.snapshot());
         changed |= self.poll_service_capture();
         changed |= self.poll_service_preparation(cx);
         let shown = self
             .platform
-            .client
             .state
             .as_ref()
-            .map(|state| (state.desktop.clone(), self.platform.client.error.clone()));
+            .map(|state| (state.desktop.clone(), self.platform.error.clone()));
         if shown != self.platform.shown {
             self.platform.shown = shown;
             changed = true;
@@ -225,16 +222,16 @@ impl AppWindow {
     }
 
     pub(super) fn platform_settings_saved(&mut self) {
-        if let Err(error) = self.platform.client.send(Request::ReloadSettings) {
-            self.platform.client.error = Some(format!("{error:#}"));
-        }
+        self.platform.host.adopt_settings(self.settings.clone());
     }
 
-    pub(super) fn platform_closed(&mut self) {}
+    pub(super) fn platform_closed(&mut self) {
+        self.platform.host.window_closed();
+    }
 
     /// Wayland desktops grant the shortcuts, or leave them to `hex` commands.
     pub(super) fn platform_settings_notice(&mut self, _: &mut Context<Self>) -> Option<AnyElement> {
-        let state = self.platform.client.state.as_ref()?;
+        let state = self.platform.state.as_ref()?;
         let rows: Vec<AnyElement> = match &state.desktop.listener.shortcuts {
             DesktopShortcuts::Unregistered | DesktopShortcuts::Registered => return None,
             DesktopShortcuts::Portal(granted) => {
@@ -320,18 +317,31 @@ impl AppWindow {
     /// shortcut, so Settings has none to record.
     pub(super) fn platform_shortcut_rows(&self) -> bool {
         self.platform
-            .client
             .state
             .as_ref()
             .is_none_or(|state| state.desktop.listener.shortcuts != DesktopShortcuts::Commands)
     }
 
+    /// Linux has no tray: the window's way to stop Hex.
     pub(super) fn platform_settings_section(
         &mut self,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        Vec::new()
+        vec![
+            panel()
+                .child(settings_row(
+                    tr("Quit Hex"),
+                    tr("Closing the window keeps Hex dictating"),
+                    crate::desktop_ui::button(
+                        crate::desktop_ui::ButtonKind::Secondary,
+                        tr("Quit Hex"),
+                    )
+                    .id("quit-hex")
+                    .on_click(cx.listener(|this, _, _, _| this.platform.host.quit())),
+                ))
+                .into_any_element(),
+        ]
     }
 
     pub(super) fn platform_model_notice(
@@ -374,7 +384,7 @@ impl AppWindow {
         })
     }
 
-    /// The service stops listening and records or awaits the chord.
+    /// The host stops listening and records or awaits the chord.
     pub(super) fn platform_capture_started(&mut self, _: &mut Context<Self>) {
         if self.preview {
             return;
@@ -385,19 +395,19 @@ impl AppWindow {
         let Some(target) = shortcut_target(kind) else {
             return;
         };
-        self.send(Request::CaptureShortcutFor(target));
+        self.send(HostRequest::CaptureShortcutFor(target));
         self.platform.capture_target = target;
         self.platform.capture = CapturePhase::Requested(Instant::now());
     }
 
     pub(super) fn platform_capture_cancelled(&mut self) {
         if self.platform.capture != CapturePhase::Idle {
-            self.send(Request::CancelShortcut);
+            self.send(HostRequest::CancelShortcut);
             self.platform.capture = CapturePhase::Idle;
         }
     }
 
-    /// The service validates, registers, and saves the chord recorded on X11.
+    /// The host validates, registers, and saves the chord recorded on X11.
     pub(super) fn platform_save_hotkey(
         &mut self,
         kind: HotkeyKind,
@@ -407,7 +417,7 @@ impl AppWindow {
             return false;
         };
         let modifiers = binding.modifiers;
-        self.send(Request::SetShortcut {
+        self.send(HostRequest::SetShortcut {
             target,
             shortcut: DesktopShortcut {
                 alt: modifiers.option.is_some(),
@@ -425,12 +435,12 @@ impl AppWindow {
         true
     }
 
-    /// The service prepares models so closing Settings never cancels one.
+    /// The host prepares models so closing the window never cancels one.
     pub(super) fn platform_prepare_transcription(
         &mut self,
         selection: &TranscriptionSelection,
     ) -> bool {
-        self.send(Request::ChooseModel {
+        self.send(HostRequest::ChooseModel {
             model: selection.model,
             language: selection.language.clone(),
         });
@@ -438,12 +448,12 @@ impl AppWindow {
     }
 
     pub(super) fn platform_cancel_transcription(&mut self) -> bool {
-        self.send(Request::CancelModel);
+        self.send(HostRequest::CancelModel);
         true
     }
 
     pub(super) fn platform_preparation_status(&self) -> Option<PreparationStatus> {
-        let transcription = &self.platform.client.state.as_ref()?.desktop.transcription;
+        let transcription = &self.platform.state.as_ref()?.desktop.transcription;
         Some(PreparationStatus {
             model: transcription.preparing,
             downloaded_bytes: transcription.downloaded_bytes,
@@ -452,18 +462,21 @@ impl AppWindow {
         })
     }
 
-    fn send(&mut self, request: Request) {
-        if let Err(error) = self.platform.client.send(request) {
-            self.platform.client.error = Some(format!("{error:#}"));
-        }
+    fn send(&mut self, request: HostRequest) {
+        self.platform.error = self
+            .platform
+            .host
+            .request(request)
+            .err()
+            .map(|error| format!("{error:#}"));
     }
 
-    /// Follows the service's shortcut edit and adopts the shortcut it saved.
+    /// Follows the host's shortcut edit and adopts the shortcut it saved.
     fn poll_service_capture(&mut self) -> bool {
-        let Some(state) = &self.platform.client.state else {
+        let Some(state) = &self.platform.state else {
             return false;
         };
-        let editing = state.capturing || state.editing;
+        let editing = state.editing;
         let finished = match self.platform.capture {
             CapturePhase::Idle => return false,
             CapturePhase::Requested(_) if editing => {
@@ -514,10 +527,10 @@ impl AppWindow {
         true
     }
 
-    /// Tracks the service's model preparation and adopts the selection it
+    /// Tracks the host's model preparation and adopts the selection it
     /// saved when it finishes.
     fn poll_service_preparation(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(state) = &self.platform.client.state else {
+        let Some(state) = &self.platform.state else {
             return false;
         };
         let transcription = &state.desktop.transcription;
@@ -544,8 +557,8 @@ impl AppWindow {
     }
 
     pub(super) fn platform_listener(&self) -> Option<ListenerView> {
-        let error = self.platform.client.error.clone();
-        let Some(state) = &self.platform.client.state else {
+        let error = self.platform.error.clone();
+        let Some(state) = &self.platform.state else {
             return Some(ListenerView {
                 running: false,
                 status: tr("Service disconnected").into(),
@@ -568,14 +581,12 @@ impl AppWindow {
         } else {
             DesktopAction::StopListening
         };
-        if let Err(error) = self.platform.client.send(Request::Desktop(action)) {
-            self.platform.client.error = Some(format!("{error:#}"));
-        }
+        self.send(HostRequest::Desktop(action));
     }
 
-    /// Only service-managed installs update themselves.
+    /// Only managed installs update themselves.
     pub(super) fn platform_software_update(&self) -> Option<SoftwareUpdate> {
-        let state = self.platform.client.state.as_ref()?;
+        let state = self.platform.state.as_ref()?;
         Some(match state.desktop.update_status {
             DesktopUpdateStatus::Unavailable => return None,
             DesktopUpdateStatus::Checking => SoftwareUpdate::Checking,
@@ -586,17 +597,11 @@ impl AppWindow {
         })
     }
 
-    /// The service checks on its own schedule.
+    /// The host checks on its own schedule.
     pub(super) fn check_for_updates(&mut self) {}
 
     pub(super) fn install_update(&mut self, _: &mut Context<Self>) {
-        if let Err(error) = self
-            .platform
-            .client
-            .send(Request::Desktop(DesktopAction::RestartIntoUpdate))
-        {
-            self.platform.client.error = Some(format!("{error:#}"));
-        }
+        self.send(HostRequest::Desktop(DesktopAction::RestartIntoUpdate));
     }
 }
 

@@ -32,8 +32,12 @@ fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
 fn sent(rt: &Runtime<Ui>) -> &[Request] {
     match &rt.state.service {
         Service::Fixture(sent) => sent,
-        _ => panic!("fixtures never connect"),
+        _ => panic!("fixtures never reach a host"),
     }
+}
+
+fn saved(rt: &Runtime<Ui>) -> usize {
+    rt.state.saved
 }
 
 /// Presses an element by key and lets every animation settle.
@@ -79,12 +83,20 @@ fn desktops_without_a_portal_list_commands_instead_of_recording_rows() {
 }
 
 #[test]
-fn toggles_save_and_ask_the_service_to_reload() {
+fn toggles_save_through_the_host() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     assert!(rt.state.settings.paste_with_shift);
     tap(&mut rt, "terminal-paste");
     assert!(!rt.state.settings.paste_with_shift);
-    assert!(matches!(sent(&rt), [Request::ReloadSettings]));
+    assert_eq!(saved(&rt), 1);
+    assert!(sent(&rt).is_empty());
+}
+
+#[test]
+fn quit_hex_in_the_sidebar_asks_the_host_to_quit() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    tap(&mut rt, "quit");
+    assert!(rt.state.quit_requested);
 }
 
 #[test]
@@ -109,7 +121,7 @@ fn releasing_the_microphone_asks_first() {
 }
 
 #[test]
-fn recording_a_shortcut_sends_the_chord_to_the_service() {
+fn recording_a_shortcut_sends_the_chord_to_the_host() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     tap(&mut rt, "dictation-hotkey");
     assert!(matches!(
@@ -218,7 +230,8 @@ fn the_sidebar_switches_panes_and_keeps_settings() {
         tap(&mut rt, key);
         assert_eq!(rt.state.pane, pane);
     }
-    assert!(sent(&rt).is_empty(), "switching panes saves nothing");
+    assert!(sent(&rt).is_empty());
+    assert_eq!(saved(&rt), 0, "switching panes saves nothing");
 }
 
 #[test]
@@ -226,7 +239,7 @@ fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
     let mut rt = runtime("voice-action-off", true, PANE_SIZE);
     tap(&mut rt, "voice-action-enabled");
     assert!(rt.state.settings.voice_action.enabled);
-    assert!(matches!(sent(&rt), [Request::ReloadSettings]));
+    assert_eq!(saved(&rt), 1);
     assert!(rt.find("opencode-model").is_some(), "the model row appears");
 
     let mut rt = runtime("voice-action-off", true, PANE_SIZE);
@@ -234,7 +247,7 @@ fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
     tap(&mut rt, "voice-action-enabled");
     assert!(!rt.state.settings.voice_action.enabled);
     assert!(rt.state.voice_action_error.is_some());
-    assert!(sent(&rt).is_empty());
+    assert_eq!(saved(&rt), 0);
 }
 
 #[test]
@@ -252,6 +265,34 @@ fn choosing_an_opencode_model_saves_it() {
     assert_eq!(
         rt.state.settings.voice_action.model, None,
         "back to the OpenCode default"
+    );
+}
+
+#[test]
+fn arrow_keys_move_the_search_highlight_and_enter_picks_it() {
+    let mut rt = runtime("voice-action-models", true, PANE_SIZE);
+    tap(&mut rt, "model-search");
+    key(&mut rt, Key::Down, Mods::default());
+    key(&mut rt, Key::Down, Mods::default());
+    key(&mut rt, Key::Up, Mods::default());
+    key(&mut rt, Key::Enter, Mods::default());
+    assert_eq!(
+        rt.state.settings.voice_action.model.as_deref(),
+        Some("anthropic/claude-sonnet-4-5")
+    );
+    assert_eq!(rt.state.open, None);
+
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    tap(&mut rt, "application-search");
+    // Visual Studio Code, WezTerm (Terminal's), Zed.
+    for _ in 0..3 {
+        key(&mut rt, Key::Down, Mods::default());
+    }
+    key(&mut rt, Key::Enter, Mods::default());
+    assert!(
+        rt.state.settings.dictation_processing.modes[0]
+            .applications
+            .contains(&"Zed".to_string())
     );
 }
 
@@ -341,10 +382,55 @@ fn mode_transformations_add_reorder_and_remove() {
             .clone()
     };
     assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
-    tap(&mut rt, "transformation1/up");
+    let saves = saved(&rt);
+    // Drag the second row's handle up one row: the rows reorder while the
+    // pointer moves and the order is saved once, on release.
+    let (x, y) = rt.find("transformation1/handle").expect("a drag handle");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    for step in 1..=8 {
+        rt.pointer_move(x, y - step as f32 * 5.0);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(rt.cursor(), rune::Cursor::Grabbing);
+    assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
+    let shown: Vec<String> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.ends_with("/name") && e.path.contains("/transformation"))
+        .filter_map(|e| e.text)
+        .collect();
+    assert_eq!(shown, ["Normalize links", "Smart punctuation"]);
+    rt.pointer_up(x, y - 40.0);
+    rt.frame(1.0 / 60.0);
     assert_eq!(ids(&rt), ["normalize-links", "smart-punctuation"]);
+    assert_eq!(saved(&rt), saves + 1);
     tap(&mut rt, "transformation0/remove");
     assert_eq!(ids(&rt), ["smart-punctuation"]);
+}
+
+#[test]
+fn a_chosen_file_joins_the_catalog_and_the_mode() {
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    let application = crate::application_catalog::InstalledApplication {
+        name: "helix".into(),
+        bundle_id: None,
+        path: "/usr/bin/helix".into(),
+        icon: None,
+    };
+    modes::chosen_application(&mut rt.state, Ok(Some(application)));
+    assert!(
+        rt.state.settings.dictation_processing.modes[0]
+            .applications
+            .contains(&"helix".to_string())
+    );
+    modes::chosen_application(&mut rt.state, Ok(None));
+    assert!(rt.state.modes_application_error().is_none());
+    modes::chosen_application(&mut rt.state, Err("no file chooser portal".into()));
+    assert_eq!(
+        rt.state.modes_application_error(),
+        Some("no file chooser portal")
+    );
 }
 
 #[test]

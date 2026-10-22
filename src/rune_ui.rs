@@ -1,12 +1,12 @@
 //! The experimental Rune front end (`hex app --ui rune`, and `hex app` on
 //! macOS when built with `--features rune-ui`).
 //!
-//! The window talks to a host: on Linux the per-user `hex.service`, exactly
-//! like the GPUI Settings process (`linux_host`); on Windows and macOS the
-//! in-process runtime thread `windows_rune` or `macos_rune` starts
-//! (`windows_host`, `macos_host`). Either way it saves
-//! `settings.json`, asks the host to reload it, and sends the same requests
-//! for listening, shortcuts, models, and updates. It has the panes GPUI shows
+//! The window talks to a host in the same process: on Linux the dictation
+//! host beside it (`linux_host`, the default window on `rune-ui` builds); on
+//! Windows and macOS the runtime thread `windows_rune` or `macos_rune`
+//! starts (`windows_host`, `macos_host`). Either way it saves
+//! `settings.json` through the host, which adopts it, and sends the same
+//! requests for listening, shortcuts, models, and updates. It has the panes GPUI shows
 //! there (Settings, Modes, Voice Action, History), the transcription picker,
 //! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
 //! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
@@ -79,10 +79,50 @@ static MEETINGS_ICON: Icon = Icon {
     body: include_str!("../assets/icons/meetings.svg"),
 };
 
+/// Runs the Linux window's app on the main thread until Hex quits: the
+/// window side of `linux_app`'s seam. It starts without a window; each
+/// `Activate` opens or focuses it with the launcher's activation token, and
+/// closing it keeps the app, its state, and the host running.
 #[cfg(target_os = "linux")]
-pub(crate) fn run() {
+pub(crate) fn run_app(
+    host: crate::linux_app::HostHandle,
+    requests: std::sync::mpsc::Receiver<crate::linux_service::Control>,
+    first: Option<crate::linux_service::Activation>,
+) {
+    use crate::linux_service::{Activation, Control};
+    let _host = host::install(host.clone());
     rune::set_app_id("hex");
-    rune::App::new(spec()).run();
+    let app = rune::App::new(spec())
+        .args(Vec::new())
+        .windowless()
+        .on_close(on_close);
+    let handle = app.handle();
+    let show = move |activation: Activation| {
+        host.set_window_open(true);
+        match activation.token.or(activation.startup_id) {
+            Some(token) => handle.activate(token),
+            None => handle.open(),
+        }
+    };
+    if let Some(activation) = first {
+        show(activation.clone());
+    }
+    let quit = app.handle();
+    std::thread::Builder::new()
+        .name("hex-window-requests".into())
+        .spawn(move || {
+            while let Ok(request) = requests.recv() {
+                match request {
+                    Control::Activate(activation) => show(activation),
+                    Control::Quit => {
+                        quit.quit();
+                        break;
+                    }
+                }
+            }
+        })
+        .expect("could not start the window request thread");
+    app.run();
 }
 
 /// The window as a Rune app whose lifetime the caller chooses.
@@ -92,13 +132,15 @@ pub(crate) fn app() -> rune::App<Ui> {
 }
 
 /// Closing the window saves pending text edits and stops a shortcut
-/// recording, as leaving a pane does.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+/// recording, as leaving a pane does. Hex keeps running.
 fn on_close(ui: &mut Ui, _: &mut Tx) {
     ui.flush_drafts();
     settings::cancel_capture(ui);
     ui.open = None;
     picker::close(ui);
+    if let Service::Live(backend) = &mut ui.service {
+        backend.closed();
+    }
     #[cfg(target_os = "macos")]
     crate::macos_rune::window_closed();
 }
@@ -140,6 +182,13 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination) {
         Destination::Meetings(Some(id)) => ui.meetings.select(id),
         _ => {}
     }
+}
+
+/// `hex app -- --snap out.png --scene …`: a headless render of a fixture
+/// scene, or `live` for the running Hex's `hex status`.
+#[cfg(target_os = "linux")]
+pub(crate) fn render() {
+    rune::run(spec());
 }
 
 fn spec() -> AppSpec<Ui> {
@@ -297,6 +346,9 @@ pub(crate) struct Ui {
     host: platform::PlatformHost,
     commands: commands::CommandsPane,
     meetings: meetings::MeetingsPane,
+    /// Settings saves and Quit Hex a fixture recorded.
+    saved: usize,
+    quit_requested: bool,
 }
 
 impl Ui {
@@ -307,7 +359,7 @@ impl Ui {
         };
         crate::desktop_i18n::apply(settings.ui_language.as_deref());
         let mut ui = Self::with(settings, Service::Pending, error);
-        ui.history = history::HistoryPane::open(ui.settings.history_retention);
+        ui.history = history::HistoryPane::shared(host::history(ui.settings.history_retention));
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
         ui.tour = onboarding::Tour::start(&ui.settings, &ui.platform);
@@ -343,6 +395,8 @@ impl Ui {
             host: platform::PlatformHost::None,
             commands: commands::CommandsPane::default(),
             meetings: meetings::MeetingsPane::default(),
+            saved: 0,
+            quit_requested: false,
         }
     }
 
@@ -362,8 +416,8 @@ impl Ui {
         }
     }
 
-    /// Saves `settings.json` before adopting the change, then asks the
-    /// service to reload it. A failed save leaves the shown settings alone.
+    /// Saves `settings.json` through the host, which adopts the change. A
+    /// failed save leaves the shown settings alone.
     fn update(&mut self, change: impl FnOnce(&mut AppSettings)) -> bool {
         let mut candidate = self.drafted();
         change(&mut candidate);
@@ -371,16 +425,19 @@ impl Ui {
     }
 
     fn commit(&mut self, candidate: AppSettings) -> bool {
-        if self.live()
-            && let Err(error) = candidate.save()
-        {
-            self.error = Some(format!("{error:#}"));
-            return false;
+        match &mut self.service {
+            Service::Live(backend) => {
+                if let Err(error) = backend.save(&candidate) {
+                    self.error = Some(format!("{error:#}"));
+                    return false;
+                }
+            }
+            Service::Fixture(_) => self.saved += 1,
+            Service::Pending => {}
         }
         self.error = None;
         self.settings = candidate;
         self.draft_since = None;
-        self.send(Request::ReloadSettings);
         true
     }
 
@@ -469,6 +526,17 @@ impl Ui {
         self.service_settings = Some(service);
     }
 
+    /// Saves pending edits, then lets the host finish its work and exit.
+    fn quit(&mut self) {
+        self.flush_drafts();
+        settings::cancel_capture(self);
+        match &mut self.service {
+            Service::Live(backend) => backend.quit(),
+            Service::Fixture(_) => self.quit_requested = true,
+            Service::Pending => {}
+        }
+    }
+
     fn select_pane(&mut self, pane: Pane) {
         if self.pane == pane {
             return;
@@ -486,7 +554,7 @@ impl Ui {
 /// Shortcut recording takes every key; otherwise Escape closes the picker
 /// or the open menu.
 fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
-    if settings::on_key(ui, event, tx) {
+    if settings::on_key(ui, event, tx) || models::on_key(ui, event) || modes::on_key(ui, event) {
         return true;
     }
     if event.key != rune::Key::Escape {
@@ -508,6 +576,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn setup(ui: &mut Ui, waker: Waker) {
+    ui.modes.waker = Some(waker.clone());
     if matches!(ui.service, Service::Pending) {
         #[cfg(target_os = "macos")]
         {
@@ -528,6 +597,7 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.models.poll(ui.live());
     changed |= ui.history.poll(ui.pane == Pane::History);
     changed |= ui.modes.poll(ui.live());
+    changed |= modes::poll_chooser(ui);
     changed |= ui.host.poll(&mut ui.platform);
     if let Service::Live(backend) = &mut ui.service {
         backend.refresh();
@@ -644,6 +714,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         .child(nav)
         .child(el().key("spacer").grow(1.0))
         .children(update)
+        .children(host::QUIT_IN_WINDOW.then(|| quit_item(p)))
         .child(
             text(tr_fill("Version {}", env!("CARGO_PKG_VERSION")))
                 .key("version")
@@ -684,6 +755,31 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
         item = item.fill(c.layer_02);
     }
     item
+}
+
+/// Linux has no tray: the window's way to stop Hex. Closing the window
+/// keeps Hex dictating.
+fn quit_item(p: Paint) -> El {
+    let c = &p.k.c;
+    row()
+        .key("quit")
+        .role("button")
+        .label(tr("Quit Hex"))
+        .h(28.0)
+        .px(6.0)
+        .mt(4.0)
+        .center_y()
+        .radius(p.k.radius.md)
+        .hover(c.hover)
+        .press(c.pressed)
+        .on_press(|ui: &mut Ui| ui.quit())
+        .child(
+            text(tr("Quit Hex"))
+                .key("label")
+                .font(p.k.ty.ui)
+                .color(c.text_muted)
+                .truncate(),
+        )
 }
 
 /// The title bar of the content panel, with the pane's actions on the right.

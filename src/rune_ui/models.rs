@@ -10,7 +10,7 @@ use std::time::Instant;
 use rune::{El, TextEdit, Tx, col, row, text};
 use rune_kit::{Badge, Placement, Popover, Select, SelectAppearance, TextInput};
 
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, setting_row};
+use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, setting_row};
 use super::modes::Selection;
 use super::{Menu, Ui};
 use crate::app_settings::AppSettings;
@@ -37,6 +37,7 @@ pub(super) struct Models {
     retry_at: Instant,
     /// The open model popover's search field.
     pub(super) search: TextEdit,
+    highlight: Highlight,
 }
 
 impl Default for Models {
@@ -46,6 +47,7 @@ impl Default for Models {
             receiver: None,
             retry_at: Instant::now(),
             search: TextEdit::default(),
+            highlight: Highlight::default(),
         }
     }
 }
@@ -213,7 +215,21 @@ fn open_model_picker(ui: &mut Ui) {
     }
     ui.models.search = TextEdit::default();
     ui.models.search.focused = true;
+    ui.models.highlight = Highlight::default();
     ui.open = Some(Menu::Model);
+}
+
+/// Up and Down move the open model popover's highlight.
+pub(super) fn on_key(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
+    if ui.open != Some(Menu::Model) {
+        return false;
+    }
+    let query = ui.models.search.text.trim().to_lowercase();
+    let count = ui
+        .models
+        .catalog()
+        .map_or(0, |catalog| filtered_model_keys(catalog, &query).len());
+    ui.models.highlight.key(&event.key, &query, count)
 }
 
 fn close(ui: &mut Ui) {
@@ -370,11 +386,12 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
         .on_edit(|ui: &mut Ui| &mut ui.models.search)
         .on_submit(move |ui: &mut Ui, _: &mut Tx| {
             let query = ui.models.search.text.trim().to_lowercase();
-            let first = ui
-                .models
-                .catalog()
-                .and_then(|catalog| filtered_model_keys(catalog, &query).into_iter().next());
-            if let Some(model) = first {
+            let picked = ui.models.catalog().and_then(|catalog| {
+                let keys = filtered_model_keys(catalog, &query);
+                let index = ui.models.highlight.index(&query, keys.len())?;
+                keys.into_iter().nth(index)
+            });
+            if let Some(model) = picked {
                 choose_model(ui, target, model);
             }
         })
@@ -387,6 +404,7 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
     let (current, _) = selected(&ui.settings, target);
     let query = ui.models.search.text.trim().to_lowercase();
     let keys = filtered_model_keys(catalog, &query);
+    let highlighted = ui.models.highlight.index(&query, keys.len());
     if keys.is_empty() {
         list = list.child(
             text(tr("No models match"))
@@ -441,6 +459,8 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
             );
         if chosen {
             entry = entry.fill(c.layer_02);
+        } else if highlighted == Some(index) {
+            entry = entry.fill(c.hover);
         }
         list = list.child(entry);
     }

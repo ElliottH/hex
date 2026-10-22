@@ -9,6 +9,7 @@ use color_eyre::Result;
 use crate::audio::{AudioInput, AudioInputEvent};
 use crate::events::{EventLog, TranscriptPhase, VoiceEvent, VoiceState, now_ms};
 use crate::linux_input::ShortcutCommand;
+use crate::linux_service::{Activation, Launch, Request};
 use crate::moonshine::Moonshine;
 
 #[derive(Parser)]
@@ -20,25 +21,27 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Open Settings and connect to the per-user dictation service.
+    /// Open the Hex window, starting Hex when it is not running (the default).
     App {
-        /// Start the service without opening Settings (legacy autostart compatibility).
+        /// Start Hex in the background without opening the window.
         #[arg(long)]
         hidden: bool,
-        /// The Settings front end: the GPUI window, or the experimental Rune one.
-        #[arg(long, value_enum, default_value_t = SettingsUi::Gpui)]
-        ui: SettingsUi,
-        /// Arguments for the Rune front end, such as `--snap out.png --scene dark`.
+        /// The window toolkit, when this process becomes Hex.
+        #[arg(long, value_enum)]
+        ui: Option<SettingsUi>,
+        /// Arguments for a headless Rune render, such as `--snap out.png --scene dark`.
         #[arg(last = true)]
         rune_args: Vec<String>,
     },
-    /// Run the per-user runtime in the foreground (normally started by systemd).
+    /// Run Hex in the foreground without opening the window (systemd's entry point).
     Service,
-    /// Start the background service and enable listening.
+    /// Start Hex in the background.
     Start,
-    /// Stop the background service.
+    /// Quit Hex after its accepted work finishes (same as `hex quit`).
     Stop,
-    /// Restart the background service in this graphical session.
+    /// Quit Hex after its accepted work finishes.
+    Quit,
+    /// Restart Hex's systemd unit in this graphical session.
     Restart,
     /// Listen to the microphone and print local transcripts until interrupted.
     Listen {
@@ -46,18 +49,18 @@ enum Command {
         #[arg(long)]
         device: Option<String>,
     },
-    /// Start, stop, or cancel a dictation in the running service. Bind these
+    /// Start, stop, or cancel a dictation in the running Hex. Bind these
     /// in your desktop's keyboard shortcuts when it has no shortcuts portal.
     Dictation {
         #[command(subcommand)]
         action: DictationAction,
     },
-    /// Start or stop a Voice Action instruction in the running service.
+    /// Start or stop a Voice Action instruction in the running Hex.
     VoiceAction {
         #[command(subcommand)]
         action: VoiceActionAction,
     },
-    /// Paste the last dictation again through the running service.
+    /// Paste the last dictation again through the running Hex.
     PasteLast,
     /// Run X11 or Wayland hotkey dictation and automatic paste until interrupted.
     Dictate {
@@ -67,7 +70,7 @@ enum Command {
     },
     /// List microphone devices visible through ALSA.
     Devices,
-    /// Query the live service, or print observations with --lines.
+    /// Query the running Hex, or print observations with --lines.
     Status {
         /// Maximum number of observations to print.
         #[arg(long)]
@@ -81,14 +84,14 @@ enum Command {
 }
 
 #[cfg(feature = "rune-ui")]
-fn open_rune_settings(_: Vec<String>) -> Result<()> {
+fn render_rune(_: Vec<String>) -> Result<()> {
     // Rune reads its own flags (`--snap`, `--scene`, …) from the process arguments.
-    crate::rune_ui::run();
+    crate::rune_ui::render();
     Ok(())
 }
 
 #[cfg(not(feature = "rune-ui"))]
-fn open_rune_settings(_: Vec<String>) -> Result<()> {
+fn render_rune(_: Vec<String>) -> Result<()> {
     color_eyre::eyre::bail!(
         "this Hex was built without the Rune front end; rebuild with `--features rune-ui`"
     )
@@ -98,6 +101,20 @@ fn open_rune_settings(_: Vec<String>) -> Result<()> {
 enum SettingsUi {
     Gpui,
     Rune,
+}
+
+impl SettingsUi {
+    fn window(self) -> Result<crate::linux_app::WindowUi> {
+        match self {
+            Self::Gpui => Ok(crate::linux_app::WindowUi::Gpui),
+            #[cfg(feature = "rune-ui")]
+            Self::Rune => Ok(crate::linux_app::WindowUi::Rune),
+            #[cfg(not(feature = "rune-ui"))]
+            Self::Rune => color_eyre::eyre::bail!(
+                "this Hex was built without the Rune front end; rebuild with `--features rune-ui`"
+            ),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -145,6 +162,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
             crate::linux_session::LinuxSession::detect().as_str(),
         );
     }
+    let activation = crate::linux_service::Activation::take_from_environment();
     color_eyre::install()?;
     let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
@@ -152,20 +170,27 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
     let event_path = log_dir.join("live.ndjson");
     let command = Cli::parse().command.unwrap_or(Command::App {
         hidden: false,
-        ui: SettingsUi::Gpui,
+        ui: None,
         rune_args: Vec::new(),
     });
-    let client = command.is_service_client();
+    let client = command.is_client();
     let result = (|| match command {
-        Command::App {
-            hidden: false,
-            ui: SettingsUi::Rune,
-            rune_args,
-        } => open_rune_settings(rune_args),
-        Command::App { hidden, .. } => crate::linux_app::open(hidden, event_path, shutdown),
-        Command::Service => crate::linux_app::run_service(event_path, shutdown),
-        Command::Start => crate::linux_service::start(),
-        Command::Stop => crate::linux_service::stop(),
+        Command::App { rune_args, .. } if !rune_args.is_empty() => render_rune(rune_args),
+        Command::App { hidden, ui, .. } => launch(&activation, !hidden, ui, event_path, shutdown),
+        Command::Start => launch(&activation, false, None, event_path, shutdown),
+        Command::Service => {
+            match crate::linux_app::run(
+                crate::linux_app::WindowUi::default_for_build(),
+                event_path,
+                shutdown,
+                None,
+            ) {
+                // A unit start that lost the race to another launch has nothing to do.
+                Err(_) if another_instance_answers() => Ok(()),
+                result => result,
+            }
+        }
+        Command::Stop | Command::Quit => crate::linux_service::quit(),
         Command::Restart => crate::linux_service::restart(),
         Command::Listen { device } => {
             let _instance = crate::instance::acquire("listener")?;
@@ -210,7 +235,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         }
         Command::Status { lines: Some(lines) } => print_status(&event_path, lines),
         Command::Status { lines: None } => {
-            let state = crate::linux_service::request(crate::linux_service::Request::Snapshot)?;
+            let state = crate::linux_service::request(Request::Status)?;
             println!("{}", serde_json::to_string_pretty(&state)?);
             Ok(())
         }
@@ -262,12 +287,12 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
 }
 
 impl Command {
-    /// Commands that only talk to the service or its systemd unit.
-    fn is_service_client(&self) -> bool {
+    /// Commands that only talk to the running Hex or its systemd unit.
+    fn is_client(&self) -> bool {
         matches!(
             self,
-            Self::Start
-                | Self::Stop
+            Self::Stop
+                | Self::Quit
                 | Self::Restart
                 | Self::Dictation { .. }
                 | Self::VoiceAction { .. }
@@ -277,10 +302,58 @@ impl Command {
     }
 }
 
-/// Asks the running service; never starts one, so a keybinding fails fast.
+/// Asks the running Hex; never starts one, so a keybinding fails fast.
 fn shortcut(command: ShortcutCommand) -> Result<()> {
-    crate::linux_service::request(crate::linux_service::Request::Shortcut(command))?;
+    crate::linux_service::request(Request::Shortcut(command))?;
     Ok(())
+}
+
+/// After losing the data root to a concurrent launch, waits for that
+/// instance to answer.
+fn another_instance_answers() -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if crate::linux_service::request(Request::Status).is_ok() {
+            return true;
+        }
+        if crate::instance::acquire("service").is_ok() {
+            // Nobody holds the root: the failure was this process's own.
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+/// Forwards to the running Hex, starts its systemd unit, or becomes Hex.
+/// Choosing a toolkit with `--ui` skips the unit, which runs the default.
+fn launch(
+    activation: &Activation,
+    show: bool,
+    ui: Option<SettingsUi>,
+    event_path: PathBuf,
+    shutdown: &'static AtomicBool,
+) -> Result<()> {
+    let window = match ui {
+        Some(ui) => ui.window()?,
+        None => crate::linux_app::WindowUi::default_for_build(),
+    };
+    loop {
+        match crate::linux_service::launch(activation, show, ui.is_none())? {
+            Launch::Forwarded => return Ok(()),
+            Launch::BecomeInstance => {}
+        }
+        match crate::linux_app::run(
+            window,
+            event_path.clone(),
+            shutdown,
+            show.then(|| activation.clone()),
+        ) {
+            // Another launch claimed the data root first; forward to it.
+            Err(_) if another_instance_answers() => continue,
+            result => return result,
+        }
+    }
 }
 
 pub(crate) fn listen(

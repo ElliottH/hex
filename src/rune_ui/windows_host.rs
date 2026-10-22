@@ -26,6 +26,8 @@ pub(super) const RECORDS_KEY_EVENTS: bool = false;
 pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 /// Windows pastes with Ctrl+V everywhere.
 pub(super) const TERMINAL_PASTE: bool = false;
+/// The window offers Quit Hex beside the tray's.
+pub(super) const QUIT_IN_WINDOW: bool = true;
 
 /// How often shortcut capture samples the keyboard, as in GPUI.
 const CHORD_POLL: Duration = Duration::from_millis(16);
@@ -65,6 +67,24 @@ impl Backend {
             },
         }
     }
+
+    /// Saves `settings.json`, then asks the runtime to reload it.
+    pub(super) fn save(&mut self, settings: &crate::app_settings::AppSettings) -> Result<()> {
+        settings.save()?;
+        self.send(Request::ReloadSettings)
+    }
+
+    /// Asks the runtime to stop the listener and end the app, as the
+    /// tray's Quit Hex does.
+    pub(super) fn quit(&mut self) {
+        if let Err(error) = self.send(Request::Quit) {
+            tracing::warn!(%error, "could not quit Hex");
+        }
+    }
+
+    /// Rune hides the window (`keep_running`) and the runtime keeps
+    /// listening; without a tray Rune ends the app instead.
+    pub(super) fn closed(&mut self) {}
 
     /// The runtime publishes into shared memory; nothing to pull. Runs on
     /// the main thread before each frame, which is where the window icon
@@ -184,6 +204,14 @@ pub(super) fn validate_hotkey(
     WindowsHotkey::from(binding)
         .validate()
         .map_err(|_| tr("Use two modifiers or add a key"))
+}
+
+pub(super) fn history(
+    retention: crate::history::HistoryRetention,
+) -> Option<crate::history::History> {
+    crate::history::History::open_default(retention)
+        .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
+        .ok()
 }
 
 /// UI Automation reports the foreground application.

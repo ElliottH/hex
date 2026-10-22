@@ -43,6 +43,8 @@ pub(super) const RECORDS_KEY_EVENTS: bool = false;
 /// Sparkle offers "Check now".
 pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 pub(super) const TERMINAL_PASTE: bool = false;
+/// Quit Hex lives in the menu bar and the app menu (⌘Q), as under GPUI.
+pub(super) const QUIT_IN_WINDOW: bool = false;
 
 /// How often the native host re-reads permissions and driver state.
 const PLATFORM_REFRESH: Duration = Duration::from_secs(1);
@@ -93,6 +95,21 @@ impl Backend {
             },
         }
     }
+
+    /// Saves `settings.json`, then asks the runtime to reload it. The
+    /// listener follows the saved file itself.
+    pub(super) fn save(&mut self, settings: &crate::app_settings::AppSettings) -> Result<()> {
+        settings.save()?;
+        self.send(Request::ReloadSettings)
+    }
+
+    pub(super) fn quit(&mut self) {
+        crate::macos_rune::quit();
+    }
+
+    /// Rune hides the window (`keep_running`); the window's own close hook
+    /// restores the Dock policy (`macos_rune::window_closed`).
+    pub(super) fn closed(&mut self) {}
 
     /// The runtime publishes into shared memory; nothing to pull.
     pub(super) fn refresh(&mut self) {}
@@ -337,6 +354,18 @@ fn hotkey_key(code: u16, characters: Option<&str>) -> Result<HotkeyKey, &'static
 /// macOS accepts every binding the capture can produce.
 pub(super) fn validate_hotkey(_: ShortcutTarget, _: &HotkeyBinding) -> Result<(), &'static str> {
     Ok(())
+}
+
+/// The listener's retained history, shared with the window.
+pub(super) fn history(
+    retention: crate::history::HistoryRetention,
+) -> Option<crate::history::History> {
+    match crate::macos_rune::runtime() {
+        Some(runtime) => runtime.history(),
+        None => crate::history::History::open_default(retention)
+            .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
+            .ok(),
+    }
 }
 
 /// The listener knows the frontmost application.

@@ -73,6 +73,8 @@ mod linux_context;
 mod linux_desktop;
 #[cfg(target_os = "linux")]
 mod linux_dictation;
+#[cfg(all(target_os = "linux", feature = "rune-ui"))]
+mod linux_file_chooser;
 #[cfg(target_os = "linux")]
 mod linux_input;
 #[cfg(target_os = "linux")]
