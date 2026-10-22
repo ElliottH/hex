@@ -253,9 +253,12 @@ the Rune core work below.
    and lists (in progress by Kit's `motion-focus` agent).
 2. **Timers and looping animation**: `Tx::wake_after`, looping tracks for
    spinners, pulses, and indeterminate progress (`motion-focus`).
-3. **App and window model**: app lifetime separate from windows, several
-   windows, hide-on-close, window kinds (non-activating panel, transparent
-   click-through overlay, Wayland layer-shell), per-app minimum size.
+3. **App and window model**: app lifetime separate from windows,
+   hide-on-close, and XDG activation landed as `rune::App`/`AppHandle`
+   (Rune `a242f5a`, see [single-process.md](single-process.md#landed-on-rune-main-a9cde14-a242f5a-hex-pins-a242f5a)).
+   Still open: several windows, window kinds (non-activating panel,
+   transparent click-through overlay, Wayland layer-shell), and per-app
+   minimum size.
 4. **Keyboard**: key-up and modifier-only events, left/right modifier sides,
    physical key codes, Globe/Fn (macOS shortcuts).
 5. **Raster images and custom vector drawing** (app icons, waveforms).

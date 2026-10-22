@@ -64,7 +64,7 @@ static HISTORY_ICON: Icon = Icon {
 #[cfg(target_os = "windows")]
 pub(crate) fn run() {
     rune::set_app_id("hex");
-    rune::run(spec());
+    rune::App::new(spec()).run();
 }
 
 /// Opens the Linux window beside `host` and returns when it closes: the
