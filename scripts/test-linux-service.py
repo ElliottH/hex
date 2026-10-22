@@ -119,11 +119,14 @@ with tempfile.TemporaryDirectory(prefix="hex-service-", dir=os.environ.get("TMPD
         status_state = json.loads(status.stdout)
         assert status_state["pid"] == service.pid
         assert status_state["desktop"]["listener"]["warning"] is None
-        assert status_state["desktop"]["listener"]["shortcuts"] == "Registered"
+        # No listener has registered shortcuts, so none is claimed, not even X11's.
+        assert status_state["desktop"]["listener"]["shortcuts"] == "Unregistered"
 
-        # Keybinding commands need a listening service; they fail fast without one.
+        # Keybinding commands need a listening service; they fail fast without one,
+        # with one line rather than an error report.
         refused = subprocess.run([binary, "dictation", "toggle"], env=env, capture_output=True, text=True)
         assert refused.returncode != 0 and "not listening" in refused.stderr, refused.stderr
+        assert refused.stderr.startswith("hex: ") and refused.stderr.count("\n") == 1, refused.stderr
 
         # Crash leaves a socket, not a permanent instance lock. No stale state is reported.
         service.kill()
@@ -131,6 +134,7 @@ with tempfile.TemporaryDirectory(prefix="hex-service-", dir=os.environ.get("TMPD
         assert subprocess.run([binary, "status"], env=env, capture_output=True).returncode != 0
         missing = subprocess.run([binary, "paste-last"], env=env, capture_output=True, text=True)
         assert missing.returncode != 0 and "not running" in missing.stderr, missing.stderr
+        assert missing.stderr.count("\n") == 1, missing.stderr
         service = launch()
         state = wait_for(snapshot)
         assert state["pid"] == service.pid

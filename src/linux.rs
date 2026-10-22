@@ -124,10 +124,11 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let event_path = log_dir.join("live.ndjson");
-    let result = (|| match Cli::parse()
+    let command = Cli::parse()
         .command
-        .unwrap_or(Command::App { hidden: false })
-    {
+        .unwrap_or(Command::App { hidden: false });
+    let client = command.is_service_client();
+    let result = (|| match command {
         Command::App { hidden } => crate::linux_app::open(hidden, event_path, shutdown),
         Command::Service => crate::linux_app::run_service(event_path, shutdown),
         Command::Start => crate::linux_service::start(),
@@ -217,7 +218,30 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         },
     })();
     crate::linux_desktop::shutdown();
-    result
+    match result {
+        // A keybinding or script wants one line, not a report.
+        Err(error) if client => {
+            eprintln!("hex: {error:#}");
+            std::process::exit(1);
+        }
+        result => result,
+    }
+}
+
+impl Command {
+    /// Commands that only talk to the service or its systemd unit.
+    fn is_service_client(&self) -> bool {
+        matches!(
+            self,
+            Self::Start
+                | Self::Stop
+                | Self::Restart
+                | Self::Dictation { .. }
+                | Self::VoiceAction { .. }
+                | Self::PasteLast
+                | Self::Status { lines: None }
+        )
+    }
 }
 
 /// Asks the running service; never starts one, so a keybinding fails fast.

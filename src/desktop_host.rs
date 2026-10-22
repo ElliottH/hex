@@ -34,8 +34,10 @@ pub(crate) struct DesktopListenerSnapshot {
 /// How the running listener receives its shortcuts.
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DesktopShortcuts {
-    /// Hex registers the shortcuts Settings records (X11).
+    /// No listener has registered its shortcuts yet: it is starting or stopped.
     #[default]
+    Unregistered,
+    /// Hex registers the shortcuts Settings records (X11).
     Registered,
     /// The desktop's shortcuts portal bound these, in request order.
     Portal(Vec<DesktopGrantedShortcut>),
@@ -83,12 +85,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn older_listener_snapshots_have_no_warning() {
+    fn older_listener_snapshots_have_no_warning_or_shortcuts() {
         let snapshot: DesktopListenerSnapshot =
             serde_json::from_str(r#"{"running":true,"status":"Listening"}"#).unwrap();
         assert!(snapshot.running);
         assert_eq!(snapshot.status, "Listening");
         assert!(snapshot.warning.is_none());
-        assert_eq!(snapshot.shortcuts, DesktopShortcuts::Registered);
+        assert_eq!(snapshot.shortcuts, DesktopShortcuts::Unregistered);
     }
 }

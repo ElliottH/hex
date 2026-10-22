@@ -727,12 +727,15 @@ Linux beta                               // not macOS feature parity
 │   ├── Wayland + GlobalShortcuts portal -> Desktop grants the triggers
 │   │   ├── Settings shows the granted trigger (GNOME/KDE may assign another)
 │   │   └── Refused shortcut -> "Not granted" + error; the rest keep working
-│   └── Wayland without the portal -> Bind `hex` commands in the desktop
-│       └── Settings hides shortcut rows and lists the commands
+│   ├── Wayland without the portal -> Bind `hex` commands in the desktop
+│   │   └── Settings hides shortcut rows and lists the commands
+│   └── Listener starting or stopped -> `hex status` reports Unregistered,
+│       never the X11 mode
 ├── hex dictation start|stop|toggle|cancel, hex voice-action start|stop|toggle,
 │   hex paste-last -> Same events as a shortcut       // linux.commands
 │   ├── Idempotent: start while recording / stop while idle -> Nothing
-│   └── Service missing or not listening -> Clear error, non-zero exit
+│   └── Service missing or not listening -> One-line error, non-zero exit
+│       // as for hex start|stop|restart|status
 ├── Escape -> Cancel active capture, not newest accepted job
 │   ├── Bound only while recording (portal: own session, also with held modifiers)
 │   └── X11 grab conflict / portal refusal -> Warn without stopping dictation
@@ -796,6 +799,7 @@ Linux runtime                            // maintain.linux-service
 ├── Close/crash Settings -> Keep microphone, accepted jobs, and model preparation
 │   └── Uncommitted shortcut capture -> Cancel and restore the prior listening state
 ├── Service restart -> Client reconnects; uncertain commands are not replayed
+├── hex restart without a display (SSH) -> Keep the saved session.env
 └── hex stop / systemctl --user stop hex -> Stop workers and release devices
 ```
 

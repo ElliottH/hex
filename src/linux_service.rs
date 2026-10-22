@@ -485,7 +485,8 @@ fn systemctl(arguments: &[&str]) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .wrap_err("Could not run systemctl; run `hex service` in a graphical session")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Stopping drains accepted work, which the unit allows 30 seconds.
+    let deadline = Instant::now() + Duration::from_secs(40);
     loop {
         if let Some(status) = child.try_wait()? {
             if !status.success() {
@@ -569,7 +570,10 @@ pub fn restart() -> Result<()> {
     if std::env::var_os("HEX_APPLICATION_SUPPORT_DIR").is_some() {
         bail!("Restart a custom-data service through its foreground process or supervisor");
     }
-    write_session_environment()?;
+    // Without a desktop (over SSH), keep the one the service last ran in.
+    if graphical_session() || !session_environment_path()?.exists() {
+        write_session_environment()?;
+    }
     systemctl(&["restart", UNIT])
 }
 
@@ -597,12 +601,18 @@ fn environment_line(key: &str, value: &str) -> Result<String> {
     ))
 }
 
+fn graphical_session() -> bool {
+    ["DISPLAY", "WAYLAND_DISPLAY"]
+        .iter()
+        .any(|key| !std::env::var(key).unwrap_or_default().is_empty())
+}
+
+fn session_environment_path() -> Result<PathBuf> {
+    Ok(crate::app_paths::support_dir()?.join("session.env"))
+}
+
 fn write_session_environment() -> Result<()> {
-    if std::env::var("DISPLAY").unwrap_or_default().is_empty()
-        && std::env::var("WAYLAND_DISPLAY")
-            .unwrap_or_default()
-            .is_empty()
-    {
+    if !graphical_session() {
         bail!("Start HEX from your graphical login session");
     }
     let directory = crate::app_paths::support_dir()?;
@@ -624,7 +634,7 @@ fn write_session_environment() -> Result<()> {
     let result = (|| -> Result<()> {
         file.write_all(body.as_bytes())?;
         file.sync_all()?;
-        fs::rename(&temporary, directory.join("session.env"))?;
+        fs::rename(&temporary, session_environment_path()?)?;
         Ok(())
     })();
     if result.is_err() {
