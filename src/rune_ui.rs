@@ -92,10 +92,11 @@ pub(crate) fn run_app(
     use crate::linux_service::{Activation, Control};
     let _host = host::install(host.clone());
     rune::set_app_id("hex");
-    let app = rune::App::new(spec())
+    let mut app = rune::App::new(spec())
         .args(Vec::new())
         .windowless()
         .on_close(on_close);
+    crate::linux_rune_hud::install(&mut app);
     let handle = app.handle();
     let show = move |activation: Activation| {
         host.set_window_open(true);
@@ -195,6 +196,8 @@ fn spec() -> AppSpec<Ui> {
     AppSpec {
         title: "Hex",
         size: (980.0, 760.0),
+        // GPUI's minimum: narrower windows crowd the sidebar and rows.
+        min_size: Some((860.0, 560.0)),
         init: Ui::load,
         view,
         scenes: SCENES,
