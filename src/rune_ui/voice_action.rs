@@ -53,7 +53,7 @@ fn toggle(ui: &mut Ui) {
 
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let enabled = ui.settings.voice_action.enabled;
-    let mut content = col().key("content").px(24.0).pt(8.0).pb(24.0).gap(24.0);
+    let mut content = col().key("content").px(24.0).pt(4.0).gap(24.0);
     let mut enable = vec![toggle_row(
         p,
         "voice-action-enabled",

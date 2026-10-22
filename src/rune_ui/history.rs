@@ -301,7 +301,6 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         .h_full()
         .pl(16.0)
         .pr(8.0)
-        .pb(16.0)
         .child(super::scroll_body("history-scroll", list));
     let body = row()
         .key("history-body")
@@ -452,7 +451,6 @@ fn detail(ui: &Ui, p: Paint) -> El {
         .grow(1.0)
         .shrink()
         .px(24.0)
-        .pb(16.0)
         .child(header)
         .child(super::scroll_body("detail-scroll", body))
 }

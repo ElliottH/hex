@@ -168,7 +168,6 @@ pub(super) fn split(p: Paint, key: &str, list: El, detail: El) -> El {
                 .h_full()
                 .pl(16.0)
                 .pr(8.0)
-                .pb(16.0)
                 .child(list),
         )
         .child(el().key("rule").w(p.hair).h_full().fill(p.k.c.border_weak))

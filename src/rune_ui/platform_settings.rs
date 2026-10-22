@@ -575,7 +575,7 @@ pub(super) fn hex_microphone_section(ui: &Ui, p: Paint) -> Option<El> {
                 "open-fun-pane",
                 tr("Open Fun"),
                 ButtonKind::Secondary,
-                |ui: &mut Ui, _| ui.select_pane(super::Pane::Fun),
+                |ui: &mut Ui, tx| ui.select_pane(super::Pane::Fun, tx),
             ),
         ));
     }
