@@ -13,7 +13,9 @@ mod controls;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rune::{AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx, Waker, col, row, text};
+use rune::{
+    AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx, Waker, col, row, text,
+};
 
 use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
@@ -29,8 +31,8 @@ use crate::linux_input::LinuxHotkey;
 use crate::linux_service::{Client, Request, ShortcutTarget};
 use crate::transcription_models::{self, ModelPreparationStage, TranscriptionModelId};
 use controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section, segmented,
-    select, setting_row, status_dot, tag, text_field, toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section,
+    segmented, select, setting_row, status_dot, tag, text_field, toggle_row,
 };
 
 const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
@@ -481,12 +483,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     let p = Paint::new(dark, cx.env().scale);
     // Menus mount above the page (rune-kit overlays), anchored to their field.
     let mut layer = Vec::new();
-    let mut content = col()
-        .key("content")
-        .px(24.0)
-        .pt(8.0)
-        .pb(24.0)
-        .gap(24.0);
+    let mut content = col().key("content").px(24.0).pt(8.0).pb(24.0).gap(24.0);
     content = content.child(listener_card(ui, p));
     if let Some(shortcuts) = desktop_shortcuts(ui, p) {
         content = content.child(shortcuts);
@@ -584,11 +581,7 @@ fn listener_card(ui: &Ui, p: Paint) -> El {
         .py(8.0)
         .gap(12.0)
         .center_y()
-        .child(status_dot(if running {
-            p.success()
-        } else {
-            p.muted()
-        }))
+        .child(status_dot(if running { p.success() } else { p.muted() }))
         .child(
             col()
                 .key("copy")
@@ -957,7 +950,8 @@ fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         .radius(p.k.radius.md)
         .motion(p.k.motion.control)
         .on_press(move |ui: &mut Ui| begin_capture(ui, target));
-    let listening = matches!(&ui.capture, Capture::Listening { target: active, .. } if *active == target);
+    let listening =
+        matches!(&ui.capture, Capture::Listening { target: active, .. } if *active == target);
     if !listening {
         frame = frame.fill(c.bg_button_neutral);
         for shadow in &p.k.elevation.button_neutral {
@@ -984,14 +978,14 @@ fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
                     .font(DESCRIPTION)
                     .color(p.muted()),
             ),
-        Capture::Saving { target: active, .. } if *active == target => frame
-            .child(keycaps(p, "keys", &caps))
-            .child(
+        Capture::Saving { target: active, .. } if *active == target => {
+            frame.child(keycaps(p, "keys", &caps)).child(
                 text(tr("Saving…"))
                     .key("label")
                     .font(label_style)
                     .color(p.muted()),
-            ),
+            )
+        }
         Capture::Saved { target: active, .. } if *active == target => frame
             .child(keycaps(p, "keys", &caps))
             .child(tag(p, "saved", tr("Saved"))),

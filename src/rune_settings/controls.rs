@@ -42,7 +42,7 @@ impl Paint {
         self.k.c.danger.fg
     }
     pub(super) fn success(self) -> Color {
-        self.k.c.success.icon
+        self.k.c.success.fg
     }
     pub(super) fn accent(self) -> Color {
         self.k.c.text_accent
@@ -138,12 +138,7 @@ pub(super) fn described_row(
                 .grow(1.0)
                 .shrink()
                 .gap(2.0)
-                .child(
-                    text(title)
-                        .key("label")
-                        .font(p.k.ty.ui)
-                        .color(p.text()),
-                )
+                .child(text(title).key("label").font(p.k.ty.ui).color(p.text()))
                 .children(description.map(|(copy, color)| {
                     text(copy)
                         .key("description")
@@ -187,8 +182,8 @@ pub(super) fn segmented(
 ) -> El {
     let widest = labels
         .iter()
-        .map(|label| label.chars().count() as f32 * 6.9 + 24.0)
-        .fold(52.0, f32::max)
+        .map(|label| label.chars().count() as f32 * 7.6 + 26.0)
+        .fold(56.0, f32::max)
         .round();
     SegmentedControl::new(labels, Some(selected))
         .width(Some(widest * labels.len() as f32))
