@@ -1038,7 +1038,9 @@ mod tests {
     fn malformed_settings_cannot_start_even_after_dismissing_the_error() {
         let mut host = LinuxDesktopHost::new(
             PathBuf::new(),
-            Default::default(),
+            // A model never installed on Linux, so the resumed start below
+            // cannot open the microphone where the real model is installed.
+            host_for_edit(false).settings.clone(),
             Some("Could not load Linux settings: invalid JSON".into()),
             UpdateState::Unmanaged,
         );
@@ -1059,6 +1061,7 @@ mod tests {
         assert!(host.settings_valid);
         assert_eq!(host.settings, recovered);
         assert!(!host.is_running());
+        assert_eq!(host.status, "Model required");
     }
 
     #[test]

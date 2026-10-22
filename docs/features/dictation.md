@@ -133,12 +133,15 @@ Release or locked finishing press                     // dictate.release-tail
   -> A press inside the tail starts after the old clip finishes, with its own pre-roll
 
 Release that will transcribe                          // dictate.stop-tone
-  -> Linux, Windows: stop tone and mute/pause restore at the release, while the
-     tail is still captured; a muted Linux output unmutes first, then the tone
+  -> Stop tone and mute/pause/sleep restore at the release, while the tail is
+     still captured; a muted output (macOS, Linux) unmutes first, then the tone
      ├── Short tap or chord -> No stop tone; the start tone is retracted
      ├── Clip later near-silent -> Tone already played; discard, nothing pasted
      └── Escape after the release -> Not bound; the clip still transcribes
-  -> macOS: stop tone after the tail (up to 200 ms later; 300 ms on a stall)
+  -> macOS: the audio owner announces it before draining the tail; HUD
+     Transcribing and submission still follow the tail
+  -> Paused media resumes without delaying the tone
+  -> Voice controls (no tail) -> Tone when the clip is submitted, as before
   -> The silence gate ignores the tail, so a tone the microphone hears there
      never makes a silent clip transcribe
 
@@ -184,9 +187,15 @@ drive the owner with a fake stream: `release_waits_for_its_tail_and_keeps_no_lat
 `a_press_inside_the_tail_starts_its_own_capture_after_the_old_one_finishes`,
 `a_stalled_or_failed_stream_bounds_the_tail_wait`, and
 `escape_and_short_taps_finish_without_waiting_for_a_tail`. The macOS coordinator
-blocks on the tail, so the stop tone, HUD Transcribing, and submission follow the
-release by up to 200 ms (300 ms on a stalled stream); their order is unchanged.
-Linux and Windows play the stop tone at the release instead. On Linux this used
+blocks on the tail, so HUD Transcribing and submission follow the release by up
+to 200 ms (300 ms on a stalled stream). The stop tone no longer does: the audio
+owner's `Finish` ends the recording environment through
+`end_recording_environment_then` and plays the tone from the environment worker
+once a muted output is restored (at once with paused media), then drains the
+tail; `finish_dictation` plays the tone itself only for tail-free finishes. This
+macOS change has **not been compiled or run**: hailmary was unreachable on
+2026-10-22, so the tone timing and the unmute-then-tone order are unverified on
+a Mac. Linux and Windows play the stop tone at the release too. On Linux this used
 to follow the tail too: on 2026-10-22, an isolated service on apollo (ALSA
 Loopback microphone and speaker, `hex dictation stop`) measured the stop tone
 requested 203 ms after the release was handled before the fix and within the same
