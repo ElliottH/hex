@@ -57,9 +57,6 @@ const RUNTIME_TICK: Duration = Duration::from_millis(250);
 const PUMP_INTERVAL: f64 = 0.016;
 const MODEL_MENU_REFRESH: Duration = Duration::from_secs(1);
 const MEETING_MENU_REFRESH: Duration = Duration::from_millis(500);
-/// How often an open window polls its host (permissions, meetings, practice)
-/// when nothing else wakes it.
-const WINDOW_REFRESH: Duration = Duration::from_millis(250);
 /// 'aevt' / 'rapp': the Apple event LaunchServices sends when the app is
 /// opened again while it runs (Dock, Finder, `open`).
 const CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
@@ -322,7 +319,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
                 (!setup_ready).then_some(recognition_start),
             )
         })?;
-    let mut app = crate::rune_ui::app().args(Vec::new()).accessory();
+    let mut app = crate::rune_ui::app(()).args(Vec::new()).accessory();
     let window = app.handle();
     let _ = WINDOW.set(window.clone());
     // The status item is created inside the loop; Hex can't run without a
@@ -361,7 +358,6 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         meeting_state: MeetingMenuState::Idle,
         meeting_menu_at: Instant::now(),
         model_menu_at: Instant::now(),
-        window_refresh_at: Instant::now(),
         show_dock_icon: settings.show_dock_icon,
     };
     // Runs first on the main thread once the loop (and NSApp) is live.
@@ -561,7 +557,6 @@ struct Pump {
     meeting_state: MeetingMenuState,
     meeting_menu_at: Instant,
     model_menu_at: Instant,
-    window_refresh_at: Instant,
     show_dock_icon: bool,
 }
 
@@ -640,15 +635,9 @@ fn start_main_thread(mut pump: Pump) {
     });
 }
 
-/// Whether the window is on screen, as far as the main thread knows.
+/// Whether the window is on screen.
 fn window_visible() -> bool {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return false;
-    };
-    NSApplication::sharedApplication(mtm)
-        .windows()
-        .iter()
-        .any(|window| window.isVisible() && window.canBecomeMainWindow())
+    WINDOW.get().is_some_and(rune::AppHandle::is_visible)
 }
 
 /// Opens the window at `destination`, in front of the app that was active.
@@ -689,16 +678,10 @@ impl Pump {
             self.controller_event(event);
             self.meeting_menu_at = Instant::now();
         }
-        let now = Instant::now();
-        if now >= self.window_refresh_at {
-            if window_visible() {
-                self.window.update(|_, _| {});
-            }
-            self.window_refresh_at = now + WINDOW_REFRESH;
-        }
         if self.status_actions.is_none() {
             return;
         }
+        let now = Instant::now();
         if now >= self.model_menu_at {
             if let Some(published) = self.runtime.published() {
                 crate::status_item::update_transcription(

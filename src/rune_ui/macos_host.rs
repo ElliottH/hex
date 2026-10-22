@@ -54,6 +54,9 @@ pub(super) const QUIT_IN_WINDOW: bool = false;
 const PLATFORM_REFRESH: Duration = Duration::from_secs(1);
 const ESCAPE_KEY_CODE: u16 = 53;
 
+/// The runtime is found through its own module; nothing is handed over.
+pub(crate) type Connect = ();
+
 pub(super) struct Backend {
     runtime: Option<RuntimeHandle>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -61,7 +64,7 @@ pub(super) struct Backend {
 }
 
 impl Backend {
-    pub(super) fn connect(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub(super) fn connect(_: Connect, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         let runtime = crate::macos_rune::runtime();
         if let Some(runtime) = &runtime {
             runtime.subscribe(wake.clone());
@@ -362,6 +365,7 @@ pub(super) fn validate_hotkey(_: ShortcutTarget, _: &HotkeyBinding) -> Result<()
 
 /// The listener's retained history, shared with the window.
 pub(super) fn history(
+    _: &Connect,
     retention: crate::history::HistoryRetention,
 ) -> Option<crate::history::History> {
     match crate::macos_rune::runtime() {

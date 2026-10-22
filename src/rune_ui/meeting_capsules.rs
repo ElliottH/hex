@@ -16,7 +16,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rune::{Align, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, col, row, text};
+use rune::{Align, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, Tx, col, row, text};
 use rune_kit::{Button, ButtonSize, ButtonVariant};
 
 use super::controls::{Paint, status_dot};
@@ -412,25 +412,24 @@ fn ready(
     } else {
         tr_fill("Ready · {}", &title)
     };
-    let mut actions = vec![button(
-        p,
-        "copy-transcript",
-        tr(if copied { "Copied" } else { "Copy" }),
-        false,
-        |c| {
+    let copy = Button::new(tr(if copied { "Copied" } else { "Copy" }))
+        .variant(ButtonVariant::Neutral)
+        .size(ButtonSize::Normal)
+        .on_press_tx(|c: &mut Capsule, tx: &mut Tx| {
             let Some(Kind::Ready(manifest)) = &c.kind else {
                 return;
             };
-            let copied = meeting::transcript_markdown_for_manifest(manifest).and_then(|markdown| {
-                arboard::Clipboard::new()?.set_text(markdown)?;
-                Ok(())
-            });
-            match copied {
-                Ok(()) => c.copied = true,
+            match meeting::transcript_markdown_for_manifest(manifest) {
+                Ok(markdown) => {
+                    tx.copy(markdown);
+                    c.copied = true;
+                }
                 Err(error) => tracing::warn!(%error, "could not copy meeting transcript"),
             }
-        },
-    )];
+        })
+        .build(p.k)
+        .key("copy-transcript");
+    let mut actions = vec![copy];
     if manifest.export_path.is_some() {
         actions.push(button(p, "reveal-transcript", tr("Reveal"), true, |c| {
             if let Some(Kind::Ready(manifest)) = &c.kind

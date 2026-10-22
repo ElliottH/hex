@@ -3,7 +3,7 @@
 //! History, and updates. A headless render without one reads the running
 //! Hex's `hex status` instead.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
@@ -26,31 +26,9 @@ pub(super) const TERMINAL_PASTE: bool = true;
 /// Linux has no tray, so the window offers Quit Hex.
 pub(super) const QUIT_IN_WINDOW: bool = true;
 
-/// The host the window's app runs beside; `AppSpec::init` and `setup` take
-/// no arguments.
-static HOST: Mutex<Option<HostHandle>> = Mutex::new(None);
-
-/// Clears the host when the app returns, even after a panic.
-pub(super) struct Installed;
-
-impl Drop for Installed {
-    fn drop(&mut self) {
-        HOST.lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take();
-    }
-}
-
-pub(super) fn install(host: HostHandle) -> Installed {
-    *HOST.lock().unwrap() = Some(host);
-    Installed
-}
-
-fn current() -> Option<HostHandle> {
-    HOST.lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .clone()
-}
+/// The host the window's app runs beside; none for a headless `--snap` of
+/// another process's `hex status`.
+pub(crate) type Connect = Option<HostHandle>;
 
 pub(super) enum Backend {
     Host(HostHandle),
@@ -59,8 +37,8 @@ pub(super) enum Backend {
 }
 
 impl Backend {
-    pub(super) fn connect(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
-        let Some(host) = current() else {
+    pub(super) fn connect(host: Connect, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        let Some(host) = host else {
             let mut backend = Self::Status(None, None);
             backend.refresh();
             return backend;
@@ -146,8 +124,11 @@ impl Backend {
 }
 
 /// The host's History store: one store per process.
-pub(super) fn history(_: crate::history::HistoryRetention) -> Option<crate::history::History> {
-    current()?.history()
+pub(super) fn history(
+    connect: &Connect,
+    _: crate::history::HistoryRetention,
+) -> Option<crate::history::History> {
+    connect.as_ref()?.history()
 }
 
 pub(super) fn validate_hotkey(

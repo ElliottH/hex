@@ -30,9 +30,6 @@ use crate::linux_updater::InstalledUpdate;
 
 const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(20);
-/// Drafts, the OpenCode retry, and the setup beat are timed; while the
-/// window is open, the host thread wakes it at least this often.
-const WINDOW_TICK: Duration = Duration::from_millis(250);
 /// Left by "Update" so the restarted process shows the window again; a
 /// crash restart finds none and stays in the background.
 const REOPEN_MARKER: &str = "reopen-window";
@@ -170,9 +167,12 @@ pub(crate) enum HostRequest {
 struct Shared {
     host: Mutex<LinuxDesktopHost>,
     waker: Mutex<Option<Waker>>,
-    window_open: AtomicBool,
+    /// Whether the window shows, as its app reports it.
+    window_visible: Mutex<Option<WindowVisible>>,
     shutdown: &'static AtomicBool,
 }
+
+type WindowVisible = Arc<dyn Fn() -> bool + Send + Sync>;
 
 /// The window's handle to the host it runs beside. Every call is a short
 /// lock on the host; nothing here waits for the listener or a model.
@@ -184,7 +184,7 @@ impl HostHandle {
         Self(Arc::new(Shared {
             host: Mutex::new(host),
             waker: Mutex::new(None),
-            window_open: AtomicBool::new(false),
+            window_visible: Mutex::new(None),
             shutdown,
         }))
     }
@@ -251,17 +251,18 @@ impl HostHandle {
         *self.0.waker.lock().unwrap() = Some(waker);
     }
 
-    pub(crate) fn set_window_open(&self, open: bool) {
-        self.0.window_open.store(open, Ordering::Release);
+    /// `hex status` asks `visible` whether the window shows.
+    pub(crate) fn set_window_visible(&self, visible: WindowVisible) {
+        *self.0.window_visible.lock().unwrap() = Some(visible);
     }
 
-    pub(crate) fn window_open(&self) -> bool {
-        self.0.window_open.load(Ordering::Acquire)
+    fn window_open(&self) -> bool {
+        let visible = self.0.window_visible.lock().unwrap().clone();
+        visible.is_some_and(|visible| visible())
     }
 
     /// A closed window leaves no shortcut capture behind.
     pub(crate) fn window_closed(&self) {
-        self.set_window_open(false);
         let mut host = self.lock();
         if host.capturing_hotkey() {
             host.cancel_shortcut_edit();
@@ -352,7 +353,6 @@ fn run_host(
 ) {
     let mut stopping = false;
     let mut shown: Option<HostSnapshot> = None;
-    let mut last_wake = Instant::now();
     loop {
         let (done, route, snapshot) = {
             let mut guard = host.lock();
@@ -373,12 +373,8 @@ fn run_host(
         };
         *published.shortcuts.lock().unwrap() = route;
         *published.status.lock().unwrap() = Some(host.status(snapshot.clone(), session.clone()));
-        let changed = shown.as_ref() != Some(&snapshot);
-        if changed {
+        if shown.as_ref() != Some(&snapshot) {
             shown = Some(snapshot);
-        }
-        if changed || (host.window_open() && last_wake.elapsed() >= WINDOW_TICK) {
-            last_wake = Instant::now();
             host.wake();
         }
         if done {
@@ -406,7 +402,6 @@ fn run_window(
     .is_err()
     {
         tracing::error!("the Hex window failed; Hex keeps running without it");
-        host.set_window_open(false);
         while !shutdown.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(100));
         }

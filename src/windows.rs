@@ -148,7 +148,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
             // A headless render (`--snap`) draws fixtures without starting
             // the runtime and prints to the terminal that ran it.
             if !rune_args.is_empty() {
-                crate::rune_ui::app().args(rune_args).run();
+                crate::rune_ui::app(()).args(rune_args).run();
                 return Ok(());
             }
             detach_from_console();
