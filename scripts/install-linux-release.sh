@@ -217,9 +217,7 @@ explain_unrunnable() {
     for library in $(ldd "$artifact_path" 2>/dev/null | awk '/not found/ { print $1 }'); do
       case "$library" in
         libasound.*) package=alsa-lib ;;
-        libgtk-layer-shell.*) package=gtk-layer-shell ;;
-        libgtk-3.* | libgdk-3.*) package=gtk3 ;;
-        libappindicator3.* | libayatana-appindicator3.*) package=libappindicator-gtk3 ;;
+        libglib-2.0.* | libgio-2.0.* | libgobject-2.0.*) package=glib2 ;;
         libopenblas.* | libblas.*) package=openblas ;;
         libvulkan.*) package=vulkan-icd-loader ;;
         libxkbcommon-x11.*) package=libxkbcommon-x11 ;;

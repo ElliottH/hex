@@ -17,7 +17,6 @@ use serde::Deserialize;
 
 /// The release origin shared with Linux and macOS: the `hex-releases` R2
 /// bucket behind its custom domain.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub const RELEASE_BASE: &str = "https://downloads.hex.kitlangton.dev";
 pub const MAX_FEED_BYTES: u64 = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;

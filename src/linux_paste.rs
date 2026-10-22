@@ -21,7 +21,7 @@ const XK_V: u32 = 0x76;
 const HELPER_TIMEOUT: Duration = Duration::from_secs(3);
 const PASTE_SETTLE: Duration = Duration::from_millis(100);
 
-pub struct LinuxPaster {
+pub(crate) struct LinuxPaster {
     backend: Backend,
     stop: Arc<AtomicBool>,
     paste_with_shift: bool,
@@ -35,7 +35,7 @@ enum Backend {
 }
 
 impl LinuxPaster {
-    pub fn new(stop: Arc<AtomicBool>, paste_with_shift: bool) -> Result<Self> {
+    pub(crate) fn new(stop: Arc<AtomicBool>, paste_with_shift: bool) -> Result<Self> {
         let backend = match LinuxSession::detect() {
             LinuxSession::X11 => Backend::X11(Box::new(X11Paster::new()?)),
             LinuxSession::Wayland => Backend::Wayland,
@@ -49,7 +49,7 @@ impl LinuxPaster {
 
     /// The focused application's selected text: the primary selection,
     /// which X11 and Wayland compositors update as the user selects.
-    pub fn selected_text(&mut self) -> Option<String> {
+    pub(crate) fn selected_text(&mut self) -> Option<String> {
         let bytes = match &mut self.backend {
             Backend::X11(paster) => {
                 let atoms = &paster.clipboard.getter.atoms;
@@ -77,7 +77,7 @@ impl LinuxPaster {
         (!text.trim().is_empty()).then_some(text)
     }
 
-    pub fn paste(&mut self, text: &str) -> Result<()> {
+    pub(crate) fn paste(&mut self, text: &str) -> Result<()> {
         if text.trim().is_empty() {
             return Err(eyre!("refusing to paste an empty transcript"));
         }
@@ -113,7 +113,7 @@ struct X11Paster {
 }
 
 impl X11Paster {
-    pub fn new() -> Result<Self> {
+    fn new() -> Result<Self> {
         let clipboard = Clipboard::new().wrap_err("could not open the X11 clipboard")?;
         let (connection, root, keymap) = connect_x11()?;
         Ok(Self {

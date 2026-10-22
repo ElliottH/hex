@@ -65,17 +65,17 @@ impl Drop for OutputWorker {
 }
 
 /// What happens to a transcript before and after it is pasted: the modes
-/// that process it and the history that keeps it. The service shares it
+/// that process it and the history that keeps it. The host shares it
 /// with the listener so saved settings apply without a restart.
 #[derive(Clone)]
-pub struct DictationOutput {
-    pub history: Option<crate::history::History>,
-    pub modes: Arc<RwLock<crate::dictation_modes::ModeRuntime>>,
-    pub transformations: Arc<crate::personal_commands::TransformationClient>,
+pub(crate) struct DictationOutput {
+    pub(crate) history: Option<crate::history::History>,
+    pub(crate) modes: Arc<RwLock<crate::dictation_modes::ModeRuntime>>,
+    pub(crate) transformations: Arc<crate::personal_commands::TransformationClient>,
 }
 
 impl DictationOutput {
-    pub fn from_settings(
+    pub(crate) fn from_settings(
         settings: &crate::app_settings::AppSettings,
         history: Option<crate::history::History>,
     ) -> Self {
@@ -128,7 +128,7 @@ impl DictationOutput {
 /// Runs hotkey dictation until `shutdown`. A prepared transcriber skips the
 /// model load; otherwise the supplied transcription selection is loaded here.
 #[allow(clippy::too_many_arguments)]
-pub fn run(
+pub(crate) fn run(
     event_path: &Path,
     device: Option<&str>,
     shutdown: &AtomicBool,
@@ -327,10 +327,8 @@ pub fn run(
                     recording_voice = action == HotkeyEvent::VoiceStart;
                     if audio_ready {
                         // An instruction plays no start tone, as on Windows.
-                        start_capture(&mut capture, captured_through, |_| {
-                            if !recording_voice {
-                                feedback::play_provisional_start();
-                            }
+                        start_capture(&mut capture, captured_through, || {
+                            play_start_tone(recording_voice)
                         });
                         stream_when_due(&mut capture, &engine, toggle);
                     } else if release_while_idle {
@@ -363,15 +361,16 @@ pub fn run(
                     )?;
                     emit_state(&mut events, active_state(false, pending), &device_label)?;
                 }
-                HotkeyEvent::Finish if capture.is_recording() && !recording_voice => {
-                    finishing = Some(begin_finishing(&capture, captured_through, false, || {
-                        announce_release(&suppressor)
-                    }));
-                }
-                HotkeyEvent::VoiceFinish if capture.is_recording() && recording_voice => {
-                    finishing = Some(begin_finishing(&capture, captured_through, true, || {
-                        announce_release(&suppressor)
-                    }));
+                HotkeyEvent::Finish | HotkeyEvent::VoiceFinish
+                    if capture.is_recording()
+                        && (action == HotkeyEvent::VoiceFinish) == recording_voice =>
+                {
+                    finishing = Some(begin_finishing(
+                        &capture,
+                        captured_through,
+                        recording_voice,
+                        || suppressor.restore_then(|| feedback::play(Tone::DictationStop)),
+                    ));
                 }
                 HotkeyEvent::PasteLast if !capture.is_recording() => {
                     match jobs.try_send(OutputJob::PasteLast) {
@@ -444,10 +443,8 @@ pub fn run(
                         // The on-demand open finished while the shortcut is
                         // held: recording starts here, without pre-roll.
                         start_pending = false;
-                        start_capture(&mut capture, captured_through, |_| {
-                            if !recording_voice {
-                                feedback::play_provisional_start();
-                            }
+                        start_capture(&mut capture, captured_through, || {
+                            play_start_tone(recording_voice)
                         });
                     }
                 }
@@ -558,13 +555,15 @@ pub(crate) fn initialize_feedback(settings: &crate::app_settings::AppSettings) {
     }
 }
 
-fn start_capture(
-    capture: &mut DictationCapture,
-    started_at: CaptureInstant,
-    play: impl FnOnce(Tone),
-) {
+fn play_start_tone(voice: bool) {
+    if !voice {
+        feedback::play_provisional_start();
+    }
+}
+
+fn start_capture(capture: &mut DictationCapture, started_at: CaptureInstant, play: impl FnOnce()) {
     capture.start(started_at);
-    play(Tone::DictationStart);
+    play();
 }
 
 /// Streams once the hold counts, so short taps and chords never reach the
@@ -578,6 +577,10 @@ fn stream_when_due(capture: &mut DictationCapture, engine: &TranscriptionEngine,
 /// Starts collecting a release's tail. A release that will be transcribed
 /// is announced at once rather than after its tail; a short tap is discarded
 /// on its release alone, needs no tail, and stays silent.
+///
+/// The release restores any muted output before playing the stop tone so it is
+/// heard while the tail is still captured. The silence gate ignores the tail,
+/// so the tone itself never makes a silent clip transcribe.
 fn begin_finishing(
     capture: &DictationCapture,
     ended_at: CaptureInstant,
@@ -599,15 +602,6 @@ fn begin_finishing(
             now
         },
     }
-}
-
-/// Ends recording's audio behavior at the release and plays the stop tone
-/// after a muted output is restored, so the tone is heard while the tail is
-/// still captured. A clip later found near-silent keeps the tone it already
-/// played, as on Windows; the silence gate ignores the tail, so the tone
-/// itself never makes a silent clip transcribe.
-fn announce_release(suppressor: &crate::linux_audio_control::AudioSuppressor) {
-    suppressor.restore_then(|| feedback::play(Tone::DictationStop));
 }
 
 fn submit_capture(
@@ -704,7 +698,7 @@ mod tests {
         seconds: u64,
     ) -> CaptureInstant {
         let start = capture_time();
-        start_capture(capture, start, |_| {});
+        start_capture(capture, start, || {});
         stream_when_due(capture, engine, toggle);
         let mut through = start;
         for _ in 0..seconds * 10 {
@@ -725,7 +719,9 @@ mod tests {
         let started_at = capture_time();
         let mut sounds = Vec::new();
 
-        start_capture(&mut capture, started_at, |tone| sounds.push(tone));
+        start_capture(&mut capture, started_at, || {
+            sounds.push(Tone::DictationStart)
+        });
 
         assert!(capture.is_recording());
         assert_eq!(sounds, [Tone::DictationStart]);
@@ -741,7 +737,7 @@ mod tests {
             let (engine, commands) = TranscriptionEngine::for_test();
             let mut capture = DictationCapture::new(16_000);
             let start = capture_time();
-            start_capture(&mut capture, start, |_| {});
+            start_capture(&mut capture, start, || {});
             stream_when_due(&mut capture, &engine, toggle);
             assert_eq!(capture.is_streaming(), toggle);
             capture.ingest(&[0.1; 1_600], start + Duration::from_millis(100));
@@ -835,7 +831,7 @@ mod tests {
 
         let mut short = DictationCapture::new(16_000);
         let start = capture_time();
-        start_capture(&mut short, start, |_| {});
+        start_capture(&mut short, start, || {});
         stream_when_due(&mut short, &engine, true);
         short.ingest(&[0.1; 1_600], start + Duration::from_millis(100));
         let finishing = begin_finishing(&short, start + Duration::from_millis(100), false, || {

@@ -18,19 +18,19 @@ use x11rb::protocol::xproto::{ConnectionExt, GrabMode, ModMask, Window};
 use x11rb::rust_connection::RustConnection;
 
 use crate::app_settings::{HotkeyBinding, HotkeyKey, HotkeyModifiers, ModifierSide};
-use crate::desktop_host::{DesktopGrantedShortcut, DesktopShortcuts};
+use crate::desktop_host::{DesktopGrantedShortcut, DesktopShortcut, DesktopShortcuts};
 use crate::linux_session::LinuxSession;
 
 /// A shortcut as X11 grabs and the portal see it: held modifiers and a
 /// named key. Settings store it as a portable `HotkeyBinding`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
-pub struct LinuxHotkey {
-    pub control: bool,
-    pub alt: bool,
-    pub shift: bool,
-    pub super_key: bool,
-    pub key: String,
+pub(crate) struct LinuxHotkey {
+    pub(crate) control: bool,
+    pub(crate) alt: bool,
+    pub(crate) shift: bool,
+    pub(crate) super_key: bool,
+    pub(crate) key: String,
 }
 
 impl Default for LinuxHotkey {
@@ -78,39 +78,37 @@ impl From<&LinuxHotkey> for HotkeyBinding {
     }
 }
 
+impl TryFrom<DesktopShortcut> for LinuxHotkey {
+    type Error = color_eyre::Report;
+
+    fn try_from(shortcut: DesktopShortcut) -> Result<Self> {
+        if shortcut.function {
+            return Err(eyre!("the Fn modifier cannot be registered on Linux"));
+        }
+        Ok(Self {
+            control: shortcut.control,
+            alt: shortcut.alt,
+            shift: shortcut.shift,
+            super_key: shortcut.platform,
+            key: if shortcut.key == " " {
+                "space".into()
+            } else {
+                shortcut.key.to_ascii_lowercase()
+            },
+        })
+    }
+}
+
 impl LinuxHotkey {
-    pub fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.key.trim().is_empty() {
             return Err(eyre!("Linux hotkeys require a non-modifier key"));
         }
         Ok(())
     }
 
-    pub fn label(&self) -> String {
-        self.keycaps().join("+")
-    }
-
-    pub fn keycaps(&self) -> Vec<String> {
-        let mut parts = Vec::new();
-        if self.control {
-            parts.push("Ctrl".to_string());
-        }
-        if self.alt {
-            parts.push("Alt".to_string());
-        }
-        if self.shift {
-            parts.push("Shift".to_string());
-        }
-        if self.super_key {
-            parts.push("Super".to_string());
-        }
-        let key = if self.key == "space" {
-            "Space".into()
-        } else {
-            self.key.to_ascii_uppercase()
-        };
-        parts.push(key);
-        parts
+    pub(crate) fn label(&self) -> String {
+        HotkeyBinding::from(self).keycaps().join("+")
     }
 
     /// The trigger the shortcuts portal asks the desktop for, in the
@@ -217,7 +215,7 @@ pub(crate) fn connect_x11() -> Result<(RustConnection, Window, Keymap)> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HotkeyEvent {
+pub(crate) enum HotkeyEvent {
     Start,
     Finish,
     Cancel,
@@ -231,7 +229,7 @@ pub enum HotkeyEvent {
 /// What a `hex` command asks of the running listener. Each one is
 /// idempotent: starting while recording or stopping while idle does nothing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ShortcutCommand {
+pub(crate) enum ShortcutCommand {
     DictationStart,
     DictationStop,
     DictationToggle,
@@ -254,14 +252,14 @@ impl ShortcutCommand {
 /// How the dictation shortcut behaves, and the shortcuts registered
 /// beside it.
 #[derive(Clone, Debug, Default)]
-pub struct HotkeyOptions {
-    pub double_tap: bool,
+pub(crate) struct HotkeyOptions {
+    pub(crate) double_tap: bool,
     /// Only a double-tap starts recording, which then stays locked.
-    pub double_tap_only: bool,
-    pub toggle: bool,
-    pub paste_last: Option<LinuxHotkey>,
+    pub(crate) double_tap_only: bool,
+    pub(crate) toggle: bool,
+    pub(crate) paste_last: Option<LinuxHotkey>,
     /// Held to record a Voice Action instruction.
-    pub voice_action: Option<LinuxHotkey>,
+    pub(crate) voice_action: Option<LinuxHotkey>,
 }
 
 pub(crate) const ESCAPE_CANCEL_WARNING: &str =
@@ -269,7 +267,7 @@ pub(crate) const ESCAPE_CANCEL_WARNING: &str =
 
 /// What the running listener reports about its shortcuts.
 #[derive(Clone, Debug, Default)]
-pub struct HotkeyStatus {
+pub(crate) struct HotkeyStatus {
     escape_unavailable: Arc<AtomicBool>,
     shortcuts: Arc<Mutex<DesktopShortcuts>>,
 }
@@ -541,9 +539,9 @@ impl Dispatcher {
     }
 }
 
-pub struct LinuxHotkeyMonitor {
-    pub events: Receiver<HotkeyEvent>,
-    pub errors: Receiver<String>,
+pub(crate) struct LinuxHotkeyMonitor {
+    pub(crate) events: Receiver<HotkeyEvent>,
+    pub(crate) errors: Receiver<String>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
 }
@@ -551,7 +549,7 @@ pub struct LinuxHotkeyMonitor {
 impl LinuxHotkeyMonitor {
     /// Registers the shortcuts on X11 or through the Wayland shortcuts
     /// portal; without the portal only `commands` drive dictation.
-    pub fn start(
+    pub(crate) fn start(
         binding: LinuxHotkey,
         options: HotkeyOptions,
         status: HotkeyStatus,
@@ -953,12 +951,13 @@ impl X11Grabs<'_> {
     }
 
     fn release_escape(&mut self) -> Result<()> {
-        release_escape(
-            self.connection,
-            self.root,
-            self.escape,
-            &mut self.escape_grabbed,
-        )
+        for modifiers in self.escape_grabbed.drain(..) {
+            self.connection
+                .ungrab_key(self.escape, self.root, modifiers)?
+                .check()?;
+        }
+        self.connection.flush()?;
+        Ok(())
     }
 }
 
@@ -1014,22 +1013,6 @@ fn grab_escape(
         }
         Err(error) => Err(error).wrap_err("could not grab the Escape key for cancel"),
     }
-}
-
-fn release_escape(
-    connection: &RustConnection,
-    root: Window,
-    escape: u8,
-    grabbed: &mut Vec<ModMask>,
-) -> Result<()> {
-    if !grabbed.is_empty() {
-        for &modifiers in grabbed.iter() {
-            connection.ungrab_key(escape, root, modifiers)?.check()?;
-        }
-        connection.flush()?;
-        grabbed.clear();
-    }
-    Ok(())
 }
 
 fn keysym(key: &str) -> Result<u32> {

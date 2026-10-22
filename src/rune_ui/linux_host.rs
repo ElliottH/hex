@@ -4,7 +4,6 @@
 //! Hex's `hex status` instead.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
@@ -13,9 +12,8 @@ use super::{HostState, ServiceView};
 use crate::app_settings::{AppSettings, HotkeyBinding};
 use crate::desktop_i18n::tr;
 use crate::linux_app::HostHandle;
-pub(super) use crate::linux_app::HostRequest as Request;
+pub(super) use crate::linux_app::{HostRequest as Request, ShortcutTarget};
 use crate::linux_input::LinuxHotkey;
-pub(super) use crate::linux_service::ShortcutTarget;
 
 /// The host registers recorded shortcuts (`SetShortcut`) and saves them.
 pub(super) const HOST_SAVES_SHORTCUTS: bool = true;
@@ -27,9 +25,6 @@ pub(super) const MANUAL_UPDATE_CHECK: bool = false;
 pub(super) const TERMINAL_PASTE: bool = true;
 /// Linux has no tray, so the window offers Quit Hex.
 pub(super) const QUIT_IN_WINDOW: bool = true;
-/// Drafts, the OpenCode retry, and the setup beat are timed; until Rune has
-/// `wake_after`, a tick redraws them while the window is open.
-const TICK: Duration = Duration::from_millis(250);
 
 /// The host the window's app runs beside; `AppSpec::init` and `setup` take
 /// no arguments.
@@ -70,16 +65,7 @@ impl Backend {
             backend.refresh();
             return backend;
         };
-        host.set_waker(wake.clone());
-        let ticking = host.clone();
-        std::thread::spawn(move || {
-            while current().is_some() {
-                std::thread::sleep(TICK);
-                if ticking.window_open() {
-                    wake();
-                }
-            }
-        });
+        host.set_waker(wake);
         Self::Host(host)
     }
 

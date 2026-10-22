@@ -1,13 +1,13 @@
 use std::ffi::OsStr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LinuxSession {
+pub(crate) enum LinuxSession {
     X11,
     Wayland,
 }
 
 impl LinuxSession {
-    pub fn detect() -> Self {
+    pub(crate) fn detect() -> Self {
         Self::from_wayland_display(std::env::var_os("WAYLAND_DISPLAY").as_deref())
     }
 
@@ -20,11 +20,11 @@ impl LinuxSession {
         }
     }
 
-    pub fn is_wayland(self) -> bool {
+    pub(crate) fn is_wayland(self) -> bool {
         self == Self::Wayland
     }
 
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::X11 => "x11",
             Self::Wayland => "wayland",
