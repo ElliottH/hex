@@ -904,6 +904,9 @@ mod tests {
         include_str!("rune_ui/meetings.rs"),
         include_str!("rune_ui/lists.rs"),
         include_str!("rune_ui/platform_settings.rs"),
+        include_str!("rune_ui/fun.rs"),
+        include_str!("rune_ui/hud_lab.rs"),
+        include_str!("rune_ui/activity.rs"),
     ];
 
     /// The string literals passed to `tr`, `tr_fill`, and `tr_named`.

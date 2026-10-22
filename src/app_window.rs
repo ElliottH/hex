@@ -7710,7 +7710,7 @@ fn normalize_captured_modifiers(modifiers: HotkeyModifiers) -> HotkeyModifiers {
     }
 }
 
-fn standalone_modifier_side(binding: &HotkeyBinding) -> Option<ModifierSide> {
+pub(crate) fn standalone_modifier_side(binding: &HotkeyBinding) -> Option<ModifierSide> {
     if binding.key.is_some() {
         return None;
     }
@@ -7726,7 +7726,7 @@ fn standalone_modifier_side(binding: &HotkeyBinding) -> Option<ModifierSide> {
     sides.all(|side| side == first).then_some(first)
 }
 
-fn set_standalone_modifier_side(binding: &mut HotkeyBinding, side: ModifierSide) {
+pub(crate) fn set_standalone_modifier_side(binding: &mut HotkeyBinding, side: ModifierSide) {
     if standalone_modifier_side(binding).is_none() {
         return;
     }
@@ -8302,7 +8302,7 @@ fn activity_context(reader: &EventReader) -> (Option<String>, Option<String>) {
         .unwrap_or_default()
 }
 
-fn event_summary(event: &VoiceEvent) -> String {
+pub(crate) fn event_summary(event: &VoiceEvent) -> String {
     match event {
         VoiceEvent::SessionStarted { .. } => "Hex session started".into(),
         VoiceEvent::State { state, device, .. } => match state {

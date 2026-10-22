@@ -8,12 +8,15 @@
 use rune::{El, col, row, text};
 use rune_kit::Switch;
 
+use super::ShortcutTarget;
 use super::Ui;
 use super::controls::{
     ButtonKind, DESCRIPTION, Paint, button, note, section, segmented, setting_row, toggle_row,
 };
 use super::lists::{PermissionControl, Tone, permission_control, small_button, tone_tag};
 use super::platform::{MeetingRequest, NotesAvailability, PlatformRequest};
+use crate::app_settings::{AppSettings, HotkeyBinding, ModifierSide};
+use crate::app_window::{set_standalone_modifier_side, standalone_modifier_side};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::hex_microphone::DriverActionState;
 use crate::login_item::LoginItemStatus;
@@ -22,7 +25,10 @@ use crate::voice_filter::VoiceFilterMode;
 
 /// A permission's name as System Settings lists it, and what Hex cannot do
 /// without it.
-pub(super) fn permission_copy(kind: PermissionKind) -> (&'static str, &'static str) {
+pub(super) fn permission_copy(
+    kind: PermissionKind,
+    accessibility_renamed: bool,
+) -> (&'static str, &'static str) {
     match kind {
         PermissionKind::Microphone => (
             tr("Microphone"),
@@ -33,13 +39,22 @@ pub(super) fn permission_copy(kind: PermissionKind) -> (&'static str, &'static s
             tr("Hex cannot recognize the dictation shortcut in other apps."),
         ),
         PermissionKind::Accessibility => (
-            tr("Accessibility"),
+            accessibility_name(accessibility_renamed),
             tr("Hex cannot paste completed dictation into the foreground app."),
         ),
         PermissionKind::SystemAudio => (
             tr("Screen & System Audio Recording"),
             tr("Required to hear the other participants."),
         ),
+    }
+}
+
+/// What System Settings calls the Accessibility list; macOS 27 renamed it.
+pub(super) fn accessibility_name(renamed: bool) -> &'static str {
+    if renamed {
+        tr("Device Control and Data Access")
+    } else {
+        tr("Accessibility")
     }
 }
 
@@ -69,7 +84,8 @@ pub(super) fn permissions_section(ui: &Ui, p: Paint) -> Option<El> {
     let rows = warnings
         .into_iter()
         .map(|warning| {
-            let (name, description) = permission_copy(warning.kind);
+            let (name, description) =
+                permission_copy(warning.kind, ui.platform.accessibility_renamed);
             let key = permission_key(warning.kind);
             let control = permission_control(
                 p,
@@ -381,36 +397,8 @@ const HEX_MICROPHONE_MODES: [VoiceFilterMode; 4] = [
     VoiceFilterMode::Normal,
 ];
 
-fn mode_label(mode: VoiceFilterMode) -> &'static str {
-    match mode {
-        VoiceFilterMode::Muffled => tr("Muffled"),
-        VoiceFilterMode::Muted => tr("Muted"),
-        VoiceFilterMode::Quiet => tr("Quiet"),
-        VoiceFilterMode::Normal => tr("Normal"),
-        VoiceFilterMode::Chipmunk => tr("Chipmunk"),
-        VoiceFilterMode::Robot => tr("Robot"),
-        VoiceFilterMode::Walkie => tr("Walkie"),
-        VoiceFilterMode::Underwater => tr("Underwater"),
-        VoiceFilterMode::Far => tr("Far"),
-    }
-}
-
-fn mode_description(mode: VoiceFilterMode) -> &'static str {
-    match mode {
-        VoiceFilterMode::Muffled => tr("Sounds like a hand over the microphone while you dictate"),
-        VoiceFilterMode::Muted => tr("Silences your voice with soft room tone while you dictate"),
-        VoiceFilterMode::Quiet => tr("Turns your voice down to a whisper while you dictate"),
-        VoiceFilterMode::Normal => tr("Passes your voice through unchanged while you dictate"),
-        VoiceFilterMode::Chipmunk => tr("Sounds pitched up while you dictate"),
-        VoiceFilterMode::Robot => tr("Sounds robotic while you dictate"),
-        VoiceFilterMode::Walkie => tr("Sounds like a handheld radio while you dictate"),
-        VoiceFilterMode::Underwater => tr("Sounds submerged while you dictate"),
-        VoiceFilterMode::Far => tr("Sounds like you are across the room while you dictate"),
-    }
-}
-
 /// The virtual microphone driver's row: install, update, or uninstall it.
-fn driver_row(ui: &Ui, p: Paint) -> El {
+pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
     let title = tr("Virtual microphone driver");
     let Some(status) = &ui.platform.hex_microphone else {
         return setting_row(
@@ -544,22 +532,24 @@ pub(super) fn hex_microphone_section(ui: &Ui, p: Paint) -> Option<El> {
     let experimental = &ui.settings.experimental;
     let labels: Vec<&str> = HEX_MICROPHONE_MODES
         .iter()
-        .map(|m| mode_label(*m))
+        .map(|m| super::fun::mode_label(*m))
         .collect();
     let selected = HEX_MICROPHONE_MODES
         .iter()
         .position(|mode| *mode == experimental.hex_microphone_mode)
         .unwrap_or(0);
-    let rows = vec![
+    let mut rows = vec![
         driver_row(ui, p),
         setting_row(
             p,
             "hex-mic-mode",
             tr("Mode while dictating"),
-            Some(mode_description(experimental.hex_microphone_mode)),
+            Some(super::fun::mode_description(
+                experimental.hex_microphone_mode,
+            )),
             segmented(p, "hex-mic-mode-control", &labels, selected, |ui, index| {
                 let mode = HEX_MICROPHONE_MODES[index];
-                ui.update(|settings| settings.experimental.hex_microphone_mode = mode);
+                super::fun::set_tuning(ui, |cfg| cfg.mode = mode, true);
             }),
         ),
         toggle_row(
@@ -570,14 +560,102 @@ pub(super) fn hex_microphone_section(ui: &Ui, p: Paint) -> Option<El> {
             experimental.hex_microphone_comfort_noise,
             |ui: &mut Ui| {
                 let enabled = !ui.settings.experimental.hex_microphone_comfort_noise;
-                ui.update(|settings| settings.experimental.hex_microphone_comfort_noise = enabled);
+                super::fun::set_tuning(ui, |cfg| cfg.comfort_noise = enabled, true);
             },
         ),
     ];
+    if ui.platform.caps.fun {
+        rows.push(setting_row(
+            p,
+            "hex-mic-try-it",
+            tr("Try it"),
+            Some(tr(
+                "Try Hex Microphone and preview how callers hear you while you dictate",
+            )),
+            button(
+                p,
+                "open-fun-pane",
+                tr("Open Fun"),
+                ButtonKind::Secondary,
+                |ui: &mut Ui, _| ui.select_pane(super::Pane::Fun),
+            ),
+        ));
+    }
     Some(section(
         p,
         "hex-microphone",
         tr("Experimental: Hex microphone"),
         rows,
     ))
+}
+
+fn binding(settings: &AppSettings, target: ShortcutTarget) -> Option<&HotkeyBinding> {
+    match target {
+        ShortcutTarget::Dictation => Some(&settings.dictation_hotkey),
+        ShortcutTarget::PasteLast => settings.paste_last_hotkey.as_ref(),
+        ShortcutTarget::VoiceAction => Some(&settings.edit_hotkey),
+    }
+}
+
+/// `target`'s modifier-only shortcut moved to `side`, unless that collides
+/// with another shortcut (as GPUI's `hotkey_side_binding`).
+pub(super) fn side_binding(
+    settings: &AppSettings,
+    target: ShortcutTarget,
+    side: ModifierSide,
+) -> Option<HotkeyBinding> {
+    let mut candidate = binding(settings, target)?.clone();
+    standalone_modifier_side(&candidate)?;
+    set_standalone_modifier_side(&mut candidate, side);
+    let mut others = Vec::new();
+    if target != ShortcutTarget::Dictation {
+        others.push(settings.dictation_hotkey.clone());
+    }
+    if target != ShortcutTarget::VoiceAction && settings.voice_action.enabled {
+        others.push(settings.edit_hotkey.clone());
+    }
+    if target != ShortcutTarget::PasteLast
+        && let Some(paste) = &settings.paste_last_hotkey
+    {
+        others.push(paste.clone());
+    }
+    if settings.meetings.available() {
+        others.push(HotkeyBinding::paste_meeting_default());
+    }
+    (!crate::app_settings::hotkey_conflicts(&candidate, others)).then_some(candidate)
+}
+
+const SIDES: [ModifierSide; 3] = [
+    ModifierSide::Left,
+    ModifierSide::Either,
+    ModifierSide::Right,
+];
+
+/// Left, Either, or Right for a modifier-only shortcut (macOS), before its
+/// recorder; sides that would collide with another shortcut are disabled.
+pub(super) fn side_selector(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<El> {
+    if !ui.platform.caps.modifier_sides {
+        return None;
+    }
+    let side = standalone_modifier_side(binding(&ui.settings, target)?)?;
+    let key = match target {
+        ShortcutTarget::Dictation => "dictation-side",
+        ShortcutTarget::PasteLast => "paste-last-side",
+        ShortcutTarget::VoiceAction => "voice-action-side",
+    };
+    let labels = [tr("Left"), tr("Either"), tr("Right")];
+    let selected = SIDES.iter().position(|s| *s == side).unwrap_or(1);
+    let mut control = rune_kit::SegmentedControl::new(&labels, Some(selected))
+        .width(Some(180.0))
+        .on_pick(move |ui: &mut Ui, index: usize, _: &mut rune::Tx| {
+            if let Some(candidate) = side_binding(&ui.settings, target, SIDES[index]) {
+                ui.update(|settings| super::settings::set_binding(settings, target, candidate));
+            }
+        });
+    for (index, side) in SIDES.into_iter().enumerate() {
+        if side_binding(&ui.settings, target, side).is_none() {
+            control = control.segment_state(index, rune_kit::State::Disabled);
+        }
+    }
+    Some(control.build(p.k).key(key).role("segmented"))
 }

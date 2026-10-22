@@ -9,12 +9,15 @@
 //! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
 //! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
 
+mod activity;
 mod commands;
 mod controls;
+mod fun;
 mod history;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
 #[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
 mod host;
+mod hud_lab;
 mod lists;
 mod meetings;
 mod models;
@@ -69,6 +72,16 @@ static COMMANDS_ICON: Icon = Icon {
     name: "hex-commands",
     view: 16.0,
     body: include_str!("../assets/icons/commands.svg"),
+};
+static ACTIVITY_ICON: Icon = Icon {
+    name: "hex-activity",
+    view: 16.0,
+    body: include_str!("../assets/icons/activity.svg"),
+};
+static HUD_LAB_ICON: Icon = Icon {
+    name: "hex-hud-lab",
+    view: 16.0,
+    body: include_str!("../assets/icons/hud-lab.svg"),
 };
 static MEETINGS_ICON: Icon = Icon {
     name: "hex-meetings",
@@ -200,18 +213,28 @@ enum Pane {
     Commands,
     VoiceAction,
     History,
+    /// The Hex Microphone's tuning and try-it demo (macOS, behind its
+    /// experiment).
+    Fun,
+    /// The dictation indicator's tuning (macOS debug builds).
+    HudLab,
     /// Recorded calls (macOS beta, behind the Meetings opt-in).
     Meetings,
+    /// The event log (debug builds).
+    Activity,
 }
 
 impl Pane {
-    const ALL: [Pane; 6] = [
+    const ALL: [Pane; 9] = [
         Pane::Settings,
         Pane::Modes,
         Pane::Commands,
         Pane::VoiceAction,
         Pane::History,
+        Pane::Fun,
+        Pane::HudLab,
         Pane::Meetings,
+        Pane::Activity,
     ];
 
     fn shown(self, ui: &Ui) -> bool {
@@ -219,6 +242,9 @@ impl Pane {
         match self {
             Pane::Commands => caps.commands,
             Pane::Meetings => caps.meetings && ui.settings.meetings.available(),
+            Pane::Fun => caps.fun && ui.settings.experimental.hex_microphone_available(),
+            Pane::HudLab => caps.hud_lab && ui.platform.developer,
+            Pane::Activity => ui.platform.developer,
             _ => true,
         }
     }
@@ -231,6 +257,9 @@ impl Pane {
             Pane::VoiceAction => tr("Voice Action"),
             Pane::History => tr("History"),
             Pane::Meetings => tr("Meetings"),
+            Pane::Fun => tr("Fun"),
+            Pane::HudLab => "HUD Lab",
+            Pane::Activity => tr("Activity"),
         }
     }
 
@@ -242,6 +271,9 @@ impl Pane {
             Pane::VoiceAction => "nav-voice-action",
             Pane::History => "nav-history",
             Pane::Meetings => "nav-meetings",
+            Pane::Fun => "nav-fun",
+            Pane::HudLab => "nav-hud-lab",
+            Pane::Activity => "nav-activity",
         }
     }
 
@@ -253,6 +285,8 @@ impl Pane {
             Pane::VoiceAction => &VOICE_ACTION_ICON,
             Pane::History => &HISTORY_ICON,
             Pane::Meetings => &MEETINGS_ICON,
+            Pane::Fun | Pane::HudLab => &HUD_LAB_ICON,
+            Pane::Activity => &ACTIVITY_ICON,
         }
     }
 }
@@ -303,6 +337,10 @@ pub(crate) struct Ui {
     host: platform::PlatformHost,
     commands: commands::CommandsPane,
     meetings: meetings::MeetingsPane,
+    fun: fun::FunPane,
+    activity: activity::ActivityPane,
+    /// HUD Lab's preset was copied since it last changed.
+    hud_copied: bool,
     /// Settings saves and Quit Hex a fixture recorded.
     saved: usize,
     quit_requested: bool,
@@ -319,6 +357,7 @@ impl Ui {
         ui.history = history::HistoryPane::shared(host::history(ui.settings.history_retention));
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
+        ui.platform.developer = crate::DEVELOPER_FEATURES_ENABLED;
         ui.tour = onboarding::Tour::start(&ui.settings, &ui.platform);
         ui.platform.set_login_item(host::launch_at_login());
         ui
@@ -352,6 +391,9 @@ impl Ui {
             host: platform::PlatformHost::None,
             commands: commands::CommandsPane::default(),
             meetings: meetings::MeetingsPane::default(),
+            fun: fun::FunPane::default(),
+            activity: activity::ActivityPane::default(),
+            hud_copied: false,
             saved: 0,
             quit_requested: false,
         }
@@ -502,8 +544,10 @@ impl Ui {
         settings::cancel_capture(self);
         self.open = None;
         self.pane = pane;
-        if pane == Pane::History {
-            self.history.reload();
+        match pane {
+            Pane::History => self.history.reload(),
+            Pane::HudLab => self.ask(platform::PlatformRequest::ConfigureHud(self.platform.hud)),
+            _ => {}
         }
     }
 }
@@ -552,6 +596,9 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     changed |= ui.modes.poll(ui.live());
     changed |= modes::poll_chooser(ui);
     changed |= ui.host.poll(&mut ui.platform);
+    changed |= ui
+        .activity
+        .poll(ui.platform.activity_log.as_ref(), ui.pane == Pane::Activity);
     if let Service::Live(backend) = &mut ui.service {
         backend.refresh();
         let error = backend.error();
@@ -599,6 +646,9 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         Pane::VoiceAction => (Vec::new(), voice_action::pane(ui, p, &mut layer)),
         Pane::History => history::pane(ui, p, &mut layer),
         Pane::Meetings => meetings::pane(ui, p, &mut layer),
+        Pane::Fun => (Vec::new(), fun::pane(ui, p)),
+        Pane::HudLab => hud_lab::pane(ui, p),
+        Pane::Activity => activity::pane(ui, p),
     };
     let panel = col()
         .key("panel")
@@ -888,6 +938,7 @@ const SCENES: &[Scene] = &[
         ui.settings.commands_enabled = true;
         ui.platform.command_model = platform::CommandModel::Failed;
         ui.platform.login_item = Some(crate::login_item::LoginItemStatus::RequiresApproval);
+        ui.platform.accessibility_renamed = true;
     }),
     ("windows-settings", |ui| {
         *ui = fixture(DesktopShortcuts::Registered);
@@ -942,6 +993,52 @@ const SCENES: &[Scene] = &[
         *ui = mac_fixture();
         ui.meetings = meetings::MeetingsPane::default();
         ui.pane = Pane::Meetings;
+    }),
+    ("mac-fun", |ui| {
+        *ui = mac_fixture();
+        ui.pane = Pane::Fun;
+    }),
+    ("mac-fun-muted", |ui| {
+        *ui = mac_fixture();
+        ui.platform.tuning.mode = crate::voice_filter::VoiceFilterMode::Muted;
+        ui.platform.demo = Some(fun::preview_demo(
+            false,
+            Some(crate::hex_microphone::DemoPlaybackTrack::CallHears),
+        ));
+        ui.pane = Pane::Fun;
+    }),
+    ("mac-fun-driver-missing", |ui| {
+        *ui = mac_fixture();
+        if let Some(driver) = &mut ui.platform.hex_microphone {
+            driver.driver_bundle_installed = false;
+            driver.driver_loaded = false;
+            driver.installed_version = None;
+            driver.active_apps.clear();
+        }
+        ui.platform.demo = Some(fun::preview_demo(true, None));
+        ui.pane = Pane::Fun;
+    }),
+    ("mac-hud-lab", |ui| {
+        *ui = mac_fixture();
+        ui.platform.developer = true;
+        ui.platform.hud.queued = 2;
+        ui.pane = Pane::HudLab;
+    }),
+    ("mac-activity", |ui| {
+        *ui = mac_fixture();
+        ui.platform.developer = true;
+        ui.activity = activity::ActivityPane::fixture();
+        ui.pane = Pane::Activity;
+    }),
+    ("mac-settings-sides", |ui| {
+        *ui = mac_fixture();
+        ui.settings.dictation_hotkey = HotkeyBinding {
+            modifiers: HotkeyModifiers {
+                option: Some(crate::app_settings::ModifierSide::Left),
+                ..HotkeyModifiers::default()
+            },
+            key: None,
+        };
     }),
     ("mac-onboarding", |ui| {
         mac_tour(ui, onboarding::MacStep::Welcome)

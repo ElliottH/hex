@@ -318,3 +318,73 @@ pub(super) fn small_button(
         .build(p.k)
         .key(key)
 }
+
+/// A horizontal slider: the label and value over a track you press or drag.
+/// `set` gets the position from zero through one and whether the gesture
+/// ended (save then, not on every move).
+pub(super) fn slider(
+    p: Paint,
+    key: &str,
+    label: &str,
+    value: f32,
+    display: String,
+    width: f32,
+    set: impl Fn(&mut Ui, f32, bool) + 'static,
+) -> El {
+    let c = &p.k.c;
+    let value = value.clamp(0.0, 1.0);
+    let knob = 14.0;
+    let track = row()
+        .key("track")
+        .role("slider")
+        .label(label)
+        .w(width)
+        .h(22.0)
+        .center_y()
+        .on_drag(
+            move |ui: &mut Ui, drag: &mut rune::Drag, _: &mut rune::Tx| {
+                let position = ((drag.x - knob / 2.0) / (drag.w - knob).max(1.0)).clamp(0.0, 1.0);
+                set(ui, position, drag.phase == rune::Phase::Up);
+            },
+        )
+        .child(
+            row()
+                .key("rail")
+                .w(width)
+                .h(4.0)
+                .radius(2.0)
+                .fill(c.layer_03)
+                .child(
+                    el().key("fill")
+                        .w((width - knob) * value + knob / 2.0)
+                        .h(4.0)
+                        .radius(2.0)
+                        .fill(c.icon_accent),
+                ),
+        )
+        .child(
+            el().key("knob")
+                .absolute((width - knob) * value, 4.0)
+                .size(knob, knob)
+                .radius(knob / 2.0)
+                .fill(c.knob)
+                .border(p.hair.max(0.5), c.border_strong),
+        );
+    col()
+        .key(key)
+        .w(width)
+        .gap(4.0)
+        .child(
+            row()
+                .key("heading")
+                .justify_between()
+                .child(text(label).key("label").font(DESCRIPTION).color(p.muted()))
+                .child(
+                    text(display)
+                        .key("value")
+                        .font(p.k.ty.mono)
+                        .color(p.faint()),
+                ),
+        )
+        .child(track)
+}
