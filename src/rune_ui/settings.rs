@@ -1,41 +1,29 @@
-//! The experimental Rune front end for Linux Settings (`hex app --ui rune`).
-//!
-//! It is a client of the per-user `hex.service`, exactly like the GPUI
-//! Settings process: it saves `settings.json`, asks the service to reload it,
-//! and sends the same `linux_service::Request`s for listening, shortcuts,
-//! models, and updates. It shows the Settings pane only; Modes, Voice Action,
-//! and History stay in the GPUI window. It is drawn with `rune-kit`'s
-//! components in OpenCode's design language (`rune-theme-opencode`), not
-//! Hex's GPUI design tokens.
+//! The Settings pane: listener status, the desktop's shortcuts, dictation,
+//! behavior, and application rows, and recording shortcuts through the service.
 
-mod controls;
-
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rune::{
-    AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx, Waker, col, row, text,
-};
+use rune::{El, Key, KeyEvent, TextStyle, Tx, col, row, text};
 
+use super::controls::{
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section,
+    segmented, select, setting_row, status_dot, tag, text_field, toggle_row,
+};
+use super::{Menu, Service, Ui};
 use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
     RecordingAudioBehavior,
 };
 use crate::desktop_host::{
-    DesktopAction, DesktopGrantedShortcut, DesktopListenerSnapshot, DesktopShortcut,
-    DesktopShortcuts, DesktopTranscriptionSnapshot, DesktopUpdateStatus,
+    DesktopAction, DesktopGrantedShortcut, DesktopShortcut, DesktopShortcuts, DesktopUpdateStatus,
 };
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
 use crate::linux_input::LinuxHotkey;
-use crate::linux_service::{Client, Request, ShortcutTarget};
-use crate::transcription_models::{self, ModelPreparationStage, TranscriptionModelId};
-use controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section,
-    segmented, select, setting_row, status_dot, tag, text_field, toggle_row,
-};
+use crate::linux_service::{Request, ShortcutTarget};
+use crate::transcription_models::{self, ModelPreparationStage};
 
-const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
+pub(super) const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
     ("Off", 0.0),
     ("25%", 0.25),
     ("50%", 0.5),
@@ -43,59 +31,12 @@ const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
     ("100%", 1.0),
 ];
 /// How long a newly saved shortcut shows "Saved".
-const SAVED_FOR: Duration = Duration::from_millis(700);
+pub(super) const SAVED_FOR: Duration = Duration::from_millis(700);
 /// How long to wait for the service to start a requested shortcut edit.
-const EDIT_START_TIMEOUT: Duration = Duration::from_secs(3);
-
-pub(crate) fn run() {
-    rune::set_app_id("hex");
-    rune::run(spec());
-}
-
-fn spec() -> AppSpec<Ui> {
-    AppSpec {
-        title: "Hex",
-        size: (720.0, 860.0),
-        init: Ui::load,
-        view,
-        scenes: SCENES,
-        fonts: rune_theme_opencode::FONTS,
-        families: rune_theme_opencode::FAMILIES,
-        setup: Some(setup),
-        poll: Some(poll),
-        on_key: Some(on_key),
-    }
-}
-
-/// Where Settings sends its requests.
-enum Service {
-    /// Not connected yet: `setup` connects unless a scene chose a fixture.
-    Pending,
-    Live(Box<Client>),
-    /// Snapshots and tests: requests are recorded, never sent.
-    Fixture(Vec<Request>),
-}
-
-/// What Settings shows of the service, from its latest snapshot.
-#[derive(Clone, PartialEq)]
-struct ServiceView {
-    listener: DesktopListenerSnapshot,
-    operation_error: Option<String>,
-    transcription: DesktopTranscriptionSnapshot,
-    update_status: DesktopUpdateStatus,
-    /// The service is recording or saving a shortcut.
-    editing: bool,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Menu {
-    Transcription,
-    Microphone,
-    Language,
-}
+pub(super) const EDIT_START_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, PartialEq, Debug)]
-enum Capture {
+pub(super) enum Capture {
     Idle,
     /// Waiting for the chord; `message` explains a rejected one.
     Listening {
@@ -114,166 +55,8 @@ enum Capture {
     },
 }
 
-pub(crate) struct Ui {
-    settings: AppSettings,
-    service: Service,
-    view: Option<ServiceView>,
-    /// A save or policy change that failed here.
-    error: Option<String>,
-    /// Why the client cannot reach the service.
-    connection_error: Option<String>,
-    /// The settings the service last reported, to adopt only its changes.
-    service_settings: Option<AppSettings>,
-    open: Option<Menu>,
-    microphones: Result<Vec<String>, String>,
-    confirm_release: bool,
-    capture: Capture,
-    hints: TextEdit,
-    /// The model the service was last seen preparing.
-    preparing: Option<TranscriptionModelId>,
-}
-
-impl Ui {
-    fn load() -> Self {
-        let (settings, error) = match AppSettings::load() {
-            Ok(settings) => (settings, None),
-            Err(error) => (AppSettings::default(), Some(format!("{error:#}"))),
-        };
-        crate::desktop_i18n::apply(settings.ui_language.as_deref());
-        Self::with(settings, Service::Pending, error)
-    }
-
-    fn with(settings: AppSettings, service: Service, error: Option<String>) -> Self {
-        let hints = TextEdit::new(settings.transcription.recognition_hints.clone());
-        Self {
-            settings,
-            service,
-            view: None,
-            error,
-            connection_error: None,
-            service_settings: None,
-            open: None,
-            microphones: Ok(Vec::new()),
-            confirm_release: false,
-            capture: Capture::Idle,
-            hints,
-            preparing: None,
-        }
-    }
-
-    fn send(&mut self, request: Request) {
-        match &mut self.service {
-            Service::Live(client) => {
-                if let Err(error) = client.send(request) {
-                    self.error = Some(format!("{error:#}"));
-                }
-            }
-            Service::Fixture(sent) => sent.push(request),
-            Service::Pending => {}
-        }
-    }
-
-    /// Saves `settings.json` before adopting the change, then asks the
-    /// service to reload it. A failed save leaves the shown settings alone.
-    fn update(&mut self, change: impl FnOnce(&mut AppSettings)) -> bool {
-        let mut candidate = self.settings.clone();
-        change(&mut candidate);
-        self.commit(candidate)
-    }
-
-    fn commit(&mut self, candidate: AppSettings) -> bool {
-        if matches!(self.service, Service::Live(_))
-            && let Err(error) = candidate.save()
-        {
-            self.error = Some(format!("{error:#}"));
-            return false;
-        }
-        self.error = None;
-        self.settings = candidate;
-        self.send(Request::ReloadSettings);
-        true
-    }
-
-    fn running(&self) -> bool {
-        self.view.as_ref().is_some_and(|view| view.listener.running)
-    }
-
-    fn shortcuts(&self) -> Option<&DesktopShortcuts> {
-        self.view.as_ref().map(|view| &view.listener.shortcuts)
-    }
-
-    /// Without a shortcuts portal the desktop's keybindings own every
-    /// shortcut, so Settings has none to record.
-    fn records_shortcuts(&self) -> bool {
-        self.shortcuts() != Some(&DesktopShortcuts::Commands)
-    }
-
-    fn adopt(&mut self, service: AppSettings) {
-        if self.service_settings.as_ref() == Some(&service) {
-            return;
-        }
-        if service != self.settings {
-            if service.transcription.recognition_hints
-                != self.settings.transcription.recognition_hints
-            {
-                self.hints = TextEdit::new(service.transcription.recognition_hints.clone());
-            }
-            self.settings = service.clone();
-        }
-        self.service_settings = Some(service);
-    }
-}
-
-fn setup(ui: &mut Ui, waker: Waker) {
-    if matches!(ui.service, Service::Pending) {
-        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
-        ui.service = Service::Live(Box::new(Client::with_waker(wake)));
-    }
-}
-
-/// Runs before every frame: adopts service updates and advances shortcut
-/// capture. True when anything shown changed.
-fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
-    let mut changed = advance_capture(ui);
-    let Service::Live(client) = &mut ui.service else {
-        return changed;
-    };
-    client.refresh();
-    let error = client.error.clone();
-    let snapshot = client.state.clone();
-    let view = snapshot.as_ref().map(|state| ServiceView {
-        listener: state.desktop.listener.clone(),
-        operation_error: state.desktop.operation_error.clone(),
-        transcription: state.desktop.transcription.clone(),
-        update_status: state.desktop.update_status,
-        editing: state.capturing || state.editing,
-    });
-    if error != ui.connection_error {
-        ui.connection_error = error;
-        changed = true;
-    }
-    if view != ui.view {
-        ui.view = view;
-        changed = true;
-    }
-    if let Some(state) = snapshot {
-        let before = ui.settings.clone();
-        ui.adopt(state.settings);
-        changed |= before != ui.settings;
-    }
-    let preparing = ui
-        .view
-        .as_ref()
-        .and_then(|view| view.transcription.preparing);
-    if preparing != ui.preparing {
-        ui.preparing = preparing;
-        changed = true;
-    }
-    changed | advance_capture(ui)
-}
-
 /// Follows the service's side of a shortcut edit.
-fn advance_capture(ui: &mut Ui) -> bool {
+pub(super) fn advance_capture(ui: &mut Ui) -> bool {
     let editing = ui.view.as_ref().is_some_and(|view| view.editing);
     match ui.capture.clone() {
         Capture::Saving {
@@ -310,7 +93,7 @@ fn advance_capture(ui: &mut Ui) -> bool {
 }
 
 /// Records a shortcut while capture listens; otherwise leaves keys alone.
-fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
+pub(super) fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
     let Capture::Listening { target, .. } = ui.capture else {
         return false;
     };
@@ -346,7 +129,7 @@ fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
     true
 }
 
-fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
+pub(super) fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
     if let Capture::Listening { target: active, .. } = ui.capture {
         cancel_capture(ui);
         if active == target {
@@ -360,7 +143,7 @@ fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
     };
 }
 
-fn cancel_capture(ui: &mut Ui) {
+pub(super) fn cancel_capture(ui: &mut Ui) {
     if matches!(ui.capture, Capture::Listening { .. }) {
         ui.send(Request::CancelShortcut);
     }
@@ -368,7 +151,7 @@ fn cancel_capture(ui: &mut Ui) {
 }
 
 /// The chord a key press records, in the key names Linux registers.
-fn recorded_binding(event: &KeyEvent) -> Result<HotkeyBinding, &'static str> {
+pub(super) fn recorded_binding(event: &KeyEvent) -> Result<HotkeyBinding, &'static str> {
     let name = match &event.key {
         Key::Text(text) if text == " " => "space".to_string(),
         Key::Text(text) if text.chars().count() == 1 => text.to_lowercase(),
@@ -403,7 +186,7 @@ fn recorded_binding(event: &KeyEvent) -> Result<HotkeyBinding, &'static str> {
     })
 }
 
-fn validate(
+pub(super) fn validate(
     settings: &AppSettings,
     target: ShortcutTarget,
     binding: &HotkeyBinding,
@@ -429,7 +212,7 @@ fn validate(
     Ok(())
 }
 
-fn desktop_shortcut(binding: &HotkeyBinding) -> DesktopShortcut {
+pub(super) fn desktop_shortcut(binding: &HotkeyBinding) -> DesktopShortcut {
     let modifiers = binding.modifiers;
     DesktopShortcut {
         alt: modifiers.option.is_some(),
@@ -445,7 +228,11 @@ fn desktop_shortcut(binding: &HotkeyBinding) -> DesktopShortcut {
     }
 }
 
-fn set_binding(settings: &mut AppSettings, target: ShortcutTarget, binding: HotkeyBinding) {
+pub(super) fn set_binding(
+    settings: &mut AppSettings,
+    target: ShortcutTarget,
+    binding: HotkeyBinding,
+) {
     match target {
         ShortcutTarget::Dictation => settings.dictation_hotkey = binding,
         ShortcutTarget::PasteLast => settings.paste_last_hotkey = Some(binding),
@@ -453,7 +240,7 @@ fn set_binding(settings: &mut AppSettings, target: ShortcutTarget, binding: Hotk
     }
 }
 
-fn sound_volume_index(settings: &AppSettings) -> usize {
+pub(super) fn sound_volume_index(settings: &AppSettings) -> usize {
     if !settings.sound_effects {
         return 0;
     }
@@ -468,62 +255,33 @@ fn sound_volume_index(settings: &AppSettings) -> usize {
         .map_or(0, |(index, _)| index + 1)
 }
 
-fn toggle_menu(ui: &mut Ui, menu: Menu) {
+pub(super) fn toggle_menu(ui: &mut Ui, menu: Menu) {
     ui.open = (ui.open != Some(menu)).then_some(menu);
     if ui.open == Some(Menu::Microphone) && !matches!(ui.service, Service::Fixture(_)) {
         ui.microphones = crate::audio::input_device_names().map_err(|error| error.to_string());
     }
 }
 
-// ---------------------------------------------------------------------------
-// View
+pub(super) fn close_menu(ui: &mut Ui) {
+    ui.open = None;
+}
 
-fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
-    let dark = cx.system_dark();
-    let p = Paint::new(dark, cx.env().scale);
-    // Menus mount above the page (rune-kit overlays), anchored to their field.
-    let mut layer = Vec::new();
+/// Whether Hex listens, how to dictate, and the one way to change it.
+/// The Settings pane's scrolling body.
+pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let mut content = col().key("content").px(24.0).pt(8.0).pb(24.0).gap(24.0);
     content = content.child(listener_card(ui, p));
     if let Some(shortcuts) = desktop_shortcuts(ui, p) {
         content = content.child(shortcuts);
     }
     content = content
-        .child(dictation_section(ui, p, &mut layer))
+        .child(dictation_section(ui, p, layer))
         .child(behavior_section(ui, p))
-        .child(application_section(ui, p, &mut layer));
-    let window = col()
-        .key("window")
-        .role("window")
-        .fill(p.k.c.page)
-        .child(
-            row().key("titlebar").h(44.0).w_full().center().child(
-                text(tr("Settings"))
-                    .key("title")
-                    .font(p.k.ty.ui_medium)
-                    .color(p.text()),
-            ),
-        )
-        .child(
-            col()
-                .key("scroll")
-                .grow(1.0)
-                .shrink()
-                .clip_fade(0.0, 4.0, 0.0, 24.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .child(content),
-        );
-    rune_kit::root(window, layer)
+        .child(application_section(ui, p, layer));
+    super::scroll_body("scroll", content)
 }
 
-fn close_menu(ui: &mut Ui) {
-    ui.open = None;
-}
-
-/// Whether Hex listens, how to dictate, and the one way to change it.
-fn listener_card(ui: &Ui, p: Paint) -> El {
+pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
     let running = ui.running();
     let status = match &ui.view {
         Some(view) => tr(&view.listener.status).to_string(),
@@ -623,7 +381,7 @@ fn listener_card(ui: &Ui, p: Paint) -> El {
 }
 
 /// What the desktop granted (portal) or which commands to bind (none).
-fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
+pub(super) fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
     let rows = match ui.shortcuts()? {
         DesktopShortcuts::Registered => return None,
         DesktopShortcuts::Portal(granted) => {
@@ -699,7 +457,7 @@ fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
     ))
 }
 
-fn granted_row(p: Paint, index: usize, shortcut: &DesktopGrantedShortcut) -> El {
+pub(super) fn granted_row(p: Paint, index: usize, shortcut: &DesktopGrantedShortcut) -> El {
     let title = match shortcut.name.as_str() {
         "Paste last dictation" => tr("Paste last dictation"),
         "Voice Action" => tr("Voice Action"),
@@ -724,7 +482,13 @@ fn granted_row(p: Paint, index: usize, shortcut: &DesktopGrantedShortcut) -> El 
     )
 }
 
-fn command_row(p: Paint, key: &str, title: &str, description: &str, commands: &[&str]) -> El {
+pub(super) fn command_row(
+    p: Paint,
+    key: &str,
+    title: &str,
+    description: &str,
+    commands: &[&str],
+) -> El {
     let lines = col()
         .key("commands")
         .gap(2.0)
@@ -738,7 +502,7 @@ fn command_row(p: Paint, key: &str, title: &str, description: &str, commands: &[
     setting_row(p, key, title, Some(description), lines)
 }
 
-fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+pub(super) fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let selection = &ui.settings.transcription;
     let model = transcription_models::definition(selection.model);
     let label = format!(
@@ -747,29 +511,7 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         model.name
     );
     let language = selection.language.clone();
-    let choices = transcription_models::choices_for_runtime(&language)
-        .into_iter()
-        .map(|choice| {
-            let id = choice.model.id;
-            let language = language.clone();
-            Choice {
-                key: choice.model.id.as_str().to_string(),
-                label: choice.model.name.to_string(),
-                detail: Some(tr(choice.recommendation.label()).to_string()),
-                selected: id == selection.model,
-                choose: Box::new(move |ui: &mut Ui| {
-                    ui.open = None;
-                    if ui.settings.transcription.model != id {
-                        ui.send(Request::ChooseModel {
-                            model: id,
-                            language: language.clone(),
-                        });
-                    }
-                }),
-            }
-        })
-        .collect();
-    let mut rows = vec![described_row(
+    let rows_start = described_row(
         p,
         "transcription",
         tr("Local transcription"),
@@ -778,13 +520,14 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             p,
             "transcription-control",
             &label,
-            ui.open == Some(Menu::Transcription),
-            choices,
-            |ui: &mut Ui| toggle_menu(ui, Menu::Transcription),
+            false,
+            Vec::new(),
+            move |ui: &mut Ui| super::picker::open(ui, language.clone()),
             close_menu,
             layer,
         ),
-    )];
+    );
+    let mut rows = vec![rows_start];
     let microphone = ui
         .settings
         .microphone
@@ -894,7 +637,7 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
 }
 
 /// The transcription row's description: preparation progress or its error.
-fn transcription_status(ui: &Ui, p: Paint) -> (String, rune::Color) {
+pub(super) fn transcription_status(ui: &Ui, p: Paint) -> (String, rune::Color) {
     let fallback = (
         tr("Language and on-device speech model").to_string(),
         p.muted(),
@@ -922,7 +665,7 @@ fn transcription_status(ui: &Ui, p: Paint) -> (String, rune::Color) {
     (format!("{name} · {stage}"), p.accent())
 }
 
-fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
+pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
     let binding = match target {
         ShortcutTarget::Dictation => Some(&ui.settings.dictation_hotkey),
         ShortcutTarget::PasteLast => ui.settings.paste_last_hotkey.as_ref(),
@@ -1002,7 +745,7 @@ fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
     }
 }
 
-fn behavior_section(ui: &Ui, p: Paint) -> El {
+pub(super) fn behavior_section(ui: &Ui, p: Paint) -> El {
     let settings = &ui.settings;
     let audio_labels: Vec<&str> = RecordingAudioBehavior::ALL
         .iter()
@@ -1168,7 +911,7 @@ fn behavior_section(ui: &Ui, p: Paint) -> El {
     section(p, "behavior", tr("Behavior"), rows)
 }
 
-fn release_confirmation(ui: &Ui, p: Paint) -> El {
+pub(super) fn release_confirmation(ui: &Ui, p: Paint) -> El {
     let description = if ui.settings.commands_enabled {
         tr("Opens the microphone on shortcut press without pre-roll and turns Commands off.")
     } else {
@@ -1208,7 +951,7 @@ fn release_confirmation(ui: &Ui, p: Paint) -> El {
     .fill(p.k.c.hover)
 }
 
-fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+pub(super) fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let settings = &ui.settings;
     let mut rows = vec![toggle_row(
         p,
@@ -1301,7 +1044,7 @@ fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     section(p, "application", tr("Application"), rows)
 }
 
-fn software_update(ui: &Ui, p: Paint) -> Option<El> {
+pub(super) fn software_update(ui: &Ui, p: Paint) -> Option<El> {
     let status = |label: &str| {
         text(label)
             .key("update-status")
@@ -1322,111 +1065,3 @@ fn software_update(ui: &Ui, p: Paint) -> Option<El> {
         ),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Fixtures for snapshots and tests
-
-/// A named starting state for `--scene`.
-type Scene = (&'static str, fn(&mut Ui));
-
-const SCENES: &[Scene] = &[
-    // The running service's real state, for headless snapshots and scripts
-    // (`--snap`): waits for its first snapshot instead of drawing
-    // "Connecting…" at virtual time zero.
-    ("live", |ui| {
-        *ui = Ui::load();
-        let mut client = Client::new();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while client.state.is_none() && client.error.is_none() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(25));
-            client.refresh();
-        }
-        ui.service = Service::Live(Box::new(client));
-        poll(ui, 0.0, &mut Tx::default());
-    }),
-    ("portal", |ui| *ui = fixture(portal_shortcuts())),
-    ("commands", |ui| *ui = fixture(DesktopShortcuts::Commands)),
-    ("disabled", |ui| {
-        *ui = fixture(portal_shortcuts());
-        if let Some(view) = &mut ui.view {
-            view.listener.running = false;
-            view.listener.status = "Disabled".into();
-        }
-    }),
-    ("capturing", |ui| {
-        *ui = fixture(portal_shortcuts());
-        ui.capture = Capture::Listening {
-            target: ShortcutTarget::Dictation,
-            message: None,
-        };
-    }),
-    ("chinese", |ui| {
-        *ui = fixture(portal_shortcuts());
-        ui.settings.ui_language = Some("zh".into());
-        crate::desktop_i18n::apply(Some("zh"));
-    }),
-    ("menus", |ui| {
-        *ui = fixture(portal_shortcuts());
-        ui.open = Some(Menu::Microphone);
-        ui.microphones = Ok(vec![
-            "Built-in Audio Analog Stereo".into(),
-            "Shure MV7".into(),
-        ]);
-        ui.confirm_release = true;
-    }),
-];
-
-fn portal_shortcuts() -> DesktopShortcuts {
-    DesktopShortcuts::Portal(vec![
-        DesktopGrantedShortcut {
-            name: "Dictation".into(),
-            trigger: Some("F12".into()),
-        },
-        DesktopGrantedShortcut {
-            name: "Paste last dictation".into(),
-            trigger: Some("Ctrl+Alt+V".into()),
-        },
-    ])
-}
-
-/// Deterministic settings and service state matching a typical Wayland
-/// desktop with the shortcuts portal.
-fn fixture(shortcuts: DesktopShortcuts) -> Ui {
-    crate::desktop_i18n::apply(Some("en"));
-    let settings = AppSettings {
-        dictation_hotkey: HotkeyBinding {
-            modifiers: HotkeyModifiers::default(),
-            key: Some(HotkeyKey::named("f12")),
-        },
-        transcription: crate::transcription_models::TranscriptionSelection {
-            model: TranscriptionModelId::ParakeetUnifiedEnglish,
-            language: "en".into(),
-            recognition_hints: String::new(),
-        },
-        paste_with_shift: true,
-        ..AppSettings::default()
-    };
-    let mut ui = Ui::with(settings, Service::Fixture(Vec::new()), None);
-    ui.view = Some(ServiceView {
-        listener: DesktopListenerSnapshot {
-            running: true,
-            status: "Enabled".into(),
-            warning: None,
-            shortcuts,
-        },
-        operation_error: None,
-        transcription: DesktopTranscriptionSnapshot {
-            downloaded_bytes: 0,
-            error: None,
-            preparation_stage: None,
-            selection: ui.settings.transcription.clone(),
-            preparing: None,
-        },
-        update_status: DesktopUpdateStatus::Current,
-        editing: false,
-    });
-    ui
-}
-
-#[cfg(test)]
-mod tests;

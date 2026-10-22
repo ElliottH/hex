@@ -1,10 +1,13 @@
+use super::settings::{desktop_shortcut, recorded_binding, validate};
 use super::*;
 use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::text::TextSystem;
-use rune::{Env, Mods, Runtime};
+use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
-/// Tall enough to show every section of the fixture without scrolling.
-const GOLDEN_SIZE: (f32, f32) = (720.0, 1640.0);
+/// Tall enough to show every Settings section without scrolling.
+const GOLDEN_SIZE: (f32, f32) = (980.0, 1720.0);
+/// The window's own size, for the other panes.
+const PANE_SIZE: (f32, f32) = (980.0, 760.0);
 const GOLDEN_SCALE: f32 = 2.0;
 
 fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
@@ -191,6 +194,241 @@ fn service_settings_are_adopted_only_when_the_service_changes_them() {
     assert!(!ui.settings.enable_on_launch);
 }
 
+fn settle(rt: &mut Runtime<Ui>) {
+    for _ in 0..60 {
+        rt.frame(1.0 / 60.0);
+    }
+}
+
+/// Saves paused drafts now, as the next poll after [`DRAFT_DELAY`] would.
+fn flush(rt: &mut Runtime<Ui>) {
+    rt.state.flush_drafts();
+    settle(rt);
+}
+
+#[test]
+fn the_sidebar_switches_panes_and_keeps_settings() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    for (key, pane) in [
+        ("nav-modes", Pane::Modes),
+        ("nav-voice-action", Pane::VoiceAction),
+        ("nav-history", Pane::History),
+        ("nav-settings", Pane::Settings),
+    ] {
+        tap(&mut rt, key);
+        assert_eq!(rt.state.pane, pane);
+    }
+    assert!(sent(&rt).is_empty(), "switching panes saves nothing");
+}
+
+#[test]
+fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
+    let mut rt = runtime("voice-action-off", true, PANE_SIZE);
+    tap(&mut rt, "voice-action-enabled");
+    assert!(rt.state.settings.voice_action.enabled);
+    assert!(matches!(sent(&rt), [Request::ReloadSettings]));
+    assert!(rt.find("opencode-model").is_some(), "the model row appears");
+
+    let mut rt = runtime("voice-action-off", true, PANE_SIZE);
+    rt.state.settings.edit_hotkey = rt.state.settings.paste_last_hotkey.clone().unwrap();
+    tap(&mut rt, "voice-action-enabled");
+    assert!(!rt.state.settings.voice_action.enabled);
+    assert!(rt.state.voice_action_error.is_some());
+    assert!(sent(&rt).is_empty());
+}
+
+#[test]
+fn choosing_an_opencode_model_saves_it() {
+    let mut rt = runtime("voice-action-models", true, PANE_SIZE);
+    tap(&mut rt, "model1");
+    assert_eq!(
+        rt.state.settings.voice_action.model.as_deref(),
+        Some("anthropic/claude-sonnet-4-5")
+    );
+    assert_eq!(rt.state.open, None);
+    tap(&mut rt, "model-value");
+    assert_eq!(rt.state.open, Some(Menu::Model));
+    tap(&mut rt, "model0");
+    assert_eq!(
+        rt.state.settings.voice_action.model, None,
+        "back to the OpenCode default"
+    );
+}
+
+#[test]
+fn opencode_missing_offers_setup_instead_of_models() {
+    let rt = runtime("voice-action-unavailable", true, PANE_SIZE);
+    assert!(rt.find("opencode-unavailable").is_some());
+    assert!(rt.find("open-opencode-setup").is_some());
+    assert!(rt.find("opencode-model").is_none());
+}
+
+#[test]
+fn history_selects_deletes_and_clears_in_two_steps() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    tap(&mut rt, "history-entry3");
+    assert_eq!(rt.state.history.selected, Some(3));
+    tap(&mut rt, "history-delete");
+    assert!(rt.state.history.entries.iter().all(|entry| entry.id != 3));
+    tap(&mut rt, "history-clear");
+    assert!(rt.state.history.clear_armed);
+    assert_eq!(rt.state.history.entries.len(), 2);
+    tap(&mut rt, "history-clear");
+    assert!(rt.state.history.entries.is_empty());
+}
+
+#[test]
+fn history_copy_writes_the_clipboard() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    tap(&mut rt, "history-copy");
+    assert_eq!(
+        rt.copy_request.as_deref(),
+        Some("The deploy failed because the cache key changed.")
+    );
+    assert_eq!(rt.state.history.copied, Some(2));
+}
+
+#[test]
+fn modes_add_select_and_delete() {
+    let mut rt = runtime("modes", true, PANE_SIZE);
+    tap(&mut rt, "add-mode");
+    assert_eq!(rt.state.settings.dictation_processing.modes.len(), 3);
+    assert_eq!(rt.state.modes.selected, modes::Selection::Custom(2));
+    assert_eq!(
+        rt.state.settings.dictation_processing.modes[2].name,
+        "Mode 3"
+    );
+    tap(&mut rt, "delete-mode");
+    assert!(rt.state.modes.delete_armed);
+    tap(&mut rt, "confirm-delete-mode");
+    assert_eq!(rt.state.settings.dictation_processing.modes.len(), 2);
+    assert_eq!(rt.state.modes.selected, modes::Selection::Default);
+}
+
+#[test]
+fn mode_corrections_and_names_save_from_their_fields() {
+    let mut rt = runtime("modes", true, PANE_SIZE);
+    tap(&mut rt, "add-correction");
+    assert_eq!(
+        rt.state.settings.dictation_processing.modes[0]
+            .replacements
+            .len(),
+        3
+    );
+    rt.paste("dax");
+    settle(&mut rt);
+    flush(&mut rt);
+    assert_eq!(
+        rt.state.settings.dictation_processing.modes[0].replacements[2].matched_phrase,
+        "dax"
+    );
+    tap(&mut rt, "correction0/remove");
+    let phrases: Vec<String> = rt.state.settings.dictation_processing.modes[0]
+        .replacements
+        .iter()
+        .map(|r| r.matched_phrase.clone())
+        .collect();
+    assert_eq!(phrases, ["hex app", "dax"]);
+}
+
+#[test]
+fn mode_transformations_add_reorder_and_remove() {
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    tap(&mut rt, "available-transformation0/add");
+    let ids = |rt: &Runtime<Ui>| {
+        rt.state.settings.dictation_processing.modes[0]
+            .transformations
+            .clone()
+    };
+    assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
+    tap(&mut rt, "transformation1/up");
+    assert_eq!(ids(&rt), ["normalize-links", "smart-punctuation"]);
+    tap(&mut rt, "transformation0/remove");
+    assert_eq!(ids(&rt), ["smart-punctuation"]);
+}
+
+#[test]
+fn mode_applications_refuse_one_another_modes_use() {
+    // In Chat, WezTerm is offered but belongs to Terminal.
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    let chat = |rt: &Runtime<Ui>| {
+        rt.state.settings.dictation_processing.modes[0]
+            .applications
+            .clone()
+    };
+    tap(&mut rt, "available1");
+    assert!(rt.state.modes_application_error().is_some());
+    assert!(!chat(&rt).contains(&"WezTerm".to_string()));
+    tap(&mut rt, "available2");
+    assert!(chat(&rt).contains(&"Zed".to_string()));
+}
+
+#[test]
+fn the_transcription_picker_asks_the_service_for_a_model() {
+    let mut rt = runtime("picker", true, PANE_SIZE);
+    tap(&mut rt, "model2/top/actions/choose-model");
+    assert!(matches!(
+        sent(&rt),
+        [Request::ChooseModel {
+            model: TranscriptionModelId::WhisperLargeV3Turbo,
+            ..
+        }]
+    ));
+    tap(&mut rt, "language4");
+    assert_eq!(rt.state.picker.language.as_deref(), Some("ja"));
+    tap(&mut rt, "close-picker");
+    assert_eq!(rt.state.picker.language, None);
+}
+
+#[test]
+fn a_download_in_progress_can_be_cancelled() {
+    let mut rt = runtime("picker-downloading", true, PANE_SIZE);
+    tap(&mut rt, "model1/top/actions/cancel-model");
+    assert!(matches!(sent(&rt), [Request::CancelModel]));
+}
+
+#[test]
+fn settings_opens_the_picker_on_the_current_language() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    tap(&mut rt, "transcription-control-trigger");
+    assert_eq!(rt.state.picker.language.as_deref(), Some("en"));
+}
+
+#[test]
+fn onboarding_downloads_the_model_through_the_service() {
+    let mut rt = runtime("onboarding", true, PANE_SIZE);
+    // Setup starts the download as soon as it opens.
+    tap(&mut rt, "tour-continue");
+    assert!(matches!(
+        sent(&rt),
+        [Request::ChooseModel {
+            model: TranscriptionModelId::ParakeetUnifiedEnglish,
+            ..
+        }]
+    ));
+    // The service finishes: the model is installed and setup moves on.
+    rt.state.picker.installed = Some(vec![TranscriptionModelId::ParakeetUnifiedEnglish]);
+    settle(&mut rt);
+    std::thread::sleep(std::time::Duration::from_millis(750));
+    settle(&mut rt);
+    tap(&mut rt, "tour-continue");
+    assert!(rt.state.tour.is_none(), "Start using Hex closes setup");
+}
+
+#[test]
+fn recognition_hints_save_when_typing_pauses() {
+    let mut ui = fixture(portal_shortcuts());
+    ui.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
+    ui.hints = TextEdit::new("OpenCode, Effect");
+    let start = std::time::Instant::now();
+    assert!(!ui.save_drafts(start), "waits for a pause");
+    assert!(ui.save_drafts(start + DRAFT_DELAY));
+    assert_eq!(
+        ui.settings.transcription.recognition_hints,
+        "OpenCode, Effect"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Goldens: offscreen GPU renders compared with checked-in PNGs. Set
 // HEX_UPDATE_GOLDENS=1 to rewrite them. Without a GPU adapter they skip.
@@ -211,13 +449,13 @@ fn gpu() -> Option<std::sync::MutexGuard<'static, Gpu>> {
     })
 }
 
-fn render(scene: &str, dark: bool) -> Option<(u32, u32, Vec<u8>)> {
+fn render(scene: &str, dark: bool, size: (f32, f32)) -> Option<(u32, u32, Vec<u8>)> {
     let gpu = gpu()?;
-    let mut rt = runtime(scene, dark, GOLDEN_SIZE);
+    let mut rt = runtime(scene, dark, size);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let (width, height) = (
-        (GOLDEN_SIZE.0 * GOLDEN_SCALE) as u32,
-        (GOLDEN_SIZE.1 * GOLDEN_SCALE) as u32,
+        (size.0 * GOLDEN_SCALE) as u32,
+        (size.1 * GOLDEN_SCALE) as u32,
     );
     let target = Offscreen::new(&gpu.device, width, height);
     renderer.prepare(
@@ -237,7 +475,7 @@ fn render(scene: &str, dark: bool) -> Option<(u32, u32, Vec<u8>)> {
 fn golden_path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
-        .join(format!("rune-settings-{name}.png"))
+        .join(format!("rune-{name}.png"))
 }
 
 fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
@@ -249,9 +487,9 @@ fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
     (info.width, info.height, pixels)
 }
 
-fn check_golden(scene: &str, dark: bool) {
+fn check_golden(scene: &str, dark: bool, size: (f32, f32)) {
     let name = format!("{scene}-{}", if dark { "dark" } else { "light" });
-    let Some((width, height, pixels)) = render(scene, dark) else {
+    let Some((width, height, pixels)) = render(scene, dark, size) else {
         eprintln!("skipping golden {name}: no GPU adapter");
         return;
     };
@@ -290,22 +528,25 @@ fn check_golden(scene: &str, dark: bool) {
     }
 }
 
+/// Every pane in both appearances; Settings at its full height.
 #[test]
-fn golden_settings_dark() {
-    check_golden("portal", true);
-}
-
-#[test]
-fn golden_settings_light() {
-    check_golden("portal", false);
-}
-
-#[test]
-fn golden_commands_dark() {
-    check_golden("commands", true);
-}
-
-#[test]
-fn golden_menus_and_capture_light() {
-    check_golden("menus", false);
+fn goldens() {
+    for dark in [true, false] {
+        check_golden("portal", dark, GOLDEN_SIZE);
+        for scene in [
+            "voice-action",
+            "history",
+            "modes",
+            "modes-picker",
+            "picker-downloading",
+            "onboarding-setup",
+        ] {
+            check_golden(scene, dark, PANE_SIZE);
+        }
+    }
+    check_golden("commands", true, GOLDEN_SIZE);
+    check_golden("menus", false, GOLDEN_SIZE);
+    check_golden("voice-action-models", true, PANE_SIZE);
+    check_golden("voice-action-unavailable", false, PANE_SIZE);
+    check_golden("onboarding", true, PANE_SIZE);
 }

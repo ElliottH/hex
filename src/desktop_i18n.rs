@@ -199,6 +199,12 @@ fn tables() -> &'static [HashMap<&'static str, &'static str>; 5] {
 /// Columns: Polish, Chinese (Simplified), Japanese, German, Spanish.
 #[rustfmt::skip]
 const TRANSLATIONS: &[(&str, [&str; 5])] = &[
+    ("Add application", ["Dodaj aplikację", "添加应用", "アプリを追加", "App hinzufügen", "Añadir aplicación"]),
+    ("Add transformation", ["Dodaj transformację", "添加转换", "変換を追加", "Transformation hinzufügen", "Añadir transformación"]),
+    ("Close", ["Zamknij", "关闭", "閉じる", "Schließen", "Cerrar"]),
+    ("Move down", ["Przenieś w dół", "下移", "下へ移動", "Nach unten", "Bajar"]),
+    ("Move up", ["Przenieś w górę", "上移", "上へ移動", "Nach oben", "Subir"]),
+    ("No models match", ["Brak pasujących modeli", "没有匹配的模型", "一致するモデルはありません", "Keine passenden Modelle", "Ningún modelo coincide"]),
     ("Status", ["Stan", "状态", "ステータス", "Status", "Estado"]),
     ("Connecting…", ["Łączenie…", "正在连接…", "接続中…", "Verbindung wird hergestellt…", "Conectando…"]),
     ("Esc to cancel", ["Esc, aby anulować", "按 Esc 取消", "Esc でキャンセル", "Esc zum Abbrechen", "Esc para cancelar"]),
@@ -874,7 +880,14 @@ mod tests {
         include_str!("app_window/tour.rs"),
         include_str!("desktop_transcription_picker.rs"),
         include_str!("windows_app.rs"),
-        include_str!("rune_settings.rs"),
+        include_str!("rune_ui.rs"),
+        include_str!("rune_ui/settings.rs"),
+        include_str!("rune_ui/voice_action.rs"),
+        include_str!("rune_ui/history.rs"),
+        include_str!("rune_ui/modes.rs"),
+        include_str!("rune_ui/models.rs"),
+        include_str!("rune_ui/picker.rs"),
+        include_str!("rune_ui/onboarding.rs"),
     ];
 
     /// The string literals passed to `tr`, `tr_fill`, and `tr_named`.

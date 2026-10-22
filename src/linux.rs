@@ -83,7 +83,7 @@ enum Command {
 #[cfg(feature = "rune-ui")]
 fn open_rune_settings(_: Vec<String>) -> Result<()> {
     // Rune reads its own flags (`--snap`, `--scene`, …) from the process arguments.
-    crate::rune_settings::run();
+    crate::rune_ui::run();
     Ok(())
 }
 

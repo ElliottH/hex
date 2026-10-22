@@ -38,6 +38,9 @@ impl Paint {
     pub(super) fn muted(self) -> Color {
         self.k.c.text_muted
     }
+    pub(super) fn faint(self) -> Color {
+        self.k.c.text_faint
+    }
     pub(super) fn danger(self) -> Color {
         self.k.c.danger.fg
     }
@@ -51,10 +54,28 @@ impl Paint {
 
 /// A titled card of rows with hairline separators between them.
 pub(super) fn section(p: Paint, key: &str, title: &str, rows: Vec<El>) -> El {
+    col()
+        .key(key)
+        .gap(8.0)
+        .child(
+            text(title)
+                .key("header")
+                .font(TextStyle {
+                    line_height: 16.0,
+                    ..p.k.ty.ui_medium
+                })
+                .color(p.k.c.text_muted)
+                .ml(12.0),
+        )
+        .child(card(p, "card", rows))
+}
+
+/// A raised card of rows with hairline separators between them.
+pub(super) fn card(p: Paint, key: &str, rows: Vec<El>) -> El {
     let c = &p.k.c;
     let count = rows.len();
     let mut card = col()
-        .key("card")
+        .key(key)
         .padding(4.0)
         .fill(c.bg_base)
         .radius(p.k.radius.lg);
@@ -67,20 +88,7 @@ pub(super) fn section(p: Paint, key: &str, title: &str, rows: Vec<El>) -> El {
             card = card.child(separator(p, index));
         }
     }
-    col()
-        .key(key)
-        .gap(8.0)
-        .child(
-            text(title)
-                .key("header")
-                .font(TextStyle {
-                    line_height: 16.0,
-                    ..p.k.ty.ui_medium
-                })
-                .color(c.text_muted)
-                .ml(12.0),
-        )
-        .child(card)
+    card
 }
 
 fn separator(p: Paint, index: usize) -> El {
@@ -180,9 +188,17 @@ pub(super) fn segmented(
     selected: usize,
     pick: fn(&mut Ui, usize),
 ) -> El {
+    // Wide (CJK) characters take about twice a Latin letter's advance.
+    let width = |label: &str| {
+        label
+            .chars()
+            .map(|c| if c as u32 >= 0x2E80 { 13.5 } else { 8.0 })
+            .sum::<f32>()
+            + 28.0
+    };
     let widest = labels
         .iter()
-        .map(|label| label.chars().count() as f32 * 8.0 + 28.0)
+        .map(|label| width(label))
         .fold(60.0, f32::max)
         .round();
     SegmentedControl::new(labels, Some(selected))
@@ -254,6 +270,8 @@ pub(super) enum ButtonKind {
     /// The one main action on screen: the kit's contrast button.
     Primary,
     Secondary,
+    /// Destructive or armed confirmations.
+    Danger,
 }
 
 pub(super) fn button(
@@ -266,6 +284,7 @@ pub(super) fn button(
     let variant = match kind {
         ButtonKind::Primary => ButtonVariant::Contrast,
         ButtonKind::Secondary => ButtonVariant::Neutral,
+        ButtonKind::Danger => ButtonVariant::Danger,
     };
     Button::new(label)
         .variant(variant)

@@ -71,7 +71,7 @@ const HOTKEY_SIDE_WIDTHS: [f32; 3] = [40.0, 50.0, 40.0];
 /// The side segments plus the control's 2 px padding and 1 px border per side.
 const HOTKEY_SIDE_SELECTOR_WIDTH: f32 =
     HOTKEY_SIDE_WIDTHS[0] + HOTKEY_SIDE_WIDTHS[1] + HOTKEY_SIDE_WIDTHS[2] + 6.0;
-const OPENCODE_INSTALL_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) const OPENCODE_INSTALL_RETRY_INTERVAL: Duration = Duration::from_secs(60);
 const PERMISSION_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 /// The setup screen flips each row as macOS grants it.
 const TOUR_PERMISSION_REFRESH_INTERVAL: Duration = Duration::from_millis(400);
@@ -718,29 +718,29 @@ struct ProcessingPicker {
     variant_control: Div,
 }
 
-enum ModelCatalogState {
+pub(crate) enum ModelCatalogState {
     Loading,
     Loaded(ModelCatalog),
     Missing,
     Failed(String),
 }
 
-struct OpenCodeUnavailableCopy {
-    title: &'static str,
-    description: &'static str,
-    error: Option<String>,
-    can_retry: bool,
-    retry_label: &'static str,
-    can_open_setup: bool,
+pub(crate) struct OpenCodeUnavailableCopy {
+    pub(crate) title: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) error: Option<String>,
+    pub(crate) can_retry: bool,
+    pub(crate) retry_label: &'static str,
+    pub(crate) can_open_setup: bool,
 }
 
 #[derive(Clone, Copy)]
-enum OpenCodeFeature {
+pub(crate) enum OpenCodeFeature {
     VoiceAction,
     Transformation,
 }
 
-fn opencode_unavailable_copy(
+pub(crate) fn opencode_unavailable_copy(
     state: &ModelCatalogState,
     feature: OpenCodeFeature,
 ) -> Option<OpenCodeUnavailableCopy> {
@@ -801,7 +801,7 @@ fn bounded_opencode_error(error: &str) -> String {
     format!("{}…", &error[..end])
 }
 
-fn start_model_catalog_load() -> Receiver<ModelCatalogState> {
+pub(crate) fn start_model_catalog_load() -> Receiver<ModelCatalogState> {
     let (sender, receiver) = sync_channel(1);
     thread::spawn(move || {
         let state = if crate::dictation_processor::opencode_installed() {
@@ -821,12 +821,12 @@ fn start_model_catalog_load() -> Receiver<ModelCatalogState> {
     receiver
 }
 
-struct ModelPresentation {
-    name: String,
-    provider: String,
+pub(crate) struct ModelPresentation {
+    pub(crate) name: String,
+    pub(crate) provider: String,
     #[cfg(all(test, target_os = "macos"))]
     key: String,
-    is_default: bool,
+    pub(crate) is_default: bool,
 }
 
 enum ApplicationCatalogState {
@@ -7650,7 +7650,7 @@ fn preview_history() -> Option<History> {
     Some(History::new(store))
 }
 
-fn voice_action_description(enabled: bool) -> &'static str {
+pub(crate) fn voice_action_description(enabled: bool) -> &'static str {
     if enabled {
         tr("Use the shortcut below with OpenCode to run spoken instructions")
     } else {
@@ -7658,7 +7658,10 @@ fn voice_action_description(enabled: bool) -> &'static str {
     }
 }
 
-fn set_voice_action_enabled(settings: &mut AppSettings, enabled: bool) -> Result<(), &'static str> {
+pub(crate) fn set_voice_action_enabled(
+    settings: &mut AppSettings,
+    enabled: bool,
+) -> Result<(), &'static str> {
     if enabled && hotkey_binding_conflicts(settings, HotkeyKind::Edit, &settings.edit_hotkey) {
         return Err(tr(
             "The Voice Action shortcut is already in use. Change it below or change the other shortcut before enabling Voice Action.",
@@ -7849,7 +7852,7 @@ fn sound_volume_index(settings: &AppSettings) -> usize {
         .map_or(0, |(index, _)| index + 1)
 }
 
-fn open_opencode_beta_docs() {
+pub(crate) fn open_opencode_beta_docs() {
     if let Err(error) = crate::commands::execute(crate::commands::Action::OpenUrl(
         OPENCODE_BETA_DOCS_URL.into(),
     )) {
@@ -7970,7 +7973,7 @@ fn application_icon(
         .into_any_element()
 }
 
-fn filtered_model_keys(catalog: &ModelCatalog, query: &str) -> Vec<Option<String>> {
+pub(crate) fn filtered_model_keys(catalog: &ModelCatalog, query: &str) -> Vec<Option<String>> {
     let mut choices = Vec::new();
     if query.is_empty() && catalog.default_name.is_some() {
         choices.push(None);
@@ -7991,7 +7994,7 @@ fn filtered_model_keys(catalog: &ModelCatalog, query: &str) -> Vec<Option<String
     choices
 }
 
-fn model_presentation(
+pub(crate) fn model_presentation(
     catalog: &ModelCatalogState,
     selected_key: Option<&str>,
 ) -> Option<ModelPresentation> {
@@ -8052,7 +8055,7 @@ fn apply_model_variant(
     *selected_variant = variant;
 }
 
-fn model_variants(catalog: &ModelCatalog, selected_key: Option<&str>) -> Vec<String> {
+pub(crate) fn model_variants(catalog: &ModelCatalog, selected_key: Option<&str>) -> Vec<String> {
     selected_key
         .or(catalog.default_key.as_deref())
         .and_then(|key| catalog.models.iter().find(|choice| choice.key == key))
@@ -8149,7 +8152,7 @@ fn input_text(input: &ProcessingInput, cx: &App) -> String {
     input.entity.read(cx).text().trim().to_string()
 }
 
-fn browser_hosts(value: &str) -> Vec<String> {
+pub(crate) fn browser_hosts(value: &str) -> Vec<String> {
     let mut hosts: Vec<_> = value
         .split(',')
         .map(str::trim)
@@ -8171,7 +8174,11 @@ fn browser_hosts(value: &str) -> Vec<String> {
     hosts
 }
 
-fn reorder_transformation(values: &mut Vec<String>, id: &str, target_index: usize) -> bool {
+pub(crate) fn reorder_transformation(
+    values: &mut Vec<String>,
+    id: &str,
+    target_index: usize,
+) -> bool {
     let Some(from) = values.iter().position(|candidate| candidate == id) else {
         return false;
     };
