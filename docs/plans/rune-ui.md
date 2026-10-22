@@ -312,7 +312,7 @@ Sizes are current GPUI lines.
 | Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order |
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Kept as is under Rune (native NSPanel driven from a main-loop timer); moving it needs a window kind: borderless, transparent, click-through, non-activating, all spaces |
 | HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) |
-| HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Stays GTK until Rune has a layer-shell surface |
+| HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Done on Rune (`linux_rune_hud.rs`, Rune's `App::overlay`: layer-shell on Wayland, override-redirect on X11); GPUI builds keep GTK |
 | Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Off under Rune (GPUI's loop can't share the main thread): offers are logged; needs a panel window kind, focus-free buttons, live waveform |
 | Mac menu bar | `status_item.rs` (AppKit) | Stays native, installed beside `rune::App` on the main thread (`macos_rune.rs`) |
 | Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on the main thread beside `rune::App` (`keep_running`, `windowless` for `--hidden`, `AppHandle` open/quit); type-checked only |
@@ -332,9 +332,12 @@ Sizes are current GPUI lines.
 3. **App and window model**: app lifetime separate from windows,
    hide-on-close, and XDG activation landed as `rune::App`/`AppHandle`
    (Rune `a242f5a`, see [single-process.md](single-process.md#landed-on-rune-main-a9cde14-a242f5a-hex-pins-a242f5a)).
-   Still open: several windows, window kinds (non-activating panel,
-   transparent click-through overlay, Wayland layer-shell), and per-app
-   minimum size.
+   Several windows (`run_windows`, Rune `1e90268`), per-app minimum size
+   (`AppSpec::min_size`, `1f6fbd0`) and edge overlays (`App::overlay`,
+   `2f338f3`: Wayland layer-shell, X11 override-redirect, a macOS
+   status-level window that never becomes key, a Windows no-activate tool
+   window) landed. Still open: an interactive non-activating panel for the
+   meeting capsules.
 4. **Keyboard**: key-up and modifier-only events, left/right modifier sides,
    physical key codes, Globe/Fn (macOS shortcuts).
 5. **Raster images and custom vector drawing** (app icons, waveforms).

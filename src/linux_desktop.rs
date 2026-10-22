@@ -18,7 +18,7 @@ const TICK: Duration = Duration::from_millis(16);
 const EDGE_MARGIN: i32 = 16;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum IndicatorState {
+pub(crate) enum IndicatorState {
     #[default]
     Hidden,
     Recording,
@@ -38,18 +38,18 @@ impl IndicatorState {
 }
 
 #[derive(Default)]
-struct IndicatorSlot {
+pub(crate) struct IndicatorSlot {
     generation: u64,
-    state: IndicatorState,
+    pub(crate) state: IndicatorState,
 }
 
 impl IndicatorSlot {
-    fn acquire(&mut self) -> u64 {
+    pub(crate) fn acquire(&mut self) -> u64 {
         self.generation += 1;
         self.state = IndicatorState::Hidden;
         self.generation
     }
-    fn set(&mut self, generation: u64, state: IndicatorState) {
+    pub(crate) fn set(&mut self, generation: u64, state: IndicatorState) {
         if self.generation == generation {
             self.state = state;
         }
@@ -103,6 +103,10 @@ fn runtime() -> &'static Runtime {
 }
 
 pub(crate) fn hud_limitation() -> Option<String> {
+    #[cfg(feature = "rune-ui")]
+    if crate::linux_rune_hud::enabled() {
+        return crate::linux_rune_hud::limitation();
+    }
     if !LinuxSession::detect().is_wayland() {
         return None;
     }
@@ -138,6 +142,12 @@ pub(crate) struct LinuxIndicator {
 
 impl LinuxIndicator {
     pub(crate) fn new(position: IndicatorPosition) -> Self {
+        #[cfg(feature = "rune-ui")]
+        if crate::linux_rune_hud::enabled() {
+            let generation = (position != IndicatorPosition::Hidden)
+                .then(|| crate::linux_rune_hud::acquire(position));
+            return Self { generation };
+        }
         let generation = (position != IndicatorPosition::Hidden).then(|| {
             let mut state = runtime()
                 .state
@@ -149,6 +159,14 @@ impl LinuxIndicator {
         Self { generation }
     }
     pub(crate) fn update(&self, recording: bool, pending: usize) {
+        #[cfg(feature = "rune-ui")]
+        if crate::linux_rune_hud::enabled() {
+            if let Some(generation) = self.generation {
+                let state = IndicatorState::for_capture(recording, pending);
+                crate::linux_rune_hud::set(generation, state);
+            }
+            return;
+        }
         if let Some(generation) = self.generation {
             runtime()
                 .state

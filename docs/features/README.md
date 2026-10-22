@@ -741,7 +741,14 @@ Linux beta                               // not macOS feature parity
 │   └── X11 grab conflict / portal refusal -> Warn without stopping dictation
 ├── Voice Action (opt-in) -> Hold its shortcut or `hex voice-action` -> Instruction
 │   └── Selected text from the primary selection -> OpenCode -> Paste the reply
-├── X11 -> No tray or recording HUD; status and sounds remain available
+├── Recording HUD -> "Recording" pill on the top or bottom edge, "Transcribing"
+│   │   until accepted output finishes; Hidden position -> none   // linux.hud
+│   ├── rune-ui builds -> Rune overlay in Hex's process (linux_rune_hud)
+│   │   ├── Wayland -> layer-shell overlay layer, no keyboard, empty input region
+│   │   ├── X11 -> override-redirect window, empty input shape
+│   │   └── No layer-shell -> `hex status` reports the HUD limitation
+│   └── GPUI builds -> GTK thread (linux_desktop), same placement
+├── X11 -> No tray; status and sounds remain available
 ├── Microphone failure -> Listener exits, not macOS automatic recovery
 │   └── Overload (Xrun) glitch -> Logged; not a failure
 └── Paste -> Retain transcript clipboard, not restore previous contents
@@ -784,6 +791,16 @@ On 2026-10-22 the portal path was observed on niri with xdg-desktop-portal-gnome
 using synthetic uinput keys against an isolated service: granted triggers,
 hold and Escape while held, double-tap lock, Paste Last, and commands. A
 physical keyboard press has not been recorded.
+
+`linux.hud` on Rune: [linux_rune_hud.rs](../../src/linux_rune_hud.rs) keeps
+the listener's generation slot from `linux_desktop` (an old listener cannot hide
+a restarted HUD) and starts before the window's app exists. Observed on
+2026-10-22 in a headless sway on apollo (isolated data root, real microphone,
+`hex service`): `hex dictation start` showed the pill at the top edge and it
+was gone after `hex dictation stop` and transcription. The Rune overlay itself
+was also observed passing a virtual-pointer click through to the window below
+and leaving keyboard focus where it was (Rune `examples/background`). Not
+observed: X11 with Hex, niri, KWin, Mutter.
 
 See the [Linux guide](../linux.md), [linux_app.rs](../../src/linux_app.rs),
 [linux_portal.rs](../../src/linux_portal.rs), and
