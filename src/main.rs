@@ -26,7 +26,7 @@ mod dashboard;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod design_tokens;
 mod desktop_activity;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(target_os = "windows", feature = "rune-ui")))]
 mod desktop_host;
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 mod desktop_transcription_picker;
@@ -128,7 +128,7 @@ mod personal_commands;
 mod recognition;
 #[cfg(target_os = "macos")]
 mod recording_environment;
-#[cfg(all(target_os = "linux", feature = "rune-ui"))]
+#[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "rune-ui"))]
 mod rune_ui;
 #[cfg(target_os = "macos")]
 mod sparkle;
@@ -186,6 +186,8 @@ mod windows_login_item;
 mod windows_migration;
 #[cfg(target_os = "windows")]
 mod windows_paste;
+#[cfg(all(target_os = "windows", feature = "rune-ui"))]
+mod windows_rune;
 #[cfg(target_os = "windows")]
 mod windows_ui;
 #[cfg(target_os = "windows")]

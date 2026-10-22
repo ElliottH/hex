@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rune::{Cursor, Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, text};
+use rune::{Cursor, Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, spacer, text};
 use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
 
 use super::Ui;
@@ -115,6 +115,7 @@ pub(super) struct ModesPane {
     /// The desktop's file chooser, while it is open.
     chooser: Option<Receiver<ChosenApplication>>,
     drag: Option<TransformationDrag>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(super) waker: Option<Waker>,
     /// Whether the listener can tell which app is frontmost (X11, not Wayland).
     focused_app_known: bool,
@@ -153,7 +154,7 @@ impl ModesPane {
     }
 
     pub(super) fn load_personal_commands(&mut self) {
-        self.focused_app_known = !crate::linux_session::LinuxSession::detect().is_wayland();
+        self.focused_app_known = super::host::focused_application_known();
         self.workspace = crate::app_paths::personal_commands_workspace()
             .unwrap_or_else(|_| PathBuf::from("~/.config/hex"));
         self.read_status();
@@ -396,6 +397,7 @@ fn add_application(ui: &mut Ui, name: String) {
 
 /// Opens the desktop's file chooser for an application the catalog does
 /// not list: a `.desktop` entry or an executable.
+#[cfg(target_os = "linux")]
 fn choose_application(ui: &mut Ui) {
     if !ui.live() || ui.modes.chooser.is_some() {
         return;
@@ -869,13 +871,8 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
             row()
                 .key("picker-actions")
                 .justify_between()
-                .child(button(
-                    p,
-                    "choose-application-file",
-                    tr("Choose a file…"),
-                    ButtonKind::Secondary,
-                    |ui: &mut Ui, _| choose_application(ui),
-                ))
+                .children(choose_file_button(p))
+                .child(spacer())
                 .child(button(
                     p,
                     "close-application-picker",
@@ -887,6 +884,24 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
                     },
                 )),
         )
+}
+
+/// "Choose a file…": Linux asks the desktop's file chooser portal; Windows
+/// has no native dialog under Rune yet.
+fn choose_file_button(p: Paint) -> Option<El> {
+    #[cfg(target_os = "linux")]
+    return Some(button(
+        p,
+        "choose-application-file",
+        tr("Choose a file…"),
+        ButtonKind::Secondary,
+        |ui: &mut Ui, _| choose_application(ui),
+    ));
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = p;
+        None
+    }
 }
 
 /// An app's initial on a tinted square: Rune has no raster images yet, so
@@ -1263,7 +1278,7 @@ fn workspace_status(ui: &Ui, p: Paint) -> Option<El> {
 }
 
 impl Ui {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(super) fn modes_application_error(&self) -> Option<&str> {
         self.modes.application_error.as_deref()
     }

@@ -236,7 +236,7 @@ impl AppWindow {
     pub(super) fn platform_settings_notice(&mut self, _: &mut Context<Self>) -> Option<AnyElement> {
         let state = self.platform.client.state.as_ref()?;
         let rows: Vec<AnyElement> = match &state.desktop.listener.shortcuts {
-            DesktopShortcuts::Registered => return None,
+            DesktopShortcuts::Unregistered | DesktopShortcuts::Registered => return None,
             DesktopShortcuts::Portal(granted) => {
                 let refused = granted.iter().any(|shortcut| shortcut.trigger.is_none());
                 let mut rows = granted
@@ -581,6 +581,7 @@ impl AppWindow {
             DesktopUpdateStatus::Checking => SoftwareUpdate::Checking,
             DesktopUpdateStatus::Current => SoftwareUpdate::Current,
             DesktopUpdateStatus::Failed => SoftwareUpdate::Failed,
+            DesktopUpdateStatus::Available => SoftwareUpdate::Available { version: None },
             DesktopUpdateStatus::ReadyToRestart => SoftwareUpdate::ReadyToRestart { version: None },
         })
     }

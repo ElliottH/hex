@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 use rune::{El, col, el, row, text};
 use rune_kit::Progress;
 
+use super::Request;
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, keycaps, setting_row};
 use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
-use crate::linux_service::Request;
 use crate::onboarding::{Effect, Flow, Input, ItemStatus, ModelProgress, SetupItem, Step, View};
 
 const WIDTH: f32 = 520.0;

@@ -10,6 +10,7 @@ use color_eyre::eyre::{Result, eyre};
 
 use crate::audio::{CaptureInstant, RecoveringAudioInput, RecoveringAudioInputEvent};
 use crate::dictation::{DictationCapture, Finish};
+use crate::feedback::{self, Tone};
 use crate::recording_environment::{CaptureMarker, RecordingEnvironmentController};
 use crate::suppression::PendingInputEvents;
 use crate::transcription_engine::TranscriptionEngine;
@@ -532,11 +533,16 @@ impl Owner {
             }
             Command::Finish { at, tail, reply } => {
                 self.drain_through(at);
-                let deferred = (self.pending_capture.is_none()
+                let announced = self.pending_capture.is_none()
                     && !tail.is_zero()
-                    && self.capture.would_transcribe(at))
-                .then(|| self.drain_tail(at, tail))
-                .flatten();
+                    && self.capture.would_transcribe(at);
+                if announced {
+                    // A release that will transcribe sounds at once, not after
+                    // its tail, and a muted output is restored first.
+                    self.capture
+                        .end_recording_environment_then(|| feedback::play(Tone::DictationStop));
+                }
+                let deferred = announced.then(|| self.drain_tail(at, tail)).flatten();
                 let finish = if self.pending_capture.take().is_some() {
                     self.input.cancel_open();
                     Finish::Discard

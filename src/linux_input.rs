@@ -1814,6 +1814,8 @@ mod tests {
             status: status.clone(),
         };
         let stop = backend.stop.clone();
+        // A starting listener claims no shortcut kind, not even X11's.
+        assert_eq!(status.shortcuts(), DesktopShortcuts::Unregistered);
         let worker = thread::spawn(move || {
             backend.run_commands(Dispatcher::new(&HotkeyOptions::default(), sender, receiver))
         });
