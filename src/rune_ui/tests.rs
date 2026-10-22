@@ -354,7 +354,7 @@ fn mode_transformations_add_reorder_and_remove() {
             .clone()
     };
     assert_eq!(ids(&rt), ["smart-punctuation", "normalize-links"]);
-    let reloads = sent(&rt).len();
+    let saves = saved(&rt);
     // Drag the second row's handle up one row: the rows reorder while the
     // pointer moves and the order is saved once, on release.
     let (x, y) = rt.find("transformation1/handle").expect("a drag handle");
@@ -376,7 +376,7 @@ fn mode_transformations_add_reorder_and_remove() {
     rt.pointer_up(x, y - 40.0);
     rt.frame(1.0 / 60.0);
     assert_eq!(ids(&rt), ["normalize-links", "smart-punctuation"]);
-    assert_eq!(sent(&rt).len(), reloads + 1);
+    assert_eq!(saved(&rt), saves + 1);
     tap(&mut rt, "transformation0/remove");
     assert_eq!(ids(&rt), ["smart-punctuation"]);
 }
