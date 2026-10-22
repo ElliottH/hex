@@ -15,7 +15,7 @@
 //! through its `AppHandle`.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -28,7 +28,7 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetWindowTextW};
 
-use crate::app_settings::AppSettings;
+use crate::app_settings::{AppSettings, IndicatorPosition};
 use crate::desktop_host::{
     DesktopAction, DesktopListenerSnapshot, DesktopShortcut, DesktopShortcuts,
     DesktopTranscriptionSnapshot, DesktopUpdateStatus,
@@ -171,6 +171,7 @@ pub fn open(
             tracing::warn!(%error, "Windows system tray is unavailable; closing Hex will quit");
         }
     }
+    let hud = crate::windows_rune_hud::install(&mut app);
     let (requests, receiver) = mpsc::channel();
     let shared = Arc::new(Shared::default());
     RUNTIME
@@ -190,6 +191,7 @@ pub fn open(
                 receiver,
                 &shared,
                 shutdown,
+                hud,
             );
             quit.quit();
         })?;
@@ -217,10 +219,24 @@ fn run_runtime(
     requests: Receiver<Request>,
     shared: &Shared,
     shutdown: &AtomicBool,
+    hud: crate::windows_rune_hud::HudHandle,
 ) {
-    // The Rune window has no HUD yet (Rune has no overlay window kind);
-    // the listener's indicator events are drained and dropped.
+    // The HUD thread owns the indicator and ends with the host's sender; the
+    // settings' position reaches it through `position`.
     let (indicator, indicator_events) = crate::windows_indicator::channel();
+    let position = Arc::new(AtomicU8::new(settings.indicator_position as u8));
+    let hud_position = position.clone();
+    let _hud = std::thread::Builder::new()
+        .name("hex-hud".into())
+        .spawn(move || {
+            crate::windows_rune_hud::run(hud, indicator_events, || {
+                match hud_position.load(Ordering::Relaxed) {
+                    1 => IndicatorPosition::Bottom,
+                    2 => IndicatorPosition::Hidden,
+                    _ => IndicatorPosition::Top,
+                }
+            })
+        });
     let mut runtime = Runtime {
         host: WindowsDesktopHost::new(event_path, settings.clone(), settings_error, indicator),
         preparation: TranscriptionPreparation::default(),
@@ -248,7 +264,7 @@ fn run_runtime(
         if shutdown.load(Ordering::Relaxed) || runtime.quit {
             break;
         }
-        while indicator_events.try_recv().is_ok() {}
+        position.store(runtime.host.indicator_position() as u8, Ordering::Relaxed);
         runtime.tick();
         let published = Arc::new(runtime.publish());
         let changed = {

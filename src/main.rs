@@ -192,6 +192,8 @@ mod windows_migration;
 mod windows_paste;
 #[cfg(all(target_os = "windows", feature = "rune-ui"))]
 mod windows_rune;
+#[cfg(all(target_os = "windows", feature = "rune-ui"))]
+mod windows_rune_hud;
 #[cfg(target_os = "windows")]
 mod windows_ui;
 #[cfg(target_os = "windows")]
