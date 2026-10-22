@@ -184,7 +184,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
                 None,
             ) {
                 // A unit start that lost the race to another launch has nothing to do.
-                Err(_) if crate::linux_service::request(Request::Status).is_ok() => Ok(()),
+                Err(_) if another_instance_answers() => Ok(()),
                 result => result,
             }
         }
@@ -283,6 +283,23 @@ fn shortcut(command: ShortcutCommand) -> Result<()> {
     Ok(())
 }
 
+/// After losing the data root to a concurrent launch, waits for that
+/// instance to answer.
+fn another_instance_answers() -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if crate::linux_service::request(Request::Status).is_ok() {
+            return true;
+        }
+        if crate::instance::acquire("service").is_ok() {
+            // Nobody holds the root: the failure was this process's own.
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
 /// Forwards to the running Hex, starts its systemd unit, or becomes Hex.
 /// Choosing a toolkit with `--ui` skips the unit, which runs the default.
 fn launch(
@@ -308,7 +325,7 @@ fn launch(
             show.then(|| activation.clone()),
         ) {
             // Another launch claimed the data root first; forward to it.
-            Err(_) if crate::linux_service::request(Request::Status).is_ok() => continue,
+            Err(_) if another_instance_answers() => continue,
             result => return result,
         }
     }

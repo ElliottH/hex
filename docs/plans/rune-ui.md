@@ -71,13 +71,19 @@ src/rune_ui/controls.rs        rows, cards, selects, buttons on rune-kit    377
 src/rune_ui/tests.rs           26 tests incl. 19 goldens                    552
 ```
 
-Every pane keeps GPUI's behavior and service contract. The window is a
-`linux_service::Client` like the GPUI Settings process: it saves
-`settings.json` before adopting an edit and sends `ReloadSettings`; listening,
-shortcuts, models, and updates go through `Desktop(…)`, `CaptureShortcutFor`,
-`SetShortcut`, `CancelShortcut`, `ChooseModel`, and `CancelModel`. Settings
-another client saved are adopted only when the service's copy changes, so a
-stale snapshot never reverts a fresh edit. Text fields are drafts saved when
+Every pane keeps GPUI's behavior. Since the single-process change the window
+runs inside the Hex process (it is the default `hex` window on builds with
+`rune-ui`) and holds a `linux_app::HostHandle`: edits save `settings.json`
+through `HostHandle::save_settings`, which adopts them at once; listening,
+shortcuts, models, and updates are direct `HostRequest`s (`Desktop(…)`,
+`CaptureShortcut`, `SetShortcut`, `CancelShortcut`, `ChooseModel`,
+`CancelModel`); the host thread wakes the window when its state changes, and
+History shares the host's store. Settings the host saved (a prepared model, a
+recorded shortcut) are adopted only when the host's copy changes, so a stale
+snapshot never reverts a fresh edit. Rune runs one window per event loop
+today, so the window opens once per process (at startup or on the first
+`Activate`) until Rune's windowless app lifetime lands; its timed redraws
+(drafts, retries) ride a quarter-second tick until `Tx::wake_after` exists. Text fields are drafts saved when
 typing pauses for 250 ms (GPUI's debounce) or when the pane or mode changes.
 The pure helpers both front ends need (OpenCode catalog loading and copy,
 model presentation, Voice Action enablement, transformation reordering) are
@@ -93,9 +99,10 @@ shared from `app_window` rather than copied.
 | Transcription picker | Modal over a scrim: languages, model cards with recommendation and streaming badges, metrics, Use/Download/Cancel/Delete (two-step), download/verify/load progress from the service snapshot, install and delete errors | [light](rune-ui/hex-rune-shell-picker-light.png) / [dark](rune-ui/hex-rune-shell-picker-dark.png), [downloading](rune-ui/hex-rune-shell-picker-downloading-dark.png) |
 | Setup | `onboarding::Flow` without permissions or practice (Linux has neither): Welcome, the model download through the service with progress and retry, Done with the shortcut tips; records completion when the model is ready | [welcome](rune-ui/hex-rune-shell-onboarding-dark.png), [download light](rune-ui/hex-rune-shell-onboarding-setup-light.png) / [dark](rune-ui/hex-rune-shell-onboarding-setup-dark.png) |
 
-Run it: `cargo run --release --features rune-ui -- app --ui rune`. Headless:
-`hex app --ui rune -- --snap out.png --scene modes --theme light`. Scenes:
-`live` (waits for the running service's first snapshot), `portal`,
+Run it: `cargo run --release --features rune-ui` (with a custom
+`HEX_APPLICATION_SUPPORT_DIR` to stay away from an installed Hex). Headless:
+`hex app -- --snap out.png --scene modes --theme light`. Scenes:
+`live` (the running Hex's `hex status`), `portal`,
 `commands`, `disabled`, `capturing`, `chinese`, `menus`, `voice-action`,
 `voice-action-off`, `voice-action-unavailable`, `voice-action-models`,
 `history`, `history-empty`, `modes`, `modes-global`, `modes-picker`, `picker`,
@@ -186,7 +193,8 @@ session):
 - **Keyboard navigation** in menus, the model search, and the application
   search (arrow keys move a highlight in GPUI); Enter picks the first match.
 - **Modal focus trap** for the picker; the scrim blocks presses only.
-- Making `--ui rune` the Linux default, after the real-window checks.
+- Reopening and focusing the window in the same process, and consuming the
+  forwarded activation token: waits for Rune's windowless app lifetime.
 
 ## Rune changes (all on Rune `main`)
 

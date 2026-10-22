@@ -335,12 +335,17 @@ cat > "$application_staged" <<EOF
 Type=Application
 Name=HEX
 Comment=Local voice dictation
-Exec="$binary" app
+Exec="$binary"
 Icon=audio-input-microphone
 Terminal=false
 Categories=Utility;Accessibility;
 StartupNotify=true
+Actions=quit;
 X-HEX-Managed=true
+
+[Desktop Action quit]
+Name=Quit Hex
+Exec="$binary" quit
 EOF
 cat > "$autostart_staged" <<EOF
 [Desktop Entry]
@@ -368,7 +373,8 @@ StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart="$unit_binary" service
 Environment="HEX_APPLICATION_SUPPORT_DIR=$unit_support"
 EnvironmentFile=-$unit_support/session.env
@@ -417,6 +423,6 @@ fi
 
 printf 'Installed HEX %s to %s\n' "$version" "$binary"
 printf 'Install a model: %s model install\n' "$binary"
-printf 'Launch HEX: %s app\n' "$binary"
-printf 'Background service: %s start (stop with %s stop)\n' "$binary" "$binary"
+printf 'Launch HEX: %s\n' "$binary"
+printf 'Start in the background: %s start (quit with %s quit)\n' "$binary" "$binary"
 printf 'Uninstall: sh install-linux.sh uninstall\n'

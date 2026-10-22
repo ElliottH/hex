@@ -135,9 +135,8 @@ pub struct ShortcutRoute {
 
 /// Routes one command, failing fast when nothing listens.
 pub fn route_shortcut(route: Option<&ShortcutRoute>, command: ShortcutCommand) -> Result<()> {
-    let route = route.ok_or_else(|| {
-        eyre!("Hex is not listening; enable it in Settings or run `hex start`")
-    })?;
+    let route = route
+        .ok_or_else(|| eyre!("Hex is not listening; enable it in Settings or run `hex start`"))?;
     if command.is_voice_action() && !route.voice_action {
         bail!("Voice Action is off; turn it on in Settings");
     }
@@ -296,7 +295,9 @@ fn connect() -> std::result::Result<UnixStream, RequestError> {
         || metadata.uid() != unsafe { libc::geteuid() }
         || metadata.mode() & 0o077 != 0
     {
-        return Err(RequestError::Failed(eyre!("Refusing an insecure Hex socket")));
+        return Err(RequestError::Failed(eyre!(
+            "Refusing an insecure Hex socket"
+        )));
     }
     // A crashed instance leaves its socket behind.
     let stream = UnixStream::connect(path).map_err(|_| RequestError::NotRunning)?;
@@ -427,20 +428,26 @@ fn serve_client(
         return;
     }
     while !stop.load(Ordering::Acquire) {
-        let Ok(message) = read_frame::<Message>(&mut stream) else {
+        // The version is read first: older clients send requests this
+        // protocol no longer has.
+        let Ok(frame) = read_frame::<serde_json::Value>(&mut stream) else {
             break;
         };
-        if message.version != VERSION {
+        let message = (frame.get("version").and_then(serde_json::Value::as_u64)
+            == Some(VERSION.into()))
+        .then(|| serde_json::from_value::<Message>(frame).ok())
+        .flatten();
+        let Some(message) = message else {
             let _ = write_frame(
                 &mut stream,
                 &Reply {
                     version: VERSION,
                     status: None,
-                    error: Some("Hex version mismatch; restart Hex".into()),
+                    error: Some("Unsupported Hex request; restart Hex".into()),
                 },
             );
             break;
-        }
+        };
         let result = match message.request {
             Request::Activate {
                 activation,
@@ -627,9 +634,9 @@ pub fn launch(activation: &Activation, show: bool, supervise: bool) -> Result<La
             // Hand the instance over to this desktop session.
             restart()?;
         }
-        Ok(_) => bail!(
-            "Hex is running in another desktop session; run `hex quit`, then launch it again"
-        ),
+        Ok(_) => {
+            bail!("Hex is running in another desktop session; run `hex quit`, then launch it again")
+        }
         Err(RequestError::Outdated) if supervise && supervised() => restart()?,
         Err(RequestError::NotRunning) if supervise && supervised() => {
             write_session_environment()?;

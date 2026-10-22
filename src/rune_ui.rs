@@ -66,10 +66,18 @@ static HOST: Mutex<Option<HostHandle>> = Mutex::new(None);
 /// `linux_app::run_windows` drives; Rune's windowless app lifetime will let
 /// it reopen and focus the window and consume `activation`.
 pub(crate) fn run_window(host: HostHandle, _activation: Activation) {
+    struct Closed;
+    impl Drop for Closed {
+        fn drop(&mut self) {
+            HOST.lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+        }
+    }
     *HOST.lock().unwrap() = Some(host);
+    let _closed = Closed;
     rune::set_app_id("hex");
     rune::run(spec());
-    HOST.lock().unwrap().take();
 }
 
 /// `hex app -- --snap out.png --scene …`: a headless render of a fixture

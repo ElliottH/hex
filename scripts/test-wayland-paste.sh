@@ -4,14 +4,12 @@ set -euo pipefail
 if [[ "${1:-}" == --inside ]]; then
   target=
   keyboard=
-  app=
   service=
   finish() {
     status=$?
     trap - EXIT
     if [[ -n "$target" ]]; then kill "$target" 2>/dev/null || true; fi
     if [[ -n "$keyboard" ]]; then kill "$keyboard" 2>/dev/null || true; fi
-    if [[ -n "$app" ]]; then kill "$app" 2>/dev/null || true; fi
     if [[ -n "$service" ]]; then kill "$service" 2>/dev/null || true; wait "$service" 2>/dev/null || true; fi
     printf '%s\n' "$status" > "$HEX_WAYLAND_TEST_RESULT"
     swaymsg exit >/dev/null 2>&1 || true
@@ -57,16 +55,20 @@ if [[ "${1:-}" == --inside ]]; then
     sleep 0.05
   done
   "$HEX_WAYLAND_APP_BINARY" status >/dev/null
-  "$HEX_WAYLAND_APP_BINARY" app >"$HEX_WAYLAND_APP_LOG" 2>&1 &
-  app=$!
-  for ((attempt = 0; attempt < 200; attempt++)); do
-    kill -0 "$app"
-    if swaymsg -t get_tree -r | grep '"name": "Hex"' >/dev/null; then break; fi
-    sleep 0.05
-  done
-  swaymsg -t get_tree -r | grep '"name": "Hex"' >/dev/null
-
-  # Keep GPUI connected while the paste helper creates a virtual keyboard.
+  # A second launch forwards Activate to the running Hex and exits; the
+  # window opens in the service's own process.
+  open_window() {
+    "$HEX_WAYLAND_APP_BINARY" app >>"$HEX_WAYLAND_APP_LOG" 2>&1
+    for ((attempt = 0; attempt < 200; attempt++)); do
+      kill -0 "$service"
+      if swaymsg -t get_tree -r | grep '"name": "Hex"' >/dev/null; then break; fi
+      sleep 0.05
+    done
+    swaymsg -t get_tree -r | grep '"name": "Hex"' >/dev/null
+    swaymsg -t get_tree -r | grep "\"pid\": $service," >/dev/null
+  }
+  open_window
+  # Keep the window connected while the paste helper creates a virtual keyboard.
   export HEX_WAYLAND_PASTE_OUTPUT="$HEX_WAYLAND_PASTE_OUTPUT-coexist"
   "$HEX_WAYLAND_TEST_TARGET" "$HEX_WAYLAND_PASTE_OUTPUT" &
   target=$!
@@ -84,16 +86,26 @@ if [[ "${1:-}" == --inside ]]; then
   test -f "$HEX_WAYLAND_PASTE_OUTPUT.ready"
   "$HEX_WAYLAND_TEST_BINARY" --exact linux_paste::tests::native_wayland_clipboard_shortcut \
     --ignored --nocapture --test-threads=1
-  kill -0 "$app"
+  kill -0 "$service"
   kill "$target"
   wait "$target" 2>/dev/null || true
   target=
 
+  # Closing the window keeps Hex; a later launch opens it again.
   swaymsg '[app_id="hex"] kill' >/dev/null
-  wait "$app"
-  app=
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    if ! swaymsg -t get_tree -r | grep '"name": "Hex"' >/dev/null; then break; fi
+    sleep 0.05
+  done
+  sleep 0.5
   kill -0 "$service"
   "$HEX_WAYLAND_APP_BINARY" status >/dev/null
+  if [[ "${HEX_WAYLAND_REOPEN:-1}" == 1 ]]; then
+    open_window
+  fi
+  "$HEX_WAYLAND_APP_BINARY" quit
+  wait "$service"
+  service=
   exit 0
 fi
 
@@ -131,4 +143,4 @@ if ! timeout 25 dbus-run-session -- sway --config "$root/tests/fixtures/wayland-
   if [[ -f "$work/hex.log" ]]; then cat "$work/hex.log"; fi
   exit 1
 fi
-echo "Native Wayland clipboard insertion and independent Settings/service checks passed."
+echo "Native Wayland clipboard insertion and the single-process window checks passed."

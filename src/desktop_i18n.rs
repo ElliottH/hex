@@ -665,6 +665,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Show Hex", ["Pokaż Hex", "显示 Hex", "Hex を表示", "Hex anzeigen", "Mostrar Hex"]),
     ("Enable / Disable Hex", ["Włącz / wyłącz Hex", "启用 / 停用 Hex", "Hex を有効 / 無効にする", "Hex aktivieren / deaktivieren", "Activar / desactivar Hex"]),
     ("Quit Hex", ["Zakończ Hex", "退出 Hex", "Hex を終了", "Hex beenden", "Salir de Hex"]),
+    ("Closing the window keeps Hex dictating", ["Zamknięcie okna nie przerywa dyktowania w Hex", "关闭窗口后 Hex 仍可继续听写", "ウィンドウを閉じても Hex は音声入力を続けます", "Hex diktiert weiter, wenn Sie das Fenster schließen", "Cerrar la ventana no detiene el dictado de Hex"]),
     ("Hex Dictation", ["Dyktowanie Hex", "Hex 听写", "Hex 音声入力", "Hex-Diktat", "Dictado de Hex"]),
     ("Enabled", ["Włączony", "已启用", "有効", "Aktiviert", "Activado"]),
     ("Sleeping", ["Uśpiony", "休眠中", "スリープ中", "Schläft", "En reposo"]),

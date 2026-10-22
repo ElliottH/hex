@@ -19,8 +19,8 @@ use crate::desktop_host::{
 };
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
-use crate::linux_input::LinuxHotkey;
 use crate::linux_app::HostRequest;
+use crate::linux_input::LinuxHotkey;
 use crate::linux_service::ShortcutTarget;
 use crate::transcription_models::{self, ModelPreparationStage};
 
@@ -286,7 +286,9 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
     let running = ui.running();
     let status = match &ui.view {
         Some(view) => tr(&view.listener.status).to_string(),
-        None if matches!(ui.service, Service::Fixture { .. }) => tr("Service disconnected").to_string(),
+        None if matches!(ui.service, Service::Fixture { .. }) => {
+            tr("Service disconnected").to_string()
+        }
         None => tr("Connecting…").to_string(),
     };
     let shortcut = ui.settings.dictation_hotkey.keycaps().join("+");
@@ -306,14 +308,11 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
         .as_ref()
         .and_then(|view| view.listener.warning.clone())
         .map(|failure| tr_fill("Last dictation failed: {}", &failure));
-    let error = ui
-        .error
-        .clone()
-        .or_else(|| {
-            ui.view
-                .as_ref()
-                .and_then(|view| view.operation_error.clone())
-        });
+    let error = ui.error.clone().or_else(|| {
+        ui.view
+            .as_ref()
+            .and_then(|view| view.operation_error.clone())
+    });
     let action = if running {
         button(
             p,

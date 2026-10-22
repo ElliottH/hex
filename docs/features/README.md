@@ -718,9 +718,9 @@ update from an older supported build.
 
 ```ts
 Linux beta                               // not macOS feature parity
-├── hex start -> Per-user service -> Alt-Space capture -> Stream (Vulkan GPU) -> Paste
+├── hex start -> One per-user Hex -> Alt-Space capture -> Stream (Vulkan GPU) -> Paste
 │   └── CPU or a model that cannot stream -> Transcribe the whole clip after release
-├── hex app -> Settings client; closing it leaves the runtime running
+├── hex / hex app -> Window in the same process; closing it leaves Hex running
 ├── Recording sounds -> Shortcut press / capture stop / active cancellation
 ├── Shortcuts -> One state machine, three sources        // linux.shortcuts
 │   ├── X11 -> Root-window key grabs; Settings records the chord
@@ -732,13 +732,13 @@ Linux beta                               // not macOS feature parity
 ├── hex dictation start|stop|toggle|cancel, hex voice-action start|stop|toggle,
 │   hex paste-last -> Same events as a shortcut       // linux.commands
 │   ├── Idempotent: start while recording / stop while idle -> Nothing
-│   └── Service missing or not listening -> Clear error, non-zero exit
+│   └── Hex missing or not listening -> Clear error, non-zero exit
 ├── Escape -> Cancel active capture, not newest accepted job
 │   ├── Bound only while recording (portal: own session, also with held modifiers)
 │   └── X11 grab conflict / portal refusal -> Warn without stopping dictation
 ├── Voice Action (opt-in) -> Hold its shortcut or `hex voice-action` -> Instruction
 │   └── Selected text from the primary selection -> OpenCode -> Paste the reply
-├── X11 -> No tray or recording HUD; service status and sounds remain available
+├── X11 -> No tray or recording HUD; status and sounds remain available
 ├── Microphone failure -> Listener exits, not macOS automatic recovery
 │   └── Overload (Xrun) glitch -> Logged; not a failure
 └── Paste -> Retain transcript clipboard, not restore previous contents
@@ -767,7 +767,8 @@ or the user's own keybindings for the `hex` commands; Hex reads no input
 devices. Click-through and a physical portal or keybinding press still need
 native evidence. Its [smoke](../../scripts/test-wayland-paste.sh) explicitly
 isolates `HEX_APPLICATION_SUPPORT_DIR`, pastes while another keyboard holds
-Ctrl and Alt, and checks that Settings can exit without stopping the service.
+Ctrl and Alt, opens the window through a second launch, and checks that
+closing it leaves the same process answering.
 
 Shortcut rules are pure and tested once for every source in
 [linux_input.rs](../../src/linux_input.rs): hold, double-tap lock, toggle,
@@ -775,7 +776,7 @@ double-tap only, Escape, Paste Last, Voice Action, and command idempotence,
 plus X11 auto-repeat filtering. The X11 grab tests run on an isolated display in
 CI; `commands_and_grabs_share_the_x11_listener` drives grabs and commands
 through one listener. [scripts/test-linux-service.py](../../scripts/test-linux-service.py)
-checks that commands fail without a listening service.
+checks that commands fail without a listening Hex.
 On 2026-10-22 the portal path was observed on niri with xdg-desktop-portal-gnome
 using synthetic uinput keys against an isolated service: granted triggers,
 hold and Escape while held, double-tap lock, Paste Last, and commands. A
@@ -790,36 +791,51 @@ a published, supported-host-validated signed release. [Nix](../nix.md) owns its
 package updates; HEX updates only managed direct installs.
 
 ```ts
-Linux runtime                            // maintain.linux-service
-├── hex start / desktop autostart -> systemd --user hex.service; no Settings or tray
-├── Settings / CLI -> Same-user, owner-only Unix socket -> Typed commands and snapshots
-├── Close/crash Settings -> Keep microphone, accepted jobs, and model preparation
+Linux process                            // maintain.linux-service
+├── hex / hex app -> Hex running? -> Activate{activation token} over the socket -> exit 0
+│   ├── No Hex, hex.service loaded -> session.env -> systemctl start (Type=notify) -> Activate
+│   ├── No Hex, no unit or custom data dir -> This process becomes Hex
+│   └── Two racing launches -> One Hex; the other forwards and exits 0
+├── hex start / desktop autostart / hex service -> Same, without the window
+├── hex dictation|voice-action|paste-last -> Socket worker -> Listener queue (never the UI thread)
+├── hex status -> Published status; hex quit / Quit Hex / launcher action -> Drain, exit 0
+├── Close the window -> Keep microphone, accepted jobs, model preparation, and HUD
 │   └── Uncommitted shortcut capture -> Cancel and restore the prior listening state
-├── Service restart -> Client reconnects; uncertain commands are not replayed
-└── hex stop / systemctl --user stop hex -> Stop workers and release devices
+├── Crash -> systemd Restart=on-failure -> Hex without a window
+├── Update -> Restart the unit -> Hex reopens the window
+└── Window fails (no display, no GPU) -> Logged; Hex keeps running
 ```
 
-Sources: the service owner and client in [linux_app.rs](../../src/linux_app.rs),
-[linux_service.rs](../../src/linux_service.rs), and the managed installer/Nix
-user units. `hex status` queries the running service; `--lines` explicitly reads
-historical observations. `hex app --hidden` is a compatibility alias for starting
-the service. GUI exit does not mean Disable; the Settings card's Enable/Disable listener and
-service controls retain separate meanings. No root daemon or new input grants.
+Sources: the process, host, and window seam in [linux_app.rs](../../src/linux_app.rs),
+the single-instance socket and systemd lifecycle in
+[linux_service.rs](../../src/linux_service.rs), the CLI in
+[linux.rs](../../src/linux.rs), and the managed installer/Nix user units.
+`hex status` queries the running Hex; `--lines` explicitly reads historical
+observations. `hex app --hidden` and `hex start` start Hex without the window;
+`hex stop` equals `hex quit`. Closing the window does not mean Disable; the
+Settings card's Enable/Disable controls the listener, Quit Hex the process. No
+root daemon or new input grants. **Known gap:** the Rune window cannot reopen in
+the same process until Rune's windowless app lifetime lands; the GPUI window
+(`--ui gpui`) reopens. Activation tokens are forwarded but not yet consumed by
+either window.
 
-Listener starts consume the service-owned settings snapshot; the foreground
+Listener starts consume the host's settings snapshot; the foreground
 `hex dictate` command loads its own snapshot once. Invalid startup settings leave
 defaults available only for editing and block capture until a successful settings
-commit or a service restart with valid settings. Dismissing the load error does
+commit or a restart with valid settings. Dismissing the load error does
 not authorize recording with defaults. Feedback is initialized at these entry
 points, so a delayed listener start cannot reset a newer live volume selection.
 
 Checks: [test-linux-service.py](../../scripts/test-linux-service.py) exercises
-real IPC and process lifetime without a display, installed model, or audio device.
-`closing_a_client_does_not_stop_normal_dictation` and
-`client_disconnect_cancels_its_edit_and_restores_previous_listening` use controlled
-runtime workers. The virtual-microphone and Wayland scripts now run separate
-service/client processes. These checks do not establish a physical desktop logout,
-cross-version signed update, or microphone/target-app success on the user's devices.
+the real socket and process lifetime without a display, installed model, or
+audio device; it passed on apollo (Arch, niri) on 2026-10-22.
+`closing_the_window_cancels_only_an_uncommitted_capture`,
+`commands_route_only_to_a_started_listener`, and
+`adopting_saved_settings_restarts_only_for_listener_settings` use controlled
+runtime workers. The virtual-microphone and Wayland scripts open the window
+through a second launch; neither has run since the single-process change.
+These checks do not establish a physical desktop logout, cross-version signed
+update, or microphone/target-app success on the user's devices.
 
 `malformed_settings_cannot_start_even_after_dismissing_the_error` in
 [linux_app.rs](../../src/linux_app.rs) checks the failure gate and recovery after a
@@ -921,8 +937,8 @@ macOS debug runtime                      // not release navigation
 └── Activity / HUD Lab / hex dev -> Observation and developer controls
 
 Desktop previews -> Rendered fixtures    // not proof capture/download/update happened
-Linux `hex app --ui rune` (--features rune-ui) -> the Linux window on Rune // dev.rune-ui
-├── Same hex.service client as GPUI Settings: saves settings.json, then ReloadSettings
+Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process // dev.rune-ui
+├── Calls the host directly: saves settings through it; woken on host changes
 ├── Sidebar: Settings, Modes, Voice Action, History (the panes Linux GPUI shows)
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
@@ -940,7 +956,7 @@ best-effort deletion is not guaranteed deletion.
 
 `dev.rune-ui` lives in [rune_ui.rs](../../src/rune_ui.rs) and its pane modules;
 its tests drive the Rune runtime headlessly (navigation; Settings rows per
-shortcut source, saves with `ReloadSettings`, microphone-release
+shortcut source, saves through the host, Quit Hex, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
 clear, copy; Modes add/delete, corrections, transformations, application
@@ -948,8 +964,8 @@ conflicts; the picker's ChooseModel/CancelModel; setup's download; draft
 saves) and compare 19 offscreen GPU renders (every pane, light and dark) with
 [tests/golden](../../tests/golden). They skip the goldens without a GPU
 adapter and do not prove a real window, input method, or physical shortcut.
-A headless script against an isolated `hex service` saved a new mode, a
-correction, and Voice Action, and the service adopted them. See
+Before the single-process change, a headless script against an isolated
+service saved a new mode, a correction, and Voice Action. See
 [the Rune port plan](../plans/rune-ui.md) for what was observed.
 
 `incremental_projection_matches_snapshot_after_updates_and_partial_writes` in

@@ -212,7 +212,10 @@ impl HostHandle {
     }
 
     fn lock(&self) -> MutexGuard<'_, LinuxDesktopHost> {
-        self.0.host.lock().unwrap_or_else(|error| error.into_inner())
+        self.0
+            .host
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
     }
 
     pub(crate) fn snapshot(&self) -> HostSnapshot {
@@ -253,6 +256,7 @@ impl HostHandle {
 
     /// Saves the window's settings, then adopts them. A failed save leaves
     /// the host's settings alone.
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
     pub(crate) fn save_settings(&self, settings: AppSettings) -> Result<()> {
         settings.save()?;
         self.lock().adopt_settings(settings);
@@ -424,14 +428,14 @@ fn run_host(
 fn run_windows(
     ui: WindowUi,
     host: &HostHandle,
-    requests: Receiver<Control>,
+    mut requests: Receiver<Control>,
     mut next: Option<Activation>,
     shutdown: &'static AtomicBool,
 ) {
     #[cfg(feature = "rune-ui")]
     let mut rune_used = false;
     loop {
-        if let Some(activation) = next.take() {
+        if let Some(_activation) = next.take() {
             let quit = match ui {
                 #[cfg(feature = "rune-ui")]
                 WindowUi::Rune if rune_used => {
@@ -443,12 +447,24 @@ fn run_windows(
                 #[cfg(feature = "rune-ui")]
                 WindowUi::Rune => {
                     rune_used = true;
-                    crate::rune_ui::run_window(host.clone(), activation);
+                    // A missing display or GPU fails the window, never Hex.
+                    let host = host.clone();
+                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::rune_ui::run_window(host, _activation)
+                    }))
+                    .is_err()
+                    {
+                        tracing::error!("the Hex window failed to open");
+                    }
                     false
                 }
                 #[cfg(not(feature = "rune-ui"))]
                 WindowUi::Rune => false,
-                WindowUi::Gpui => run_gpui_window(host, &requests, shutdown),
+                WindowUi::Gpui => {
+                    let (quit, returned) = run_gpui_window(host, requests, shutdown);
+                    requests = returned;
+                    quit
+                }
             };
             host.window_closed();
             if quit {
@@ -466,91 +482,91 @@ fn run_windows(
 }
 
 /// Runs GPUI for one window. GPUI on Linux ends its loop with the last
-/// window, so closing it quits the loop. True when Hex should quit.
+/// window, so closing it quits the loop. Returns whether Hex should quit,
+/// and the request queue the window borrowed.
 fn run_gpui_window(
     host: &HostHandle,
-    requests: &Receiver<Control>,
+    requests: Receiver<Control>,
     shutdown: &'static AtomicBool,
-) -> bool {
+) -> (bool, Receiver<Control>) {
     use gpui::{App, Application, Timer};
     let quit = Arc::new(AtomicBool::new(false));
     let (forward, forwarded) = mpsc::channel::<Control>();
-    // GPUI's executor polls a channel it owns; requests arrive here.
+    // GPUI's executor polls a channel of its own; the relay feeds it.
+    let relay_stop = Arc::new(AtomicBool::new(false));
+    let relay = {
+        let relay_stop = relay_stop.clone();
+        std::thread::spawn(move || {
+            while !relay_stop.load(Ordering::Acquire) {
+                match requests.recv_timeout(Duration::from_millis(100)) {
+                    Ok(request) => {
+                        if forward.send(request).is_err() {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            requests
+        })
+    };
     let host = host.clone();
     let quitting = quit.clone();
-    std::thread::scope(|scope| {
-        let relay_stop = Arc::new(AtomicBool::new(false));
-        let relay = {
-            let relay_stop = relay_stop.clone();
-            scope.spawn(move || {
-                while !relay_stop.load(Ordering::Acquire) {
-                    match requests.recv_timeout(Duration::from_millis(100)) {
-                        Ok(request) => {
-                            if forward.send(request).is_err() {
-                                break;
-                            }
+    Application::new().run(move |cx: &mut App| {
+        cx.bind_keys(crate::text_input::key_bindings());
+        let window = match crate::app_window::open(host.clone(), cx) {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "could not open the Hex window");
+                cx.quit();
+                return;
+            }
+        };
+        host.window_opened(Arc::new(|| {}));
+        window
+            .update(cx, |_, window, cx| {
+                window.set_window_title("Hex");
+                // Quit without letting GPUI close the window here: on Wayland
+                // it destroys the Vulkan surface at once, and a configure the
+                // compositor queued behind the close (as sway does when it
+                // retiles) then resizes the destroyed surface and segfaults.
+                // Quitting stops the event loop after this dispatch instead.
+                window.on_window_should_close(cx, |_, cx| {
+                    cx.quit();
+                    false
+                });
+                window.activate_window();
+            })
+            .ok();
+        cx.spawn(async move |cx| {
+            loop {
+                Timer::after(Duration::from_millis(50)).await;
+                while let Ok(request) = forwarded.try_recv() {
+                    match request {
+                        Control::Activate(_) => {
+                            let _ = window.update(cx, |_, window, _| window.activate_window());
                         }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Control::Quit => {
+                            quitting.store(true, Ordering::Release);
+                            let _ = cx.update(|cx| cx.quit());
+                            return;
+                        }
                     }
                 }
-            })
-        };
-        Application::new().run(move |cx: &mut App| {
-            cx.bind_keys(crate::text_input::key_bindings());
-            let window = match crate::app_window::open(host.clone(), cx) {
-                Ok(window) => window,
-                Err(error) => {
-                    tracing::error!(%error, "could not open the Hex window");
-                    cx.quit();
+                if shutdown.load(Ordering::Acquire) {
+                    quitting.store(true, Ordering::Release);
+                    let _ = cx.update(|cx| cx.quit());
                     return;
                 }
-            };
-            host.window_opened(Arc::new(|| {}));
-            window
-                .update(cx, |_, window, cx| {
-                    window.set_window_title("Hex");
-                    // Quit without letting GPUI close the window here: on Wayland
-                    // it destroys the Vulkan surface at once, and a configure the
-                    // compositor queued behind the close (as sway does when it
-                    // retiles) then resizes the destroyed surface and segfaults.
-                    // Quitting stops the event loop after this dispatch instead.
-                    window.on_window_should_close(cx, |_, cx| {
-                        cx.quit();
-                        false
-                    });
-                    window.activate_window();
-                })
-                .ok();
-            cx.spawn(async move |cx| {
-                loop {
-                    Timer::after(Duration::from_millis(50)).await;
-                    while let Ok(request) = forwarded.try_recv() {
-                        match request {
-                            Control::Activate(_) => {
-                                let _ = window.update(cx, |_, window, _| window.activate_window());
-                            }
-                            Control::Quit => {
-                                quitting.store(true, Ordering::Release);
-                                let _ = cx.update(|cx| cx.quit());
-                                return;
-                            }
-                        }
-                    }
-                    if shutdown.load(Ordering::Acquire) {
-                        quitting.store(true, Ordering::Release);
-                        let _ = cx.update(|cx| cx.quit());
-                        return;
-                    }
-                }
-            })
-            .detach();
-            cx.activate(true);
-        });
-        relay_stop.store(true, Ordering::Release);
-        let _ = relay.join();
+            }
+        })
+        .detach();
+        cx.activate(true);
     });
-    quit.load(Ordering::Acquire)
+    relay_stop.store(true, Ordering::Release);
+    let requests = relay.join().expect("the window request relay panicked");
+    (quit.load(Ordering::Acquire), requests)
 }
 
 fn reopen_marker() -> Option<PathBuf> {
@@ -566,7 +582,11 @@ fn take_reopen_marker() -> bool {
     };
     let fresh = std::fs::metadata(&path)
         .and_then(|metadata| metadata.modified())
-        .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age < Duration::from_secs(60)));
+        .is_ok_and(|modified| {
+            modified
+                .elapsed()
+                .is_ok_and(|age| age < Duration::from_secs(60))
+        });
     let _ = std::fs::remove_file(&path);
     fresh
 }

@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::desktop_host::{DesktopAction, DesktopShortcut, DesktopShortcuts, DesktopUpdateStatus};
-use crate::linux_input::LinuxHotkey;
 use crate::linux_app::{HostHandle, HostRequest, HostSnapshot};
+use crate::linux_input::LinuxHotkey;
 use crate::linux_service::ShortcutTarget;
 
 pub(super) const CAPABILITIES: Capabilities = Capabilities {
@@ -322,12 +322,26 @@ impl AppWindow {
             .is_none_or(|state| state.desktop.listener.shortcuts != DesktopShortcuts::Commands)
     }
 
+    /// Linux has no tray: the window's way to stop Hex.
     pub(super) fn platform_settings_section(
         &mut self,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        Vec::new()
+        vec![
+            panel()
+                .child(settings_row(
+                    tr("Quit Hex"),
+                    tr("Closing the window keeps Hex dictating"),
+                    crate::desktop_ui::button(
+                        crate::desktop_ui::ButtonKind::Secondary,
+                        tr("Quit Hex"),
+                    )
+                    .id("quit-hex")
+                    .on_click(cx.listener(|this, _, _, _| this.platform.host.quit())),
+                ))
+                .into_any_element(),
+        ]
     }
 
     pub(super) fn platform_model_notice(

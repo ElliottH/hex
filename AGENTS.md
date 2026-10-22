@@ -150,8 +150,9 @@ substitute for source inspection or a second roadmap.
 - `sparkle`: packaged-app-only Sparkle lifecycle and manual update checks.
 - `linux`, `linux_app`, `linux_dictation`, `linux_paste`, `linux_migration`:
   the Linux beta CLI (including the `hex dictation`, `hex voice-action`, and
-  `hex paste-last` keybinding commands), the service host and Settings process,
-  the hotkey capture-transcribe-paste loop with Paste Last and Voice Action,
+  `hex paste-last` keybinding commands and launch forwarding), the one Linux
+  process (host thread, window on demand through one seam, Quit), the hotkey
+  capture-transcribe-paste loop with Paste Last and Voice Action,
   paste and primary-selection reads, and the one-time `linux-settings.json`
   migration.
 - `linux_input`: the one shortcut state machine (hold, double-tap lock, toggle,
@@ -167,12 +168,14 @@ substitute for source inspection or a second roadmap.
   MPRIS pause over D-Bus, restoring only what it changed.
 - `linux_session`: display-backend selection matching GPUI's nonempty
   `WAYLAND_DISPLAY` rule, independent of persisted preferences.
-- `linux_service`: owner-only, same-user Unix IPC, bounded service/client transport,
-  and per-user systemd lifecycle. Settings and CLI are clients of one runtime.
-- `linux_desktop`: the service-owned GTK thread for the focus-free, click-through
-  recording/processing HUD: layer-shell on Wayland, an override-redirect popup on
-  X11, at the top or bottom. Settings never owns its lifecycle; Linux has no tray
-  icon.
+- `linux_service`: the single-instance lock and owner-only, same-user Unix
+  socket that forwards `Activate` (with the activation token), shortcut
+  commands, `Status`, and `Quit` to the one Hex process, plus the per-user
+  systemd lifecycle (`Type=notify` readiness, `session.env`, start/restart).
+- `linux_desktop`: the GTK thread in the Hex process for the focus-free,
+  click-through recording/processing HUD: layer-shell on Wayland, an
+  override-redirect popup on X11, at the top or bottom. The window never owns
+  its lifecycle; Linux has no tray icon.
 - `self_update`: the signed-feed core the Linux and Windows updaters share:
   ed25519 feed verification, per-target manifest validation, bounded HTTPS
   downloads, and size and checksum verification.
@@ -203,7 +206,8 @@ substitute for source inspection or a second roadmap.
   projections.
 - `desktop_activity`: the shared listener, device, session, and latest-failure
   projection over `EventReader`. Transcript rows read retained events directly.
-- `desktop_host`: the Linux Settings/service snapshot-and-action contract.
+- `desktop_host`: the Linux host's in-process snapshot-and-action types, shared
+  by the window and `hex status`.
 - `design_tokens`: the desktop design tokens (surface, text and role colours,
   the five-step type scale, spacing, radii, and control geometry) plus the
   `Typography` trait and the test that rejects raw styles in desktop sources.
@@ -524,20 +528,29 @@ CoreAudio formats, AppleScript details, or event serialization.
 - Every Linux shortcut source (X11 grabs, portal presses, `hex` commands) feeds
   the same `linux_input` state machine and emits the same events. Commands are
   idempotent: starting while recording or stopping while idle does nothing.
-  They talk only to a running, listening service and fail with a clear error
-  otherwise; they never start one.
-- Linux Settings owns no microphone, model workers, saved settings, or tray. The
-  per-user `hex.service` owns these independently of GUI lifetime. Closing or
-  crashing Settings must not stop capture or accepted work. Socket access is
-  owner-only and peer-UID checked; framing, queues, and I/O remain bounded.
-  Client disconnect cancels only its uncommitted shortcut capture, with a bounded
-  lease fallback. Never replay uncertain mutation requests after reconnecting.
-- Linux shortcut capture uses focused GPUI input in Settings. Editing
+  They talk only to a running, listening Hex and fail with a clear error
+  otherwise; they never start one. The socket hands them straight to the
+  listener's queue, never through the window's thread.
+- One Linux Hex process per user and data root owns the microphone, model
+  workers, saved settings, History, the HUD, and the window. The window is
+  optional and opened on demand; closing it never stops capture, accepted
+  work, or the HUD, and cancels only an uncommitted shortcut capture. A
+  relaunch forwards `Activate` (with any activation token) and exits 0;
+  hidden and autostart launches never show the window. With the managed unit
+  loaded and the default data root, launches start Hex through systemd
+  (`Type=notify`), which owns its lifetime and restart; a crash restart opens
+  no window. Otherwise the launching process becomes Hex. The socket stays
+  owner-only and peer-UID checked, with bounded framing, queues, and I/O, and
+  carries only `Activate`, shortcut commands, `Status`, and `Quit`. Window
+  failures (no display, no GPU) are logged and never stop Hex. The unit's
+  `ExecStart … service`, `hex app`, `hex app --hidden`, and `hex start` stay
+  valid entry points forever: self-updates replace only the executable.
+- Linux shortcut capture uses focused input in the window. Editing
   shortcut/double-tap settings stops and restores only a previously running
   listener; cancellation restores the old binding unless its save already
-  committed. Settings and the CLI must expose service state, recovery, and errors.
-  Explicit service shutdown drains workers; closing Settings only disconnects its
-  client. HUD teardown only hides that listener's HUD.
+  committed. The window and the CLI must expose Hex's state, recovery, and
+  errors. `hex quit`, the window's Quit Hex, and SIGTERM drain workers before
+  exit. HUD teardown only hides that listener's HUD.
 - Linux paste keeps transcripts off helper argv and bounds helper I/O. X11 waits
   for physical modifiers without discarding accepted output, and shutdown
   cancels that wait; on Wayland, `wtype`'s virtual keyboard carries its own
