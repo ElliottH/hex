@@ -25,6 +25,12 @@ enum Command {
         /// Start the service without opening Settings (legacy autostart compatibility).
         #[arg(long)]
         hidden: bool,
+        /// The Settings front end: the GPUI window, or the experimental Rune one.
+        #[arg(long, value_enum, default_value_t = SettingsUi::Gpui)]
+        ui: SettingsUi,
+        /// Arguments for the Rune front end, such as `--snap out.png --scene dark`.
+        #[arg(last = true)]
+        rune_args: Vec<String>,
     },
     /// Run the per-user runtime in the foreground (normally started by systemd).
     Service,
@@ -72,6 +78,26 @@ enum Command {
         #[command(subcommand)]
         command: ModelCommand,
     },
+}
+
+#[cfg(feature = "rune-ui")]
+fn open_rune_settings(_: Vec<String>) -> Result<()> {
+    // Rune reads its own flags (`--snap`, `--scene`, …) from the process arguments.
+    crate::rune_settings::run();
+    Ok(())
+}
+
+#[cfg(not(feature = "rune-ui"))]
+fn open_rune_settings(_: Vec<String>) -> Result<()> {
+    color_eyre::eyre::bail!(
+        "this Hex was built without the Rune front end; rebuild with `--features rune-ui`"
+    )
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SettingsUi {
+    Gpui,
+    Rune,
 }
 
 #[derive(Subcommand)]
@@ -124,11 +150,17 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let event_path = log_dir.join("live.ndjson");
-    let result = (|| match Cli::parse()
-        .command
-        .unwrap_or(Command::App { hidden: false })
-    {
-        Command::App { hidden } => crate::linux_app::open(hidden, event_path, shutdown),
+    let result = (|| match Cli::parse().command.unwrap_or(Command::App {
+        hidden: false,
+        ui: SettingsUi::Gpui,
+        rune_args: Vec::new(),
+    }) {
+        Command::App {
+            hidden: false,
+            ui: SettingsUi::Rune,
+            rune_args,
+        } => open_rune_settings(rune_args),
+        Command::App { hidden, .. } => crate::linux_app::open(hidden, event_path, shutdown),
         Command::Service => crate::linux_app::run_service(event_path, shutdown),
         Command::Start => crate::linux_service::start(),
         Command::Stop => crate::linux_service::stop(),

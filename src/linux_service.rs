@@ -401,6 +401,13 @@ pub struct Client {
 
 impl Client {
     pub fn new() -> Self {
+        Self::with_waker(Arc::new(|| {}))
+    }
+
+    /// A client that calls `wake` after each service update arrives, so a
+    /// front end that redraws only on demand can poll it.
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub fn with_waker(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         let (sender, requests) = mpsc::sync_channel(16);
         let (updates_sender, updates) = mpsc::sync_channel(1);
         let stop = Arc::new(AtomicBool::new(false));
@@ -409,6 +416,7 @@ impl Client {
             let startup = ensure_started();
             if let Err(error) = startup {
                 let _ = updates_sender.try_send(Err(format!("{error:#}")));
+                wake();
             }
             let mut stream = None;
             while !stopping.load(Ordering::Acquire) {
@@ -436,6 +444,7 @@ impl Client {
                     stream = None;
                 }
                 let _ = updates_sender.try_send(result.map_err(|e| format!("{e:#}")));
+                wake();
             }
         });
         Self {

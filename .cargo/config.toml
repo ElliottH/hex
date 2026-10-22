@@ -12,3 +12,8 @@ rustflags = ["-C", "target-feature=+crt-static"]
 # such as -DGGML_NATIVE=OFF. Compilers other than MSVC ignore this define.
 [env]
 CMAKE_ARGS = "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+
+# The optional Rune front end (`--features rune-ui`) is a private Git
+# dependency; let Cargo fetch it with the user's own Git and SSH setup.
+[net]
+git-fetch-with-cli = true

@@ -921,6 +921,10 @@ macOS debug runtime                      // not release navigation
 └── Activity / HUD Lab / hex dev -> Observation and developer controls
 
 Desktop previews -> Rendered fixtures    // not proof capture/download/update happened
+Linux `hex app --ui rune` (--features rune-ui) -> Rune Settings pane // dev.rune-settings
+├── Same hex.service client as GPUI Settings: saves settings.json, then ReloadSettings
+├── Status, Desktop shortcuts (portal grants or hex commands), Dictation, Behavior, Application
+└── Modes / Voice Action / History / transcription picker -> GPUI only
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -931,6 +935,14 @@ Sources: [meeting.rs](../../src/meeting.rs),
 [capture-preview.sh](../../scripts/capture-preview.sh), [iOS guide](../../ios/README.md).
 iOS physical-device proof and temporary-WAV failure cleanup remain gaps;
 best-effort deletion is not guaranteed deletion.
+
+`dev.rune-settings` lives in [rune_settings.rs](../../src/rune_settings.rs); its
+tests drive the Rune runtime headlessly (rows per shortcut source, saves with
+`ReloadSettings`, microphone-release confirmation, shortcut recording and
+Escape, conflicts) and compare offscreen GPU renders with
+[tests/golden](../../tests/golden). They skip the goldens without a GPU adapter
+and do not prove a real window, input method, or physical shortcut. See
+[the Rune port plan](../plans/rune-ui.md) for what was observed.
 
 `incremental_projection_matches_snapshot_after_updates_and_partial_writes` in
 [meeting_live.rs](../../src/meeting_live.rs) compares the incremental transcript

@@ -18,6 +18,8 @@ embed-resource = "3"
 
 [features]
 onnx-benchmark = ["dep:transcribe-rs"]
+# The experimental Rune front end for Linux Settings (`hex app --ui rune`).
+rune-ui = ["dep:rune", "dep:png"]
 
 [profile.moonshine-lab]
 inherits = "release"
@@ -86,6 +88,8 @@ gtk-layer-shell = { version = "0.8.2", features = ["v0_6"] }
 transcribe-cpp = { version = "=0.2.4", features = ["vulkan"] }
 x11-clipboard = "0.9.3"
 x11rb = { version = "0.14.0", features = ["xtest"] }
+png = { version = "0.18", optional = true }
+rune = { git = "ssh://git@github.com/anomalyco/rune.git", branch = "hex-port", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }

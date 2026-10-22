@@ -199,6 +199,9 @@ fn tables() -> &'static [HashMap<&'static str, &'static str>; 5] {
 /// Columns: Polish, Chinese (Simplified), Japanese, German, Spanish.
 #[rustfmt::skip]
 const TRANSLATIONS: &[(&str, [&str; 5])] = &[
+    ("Status", ["Stan", "状态", "ステータス", "Status", "Estado"]),
+    ("Connecting…", ["Łączenie…", "正在连接…", "接続中…", "Verbindung wird hergestellt…", "Conectando…"]),
+    ("Esc to cancel", ["Esc, aby anulować", "按 Esc 取消", "Esc でキャンセル", "Esc zum Abbrechen", "Esc para cancelar"]),
     ("Desktop shortcuts", ["Skróty pulpitu", "桌面快捷键", "デスクトップのショートカット", "Desktop-Tastenkürzel", "Atajos del escritorio"]),
     ("Granted by your desktop", ["Przyznany przez pulpit", "由桌面授予", "デスクトップが割り当て", "Vom Desktop vergeben", "Concedido por tu escritorio"]),
     ("Not granted", ["Nie przyznano", "未授予", "未割り当て", "Nicht vergeben", "No concedido"]),
@@ -871,6 +874,7 @@ mod tests {
         include_str!("app_window/tour.rs"),
         include_str!("desktop_transcription_picker.rs"),
         include_str!("windows_app.rs"),
+        include_str!("rune_settings.rs"),
     ];
 
     /// The string literals passed to `tr`, `tr_fill`, and `tr_named`.
