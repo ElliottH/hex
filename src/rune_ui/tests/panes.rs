@@ -542,16 +542,7 @@ fn hud_lab_drives_the_indicator() {
 fn hud_lab_controls_round_trip() {
     use hud_lab::Control;
     let mut tuning = platform::HudTuning::default();
-    for control in [
-        Control::LineCount,
-        Control::Curvature,
-        Control::Speed,
-        Control::Blur,
-        Control::Glow,
-        Control::Depth,
-        Control::LightAngle,
-        Control::Outline,
-    ] {
+    for (control, _, _) in Control::ALL {
         control.set(&mut tuning, 0.6);
         assert!((control.value(&tuning) - 0.6).abs() < 1e-4, "{control:?}");
     }

@@ -29,7 +29,7 @@ pub(super) enum Control {
 }
 
 impl Control {
-    const ALL: [(Control, &'static str, &'static str); 8] = [
+    pub(super) const ALL: [(Control, &'static str, &'static str); 8] = [
         (Control::LineCount, "hud-line-count", "Line count"),
         (Control::Curvature, "hud-curvature", "Curvature"),
         (Control::Speed, "hud-speed", "Speed"),
@@ -107,7 +107,7 @@ pub(super) fn style(index: usize) -> HudTuning {
     }
 }
 
-pub(super) fn preset(t: &HudTuning) -> String {
+fn preset(t: &HudTuning) -> String {
     format!(
         "hud-v1 style={} lines={:.0} curvature={:.2} speed={:.2} blur={:.2} glow={:.2} depth={:.2} light={:.2} outline={:.2}",
         t.style as usize,

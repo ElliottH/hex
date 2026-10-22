@@ -14,6 +14,7 @@ use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, Text
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, card, note, setting_row};
+use super::lists::list_row;
 use super::models::{self, Target};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::application_catalog::InstalledApplication;
@@ -111,7 +112,7 @@ pub(super) struct ModesPane {
     pub(super) application_picker_open: bool,
     application_search: TextEdit,
     application_highlight: Highlight,
-    application_error: Option<String>,
+    pub(super) application_error: Option<String>,
     applications: Applications,
     /// The desktop's file chooser, while it is open.
     chooser: Option<Receiver<ChosenApplication>>,
@@ -231,6 +232,15 @@ impl ModesPane {
         self.drag = None;
     }
 
+    fn select_in(&mut self, settings: &AppSettings, selection: Selection) {
+        self.select(selection);
+        self.editor = Editor::of(mode(settings, selection));
+    }
+
+    fn application_query(&self) -> String {
+        self.application_search.text.trim().to_lowercase()
+    }
+
     pub(super) fn poll(&mut self, live: bool) -> bool {
         let mut changed = false;
         if let Applications::Loading(receiver) = &self.applications
@@ -276,7 +286,7 @@ impl ModesPane {
         let Applications::Loaded(applications) = &self.applications else {
             return Vec::new();
         };
-        let query = self.application_search.text.trim().to_lowercase();
+        let query = self.application_query();
         applications
             .iter()
             .filter(|application| {
@@ -302,8 +312,7 @@ fn select_mode(ui: &mut Ui, selection: Selection) {
     }
     ui.flush_drafts();
     ui.open = None;
-    ui.modes.select(selection);
-    ui.modes.editor = Editor::of(mode(&ui.settings, selection));
+    ui.modes.select_in(&ui.settings, selection);
 }
 
 /// Saves one change to the selected mode.
@@ -323,8 +332,7 @@ fn add_mode(ui: &mut Ui) {
     new.browser_hosts.clear();
     let index = ui.settings.dictation_processing.modes.len();
     if ui.update(|settings| settings.dictation_processing.modes.push(new)) {
-        ui.modes.select(Selection::Custom(index));
-        ui.modes.editor = Editor::of(mode(&ui.settings, Selection::Custom(index)));
+        ui.modes.select_in(&ui.settings, Selection::Custom(index));
     }
 }
 
@@ -341,8 +349,7 @@ fn delete_mode(ui: &mut Ui) {
     if ui.update(|settings| {
         settings.dictation_processing.modes.remove(index);
     }) {
-        ui.modes.select(Selection::Default);
-        ui.modes.editor = Editor::of(mode(&ui.settings, Selection::Default));
+        ui.modes.select_in(&ui.settings, Selection::Default);
     }
 }
 
@@ -406,9 +413,11 @@ pub(super) fn on_key(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
     {
         return false;
     }
-    let selected = mode(&ui.settings, ui.modes.selected).applications.clone();
-    let query = ui.modes.application_search.text.trim().to_lowercase();
-    let count = ui.modes.application_choices(&selected).len();
+    let query = ui.modes.application_query();
+    let count = ui
+        .modes
+        .application_choices(&mode(&ui.settings, ui.modes.selected).applications)
+        .len();
     ui.modes
         .application_highlight
         .key(&event.key, &query, count)
@@ -545,12 +554,14 @@ fn provision_workspace(ui: &mut Ui) {
 // ---------------------------------------------------------------------------
 // View
 
-fn icon_button(p: Paint, key: &str, glyph: &'static rune::Icon, label: &str) -> IconButton {
-    let _ = (p, key);
-    IconButton::new(glyph)
+fn remove_button(p: Paint, size: ButtonSize, press: impl Fn(&mut Ui) + 'static) -> El {
+    IconButton::new(CLOSE)
         .variant(IconButtonVariant::Ghost)
-        .size(ButtonSize::Normal)
-        .label(label)
+        .size(size)
+        .label(tr("Remove"))
+        .on_press(press)
+        .build(p.k)
+        .key("remove")
 }
 
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
@@ -616,36 +627,9 @@ fn mode_row(
     selected: bool,
     selection: Selection,
 ) -> El {
-    let c = &p.k.c;
-    let mut item = col()
-        .key(key)
-        .role("button")
-        .label(name)
-        .px(10.0)
-        .py(8.0)
-        .gap(2.0)
-        .radius(p.k.radius.md)
-        .hover(c.hover)
-        .press(c.pressed)
-        .on_press(move |ui: &mut Ui| select_mode(ui, selection))
-        .child(
-            text(name)
-                .key("name")
-                .font(p.k.ty.ui_medium)
-                .color(p.text())
-                .truncate(),
-        )
-        .child(
-            text(summary)
-                .key("summary")
-                .font(p.k.ty.small)
-                .color(p.muted())
-                .truncate(),
-        );
-    if selected {
-        item = item.fill(c.layer_02);
-    }
-    item
+    list_row(p, key, name, Vec::new(), summary, selected, move |ui| {
+        select_mode(ui, selection)
+    })
 }
 
 fn detail(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
@@ -744,19 +728,13 @@ fn basics(ui: &Ui, p: Paint, selection: Selection, current: &DictationMode) -> E
                         .font(p.k.ty.small_medium)
                         .color(p.text()),
                 )
-                .child(
-                    icon_button(p, "remove", CLOSE, tr("Remove"))
-                        .size(ButtonSize::Small)
-                        .on_press(move |ui: &mut Ui| {
-                            let remove = remove.clone();
-                            update_mode(ui, |mode| {
-                                mode.applications
-                                    .retain(|application| *application != remove)
-                            });
-                        })
-                        .build(p.k)
-                        .key("remove"),
-                ),
+                .child(remove_button(p, ButtonSize::Small, move |ui: &mut Ui| {
+                    let remove = remove.clone();
+                    update_mode(ui, |mode| {
+                        mode.applications
+                            .retain(|application| *application != remove)
+                    });
+                })),
         );
     }
     chips = chips.child(
@@ -805,14 +783,15 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         .width(None)
         .on_edit(|ui: &mut Ui| &mut ui.modes.application_search)
         .on_submit(|ui: &mut Ui, _: &mut Tx| {
-            let selected = mode(&ui.settings, ui.modes.selected).applications.clone();
-            let query = ui.modes.application_search.text.trim().to_lowercase();
-            let choices = ui.modes.application_choices(&selected);
-            let picked = ui
-                .modes
-                .application_highlight
-                .index(&query, choices.len())
-                .map(|index| choices[index].name.clone());
+            let picked = {
+                let selected = &mode(&ui.settings, ui.modes.selected).applications;
+                let query = ui.modes.application_query();
+                let choices = ui.modes.application_choices(selected);
+                ui.modes
+                    .application_highlight
+                    .index(&query, choices.len())
+                    .map(|index| choices[index].name.clone())
+            };
             if let Some(name) = picked {
                 add_application(ui, name);
             }
@@ -820,7 +799,7 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         .build(p.k)
         .key("application-search");
     let choices = ui.modes.application_choices(&current.applications);
-    let query = ui.modes.application_search.text.trim().to_lowercase();
+    let query = ui.modes.application_query();
     let highlighted = ui.modes.application_highlight.index(&query, choices.len());
     let status = match &ui.modes.applications {
         Applications::NotLoaded | Applications::Loading(_) => {
@@ -1031,12 +1010,9 @@ fn corrections(ui: &Ui, p: Paint) -> El {
                         .grow(1.0)
                         .shrink(),
                 )
-                .child(
-                    icon_button(p, "remove", CLOSE, tr("Remove"))
-                        .on_press(move |ui: &mut Ui| remove_replacement(ui, index))
-                        .build(p.k)
-                        .key("remove"),
-                ),
+                .child(remove_button(p, ButtonSize::Normal, move |ui: &mut Ui| {
+                    remove_replacement(ui, index)
+                })),
         );
     }
     card(p, "corrections-card", rows)
@@ -1184,17 +1160,12 @@ fn transformations(ui: &Ui, p: Paint, current: &DictationMode) -> El {
                     .grow(1.0)
                     .truncate(),
             )
-            .child(
-                icon_button(p, "remove", CLOSE, tr("Remove"))
-                    .on_press(move |ui: &mut Ui| {
-                        let id = remove.clone();
-                        update_mode(ui, |mode| {
-                            mode.transformations.retain(|candidate| *candidate != id)
-                        });
-                    })
-                    .build(p.k)
-                    .key("remove"),
-            );
+            .child(remove_button(p, ButtonSize::Normal, move |ui: &mut Ui| {
+                let id = remove.clone();
+                update_mode(ui, |mode| {
+                    mode.transformations.retain(|candidate| *candidate != id)
+                });
+            }));
         if held {
             item = item.fill(p.k.c.layer_02);
         }
@@ -1307,13 +1278,6 @@ fn workspace_status(ui: &Ui, p: Paint) -> Option<El> {
     Some(row)
 }
 
-impl Ui {
-    #[cfg(all(test, target_os = "linux"))]
-    pub(super) fn modes_application_error(&self) -> Option<&str> {
-        self.modes.application_error.as_deref()
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Fixture
 
@@ -1368,8 +1332,7 @@ pub(super) fn fixture(ui: &mut Ui) {
         ),
         app("Zed", "/usr/share/applications/dev.zed.Zed.desktop"),
     ]);
-    ui.modes.select(Selection::Custom(0));
-    ui.modes.editor = Editor::of(mode(&ui.settings, Selection::Custom(0)));
+    ui.modes.select_in(&ui.settings, Selection::Custom(0));
 }
 
 #[cfg(test)]

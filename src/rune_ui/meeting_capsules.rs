@@ -16,7 +16,7 @@ use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rune::{Align, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, Tx, col, row, text};
+use rune::{Align, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, col, row, text};
 use rune_kit::{Button, ButtonSize, ButtonVariant};
 
 use super::controls::{Paint, status_dot};
@@ -54,34 +54,21 @@ enum Kind {
     },
 }
 
-pub(crate) struct Capsule {
+struct Capsule {
     kind: Option<Kind>,
     /// The offer shows its "Never offer" confirmation in place of its actions.
     more_open: bool,
     copied: bool,
-    commands: Option<SyncSender<ControllerCommand>>,
+    commands: SyncSender<ControllerCommand>,
     hide: Option<Arc<dyn Fn() + Send + Sync>>,
-    never_offer: Option<NeverOffer>,
+    never_offer: NeverOffer,
 }
 
 type NeverOffer = Arc<dyn Fn(NeverOfferMeeting) + Send + Sync>;
 
 impl Capsule {
-    fn empty() -> Self {
-        Self {
-            kind: None,
-            more_open: false,
-            copied: false,
-            commands: None,
-            hide: None,
-            never_offer: None,
-        }
-    }
-
     fn send(&self, command: ControllerCommand) -> bool {
-        self.commands
-            .as_ref()
-            .is_some_and(|commands| commands.try_send(command).is_ok())
+        self.commands.try_send(command).is_ok()
     }
 
     fn close(&mut self) {
@@ -113,42 +100,43 @@ impl MeetingCapsules {
         never_offer: impl Fn(NeverOfferMeeting) + Send + Sync + 'static,
     ) -> Self {
         let never_offer: NeverOffer = Arc::new(never_offer);
-        let panel = app.overlay(
-            OverlaySpec {
-                name: "Hex meeting",
-                size: (MEETING_PANEL_WIDTH, MEETING_PANEL_HEIGHT),
-                edge: ScreenEdge::Top,
-                margin: WINDOW_MARGIN + MENU_BAR,
-                align: Align::End,
-                inset: WINDOW_MARGIN,
-                interactive: true,
-                view,
-            },
-            Capsule::empty(),
-        );
-        let recording = app.overlay(
-            OverlaySpec {
-                name: "Hex meeting recording",
-                size: (RECORDING_PANEL_WIDTH, RECORDING_PANEL_HEIGHT),
-                edge: ScreenEdge::Top,
-                margin: WINDOW_MARGIN + MENU_BAR,
-                align: Align::End,
-                inset: WINDOW_MARGIN,
-                interactive: true,
-                view,
-            },
-            Capsule::empty(),
-        );
-        for overlay in [&panel, &recording] {
-            let hide = overlay.clone();
-            let commands = commands.clone();
-            let never_offer = never_offer.clone();
-            overlay.update(move |capsule, _| {
-                capsule.commands = Some(commands);
+        let overlay = |app: &mut rune::App<S>, name, size| {
+            let handle = app.overlay(
+                OverlaySpec {
+                    name,
+                    size,
+                    edge: ScreenEdge::Top,
+                    margin: WINDOW_MARGIN + MENU_BAR,
+                    align: Align::End,
+                    inset: WINDOW_MARGIN,
+                    interactive: true,
+                    view,
+                },
+                Capsule {
+                    kind: None,
+                    more_open: false,
+                    copied: false,
+                    commands: commands.clone(),
+                    hide: None,
+                    never_offer: never_offer.clone(),
+                },
+            );
+            let hide = handle.clone();
+            handle.update(move |capsule, _| {
                 capsule.hide = Some(Arc::new(move || hide.hide()));
-                capsule.never_offer = Some(never_offer);
             });
-        }
+            handle
+        };
+        let panel = overlay(
+            app,
+            "Hex meeting",
+            (MEETING_PANEL_WIDTH, MEETING_PANEL_HEIGHT),
+        );
+        let recording = overlay(
+            app,
+            "Hex meeting recording",
+            (RECORDING_PANEL_WIDTH, RECORDING_PANEL_HEIGHT),
+        );
         Self {
             panel,
             recording,
@@ -289,7 +277,7 @@ fn button(
     key: &str,
     label: &str,
     primary: bool,
-    press: impl Fn(&mut Capsule, &mut Tx) + 'static,
+    press: impl Fn(&mut Capsule) + 'static,
 ) -> El {
     Button::new(label)
         .variant(if primary {
@@ -298,7 +286,7 @@ fn button(
             ButtonVariant::Neutral
         })
         .size(ButtonSize::Normal)
-        .on_press_tx(press)
+        .on_press(press)
         .build(p.k)
         .key(key)
 }
@@ -321,17 +309,15 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
                 tr_fill("Never offer for {}?", &label),
                 tr("You can undo this in Settings › Meetings.").to_owned(),
                 vec![
-                    button(p, "never-offer-cancel", tr("Cancel"), false, |c, _| {
+                    button(p, "never-offer-cancel", tr("Cancel"), false, |c| {
                         c.more_open = false;
                     }),
-                    button(p, "never-offer", tr("Never offer"), true, |c, _| {
+                    button(p, "never-offer", tr("Never offer"), true, |c| {
                         if let Some(Kind::Offer(candidate)) = &c.kind
                             && let Some(target) = candidate.never_offer_target()
                         {
                             tracing::info!(key = %target.key, "meeting offers silenced");
-                            if let Some(never_offer) = &c.never_offer {
-                                never_offer(target);
-                            }
+                            (c.never_offer)(target);
                         }
                         c.send(ControllerCommand::Dismiss);
                         c.close();
@@ -342,11 +328,11 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
         Kind::Offer(candidate) => {
             let mut actions = Vec::new();
             if candidate.never_offer_target().is_some() {
-                actions.push(button(p, "offer-more", "…", false, |c, _| {
+                actions.push(button(p, "offer-more", "…", false, |c| {
                     c.more_open = true;
                 }));
             }
-            actions.push(button(p, "not-now", tr("Not now"), false, |c, _| {
+            actions.push(button(p, "not-now", tr("Not now"), false, |c| {
                 if let Some(Kind::Offer(candidate)) = &c.kind {
                     tracing::info!(
                         source = candidate.source.label(),
@@ -357,7 +343,7 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
                 c.send(ControllerCommand::Dismiss);
                 c.close();
             }));
-            actions.push(button(p, "record", tr("Record"), true, |c, _| {
+            actions.push(button(p, "record", tr("Record"), true, |c| {
                 let Some(Kind::Offer(candidate)) = &c.kind else {
                     return;
                 };
@@ -382,10 +368,10 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
             tr_fill("{} left the call", app),
             tr("Hex is still recording.").to_owned(),
             vec![
-                button(p, "keep-recording", tr("Keep recording"), false, |c, _| {
+                button(p, "keep-recording", tr("Keep recording"), false, |c| {
                     c.close();
                 }),
-                button(p, "stop-meeting", tr("Stop & transcribe"), true, |c, _| {
+                button(p, "stop-meeting", tr("Stop & transcribe"), true, |c| {
                     if c.send(ControllerCommand::Stop) {
                         c.close();
                     }
@@ -431,7 +417,7 @@ fn ready(
         "copy-transcript",
         tr(if copied { "Copied" } else { "Copy" }),
         false,
-        |c, _| {
+        |c| {
             let Some(Kind::Ready(manifest)) = &c.kind else {
                 return;
             };
@@ -446,20 +432,14 @@ fn ready(
         },
     )];
     if manifest.export_path.is_some() {
-        actions.push(button(
-            p,
-            "reveal-transcript",
-            tr("Reveal"),
-            true,
-            |c, _| {
-                if let Some(Kind::Ready(manifest)) = &c.kind
-                    && let Some(path) = &manifest.export_path
-                {
-                    meeting::reveal(path);
-                }
-                c.close();
-            },
-        ));
+        actions.push(button(p, "reveal-transcript", tr("Reveal"), true, |c| {
+            if let Some(Kind::Ready(manifest)) = &c.kind
+                && let Some(path) = &manifest.export_path
+            {
+                meeting::reveal(path);
+            }
+            c.close();
+        }));
     }
     (p.success(), title, subtitle, actions)
 }
@@ -467,12 +447,12 @@ fn ready(
 fn recording(p: Paint, title: &str, started: Instant) -> El {
     let elapsed = meeting::format_duration(started.elapsed().as_millis() as u64);
     let actions = vec![
-        button(p, "open", tr("Open"), false, |c, _| {
+        button(p, "open", tr("Open"), false, |c| {
             if let Some(Kind::Recording { id, .. }) = &c.kind {
                 c.send(ControllerCommand::Open(id.clone()));
             }
         }),
-        button(p, "stop", tr("Stop"), true, |c, _| {
+        button(p, "stop", tr("Stop"), true, |c| {
             c.send(ControllerCommand::Stop);
         }),
     ];
