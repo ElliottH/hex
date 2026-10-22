@@ -64,6 +64,20 @@ pub fn devices() -> Result<Vec<String>> {
         .collect())
 }
 
+/// Initializes transcribe.cpp's backends, which creates its Vulkan instance,
+/// on the calling thread. The Linux process calls this before its listener
+/// or window can start: two Vulkan instances created at once in one process
+/// (ggml's here, wgpu's for the window) crash inside the Vulkan loader.
+/// Later model loads reuse the instance.
+pub fn initialize_backends() {
+    transcribe_cpp::init_logging();
+    match transcribe_cpp::init_backends_default() {
+        // Enumerating the devices makes sure the Vulkan backend exists now.
+        Ok(()) => drop(transcribe_cpp::devices()),
+        Err(error) => tracing::warn!(%error, "could not initialize transcription backends"),
+    }
+}
+
 pub fn transcribe_wav(path: &Path) -> Result<String> {
     transcribe_wav_with_selection(path, &TranscriptionSelection::default())
 }
