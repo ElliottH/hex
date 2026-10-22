@@ -7312,7 +7312,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=a5121c34eccc47c1746b306e92fd2ddce3b7ddb1#a5121c34eccc47c1746b306e92fd2ddce3b7ddb1"
+source = "git+https://github.com/anomalyco/rune.git?rev=2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f#2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f"
 dependencies = [
  "arboard",
  "bytemuck",
@@ -7331,14 +7331,16 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols 0.32.13",
+ "wayland-protocols-wlr",
  "wgpu",
+ "windows-sys 0.59.0",
  "winit",
 ]
 
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=a5121c34eccc47c1746b306e92fd2ddce3b7ddb1#a5121c34eccc47c1746b306e92fd2ddce3b7ddb1"
+source = "git+https://github.com/anomalyco/rune.git?rev=2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f#2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f"
 dependencies = [
  "rune",
  "rune-motion",
@@ -7348,12 +7350,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune.git?rev=a5121c34eccc47c1746b306e92fd2ddce3b7ddb1#a5121c34eccc47c1746b306e92fd2ddce3b7ddb1"
+source = "git+https://github.com/anomalyco/rune.git?rev=2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f#2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f"
 
 [[package]]
 name = "rune-theme-opencode"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=a5121c34eccc47c1746b306e92fd2ddce3b7ddb1#a5121c34eccc47c1746b306e92fd2ddce3b7ddb1"
+source = "git+https://github.com/anomalyco/rune.git?rev=2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f#2f338f3efe1cf18e04fbd5e3c9dc981a95ce594f"
 dependencies = [
  "rune",
  "rune-kit",
