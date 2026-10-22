@@ -381,3 +381,42 @@ pub(super) fn text_field(
         .build(p.k)
         .key(key)
 }
+
+/// The keyboard highlight in a search popover's results: Up and Down move
+/// it, Enter picks it, and it returns to the first result whenever the query
+/// changes, as in GPUI.
+#[derive(Default)]
+pub(super) struct Highlight {
+    query: String,
+    index: usize,
+}
+
+impl Highlight {
+    /// The highlighted result among `count` for `query`.
+    pub(super) fn index(&self, query: &str, count: usize) -> Option<usize> {
+        if count == 0 {
+            None
+        } else if self.query == query {
+            Some(self.index.min(count - 1))
+        } else {
+            Some(0)
+        }
+    }
+
+    /// Moves the highlight for Up or Down; false for any other key.
+    pub(super) fn key(&mut self, key: &rune::Key, query: &str, count: usize) -> bool {
+        let down = match key {
+            rune::Key::Down => true,
+            rune::Key::Up => false,
+            _ => return false,
+        };
+        let current = self.index(query, count).unwrap_or(0);
+        self.query = query.to_string();
+        self.index = if down {
+            (current + 1).min(count.saturating_sub(1))
+        } else {
+            current.saturating_sub(1)
+        };
+        true
+    }
+}

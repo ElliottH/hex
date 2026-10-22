@@ -13,7 +13,7 @@ use rune::{Cursor, Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, r
 use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, note, setting_row};
+use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, card, note, setting_row};
 use super::models::{self, Target};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::app_window::{OpenCodeFeature, reorder_transformation};
@@ -110,6 +110,7 @@ pub(super) struct ModesPane {
     pub(super) transformation_picker_open: bool,
     pub(super) application_picker_open: bool,
     application_search: TextEdit,
+    application_highlight: Highlight,
     application_error: Option<String>,
     applications: Applications,
     /// The desktop's file chooser, while it is open.
@@ -138,6 +139,7 @@ impl ModesPane {
             transformation_picker_open: false,
             application_picker_open: false,
             application_search: TextEdit::default(),
+            application_highlight: Highlight::default(),
             application_error: None,
             applications: Applications::NotLoaded,
             chooser: None,
@@ -390,9 +392,26 @@ fn add_application(ui: &mut Ui, name: String) {
         })
     {
         ui.modes.application_search = TextEdit::default();
+        ui.modes.application_highlight = Highlight::default();
         ui.modes.application_search.focused = true;
         ui.modes.application_error = None;
     }
+}
+
+/// Up and Down move the application search's highlight.
+pub(super) fn on_key(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
+    if ui.pane != super::Pane::Modes
+        || !ui.modes.application_picker_open
+        || !ui.modes.application_search.focused
+    {
+        return false;
+    }
+    let selected = mode(&ui.settings, ui.modes.selected).applications.clone();
+    let query = ui.modes.application_search.text.trim().to_lowercase();
+    let count = ui.modes.application_choices(&selected).len();
+    ui.modes
+        .application_highlight
+        .key(&event.key, &query, count)
 }
 
 /// Opens the desktop's file chooser for an application the catalog does
@@ -780,12 +799,14 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         .on_edit(|ui: &mut Ui| &mut ui.modes.application_search)
         .on_submit(|ui: &mut Ui, _: &mut Tx| {
             let selected = mode(&ui.settings, ui.modes.selected).applications.clone();
-            let first = ui
+            let query = ui.modes.application_search.text.trim().to_lowercase();
+            let choices = ui.modes.application_choices(&selected);
+            let picked = ui
                 .modes
-                .application_choices(&selected)
-                .first()
-                .map(|a| a.name.clone());
-            if let Some(name) = first {
+                .application_highlight
+                .index(&query, choices.len())
+                .map(|index| choices[index].name.clone());
+            if let Some(name) = picked {
                 add_application(ui, name);
             }
         })
@@ -793,6 +814,7 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         .key("application-search");
     let choices = ui.modes.application_choices(&current.applications);
     let query = ui.modes.application_search.text.trim().to_lowercase();
+    let highlighted = ui.modes.application_highlight.index(&query, choices.len());
     let status = match &ui.modes.applications {
         Applications::NotLoaded | Applications::Loading(_) => {
             Some(tr("Finding applications…").to_string())
@@ -812,9 +834,15 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
             .path
             .parent()
             .map_or_else(String::new, |path| path.display().to_string());
+        let fill = if highlighted == Some(index) {
+            c.hover
+        } else {
+            rune::Color::TRANSPARENT
+        };
         results = results.child(
             row()
                 .key(format!("available{index}"))
+                .fill(fill)
                 .role("button")
                 .label(application.name.clone())
                 .px(8.0)

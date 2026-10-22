@@ -968,6 +968,7 @@ Linux `hex` (--features rune-ui) -> the Linux window on Rune, in the Hex process
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
 ├── Modes: "Choose a file…" through the FileChooser portal; drag to reorder
+├── Model and application searches: Up/Down highlight, Enter picks it
 ├── Not yet: app icons, right-click delete
 └── macOS/Windows surfaces as scenes only (Capabilities + preview data):
     Commands, Meetings, permission rows, Launch at login, Dock icon,
@@ -995,7 +996,8 @@ shortcut source, saves through the host, Quit Hex, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
 clear, copy; Modes add/delete, corrections, transformations (drag reorder saves once
-on release), application conflicts, a chosen file joining the mode; the picker's ChooseModel/CancelModel; setup's download; draft
+on release), application conflicts, a chosen file joining the mode, arrow
+keys in the model and application searches; the picker's ChooseModel/CancelModel; setup's download; draft
 saves; and, from macOS/Windows preview data, each OS's panes and rows, Launch
 at login, permission warnings, the command model notice, Meetings settings,
 the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
