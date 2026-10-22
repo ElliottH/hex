@@ -330,7 +330,7 @@ Sizes are current GPUI lines.
 | Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; the macOS host feeds permissions, practice dictations (from the event log), and listener failures, and performs guide/relaunch requests; art is static until looping tracks exist |
 | Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order |
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Kept as is under Rune (native NSPanel driven from a main-loop timer); moving it needs a window kind: borderless, transparent, click-through, non-activating, all spaces |
-| HUD, Windows | `windows_indicator.rs` (151) + GPUI | Off under Rune: GPUI's HUD cannot share the process with Rune's loop. Needs an overlay window kind (topmost, no activation, click-through) |
+| HUD, Windows | `windows_indicator.rs` (151) + GPUI | Written on Rune (`windows_rune_hud.rs`: shared model + CPU shader into `rune::Pixels` in an `App::overlay`); type-checked only |
 | HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Done on Rune (`linux_rune_hud.rs`, Rune's `App::overlay`: layer-shell on Wayland, override-redirect on X11); GPUI builds keep GTK |
 | Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Off under Rune (GPUI's loop can't share the main thread): offers are logged; needs a panel window kind, focus-free buttons, live waveform |
 | Mac menu bar | `status_item.rs` (AppKit) | Stays native, installed beside `rune::App` on the main thread (`macos_rune.rs`) |

@@ -199,9 +199,15 @@ hex app --ui rune
 - Models are prepared in-process through `transcription_preparation`; the
   runtime saves the selection when it is ready and restarts the listener.
 - Enable on launch waits until first-run setup has recorded completion.
-- Not yet: the HUD (Rune has no topmost, no-activate, click-through window
-  kind, and GPUI's HUD cannot share the process with Rune's event loop, so
-  dictation shows no pill), the custom caption (native title bar for now),
+- The dictation HUD is a Rune overlay (`windows_rune_hud.rs`): a HUD thread
+  steps the shared indicator model and shades each frame with the CPU port of
+  the macOS shader into `rune::Pixels`; Rune shows it in a topmost tool window
+  with `WS_EX_NOACTIVATE|WS_EX_TRANSPARENT|WS_EX_LAYERED`, shown with
+  `SW_SHOWNOACTIVATE`, 12 pt from the top or 24 pt above the taskbar. The
+  same model, shader, and overlay path ran in a headless sway on apollo (a
+  test binary including the two shared modules); on Windows it is only
+  type-checked.
+- Not yet: the custom caption (native title bar for now),
   website rules in Modes, and app icons. The window icon is set by finding
   the window by title, since Rune exposes no window handle.
 - Without a tray (creation failed) closing the window quits Hex.
