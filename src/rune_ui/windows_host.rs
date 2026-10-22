@@ -37,10 +37,7 @@ pub(super) struct Backend {
 }
 
 impl Backend {
-    /// Runs in Rune's `setup`, on the main thread right after the window
-    /// exists, which is where the tray and hide-on-close attach.
     pub(super) fn connect(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
-        crate::windows_rune::attach_window();
         let runtime = crate::windows_rune::runtime();
         if let Some(runtime) = &runtime {
             runtime.subscribe(wake.clone());
@@ -69,8 +66,12 @@ impl Backend {
         }
     }
 
-    /// The runtime publishes into shared memory; nothing to pull.
-    pub(super) fn refresh(&mut self) {}
+    /// The runtime publishes into shared memory; nothing to pull. Runs on
+    /// the main thread before each frame, which is where the window icon
+    /// can attach once the window exists.
+    pub(super) fn refresh(&mut self) {
+        crate::windows_rune::attach_window_icon();
+    }
 
     pub(super) fn error(&self) -> Option<String> {
         self.runtime

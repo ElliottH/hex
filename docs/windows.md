@@ -182,9 +182,10 @@ hex app --ui rune
 ├── named event already held -> signal it (the running app shows its window) -> exit
 └── becomes the app                                   // windows_rune::open
     ├── runtime thread: WindowsDesktopHost + TranscriptionPreparation, publishes every 250 ms
-    ├── main thread: Rune's winit loop, the window, the tray (rides winit's message pump)
-    ├── close -> hide (WM_CLOSE intercepted); tray Show or a relaunch -> show and focus
-    └── tray Quit / Ctrl-C / restart into an update -> real close -> runtime stops the listener
+    ├── main thread: rune::App's winit loop, the window, the tray (rides winit's message pump)
+    ├── --hidden -> windowless start; close -> hide (keep_running)
+    ├── tray Show or a relaunch -> AppHandle::open (shows and focuses)
+    └── tray Quit / Ctrl-C / restart into an update -> AppHandle::quit -> runtime stops the listener
 ```
 
 - The window uses the shared Rune panes (Settings, Modes, Voice Action,
@@ -199,11 +200,10 @@ hex app --ui rune
 - Not yet: the HUD (Rune has no topmost, no-activate, click-through window
   kind, and GPUI's HUD cannot share the process with Rune's event loop, so
   dictation shows no pill), the custom caption (native title bar for now),
-  website rules in Modes, and app icons. A hidden start briefly shows the
-  window before hiding it, because Rune always creates it visible.
-- The hide-on-close bridge replaces the window procedure; it goes away once
-  Rune has an app lifetime separate from windows
-  ([single-process plan](plans/single-process.md#windows-under-rune)).
+  website rules in Modes, and app icons. The window icon is set by finding
+  the window by title, since Rune exposes no window handle.
+- Without a tray (creation failed) closing the window quits Hex.
+  See the [single-process plan](plans/single-process.md#windows-under-rune).
 
 None of this has run on Windows. It is type-checked by cross-compiling on
 Linux with [cargo-xwin](https://github.com/rust-cross/cargo-xwin):

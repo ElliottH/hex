@@ -7,7 +7,10 @@ the local transcription picker, and first-run setup. Windows has the same
 panes in a single-instance tray process (`hex app --ui rune`), written and
 cross-compiled but never run (see `docs/windows.md`). GPUI stays the default
 everywhere. Rune, `rune-kit`, and `rune-theme-opencode` are pinned to a
-commit on Rune's `main` (`anomalyco/rune`, private; `338d22a`). Do not merge
+commit on Rune's `main` (`anomalyco/rune`, `7eea3a3`, over HTTPS). Rune
+became public on 2026-10-22 as a fresh one-commit history (`7eea3a3`, the
+tree of the old private `a242f5a`); the old pins such as `338d22a` can no
+longer be fetched. Do not merge
 to `main` until the dependency questions under [Risks](#risks) are settled
 and a person has checked [the real-window list](#needs-a-person-to-look).
 
@@ -294,7 +297,7 @@ Sizes are current GPUI lines. Effort is focused agent-days with review.
 | HUD, Linux | `linux_desktop.rs` (336), GTK + layer-shell | Stays GTK until Rune has a layer-shell surface | 3 later |
 | Meeting capsules (macOS) | `meeting_watcher.rs` (UI ~1k) | Panel window kind, focus-free buttons, live waveform | 5 |
 | Mac menu bar | `status_item.rs` (AppKit) | Stays native; Rune must run inside an app lifetime that outlives windows | 1 |
-| Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on Rune's winit thread; close-to-tray bridged in Hex by replacing the window procedure until Rune has an app lifetime (type-checked only) | 0.5 |
+| Windows tray | `tray-icon` + `windows_app.rs` | Written in `windows_rune.rs` on the main thread beside `rune::App` (`keep_running`, `windowless` for `--hidden`, `AppHandle` open/quit); type-checked only | 0.5 |
 | Windows chrome | `windows_ui.rs` (311) | Custom title bar hit-testing | 2 |
 | Previews | macOS-only `capture-preview.sh` | Rune `--snap`/`--scene` on every OS (done for every Linux pane); goldens in CI on lavapipe | 1 |
 | i18n | `desktop_i18n.rs` | Done: CJK fallback in Rune, translation test covers Rune copy | 0 |
@@ -310,9 +313,12 @@ the Rune core work below.
    and lists (in progress by Kit's `motion-focus` agent).
 2. **Timers and looping animation**: `Tx::wake_after`, looping tracks for
    spinners, pulses, and indeterminate progress (`motion-focus`).
-3. **App and window model**: app lifetime separate from windows, several
-   windows, hide-on-close, window kinds (non-activating panel, transparent
-   click-through overlay, Wayland layer-shell), per-app minimum size.
+3. **App and window model**: app lifetime separate from windows,
+   hide-on-close, and XDG activation landed as `rune::App`/`AppHandle`
+   (Rune `a242f5a`, see [single-process.md](single-process.md#landed-on-rune-main-a9cde14-a242f5a-hex-pins-a242f5a)).
+   Still open: several windows, window kinds (non-activating panel,
+   transparent click-through overlay, Wayland layer-shell), and per-app
+   minimum size.
 4. **Keyboard**: key-up and modifier-only events, left/right modifier sides,
    physical key codes, Globe/Fn (macOS shortcuts).
 5. **Raster images and custom vector drawing** (app icons, waveforms).
@@ -328,9 +334,8 @@ the Rune core work below.
    real-window checks.
 2. Windows: the panes, tray, single instance, and in-process runtime are
    written and cross-compiled (`hex app --ui rune`, `docs/windows.md`) but
-   have never run; next a person on Windows runs them, then Rune's app
-   lifetime replaces the hide-on-close bridge, then chrome and title-bar
-   hit-testing and the overlay HUD window; tray stays
+   have never run, on `rune::App`; next a person on Windows runs them, then
+   chrome and title-bar hit-testing and the overlay HUD window; tray stays
    native; panes as Linux, in-process model preparation, Launch at login.
 3. macOS: app lifetime with the status item, keyboard gap 4, the panel window
    kind, then the HUD, meeting capsules, permissions rows and the full tour,
@@ -352,11 +357,11 @@ the Rune core work below.
 
 ## Risks
 
-- **Private dependency in a public repo.** Cargo fetches every Git dependency
-  in `Cargo.lock`, optional or not: with Rune unreachable even the default GPUI
-  build fails (verified with an empty `CARGO_HOME`). Release CI, the Nix flake,
-  and outside contributors break until Rune is public, vendored, or moved out
-  of Hex's lockfile. This is why the port stays on the branch.
+- **Git dependency in a public repo.** Cargo fetches every Git dependency
+  in `Cargo.lock`, optional or not. Rune is now public and pinned over HTTPS,
+  so outside contributors can resolve it (checked with an unauthenticated
+  `git ls-remote`, not with a clean `CARGO_HOME` build). Whether release CI
+  and the Nix flake accept a Git dependency is still open.
 - **API churn.** Kit's agents change Rune's `main` daily. Hex pins a commit,
   keeps its Rune code in `src/rune_ui*`, and moves the pin deliberately. A
   pending text-quality change will shift glyph rendering; the goldens' 12/255
