@@ -26,6 +26,8 @@ pub(super) const RECORDS_KEY_EVENTS: bool = false;
 pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 /// Windows pastes with Ctrl+V everywhere.
 pub(super) const TERMINAL_PASTE: bool = false;
+/// The tray quits Hex.
+pub(super) const QUIT_IN_WINDOW: bool = false;
 
 /// How often shortcut capture samples the keyboard, as in GPUI.
 const CHORD_POLL: Duration = Duration::from_millis(16);
@@ -37,10 +39,7 @@ pub(super) struct Backend {
 }
 
 impl Backend {
-    /// Runs in Rune's `setup`, on the main thread right after the window
-    /// exists, which is where the tray and hide-on-close attach.
     pub(super) fn connect(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
-        crate::windows_rune::attach_window();
         let runtime = crate::windows_rune::runtime();
         if let Some(runtime) = &runtime {
             runtime.subscribe(wake.clone());
@@ -69,8 +68,24 @@ impl Backend {
         }
     }
 
-    /// The runtime publishes into shared memory; nothing to pull.
-    pub(super) fn refresh(&mut self) {}
+    /// Saves `settings.json`, then asks the runtime to reload it.
+    pub(super) fn save(&mut self, settings: &crate::app_settings::AppSettings) -> Result<()> {
+        settings.save()?;
+        self.send(Request::ReloadSettings)
+    }
+
+    /// The tray owns quitting.
+    pub(super) fn quit(&mut self) {}
+
+    /// Closing hides the window; the runtime keeps running.
+    pub(super) fn closed(&mut self) {}
+
+    /// The runtime publishes into shared memory; nothing to pull. Runs on
+    /// the main thread before each frame, which is where the window icon
+    /// can attach once the window exists.
+    pub(super) fn refresh(&mut self) {
+        crate::windows_rune::attach_window_icon();
+    }
 
     pub(super) fn error(&self) -> Option<String> {
         self.runtime
@@ -183,6 +198,14 @@ pub(super) fn validate_hotkey(
     WindowsHotkey::from(binding)
         .validate()
         .map_err(|_| tr("Use two modifiers or add a key"))
+}
+
+pub(super) fn history(
+    retention: crate::history::HistoryRetention,
+) -> Option<crate::history::History> {
+    crate::history::History::open_default(retention)
+        .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
+        .ok()
 }
 
 /// UI Automation reports the foreground application.

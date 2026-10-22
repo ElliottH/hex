@@ -109,6 +109,10 @@ grep -Fq 'X-HEX-Managed=true' "$home/.config/autostart/HEX.desktop"
 grep -Fq '" start' "$home/.config/autostart/HEX.desktop"
 grep -Fq '# X-HEX-Managed=true' "$home/.config/systemd/user/hex.service"
 grep -Fq '" service' "$home/.config/systemd/user/hex.service"
+grep -Fxq 'Type=notify' "$home/.config/systemd/user/hex.service"
+grep -Fxq 'NotifyAccess=main' "$home/.config/systemd/user/hex.service"
+grep -Fxq "Exec=\"$install_dir/hex\"" "$home/.local/share/applications/hex.desktop"
+grep -Fxq "Exec=\"$install_dir/hex\" quit" "$home/.local/share/applications/hex.desktop"
 grep -Fxq "EnvironmentFile=-$support_dir/session.env" "$home/.config/systemd/user/hex.service"
 
 HOME="$home" \

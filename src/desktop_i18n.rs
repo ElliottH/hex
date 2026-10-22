@@ -202,8 +202,8 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Add application", ["Dodaj aplikację", "添加应用", "アプリを追加", "App hinzufügen", "Añadir aplicación"]),
     ("Add transformation", ["Dodaj transformację", "添加转换", "変換を追加", "Transformation hinzufügen", "Añadir transformación"]),
     ("Close", ["Zamknij", "关闭", "閉じる", "Schließen", "Cerrar"]),
-    ("Move down", ["Przenieś w dół", "下移", "下へ移動", "Nach unten", "Bajar"]),
-    ("Move up", ["Przenieś w górę", "上移", "上へ移動", "Nach oben", "Subir"]),
+    ("All files", ["Wszystkie pliki", "所有文件", "すべてのファイル", "Alle Dateien", "Todos los archivos"]),
+    ("Reorder", ["Zmień kolejność", "重新排序", "並べ替え", "Neu anordnen", "Reordenar"]),
     ("No models match", ["Brak pasujących modeli", "没有匹配的模型", "一致するモデルはありません", "Keine passenden Modelle", "Ningún modelo coincide"]),
     ("Status", ["Stan", "状态", "ステータス", "Status", "Estado"]),
     ("Connecting…", ["Łączenie…", "正在连接…", "接続中…", "Verbindung wird hergestellt…", "Conectando…"]),
@@ -665,6 +665,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Show Hex", ["Pokaż Hex", "显示 Hex", "Hex を表示", "Hex anzeigen", "Mostrar Hex"]),
     ("Enable / Disable Hex", ["Włącz / wyłącz Hex", "启用 / 停用 Hex", "Hex を有効 / 無効にする", "Hex aktivieren / deaktivieren", "Activar / desactivar Hex"]),
     ("Quit Hex", ["Zakończ Hex", "退出 Hex", "Hex を終了", "Hex beenden", "Salir de Hex"]),
+    ("Closing the window keeps Hex dictating", ["Zamknięcie okna nie przerywa dyktowania w Hex", "关闭窗口后 Hex 仍可继续听写", "ウィンドウを閉じても Hex は音声入力を続けます", "Hex diktiert weiter, wenn Sie das Fenster schließen", "Cerrar la ventana no detiene el dictado de Hex"]),
     ("Hex Dictation", ["Dyktowanie Hex", "Hex 听写", "Hex 音声入力", "Hex-Diktat", "Dictado de Hex"]),
     ("Enabled", ["Włączony", "已启用", "有効", "Aktiviert", "Activado"]),
     ("Sleeping", ["Uśpiony", "休眠中", "スリープ中", "Schläft", "En reposo"]),
@@ -829,6 +830,17 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("You", ["Ty", "你", "あなた", "Du", "Tú"]),
     ("Your 5s sample", ["Twoja próbka 5 s", "你的 5 秒录音", "あなたの5秒サンプル", "Deine 5-Sek.-Aufnahme", "Tu muestra de 5 s"]),
     ("Your voice", ["Twój głos", "你的声音", "自分の声", "Deine Stimme", "Tu voz"]),
+    // The Rune Meetings pane and the OS-only Settings rows.
+    ("Today", ["Dzisiaj", "今天", "今日", "Heute", "Hoy"]),
+    ("Yesterday", ["Wczoraj", "昨天", "昨日", "Gestern", "Ayer"]),
+    ("More", ["Więcej", "更多", "その他", "Mehr", "Más"]),
+    ("Them", ["Rozmówcy", "对方", "相手", "Andere", "Ellos"]),
+    ("Meeting titles and short summaries, written on this Mac", ["Tytuły spotkań i krótkie podsumowania tworzone na tym Macu", "会议标题和简短摘要，在这台 Mac 上生成", "会議のタイトルと短い要約をこの Mac で作成", "Besprechungstitel und kurze Zusammenfassungen, auf diesem Mac erstellt", "Títulos de reuniones y resúmenes breves, escritos en este Mac"]),
+    ("This Mac does not support Apple Intelligence", ["Ten Mac nie obsługuje Apple Intelligence", "这台 Mac 不支持 Apple 智能", "この Mac は Apple Intelligence に対応していません", "Dieser Mac unterstützt Apple Intelligence nicht", "Este Mac no es compatible con Apple Intelligence"]),
+    ("Turn on Apple Intelligence in System Settings to use this", ["Włącz Apple Intelligence w Ustawieniach systemowych, aby z tego korzystać", "在“系统设置”中打开 Apple 智能以使用此功能", "使用するにはシステム設定で Apple Intelligence をオンにしてください", "Aktiviere Apple Intelligence in den Systemeinstellungen, um dies zu nutzen", "Activa Apple Intelligence en Ajustes del Sistema para usar esto"]),
+    ("The Apple Intelligence model is still downloading", ["Model Apple Intelligence wciąż się pobiera", "Apple 智能模型仍在下载", "Apple Intelligence のモデルをダウンロード中です", "Das Apple-Intelligence-Modell wird noch geladen", "El modelo de Apple Intelligence aún se está descargando"]),
+    ("Requires macOS 26 or later", ["Wymaga macOS 26 lub nowszego", "需要 macOS 26 或更高版本", "macOS 26 以降が必要です", "Erfordert macOS 26 oder neuer", "Requiere macOS 26 o posterior"]),
+    ("Apple Intelligence is unavailable", ["Apple Intelligence jest niedostępne", "Apple 智能不可用", "Apple Intelligence は利用できません", "Apple Intelligence ist nicht verfügbar", "Apple Intelligence no está disponible"]),
 ];
 
 #[cfg(test)]
@@ -888,6 +900,10 @@ mod tests {
         include_str!("rune_ui/models.rs"),
         include_str!("rune_ui/picker.rs"),
         include_str!("rune_ui/onboarding.rs"),
+        include_str!("rune_ui/commands.rs"),
+        include_str!("rune_ui/meetings.rs"),
+        include_str!("rune_ui/lists.rs"),
+        include_str!("rune_ui/platform_settings.rs"),
     ];
 
     /// The string literals passed to `tr`, `tr_fill`, and `tr_named`.

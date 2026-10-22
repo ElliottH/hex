@@ -270,21 +270,22 @@ listener worker fails -> reap worker -> show failure
   ├── Retry -> new managed listener -> fresh capture -> expected output
   └── Dismiss -> clear error                            // not evidence of recovery
 
-close/crash Settings -> disconnect client -> service keeps running
-  └── that client's uncommitted shortcut capture -> cancel edit -> restore prior listening
+close the window -> Hex keeps running
+  └── uncommitted shortcut capture -> cancel edit -> restore prior listening
 
-service exits -> systemd restart-on-failure OR explicit hex start
-  -> client reconnects -> live snapshot, not stale log state
+Hex crashes -> systemd restart-on-failure (no window) OR explicit hex start
+  -> hex / hex status -> live state, not stale log state
 
-hex stop -> stop service -> release microphone and hotkeys
+hex quit / Quit Hex -> drain accepted work -> release microphone and hotkeys -> exit 0
 ```
 Sources/checks: [linux_app.rs](../../src/linux_app.rs),
 [Linux CI](../../.github/workflows/check-linux.yml),
 [test-wayland-paste.sh](../../scripts/test-wayland-paste.sh), and
 [test-linux-service.py](../../scripts/test-linux-service.py).
 Proof limit: source and available headless checks, not current supported-host
-behavior. Native compositor/device validation remains separate. The service
-socket is same-user only; bounded I/O and queues keep client stalls off the audio loop.
+behavior. Native compositor/device validation remains separate. The
+single-instance socket is same-user only; bounded I/O and queues keep client
+stalls off the audio loop.
 
 **Fixed after 2.1.24:** on X11 the Escape-cancel grab is best-effort.
 

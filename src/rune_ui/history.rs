@@ -1,7 +1,6 @@
 //! The History pane: retained dictations (newest first) with search, the
 //! retention choice, two-step Clear all, and a detail view with Copy and
-//! Delete. It reads and edits the same owner-only `history.json` store as
-//! GPUI's Settings process; the service records into it.
+//! Delete. It shares the host's store, which the listener records into.
 
 use rune::{El, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Select, SelectAppearance, TextInput};
@@ -27,16 +26,14 @@ pub(super) struct HistoryPane {
 }
 
 impl HistoryPane {
-    pub(super) fn open(retention: HistoryRetention) -> Self {
-        match History::open_default(retention) {
-            Ok(store) => Self {
-                store: Some(store),
-                ..Self::default()
-            },
-            Err(error) => Self {
-                error: Some(error.to_string()),
-                ..Self::default()
-            },
+    /// The host's store; `None` when it could not open one.
+    pub(super) fn shared(store: Option<History>) -> Self {
+        Self {
+            error: store
+                .is_none()
+                .then(|| crate::desktop_i18n::tr("History could not be loaded.").to_string()),
+            store,
+            ..Self::default()
         }
     }
 

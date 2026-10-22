@@ -1,17 +1,21 @@
-//! Linux processes: `hex.service`, which owns the listener, shortcut
-//! registration, model preparation, and updates, and the Settings process,
-//! which opens the shared app window and talks to the service over its
-//! socket.
+//! The one Linux Hex process: the dictation host (listener, shortcut
+//! registration, model preparation, updates, History writes, paste), the
+//! single-instance socket, the GTK HUD thread, and the window, opened on
+//! demand and closed without stopping anything.
+//!
+//! Threads: the main thread runs the window toolkit; the host thread
+//! refreshes [`LinuxDesktopHost`] every 20 ms and publishes its status;
+//! the socket's workers answer `hex` commands from that published status
+//! and hand shortcut commands straight to the listener.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use color_eyre::Result;
-use gpui::{App, Application, Timer};
 
 use crate::app_settings::{AppSettings, HotkeyBinding};
 use crate::desktop_activity::DesktopActivity;
@@ -22,14 +26,37 @@ use crate::desktop_host::{
 use crate::events::EventReader;
 use crate::linux_input::{LinuxHotkey, ShortcutCommand};
 use crate::linux_service::{
-    self, Event as ServiceEvent, Request, ShortcutTarget, Snapshot as ServiceSnapshot,
+    self, Activation, Control, Published, ShortcutRoute, ShortcutTarget, Status,
 };
 use crate::linux_updater::InstalledUpdate;
 
 const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+const REFRESH_INTERVAL: Duration = Duration::from_millis(20);
+/// Left by "Update" so the restarted process shows the window again; a
+/// crash restart finds none and stays in the background.
+const REOPEN_MARKER: &str = "reopen-window";
 
 type ListenerResult = std::result::Result<(), String>;
 type PreparationResult = std::result::Result<PreparedTranscription, String>;
+pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// The window toolkit the process hosts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowUi {
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    Rune,
+    Gpui,
+}
+
+impl WindowUi {
+    pub(crate) fn default_for_build() -> Self {
+        if cfg!(feature = "rune-ui") {
+            Self::Rune
+        } else {
+            Self::Gpui
+        }
+    }
+}
 
 struct PreparedTranscription {
     selection: crate::transcription_models::TranscriptionSelection,
@@ -48,7 +75,7 @@ struct TranscriptionPreparation {
 enum SettingsChange {
     Capture(ShortcutTarget),
     Hotkey(ShortcutTarget, LinuxHotkey),
-    /// Settings the Settings window already saved.
+    /// Settings the window already saved.
     Reload(Box<AppSettings>),
 }
 
@@ -125,31 +152,184 @@ enum UpdateState {
     Ready(InstalledUpdate),
 }
 
-fn service_snapshot(host: &LinuxDesktopHost, owns_editor: bool) -> ServiceSnapshot {
-    ServiceSnapshot {
-        desktop: host.snapshot(),
-        settings: host.settings.clone(),
-        editing: host.settings_edit.is_some(),
-        capturing: owns_editor && host.capturing_hotkey(),
-        hud_limitation: crate::linux_desktop::hud_limitation(),
-        pid: std::process::id(),
-        session: linux_service::Session::current(),
+/// What the window shows of the host.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HostSnapshot {
+    pub(crate) desktop: DesktopSnapshot,
+    pub(crate) settings: AppSettings,
+    /// The host is recording or saving a shortcut.
+    pub(crate) editing: bool,
+}
+
+/// What the window asks of the host. Settings edits go through
+/// [`HostHandle::save_settings`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum HostRequest {
+    Desktop(DesktopAction),
+    /// Stops listening while the window records a shortcut.
+    CaptureShortcutFor(ShortcutTarget),
+    CancelShortcut,
+    /// The chord the window recorded, for the host to register and save.
+    SetShortcut {
+        target: ShortcutTarget,
+        shortcut: DesktopShortcut,
+    },
+    ChooseModel {
+        model: crate::transcription_models::TranscriptionModelId,
+        language: String,
+    },
+    CancelModel,
+}
+
+struct Shared {
+    host: Mutex<LinuxDesktopHost>,
+    waker: Mutex<Option<Waker>>,
+    window_open: AtomicBool,
+    shutdown: &'static AtomicBool,
+}
+
+/// The window's handle to the host it runs beside. Every call is a short
+/// lock on the host; nothing here waits for the listener or a model.
+#[derive(Clone)]
+pub(crate) struct HostHandle(Arc<Shared>);
+
+impl HostHandle {
+    fn new(host: LinuxDesktopHost, shutdown: &'static AtomicBool) -> Self {
+        Self(Arc::new(Shared {
+            host: Mutex::new(host),
+            waker: Mutex::new(None),
+            window_open: AtomicBool::new(false),
+            shutdown,
+        }))
+    }
+
+    /// The window's "Quit Hex": drains accepted work, then exits.
+    pub(crate) fn quit(&self) {
+        self.0.shutdown.store(true, Ordering::Release);
+    }
+
+    fn lock(&self) -> MutexGuard<'_, LinuxDesktopHost> {
+        self.0
+            .host
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(crate) fn snapshot(&self) -> HostSnapshot {
+        let host = self.lock();
+        HostSnapshot {
+            desktop: host.snapshot(),
+            settings: host.settings.clone(),
+            editing: host.settings_edit.is_some(),
+        }
+    }
+
+    pub(crate) fn request(&self, request: HostRequest) -> Result<()> {
+        let result = {
+            let mut host = self.lock();
+            match request {
+                HostRequest::Desktop(action) => host.dispatch(action),
+                HostRequest::CaptureShortcutFor(target) => {
+                    host.begin_settings_edit(SettingsChange::Capture(target));
+                    Ok(())
+                }
+                HostRequest::CancelShortcut => {
+                    host.cancel_settings_edit();
+                    Ok(())
+                }
+                HostRequest::SetShortcut { target, shortcut } => host.set_hotkey(target, shortcut),
+                HostRequest::ChooseModel { model, language } => {
+                    host.choose_transcription(model, language)
+                }
+                HostRequest::CancelModel => {
+                    host.cancel_transcription_preparation();
+                    Ok(())
+                }
+            }
+        };
+        self.wake();
+        result
+    }
+
+    /// Saves the window's settings, then adopts them. A failed save leaves
+    /// the host's settings alone.
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub(crate) fn save_settings(&self, settings: AppSettings) -> Result<()> {
+        settings.save()?;
+        self.lock().adopt_settings(settings);
+        self.wake();
+        Ok(())
+    }
+
+    /// Adopts settings the window already saved.
+    pub(crate) fn adopt_settings(&self, settings: AppSettings) {
+        self.lock().adopt_settings(settings);
+        self.wake();
+    }
+
+    pub(crate) fn event_path(&self) -> PathBuf {
+        self.lock().event_path.clone()
+    }
+
+    /// The host's retained-history store; one store per process.
+    pub(crate) fn history(&self) -> Option<crate::history::History> {
+        self.lock().output.history.clone()
+    }
+
+    /// The window's toolkit wakes on host changes through `waker`.
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub(crate) fn set_waker(&self, waker: Waker) {
+        *self.0.waker.lock().unwrap() = Some(waker);
+    }
+
+    pub(crate) fn set_window_open(&self, open: bool) {
+        self.0.window_open.store(open, Ordering::Release);
+    }
+
+    #[cfg_attr(not(feature = "rune-ui"), allow(dead_code))]
+    pub(crate) fn window_open(&self) -> bool {
+        self.0.window_open.load(Ordering::Acquire)
+    }
+
+    /// A closed window leaves no shortcut capture behind.
+    pub(crate) fn window_closed(&self) {
+        self.set_window_open(false);
+        let mut host = self.lock();
+        if host.capturing_hotkey() {
+            host.cancel_settings_edit();
+        }
+    }
+
+    fn wake(&self) {
+        let waker = self.0.waker.lock().unwrap().clone();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+
+    fn status(&self) -> Status {
+        let snapshot = self.snapshot();
+        Status {
+            desktop: snapshot.desktop,
+            settings: snapshot.settings,
+            editing: snapshot.editing,
+            hud_limitation: crate::linux_desktop::hud_limitation(),
+            window_open: self.0.window_open.load(Ordering::Acquire),
+            pid: std::process::id(),
+            session: linux_service::Session::current(),
+        }
     }
 }
 
-fn disconnect_editor(
-    host: &mut LinuxDesktopHost,
-    editor: &mut Option<(u64, Instant)>,
-    client: u64,
-) {
-    if editor.is_some_and(|(owner, _)| owner == client) {
-        host.cancel_settings_edit();
-        *editor = None;
-    }
-}
-
-/// The service owns this host independently of any GPUI application or Settings window.
-pub fn run_service(event_path: PathBuf, shutdown: &'static AtomicBool) -> Result<()> {
+/// Becomes the Linux instance: claims the data root, starts the host, and
+/// runs the window toolkit on this (the main) thread until `hex quit`, a
+/// signal, or the window's Quit. `activation` opens the window at once.
+pub fn run(
+    ui: WindowUi,
+    event_path: PathBuf,
+    shutdown: &'static AtomicBool,
+    activation: Option<Activation>,
+) -> Result<()> {
     let mut server = linux_service::Server::bind()?;
     let (settings, error) = match AppSettings::load() {
         Ok(settings) => (settings, None),
@@ -169,109 +349,182 @@ pub fn run_service(event_path: PathBuf, shutdown: &'static AtomicBool) -> Result
     if enable_on_launch {
         host.start();
     }
-    let mut editor: Option<(u64, Instant)> = None;
-    let mut stopping = false;
-    loop {
-        if shutdown.load(Ordering::Acquire) && !stopping {
-            stopping = true;
-            host.stop();
-            host.cancel_transcription_preparation();
-        }
-        host.refresh();
-        if stopping && !host.has_pending_work() {
-            break;
-        }
-        if !host.capturing_hotkey() {
-            editor = None;
-        }
-        if let Some((owner, deadline)) = editor
-            && Instant::now() >= deadline
-        {
-            disconnect_editor(&mut host, &mut editor, owner);
-        }
-        server.accept()?;
-        match server.events.recv_timeout(Duration::from_millis(20)) {
-            Ok(ServiceEvent::Disconnected(client)) => {
-                disconnect_editor(&mut host, &mut editor, client)
-            }
-            Ok(ServiceEvent::Request {
-                client,
-                request,
-                reply,
-            }) => {
-                let result = (|| -> Result<()> {
-                    if stopping {
-                        return Err(color_eyre::eyre::eyre!("Hex service is stopping"));
-                    }
-                    if let Some((owner, deadline)) = &mut editor {
-                        if *owner == client {
-                            *deadline = Instant::now() + Duration::from_secs(3);
-                        } else if matches!(
-                            request,
-                            Request::CaptureShortcut
-                                | Request::CaptureShortcutFor(_)
-                                | Request::CancelShortcut
-                                | Request::SetShortcut { .. }
-                                | Request::Desktop(DesktopAction::SetDictationShortcut(_))
-                        ) {
-                            return Err(color_eyre::eyre::eyre!(
-                                "Another Settings client is capturing a shortcut"
-                            ));
-                        }
-                    }
-                    match request {
-                        Request::Snapshot => {}
-                        Request::Desktop(action) => host.dispatch(action)?,
-                        Request::CaptureShortcut | Request::CaptureShortcutFor(_) => {
-                            let target = match request {
-                                Request::CaptureShortcutFor(target) => target,
-                                _ => ShortcutTarget::Dictation,
-                            };
-                            host.begin_settings_edit(SettingsChange::Capture(target));
-                            if host.capturing_hotkey() {
-                                editor = Some((client, Instant::now() + Duration::from_secs(3)));
-                            }
-                        }
-                        Request::CancelShortcut => host.cancel_settings_edit(),
-                        Request::SetShortcut { target, shortcut } => {
-                            host.set_hotkey(target, shortcut)?
-                        }
-                        Request::ChooseModel { model, language } => {
-                            host.choose_transcription(model, language)?
-                        }
-                        Request::CancelModel => host.cancel_transcription_preparation(),
-                        Request::ReloadSettings => host.reload_settings()?,
-                        Request::Shortcut(command) => host.shortcut(command)?,
-                        Request::Shutdown => shutdown.store(true, Ordering::Release),
-                    }
-                    Ok(())
-                })();
-                let _ = reply.try_send((
-                    service_snapshot(&host, editor.is_some_and(|(owner, _)| owner == client)),
-                    result.err().map(|e| format!("{e:#}")),
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
+    let host = HostHandle::new(host, shutdown);
+    let published = Arc::new(Published::default());
+    *published.status.lock().unwrap() = Some(host.status());
+    let (control, requests) = mpsc::sync_channel(8);
+    server.serve(published.clone(), control.clone(), shutdown);
+    linux_service::notify("READY=1");
+    tracing::info!(pid = std::process::id(), "Hex instance ready");
+
+    let worker = {
+        let host = host.clone();
+        std::thread::Builder::new()
+            .name("hex-host".into())
+            .spawn(move || run_host(host, published, server, control, shutdown))?
+    };
+    let reopen = take_reopen_marker();
+    let first = activation.or(reopen.then(Activation::default));
+    run_windows(ui, &host, requests, first, shutdown);
+    shutdown.store(true, Ordering::Release);
+    let _ = worker.join();
     Ok(())
 }
 
-pub fn open(start_hidden: bool, event_path: PathBuf, shutdown: &'static AtomicBool) -> Result<()> {
-    if start_hidden {
-        return linux_service::start();
+/// The host thread: refreshes the host, publishes what the socket answers
+/// with, wakes the window on changes, and drains accepted work on quit.
+fn run_host(
+    host: HostHandle,
+    published: Arc<Published>,
+    server: linux_service::Server,
+    control: mpsc::SyncSender<Control>,
+    shutdown: &'static AtomicBool,
+) {
+    let mut stopping = false;
+    let mut shown: Option<HostSnapshot> = None;
+    loop {
+        let (done, route) = {
+            let mut guard = host.lock();
+            if shutdown.load(Ordering::Acquire) && !stopping {
+                stopping = true;
+                linux_service::notify("STOPPING=1");
+                guard.stop();
+                guard.cancel_transcription_preparation();
+                // The main thread may be waiting for the next window request.
+                let _ = control.try_send(Control::Quit);
+            }
+            guard.refresh();
+            (
+                stopping && !guard.has_pending_work(),
+                guard.shortcut_route(),
+            )
+        };
+        *published.shortcuts.lock().unwrap() = route;
+        let status = host.status();
+        let snapshot = HostSnapshot {
+            desktop: status.desktop.clone(),
+            settings: status.settings.clone(),
+            editing: status.editing,
+        };
+        *published.status.lock().unwrap() = Some(status);
+        if shown.as_ref() != Some(&snapshot) {
+            shown = Some(snapshot);
+            host.wake();
+        }
+        if done {
+            break;
+        }
+        std::thread::sleep(REFRESH_INTERVAL);
     }
-    open_settings(event_path, shutdown)
+    *published.shortcuts.lock().unwrap() = None;
+    drop(server);
 }
 
-/// The Settings process: the shared app window, which saves `settings.json`
-/// and asks the service to reload it. Closing the window ends the process.
-fn open_settings(event_path: PathBuf, shutdown: &'static AtomicBool) -> Result<()> {
+/// The one seam between the process and its window toolkit, on the main
+/// thread until Hex quits. `first` opens the window at once.
+fn run_windows(
+    ui: WindowUi,
+    host: &HostHandle,
+    requests: Receiver<Control>,
+    first: Option<Activation>,
+    shutdown: &'static AtomicBool,
+) {
+    match ui {
+        #[cfg(feature = "rune-ui")]
+        WindowUi::Rune => {
+            // A missing display or GPU fails the window, never Hex.
+            let app = host.clone();
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::rune_ui::run_app(app, requests, first)
+            }))
+            .is_err()
+            {
+                tracing::error!("the Hex window failed; Hex keeps running without it");
+                host.set_window_open(false);
+                while !shutdown.load(Ordering::Acquire) {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        #[cfg(not(feature = "rune-ui"))]
+        WindowUi::Rune => {
+            let _ = (first, shutdown);
+            while let Ok(Control::Activate(_)) = requests.recv() {}
+        }
+        WindowUi::Gpui => run_gpui_windows(host, requests, first, shutdown),
+    }
+}
+
+/// GPUI on Linux ends its loop with the last window, so it runs once per
+/// opened window and the main thread waits for requests in between.
+fn run_gpui_windows(
+    host: &HostHandle,
+    mut requests: Receiver<Control>,
+    mut next: Option<Activation>,
+    shutdown: &'static AtomicBool,
+) {
+    loop {
+        if next.take().is_some() {
+            host.set_window_open(true);
+            let (quit, returned) = run_gpui_window(host, requests, shutdown);
+            requests = returned;
+            host.window_closed();
+            if quit {
+                break;
+            }
+        }
+        if shutdown.load(Ordering::Acquire) {
+            break;
+        }
+        match requests.recv() {
+            Ok(Control::Activate(activation)) => next = Some(activation),
+            Ok(Control::Quit) | Err(_) => break,
+        }
+    }
+}
+
+/// Runs GPUI for one window. GPUI on Linux ends its loop with the last
+/// window, so closing it quits the loop. Returns whether Hex should quit,
+/// and the request queue the window borrowed.
+fn run_gpui_window(
+    host: &HostHandle,
+    requests: Receiver<Control>,
+    shutdown: &'static AtomicBool,
+) -> (bool, Receiver<Control>) {
+    use gpui::{App, Application, Timer};
+    let quit = Arc::new(AtomicBool::new(false));
+    let (forward, forwarded) = mpsc::channel::<Control>();
+    // GPUI's executor polls a channel of its own; the relay feeds it.
+    let relay_stop = Arc::new(AtomicBool::new(false));
+    let relay = {
+        let relay_stop = relay_stop.clone();
+        std::thread::spawn(move || {
+            while !relay_stop.load(Ordering::Acquire) {
+                match requests.recv_timeout(Duration::from_millis(100)) {
+                    Ok(request) => {
+                        if forward.send(request).is_err() {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            requests
+        })
+    };
+    let host = host.clone();
+    let quitting = quit.clone();
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys(crate::text_input::key_bindings());
-        let window =
-            crate::app_window::open(event_path, cx).expect("could not open the Hex window");
+        let window = match crate::app_window::open(host.clone(), cx) {
+            Ok(window) => window,
+            Err(error) => {
+                tracing::error!(%error, "could not open the Hex window");
+                cx.quit();
+                return;
+            }
+        };
         window
             .update(cx, |_, window, cx| {
                 window.set_window_title("Hex");
@@ -289,17 +542,54 @@ fn open_settings(event_path: PathBuf, shutdown: &'static AtomicBool) -> Result<(
             .ok();
         cx.spawn(async move |cx| {
             loop {
-                Timer::after(Duration::from_millis(250)).await;
-                if shutdown.load(Ordering::Relaxed) {
+                Timer::after(Duration::from_millis(50)).await;
+                while let Ok(request) = forwarded.try_recv() {
+                    match request {
+                        Control::Activate(_) => {
+                            let _ = window.update(cx, |_, window, _| window.activate_window());
+                        }
+                        Control::Quit => {
+                            quitting.store(true, Ordering::Release);
+                            let _ = cx.update(|cx| cx.quit());
+                            return;
+                        }
+                    }
+                }
+                if shutdown.load(Ordering::Acquire) {
+                    quitting.store(true, Ordering::Release);
                     let _ = cx.update(|cx| cx.quit());
-                    break;
+                    return;
                 }
             }
         })
         .detach();
         cx.activate(true);
     });
-    Ok(())
+    relay_stop.store(true, Ordering::Release);
+    let requests = relay.join().expect("the window request relay panicked");
+    (quit.load(Ordering::Acquire), requests)
+}
+
+fn reopen_marker() -> Option<PathBuf> {
+    crate::app_paths::support_dir()
+        .ok()
+        .map(|directory| directory.join(REOPEN_MARKER))
+}
+
+/// True when "Update" restarted this process with its window open.
+fn take_reopen_marker() -> bool {
+    let Some(path) = reopen_marker() else {
+        return false;
+    };
+    let fresh = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|modified| {
+            modified
+                .elapsed()
+                .is_ok_and(|age| age < Duration::from_secs(60))
+        });
+    let _ = std::fs::remove_file(&path);
+    fresh
 }
 
 impl LinuxDesktopHost {
@@ -614,19 +904,12 @@ impl LinuxDesktopHost {
         }
     }
 
-    /// Adopts the settings the Settings window saved. A running listener
-    /// restarts when a setting it captured at start changed; the sound
-    /// volume already applied when the settings loaded.
-    fn reload_settings(&mut self) -> Result<()> {
-        let settings = match AppSettings::load() {
-            Ok(settings) => settings,
-            Err(error) => {
-                self.settings_error = Some(format!("Could not load settings: {error:#}"));
-                return Err(error);
-            }
-        };
+    /// Adopts settings the window saved. A running listener restarts when
+    /// a setting it captured at start changed; the sound volume already
+    /// applied when the window saved it.
+    fn adopt_settings(&mut self, settings: AppSettings) {
         if self.settings_valid && settings == self.settings {
-            return Ok(());
+            return;
         }
         let model_changed = settings.transcription != self.settings.transcription;
         let restart = model_changed
@@ -645,7 +928,7 @@ impl LinuxDesktopHost {
             || settings.edit_hotkey != self.settings.edit_hotkey;
         if restart && self.is_running() && self.settings_edit.is_none() {
             self.begin_settings_edit(SettingsChange::Reload(Box::new(settings)));
-            return Ok(());
+            return;
         }
         self.settings = settings;
         self.settings_valid = true;
@@ -654,7 +937,6 @@ impl LinuxDesktopHost {
         if model_changed && self.listen_when_ready && !self.is_running() {
             self.start();
         }
-        Ok(())
     }
 
     fn capturing_hotkey(&self) -> bool {
@@ -761,6 +1043,9 @@ impl LinuxDesktopHost {
         let UpdateState::Ready(update) = &self.update else {
             return Err(color_eyre::eyre::eyre!("no installed update is ready"));
         };
+        if let Some(marker) = reopen_marker() {
+            let _ = std::fs::write(marker, b"");
+        }
         crate::linux_updater::relaunch(update)
     }
 
@@ -848,8 +1133,8 @@ impl LinuxDesktopHost {
     }
 }
 
-/// Saves one service-owned change on top of the current `settings.json`, so
-/// edits the Settings window saved meanwhile survive.
+/// Saves one host-owned change on top of the current `settings.json`, so
+/// edits the window saved meanwhile survive.
 fn save_with(change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     let mut settings = AppSettings::load()?;
     change(&mut settings);
@@ -946,26 +1231,16 @@ impl LinuxDesktopHost {
         }
     }
 
-    /// Hands a `hex` command to the running listener's shortcut state machine.
-    fn shortcut(&mut self, command: ShortcutCommand) -> Result<()> {
-        let listener = self
-            .listener
+    /// Where `hex` shortcut commands go: the listener, once it reports its
+    /// session (a listener still loading its model would replay them late).
+    fn shortcut_route(&self) -> Option<ShortcutRoute> {
+        self.listener
             .as_ref()
             .filter(|listener| matches!(listener.startup, ListenerStartup::Observed))
-            .ok_or_else(|| {
-                color_eyre::eyre::eyre!(
-                    "Hex is not listening; enable it in Settings or run `hex start`"
-                )
-            })?;
-        if command.is_voice_action() && !self.settings.voice_action.enabled {
-            return Err(color_eyre::eyre::eyre!(
-                "Voice Action is off; turn it on in Settings"
-            ));
-        }
-        listener
-            .commands
-            .try_send(command)
-            .map_err(|_| color_eyre::eyre::eyre!("Hex is busy; try again"))
+            .map(|listener| ShortcutRoute {
+                commands: listener.commands.clone(),
+                voice_action: self.settings.voice_action.enabled,
+            })
     }
 
     fn dispatch(&mut self, action: DesktopAction) -> Result<()> {
@@ -1089,22 +1364,21 @@ mod tests {
     }
 
     #[test]
-    fn listener_warning_is_nonfatal_and_round_trips_in_service_snapshots() {
+    fn listener_warning_is_nonfatal_and_round_trips_in_status() {
         let mut host = host_for_edit(true);
         host.status = "Enabled".into();
         let status = host.listener.as_ref().unwrap().hotkey_status.clone();
         status.update_escape_availability(false);
-        let snapshot = service_snapshot(&host, false);
-        let serialized = serde_json::to_vec(&snapshot).unwrap();
-        let received: ServiceSnapshot = serde_json::from_slice(&serialized).unwrap();
-        let listener = received.desktop.listener;
+        let serialized = serde_json::to_vec(&host.snapshot()).unwrap();
+        let received: DesktopSnapshot = serde_json::from_slice(&serialized).unwrap();
+        let listener = received.listener;
         assert!(listener.running);
         assert_eq!(listener.status, "Enabled");
         assert_eq!(
             listener.warning.as_deref(),
             Some(crate::linux_input::ESCAPE_CANCEL_WARNING),
         );
-        assert!(received.desktop.operation_error.is_none());
+        assert!(received.operation_error.is_none());
 
         // Dismissing an unrelated failure must not hide an unresolved limitation.
         host.error = Some("previous transcription failed".into());
@@ -1294,35 +1568,35 @@ mod tests {
     }
 
     #[test]
-    fn client_disconnect_cancels_its_edit_and_restores_previous_listening() {
+    fn closing_the_window_cancels_only_an_uncommitted_capture() {
+        static SHUTDOWN: AtomicBool = AtomicBool::new(false);
         let mut host = host_for_edit(true);
         host.begin_settings_edit(SettingsChange::Capture(ShortcutTarget::Dictation));
-        let mut editor = Some((1, Instant::now()));
-        disconnect_editor(&mut host, &mut editor, 2);
-        assert!(
-            !host
-                .settings_edit
-                .as_ref()
-                .unwrap()
-                .canceled
-                .load(Ordering::Acquire)
-        );
-        disconnect_editor(&mut host, &mut editor, 1);
-        let edit = host.settings_edit.as_ref().unwrap();
-        assert!(edit.resume);
-        assert!(edit.canceled.load(Ordering::Acquire));
-        host.listener = None;
-        host.refresh_settings_edit();
+        let handle = HostHandle::new(host, &SHUTDOWN);
+        handle.window_closed();
+        {
+            let mut host = handle.lock();
+            let edit = host.settings_edit.as_ref().unwrap();
+            assert!(edit.resume);
+            assert!(edit.canceled.load(Ordering::Acquire));
+            host.listener = None;
+            host.refresh_settings_edit();
+            assert!(host.listen_when_ready);
+        }
+
+        // Without a capture, closing the window leaves dictation alone.
+        let handle = HostHandle::new(host_for_edit(true), &SHUTDOWN);
+        handle.window_closed();
+        let host = handle.lock();
+        assert!(host.is_running());
         assert!(host.listen_when_ready);
-        assert!(editor.is_none());
+        assert!(!host.listener.as_ref().unwrap().stop.load(Ordering::Acquire));
     }
 
     #[test]
-    fn commands_reach_only_a_started_listener() {
+    fn commands_route_only_to_a_started_listener() {
         let mut host = host_for_edit(false);
-        let error = host.shortcut(ShortcutCommand::DictationToggle).unwrap_err();
-        assert!(error.to_string().contains("not listening"), "{error}");
-
+        assert!(host.shortcut_route().is_none());
         let (commands, received) = mpsc::sync_channel(4);
         host.listener = Some(Listener {
             worker: std::thread::spawn(|| Ok(())),
@@ -1334,33 +1608,31 @@ mod tests {
             commands,
         });
         // A listener still loading its model would replay the command late.
-        assert!(host.shortcut(ShortcutCommand::DictationStart).is_err());
+        assert!(host.shortcut_route().is_none());
         host.listener.as_mut().unwrap().startup = ListenerStartup::Observed;
-        host.shortcut(ShortcutCommand::DictationStart).unwrap();
-        host.shortcut(ShortcutCommand::PasteLast).unwrap();
-        let error = host
-            .shortcut(ShortcutCommand::VoiceActionStart)
-            .unwrap_err();
-        assert!(error.to_string().contains("Voice Action is off"), "{error}");
+        let route = host.shortcut_route().unwrap();
+        assert!(!route.voice_action);
+        linux_service::route_shortcut(Some(&route), ShortcutCommand::PasteLast).unwrap();
         host.settings.voice_action.enabled = true;
-        host.shortcut(ShortcutCommand::VoiceActionToggle).unwrap();
+        assert!(host.shortcut_route().unwrap().voice_action);
         assert_eq!(
             received.try_iter().collect::<Vec<_>>(),
-            [
-                ShortcutCommand::DictationStart,
-                ShortcutCommand::PasteLast,
-                ShortcutCommand::VoiceActionToggle
-            ]
+            [ShortcutCommand::PasteLast]
         );
     }
 
     #[test]
-    fn closing_a_client_does_not_stop_normal_dictation() {
+    fn adopting_saved_settings_restarts_only_for_listener_settings() {
         let mut host = host_for_edit(true);
-        disconnect_editor(&mut host, &mut None, 1);
-        assert!(host.is_running());
-        assert!(host.listen_when_ready);
-        assert!(!host.listener.as_ref().unwrap().stop.load(Ordering::Acquire));
+        let mut candidate = host.settings.clone();
+        candidate.history_retention = crate::history::HistoryRetention::Off;
+        host.adopt_settings(candidate.clone());
+        assert!(host.settings_edit.is_none());
+        assert_eq!(host.settings, candidate);
+        candidate.paste_with_shift = !candidate.paste_with_shift;
+        host.adopt_settings(candidate.clone());
+        assert!(host.settings_edit.is_some());
+        assert_ne!(host.settings, candidate);
     }
 
     #[test]
