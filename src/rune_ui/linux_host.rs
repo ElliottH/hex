@@ -60,7 +60,7 @@ fn current() -> Option<HostHandle> {
 pub(super) enum Backend {
     Host(HostHandle),
     /// `--snap --scene live` from a separate process.
-    Status(Option<crate::linux_service::Status>, Option<String>),
+    Status(Option<Box<crate::linux_service::Status>>, Option<String>),
 }
 
 impl Backend {
@@ -112,7 +112,7 @@ impl Backend {
             }
             Self::Status(status, error) => {
                 match crate::linux_service::request(crate::linux_service::Request::Status) {
-                    Ok(state) => (*status, *error) = (Some(state), None),
+                    Ok(state) => (*status, *error) = (Some(Box::new(state)), None),
                     Err(failure) => (*status, *error) = (None, Some(failure.to_string())),
                 }
             }
@@ -133,7 +133,7 @@ impl Backend {
                 (snapshot.desktop, snapshot.settings, snapshot.editing)
             }
             Self::Status(status, _) => {
-                let status = status.clone()?;
+                let status = *status.clone()?;
                 (status.desktop, status.settings, status.editing)
             }
         };
