@@ -64,7 +64,7 @@ static HISTORY_ICON: Icon = Icon {
 #[cfg(target_os = "linux")]
 pub(crate) fn run() {
     rune::set_app_id("hex");
-    rune::run(spec());
+    rune::App::new(spec()).run();
 }
 
 /// The window as a Rune app whose lifetime the caller chooses.
