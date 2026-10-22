@@ -188,6 +188,8 @@ hex app --ui rune
     └── tray Quit / Ctrl-C / restart into an update -> AppHandle::quit -> runtime stops the listener
 ```
 
+- Quit Hex in the window or the tray stops the listener and ends the app;
+  closing the window only hides it.
 - The window uses the shared Rune panes (Settings, Modes, Voice Action,
   History, the transcription picker, first-run setup) with Windows rows:
   Launch at login (the current-user Run key), Check now and Update for
@@ -218,6 +220,11 @@ echo '{"libraries":[],"shared":false}' > /tmp/no-transcribe/lib/transcribe-link.
 TRANSCRIBE_DIR=/tmp/no-transcribe cargo xwin clippy --target x86_64-pc-windows-msvc \
   --features rune-ui --all-targets -- -D warnings
 ```
+
+For ARM64, add the `aarch64-pc-windows-msvc` target and set
+`XWIN_CROSS_COMPILER=clang`: ring's aarch64 build forces the GNU-style
+`clang` driver, which rejects the clang-cl `/imsvc` flags cargo-xwin passes
+by default.
 
 That checks every Rust path, including GPUI, wgpu's DX12 and Vulkan
 backends, and the Windows modules; it compiles C build scripts (ring) for

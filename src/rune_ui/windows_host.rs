@@ -26,8 +26,8 @@ pub(super) const RECORDS_KEY_EVENTS: bool = false;
 pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 /// Windows pastes with Ctrl+V everywhere.
 pub(super) const TERMINAL_PASTE: bool = false;
-/// The tray quits Hex.
-pub(super) const QUIT_IN_WINDOW: bool = false;
+/// The window offers Quit Hex beside the tray's.
+pub(super) const QUIT_IN_WINDOW: bool = true;
 
 /// How often shortcut capture samples the keyboard, as in GPUI.
 const CHORD_POLL: Duration = Duration::from_millis(16);
@@ -74,10 +74,16 @@ impl Backend {
         self.send(Request::ReloadSettings)
     }
 
-    /// The tray owns quitting.
-    pub(super) fn quit(&mut self) {}
+    /// Asks the runtime to stop the listener and end the app, as the
+    /// tray's Quit Hex does.
+    pub(super) fn quit(&mut self) {
+        if let Err(error) = self.send(Request::Quit) {
+            tracing::warn!(%error, "could not quit Hex");
+        }
+    }
 
-    /// Closing hides the window; the runtime keeps running.
+    /// Rune hides the window (`keep_running`) and the runtime keeps
+    /// listening; without a tray Rune ends the app instead.
     pub(super) fn closed(&mut self) {}
 
     /// The runtime publishes into shared memory; nothing to pull. Runs on
