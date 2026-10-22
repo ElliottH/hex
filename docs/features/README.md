@@ -921,10 +921,12 @@ macOS debug runtime                      // not release navigation
 └── Activity / HUD Lab / hex dev -> Observation and developer controls
 
 Desktop previews -> Rendered fixtures    // not proof capture/download/update happened
-Linux `hex app --ui rune` (--features rune-ui) -> Rune Settings pane // dev.rune-settings
+Linux `hex app --ui rune` (--features rune-ui) -> the Linux window on Rune // dev.rune-ui
 ├── Same hex.service client as GPUI Settings: saves settings.json, then ReloadSettings
-├── Status, Desktop shortcuts (portal grants or hex commands), Dictation, Behavior, Application
-└── Modes / Voice Action / History / transcription picker -> GPUI only
+├── Sidebar: Settings, Modes, Voice Action, History (the panes Linux GPUI shows)
+├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
+├── First-run setup -> onboarding::Flow without permissions or practice
+└── Not yet: app file chooser, app icons, drag reorder, right-click delete
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -936,12 +938,18 @@ Sources: [meeting.rs](../../src/meeting.rs),
 iOS physical-device proof and temporary-WAV failure cleanup remain gaps;
 best-effort deletion is not guaranteed deletion.
 
-`dev.rune-settings` lives in [rune_settings.rs](../../src/rune_settings.rs); its
-tests drive the Rune runtime headlessly (rows per shortcut source, saves with
-`ReloadSettings`, microphone-release confirmation, shortcut recording and
-Escape, conflicts) and compare offscreen GPU renders with
-[tests/golden](../../tests/golden). They skip the goldens without a GPU adapter
-and do not prove a real window, input method, or physical shortcut. See
+`dev.rune-ui` lives in [rune_ui.rs](../../src/rune_ui.rs) and its pane modules;
+its tests drive the Rune runtime headlessly (navigation; Settings rows per
+shortcut source, saves with `ReloadSettings`, microphone-release
+confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
+and its conflict refusal, model choice; History select, delete, two-step
+clear, copy; Modes add/delete, corrections, transformations, application
+conflicts; the picker's ChooseModel/CancelModel; setup's download; draft
+saves) and compare 19 offscreen GPU renders (every pane, light and dark) with
+[tests/golden](../../tests/golden). They skip the goldens without a GPU
+adapter and do not prove a real window, input method, or physical shortcut.
+A headless script against an isolated `hex service` saved a new mode, a
+correction, and Voice Action, and the service adopted them. See
 [the Rune port plan](../plans/rune-ui.md) for what was observed.
 
 `incremental_projection_matches_snapshot_after_updates_and_partial_writes` in

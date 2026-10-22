@@ -18,7 +18,7 @@ embed-resource = "3"
 
 [features]
 onnx-benchmark = ["dep:transcribe-rs"]
-# The experimental Rune front end for Linux Settings (`hex app --ui rune`).
+# The experimental Rune front end for Linux (`hex app --ui rune`).
 rune-ui = ["dep:rune", "dep:rune-kit", "dep:rune-theme-opencode", "dep:png"]
 
 [profile.moonshine-lab]
