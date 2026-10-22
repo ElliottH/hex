@@ -331,7 +331,7 @@ umask 077
 cat > "$application_staged" <<EOF
 [Desktop Entry]
 Type=Application
-Name=HEX
+Name=Hex
 Comment=Local voice dictation
 Exec="$binary"
 Icon=audio-input-microphone
@@ -348,7 +348,7 @@ EOF
 cat > "$autostart_staged" <<EOF
 [Desktop Entry]
 Type=Application
-Name=HEX
+Name=Hex
 Comment=Local voice dictation
 Exec="$binary" start
 Icon=audio-input-microphone
