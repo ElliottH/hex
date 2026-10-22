@@ -8,7 +8,7 @@ use rune::{El, TextEdit, Tx, col, el, row, text};
 use rune_kit::{Switch, TextInput};
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, setting_row};
 use super::lists::{
     detail_header, detail_title, error_panel, fact, group_label, list_row, message, placeholder,
     split,
@@ -24,10 +24,10 @@ pub(super) struct CommandsPane {
     /// Commands are off and the microphone is released: enabling them asks
     /// to keep the microphone ready first.
     pub(super) confirm_enable: bool,
-    pub(super) prompt_copied: bool,
+    prompt_copied: bool,
 }
 
-pub(super) fn matches(command: &CatalogCommand, query: &str) -> bool {
+fn matches(command: &CatalogCommand, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
@@ -332,10 +332,10 @@ pub(super) fn model_notice_panel(ui: &Ui, p: Paint, title: &str, description: &s
         ButtonKind::Secondary,
         |ui: &mut Ui, _| set_enabled(ui, false),
     ));
-    super::controls::card(
+    card(
         p,
         "command-model-notice",
-        vec![super::controls::setting_row(
+        vec![setting_row(
             p,
             "command-model",
             title,

@@ -9,7 +9,7 @@
 //! `meeting::clock`, and the coalesced transcript) and sends
 //! [`MeetingRequest`]s back. Scenes feed [`MeetingsPane::fixture`].
 
-use rune::{El, TextEdit, Tx, col, row, text};
+use rune::{El, TextEdit, Tx, col, el, row, text};
 use rune_kit::{IconButton, IconButtonVariant, Menu as KitMenu, MenuItem, Placement, TextInput};
 
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, status_dot};
@@ -112,7 +112,7 @@ impl Meeting {
 pub(super) struct MeetingsPane {
     /// Newest first, as the store lists them.
     pub(super) meetings: Vec<Meeting>,
-    pub(super) error: Option<String>,
+    error: Option<String>,
     /// The last recording that could not start or finish.
     pub(super) runtime_error: Option<String>,
     pub(super) search: TextEdit,
@@ -120,15 +120,15 @@ pub(super) struct MeetingsPane {
     pub(super) renaming: Option<String>,
     pub(super) rename: TextEdit,
     pub(super) delete_armed: Option<String>,
-    pub(super) action_error: Option<String>,
+    action_error: Option<String>,
     /// What was last copied, for the button's "Copied".
-    pub(super) copied: Option<(String, &'static str)>,
+    copied: Option<(String, &'static str)>,
     pub(super) start_pending: bool,
     pub(super) stop_pending: bool,
 }
 
 /// `42 min`, `1 h 05 min`, or `< 1 min`.
-pub(super) fn length(milliseconds: u64) -> String {
+fn length(milliseconds: u64) -> String {
     let minutes = milliseconds / 60_000;
     match minutes {
         0 => tr("< 1 min").into(),
@@ -144,13 +144,13 @@ pub(super) fn length(milliseconds: u64) -> String {
 }
 
 /// `mm:ss`, as `meeting::format_duration`.
-pub(super) fn clock_offset(milliseconds: u64) -> String {
+fn clock_offset(milliseconds: u64) -> String {
     let seconds = milliseconds / 1_000;
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 /// Speaker turns as Markdown, as `meeting::transcript_markdown`.
-pub(super) fn transcript_markdown(turns: &[Turn]) -> String {
+fn transcript_markdown(turns: &[Turn]) -> String {
     turns
         .iter()
         .map(|turn| {
@@ -926,7 +926,7 @@ fn turn_bubble(p: Paint, index: usize, turn: &Turn) -> El {
     let c = &p.k.c;
     let mut line = col().key(format!("turn{index}")).gap(4.0);
     if let Some(pause) = turn.pause_before_ms {
-        let rule = || rune::el().h(p.hair).grow(1.0).fill(c.border_weak);
+        let rule = || el().h(p.hair).grow(1.0).fill(c.border_weak);
         line = line.child(
             row()
                 .key("pause")
@@ -980,13 +980,10 @@ fn turn_bubble(p: Paint, index: usize, turn: &Turn) -> El {
                     .wrap(),
             ),
     );
-    let side = row().key("side").child(bubble);
-    let side = if turn.mine { side.justify_end() } else { side };
-    let header = row().key("header").child(speaker);
-    let header = if turn.mine {
-        header.justify_end()
-    } else {
-        header
+    let align = |key: &str, child: El| {
+        let item = row().key(key).child(child);
+        if turn.mine { item.justify_end() } else { item }
     };
-    line.child(header).child(side)
+    line.child(align("header", speaker))
+        .child(align("side", bubble))
 }
