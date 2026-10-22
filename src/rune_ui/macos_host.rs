@@ -129,7 +129,7 @@ impl Backend {
         Some(HostState {
             view: ServiceView {
                 listener: published.listener.clone(),
-                operation_error: published.operation_error.clone(),
+                operation_error: None,
                 transcription: published.transcription.clone(),
                 update_status: published.update_status,
                 editing: false,
@@ -395,8 +395,7 @@ pub(super) fn native_host() -> Box<dyn NativeHost> {
 struct MacHost {
     login: Option<LoginItemWorker>,
     login_checking: bool,
-    compiled: Vec<CatalogCommand>,
-    personal: Vec<CatalogCommand>,
+    commands: Vec<CatalogCommand>,
     workspace_path: PathBuf,
     workspace: Option<Receiver<Result<PathBuf, String>>>,
     workspace_error: Option<String>,
@@ -415,23 +414,10 @@ impl MacHost {
         let login = LoginItemWorker::new()
             .inspect_err(|error| tracing::warn!(%error, "login item worker is unavailable"))
             .ok();
-        let compiled = crate::config::voice_control()
-            .catalog()
-            .into_iter()
-            .map(|command| CatalogCommand {
-                task: command_task(&command),
-                scope: command.scope,
-                phrase: command.phrase,
-                aliases: command.aliases,
-                description: command.description,
-                id: command.id,
-            })
-            .collect();
         let mut host = Self {
             login,
             login_checking: false,
-            compiled,
-            personal: Vec::new(),
+            commands: build_commands(),
             workspace_path: crate::app_paths::personal_commands_workspace().unwrap_or_default(),
             workspace: None,
             workspace_error: None,
@@ -443,19 +429,8 @@ impl MacHost {
             practice: None,
             folder_choice: None,
         };
-        host.reload_personal_commands();
         host.request_login(LoginItemRequest::Status);
         host
-    }
-
-    fn reload_personal_commands(&mut self) {
-        self.personal = match crate::personal_commands::load_status() {
-            Ok(status) => personal_catalog(&status),
-            Err(error) => {
-                tracing::debug!(%error, "personal commands are unavailable");
-                Vec::new()
-            }
-        };
     }
 
     fn request_login(&mut self, request: LoginItemRequest) {
@@ -622,7 +597,7 @@ impl NativeHost for MacHost {
                 Ok(path) => {
                     self.workspace_path = path;
                     self.workspace_error = None;
-                    self.reload_personal_commands();
+                    self.commands = build_commands();
                 }
                 Err(error) => self.workspace_error = Some(error),
             }
@@ -651,40 +626,55 @@ impl NativeHost for MacHost {
             return changed;
         }
         self.refresh_at = Instant::now() + PLATFORM_REFRESH;
-        let before = state.clone();
-        state.tuning = crate::hex_microphone::current_tuned_config();
-        state.accessibility_renamed =
-            crate::permission_guide::list_name(PermissionKind::Accessibility) != "Accessibility";
-        state.activity_log = crate::app_paths::logs_dir()
-            .ok()
-            .map(|logs| logs.join("live.ndjson"));
-        state.permissions = crate::onboarding::status_with_transcription_model(
+        changed |= update(
+            &mut state.tuning,
+            crate::hex_microphone::current_tuned_config(),
+        );
+        changed |= update(
+            &mut state.accessibility_renamed,
+            crate::permission_guide::list_name(PermissionKind::Accessibility) != "Accessibility",
+        );
+        changed |= update(
+            &mut state.activity_log,
+            crate::app_paths::logs_dir()
+                .ok()
+                .map(|logs| logs.join("live.ndjson")),
+        );
+        let permissions = crate::onboarding::status_with_transcription_model(
             state.permissions.transcription_model,
         );
-        state.system_audio = crate::meeting::system_audio_ready();
-        let status = state.permissions;
-        let system_audio = state.system_audio;
+        let system_audio = crate::meeting::system_audio_ready();
+        changed |= update(&mut state.permissions, permissions);
+        changed |= update(&mut state.system_audio, system_audio);
+        let asked_len = state.permissions_asked.len();
         state.permissions_asked.retain(|kind| match kind {
-            PermissionKind::Microphone => status.microphone != PermissionState::Ready,
-            PermissionKind::InputMonitoring => status.input_monitoring != PermissionState::Ready,
-            PermissionKind::Accessibility => status.accessibility != PermissionState::Ready,
+            PermissionKind::Microphone => permissions.microphone != PermissionState::Ready,
+            PermissionKind::InputMonitoring => {
+                permissions.input_monitoring != PermissionState::Ready
+            }
+            PermissionKind::Accessibility => permissions.accessibility != PermissionState::Ready,
             PermissionKind::SystemAudio => !system_audio,
         });
-        state.login_item_checking = self.login_checking;
-        state.hex_microphone = Some(crate::hex_microphone::status());
-        state.command_model = match crate::recognition::command_model_status() {
-            crate::recognition::CommandModelStatus::Disabled => CommandModel::Disabled,
-            crate::recognition::CommandModelStatus::Loading => CommandModel::Loading,
-            crate::recognition::CommandModelStatus::Ready => CommandModel::Ready,
-            crate::recognition::CommandModelStatus::Failed => CommandModel::Failed,
-        };
-        state.commands = self
-            .compiled
-            .iter()
-            .chain(&self.personal)
-            .cloned()
-            .collect();
-        state.workspace = if self.workspace.is_some() {
+        changed |= state.permissions_asked.len() != asked_len;
+        changed |= update(&mut state.login_item_checking, self.login_checking);
+        changed |= update(
+            &mut state.hex_microphone,
+            Some(crate::hex_microphone::status()),
+        );
+        changed |= update(
+            &mut state.command_model,
+            match crate::recognition::command_model_status() {
+                crate::recognition::CommandModelStatus::Disabled => CommandModel::Disabled,
+                crate::recognition::CommandModelStatus::Loading => CommandModel::Loading,
+                crate::recognition::CommandModelStatus::Ready => CommandModel::Ready,
+                crate::recognition::CommandModelStatus::Failed => CommandModel::Failed,
+            },
+        );
+        if state.commands != self.commands {
+            state.commands.clone_from(&self.commands);
+            changed = true;
+        }
+        let workspace = if self.workspace.is_some() {
             Workspace::Creating
         } else if self.workspace_error.is_some() {
             Workspace::Error
@@ -693,12 +683,19 @@ impl NativeHost for MacHost {
         } else {
             Workspace::Missing
         };
-        state.workspace_path = self.workspace_path.display().to_string();
-        state.workspace_error = self.workspace_error.clone();
-        state.notes = *self.notes.get_or_insert_with(notes_availability);
-        state.meeting_folder_error = self.folder_error.clone();
-        state.relaunch_failed = self.relaunch_failed;
-        changed || !same_platform_state(&before, state)
+        changed |= update(&mut state.workspace, workspace);
+        changed |= update(
+            &mut state.workspace_path,
+            self.workspace_path.display().to_string(),
+        );
+        changed |= update(&mut state.workspace_error, self.workspace_error.clone());
+        changed |= update(
+            &mut state.notes,
+            *self.notes.get_or_insert_with(notes_availability),
+        );
+        changed |= update(&mut state.meeting_folder_error, self.folder_error.clone());
+        changed |= update(&mut state.relaunch_failed, self.relaunch_failed);
+        changed
     }
 
     fn meetings(&mut self) -> Option<Result<Vec<Meeting>, String>> {
@@ -955,10 +952,33 @@ fn configure_hud(runtime: &RuntimeHandle, lab: HudLab) {
     }
 }
 
-/// `PlatformState` has no `PartialEq` (its driver status doesn't); compare
-/// what the panes draw.
-fn same_platform_state(left: &PlatformState, right: &PlatformState) -> bool {
-    format!("{left:?}") == format!("{right:?}")
+fn update<T: PartialEq>(slot: &mut T, value: T) -> bool {
+    if *slot == value {
+        false
+    } else {
+        *slot = value;
+        true
+    }
+}
+
+fn build_commands() -> Vec<CatalogCommand> {
+    let mut commands: Vec<CatalogCommand> = crate::config::voice_control()
+        .catalog()
+        .into_iter()
+        .map(|command| CatalogCommand {
+            task: command_task(&command),
+            scope: command.scope,
+            phrase: command.phrase,
+            aliases: command.aliases,
+            description: command.description,
+            id: command.id,
+        })
+        .collect();
+    match crate::personal_commands::load_status() {
+        Ok(status) => commands.extend(personal_catalog(&status)),
+        Err(error) => tracing::debug!(%error, "personal commands are unavailable"),
+    }
+    commands
 }
 
 fn notes_availability() -> NotesAvailability {
