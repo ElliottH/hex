@@ -1352,6 +1352,11 @@ const SCENES: &[Scene] = &[
             message: None,
         };
     }),
+    ("chinese", |ui| {
+        *ui = fixture(portal_shortcuts());
+        ui.settings.ui_language = Some("zh".into());
+        crate::desktop_i18n::apply(Some("zh"));
+    }),
     ("menus", |ui| {
         *ui = fixture(portal_shortcuts());
         ui.open = Some(Menu::Microphone);
