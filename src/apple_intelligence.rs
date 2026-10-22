@@ -50,7 +50,6 @@ impl Availability {
         self == Self::Available
     }
 
-    /// One line for the Meetings settings row.
     pub fn description(self) -> &'static str {
         match self {
             Self::Available => "Meeting titles and short summaries, written on this Mac",
