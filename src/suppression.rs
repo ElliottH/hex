@@ -3468,7 +3468,10 @@ mod tests {
                     hotkey.process(option_key(key, false, OPTION_KEY_MASK), chord);
                 }
                 assert_eq!(
-                    hotkey.process(InputEvent::Flags(NO_FLAGS), chord + Duration::from_millis(50)),
+                    hotkey.process(
+                        InputEvent::Flags(NO_FLAGS),
+                        chord + Duration::from_millis(50)
+                    ),
                     None
                 );
                 assert!(!hotkey.is_recording());
