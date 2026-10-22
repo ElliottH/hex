@@ -399,7 +399,6 @@ struct MacHost {
     workspace_path: PathBuf,
     workspace: Option<Receiver<Result<PathBuf, String>>>,
     workspace_error: Option<String>,
-    relaunch_failed: bool,
     folder_error: Option<String>,
     refresh_at: Instant,
     notes: Option<NotesAvailability>,
@@ -421,7 +420,6 @@ impl MacHost {
             workspace_path: crate::app_paths::personal_commands_workspace().unwrap_or_default(),
             workspace: None,
             workspace_error: None,
-            relaunch_failed: false,
             folder_error: None,
             refresh_at: Instant::now(),
             notes: None,
@@ -535,11 +533,10 @@ impl NativeHost for MacHost {
                 {
                     tracing::warn!(%error, "could not record the onboarding relaunch");
                 }
-                if crate::onboarding::spawn_relaunch() {
-                    crate::macos_rune::quit();
-                } else {
-                    self.relaunch_failed = true;
+                if !crate::onboarding::spawn_relaunch() {
+                    return Err("could not relaunch Hex".into());
                 }
+                crate::macos_rune::quit();
             }
             PlatformRequest::SetTuning(tuning) => {
                 crate::hex_microphone::update_tuned_config(|current| *current = tuning);
@@ -694,7 +691,6 @@ impl NativeHost for MacHost {
             *self.notes.get_or_insert_with(notes_availability),
         );
         changed |= update(&mut state.meeting_folder_error, self.folder_error.clone());
-        changed |= update(&mut state.relaunch_failed, self.relaunch_failed);
         changed
     }
 
