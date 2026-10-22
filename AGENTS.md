@@ -594,10 +594,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   change loads the new model beside the old one and swaps it in once no
   transcription is pending (`local_transcriber::ModelSwap`). Recording a
   shortcut in the window suspends only global matching.
-- Linux shortcut capture uses focused input in the window. Editing
-  shortcut/double-tap settings stops and restores only a previously running
-  listener; cancellation restores the old binding unless its save already
-  committed. The window and the CLI must expose Hex's state, recovery, and
+- Linux shortcut capture uses focused input in the window. Recording a
+  shortcut suspends the running listener's global matching and registers the
+  shortcuts again when it ends; cancellation restores the old binding unless
+  its save already committed. The window and the CLI must expose Hex's state, recovery, and
   errors. `hex quit`, the window's Quit Hex, and SIGTERM drain workers before
   exit. HUD teardown only hides that listener's HUD.
 - Linux paste keeps transcripts off helper argv and bounds helper I/O. X11 waits
