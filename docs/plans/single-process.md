@@ -120,7 +120,7 @@ impl HostHandle {
 
 ## What Rune must gain
 
-### Landed on Rune `main` (`a9cde14`, `a242f5a`; Hex pins `a242f5a`)
+### Landed on Rune `main` (`a9cde14`, `a242f5a`; public as `7eea3a3`, which Hex pins)
 
 Requirements 1–5 below landed as a smaller API than the proposal: one window
 per app, built on the existing `AppSpec`. It is documented in Rune's
