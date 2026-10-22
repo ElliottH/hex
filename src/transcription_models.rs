@@ -73,6 +73,7 @@ impl ModelPreparationStage {
         stage.store(self as u8, Ordering::Release);
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub fn load(stage: &AtomicU8) -> Self {
         match stage.load(Ordering::Acquire) {
             value if value == Self::Downloading as u8 => Self::Downloading,
