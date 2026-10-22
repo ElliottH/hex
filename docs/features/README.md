@@ -823,8 +823,14 @@ it opens or focuses with the forwarded activation token and keeps its state
 across close and reopen. The GPUI window (`--ui gpui`) reopens but ignores the
 token. Observed in a headless sway on apollo on 2026-10-22 with
 [test-wayland-paste.sh](../../scripts/test-wayland-paste.sh) for both toolkits
-(open in the same process, close, still answering, reopen, quit); not yet on
-niri, KWin, Mutter, or i3.
+(open in the same process, close, still answering, reopen, quit). On niri
+(apollo, 2026-10-22, isolated data directory, listener off) launches spawned
+through `niri msg action spawn` opened the window in the instance's process,
+`close-window` left the same process answering, a relaunch opened a new
+window in it, and `hex quit` exited; the window never took focus although niri
+passed `XDG_ACTIVATION_TOKEN` (an IPC spawn's token, without user input, so
+this does not show whether a launcher's token focuses it). Not yet on KWin,
+Mutter, or i3.
 
 Listener starts consume the host's settings snapshot; the foreground
 `hex dictate` command loads its own snapshot once. Invalid startup settings leave
