@@ -581,7 +581,7 @@ fn recognition_hints_save_when_typing_pauses() {
 fn gpu() -> Option<std::sync::MutexGuard<'static, Gpu>> {
     static GPU: std::sync::OnceLock<Option<std::sync::Mutex<Gpu>>> = std::sync::OnceLock::new();
     GPU.get_or_init(|| {
-        std::panic::catch_unwind(|| Gpu::new(Gpu::instance(), None))
+        Gpu::try_new(Gpu::instance(), None)
             .ok()
             .map(std::sync::Mutex::new)
     })

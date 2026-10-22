@@ -71,7 +71,7 @@ Arch/i3 host. Verify:
 - atomic activation and application restart;
 - retained-version rollback;
 - refusal to overwrite development, root, or package-manager installs;
-- service/client restart and reconnect without requiring a tray host.
+- systemd service restart and window reopen without requiring a tray host.
 
 This validation blocks calling the direct-install update channel proven.
 
@@ -221,4 +221,4 @@ implementation assumptions.
 - Do not install a privileged helper for the X11 contract.
 - Rebuild the proposals in [#28](https://github.com/anomalyco/hex/pull/28) and
   [#29](https://github.com/anomalyco/hex/pull/29) with regression coverage for
-  input state, GTK ownership, helper I/O, settings restart, and Nix environments.
+  input state, overlay ownership, helper I/O, settings restart, and Nix environments.

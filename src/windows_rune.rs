@@ -23,12 +23,11 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM};
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumThreadWindows, GWLP_HINSTANCE, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextW,
-    ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR, LoadImageW, SM_CXICON, SM_CXSMICON,
-    SM_CYICON, SM_CYSMICON, SendMessageW, WM_SETICON,
+    GWLP_HINSTANCE, GetSystemMetrics, GetWindowLongPtrW, ICON_BIG, ICON_SMALL, IMAGE_ICON,
+    LR_DEFAULTCOLOR, LoadImageW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SendMessageW,
+    WM_SETICON,
 };
 
 use crate::app_settings::AppSettings;
@@ -162,7 +161,15 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
     let history = History::open_default(settings.history_retention)
         .inspect_err(|error| tracing::warn!(%error, "could not open retained history"))
         .ok();
-    let mut app = crate::rune_ui::app().args(Vec::new());
+    let mut app = crate::rune_ui::app(Default::default())
+        .args(Vec::new())
+        .on_window(|window| {
+            let _ = window.with_raw_handle(|handle| {
+                if let rune::raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() {
+                    apply_window_icon(handle.hwnd.get() as HWND);
+                }
+            });
+        });
     let window = app.handle();
     // The tray rides the main thread's message pump, which Rune's loop runs.
     match create_tray(window.clone()) {
@@ -275,20 +282,6 @@ fn run_runtime(
 
 thread_local! {
     static TRAY: std::cell::RefCell<Option<TrayIcon>> = const { std::cell::RefCell::new(None) };
-    static ICON_SET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Gives the window the app icon once it exists. Rune's winit window has
-/// none and exposes no handle, so this finds it on the main thread by its
-/// title; closing only hides it, so once is enough.
-pub(crate) fn attach_window_icon() {
-    if RUNTIME.get().is_none() || ICON_SET.get() {
-        return;
-    }
-    if let Some(hwnd) = find_window() {
-        apply_window_icon(hwnd);
-        ICON_SET.set(true);
-    }
 }
 
 /// Gives the window the executable's embedded icon (resource 1, see
@@ -316,32 +309,6 @@ fn apply_window_icon(hwnd: HWND) {
             }
         }
     }
-}
-
-/// The top-level window titled "Hex" on this thread.
-fn find_window() -> Option<HWND> {
-    unsafe extern "system" fn visit(hwnd: HWND, found: LPARAM) -> i32 {
-        let mut title = [0u16; 8];
-        // SAFETY: `title` is a writable buffer of the length passed.
-        let length = unsafe { GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32) };
-        if String::from_utf16_lossy(&title[..length.max(0) as usize]) == "Hex" {
-            // SAFETY: `found` points at the caller's `HWND` slot.
-            unsafe { *(found as *mut HWND) = hwnd };
-            return 0;
-        }
-        1
-    }
-    let mut found: HWND = std::ptr::null_mut();
-    // SAFETY: `visit` only writes through the pointer to `found`, which
-    // outlives the call.
-    unsafe {
-        EnumThreadWindows(
-            GetCurrentThreadId(),
-            Some(visit),
-            (&raw mut found) as LPARAM,
-        );
-    }
-    (!found.is_null()).then_some(found)
 }
 
 fn create_tray(window: rune::AppHandle<Ui>) -> Result<TrayIcon> {

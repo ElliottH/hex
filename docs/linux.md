@@ -171,7 +171,7 @@ running state after the edit.
 Modes apply corrections, OpenCode rewriting, and transformations per
 application. On X11, HEX reads the frontmost application from the active
 window's process name (`code`, `firefox`); the application picker lists
-`.desktop` entries with their icons. Wayland doesn't report the focused window,
+`.desktop` entries. Wayland doesn't report the focused window,
 so the Global mode applies there. Completed dictations are kept in History.
 
 Voice Action, once enabled, records an instruction while you hold

@@ -32,6 +32,12 @@ pub(super) const QUIT_IN_WINDOW: bool = true;
 /// How often shortcut capture samples the keyboard.
 const CHORD_POLL: Duration = Duration::from_millis(16);
 
+/// The runtime is found through its own module; nothing is handed over.
+#[derive(Default)]
+pub(crate) struct Connect {
+    _nothing: (),
+}
+
 pub(super) struct Backend {
     runtime: Option<RuntimeHandle>,
     wake: Arc<dyn Fn() + Send + Sync>,
@@ -39,7 +45,7 @@ pub(super) struct Backend {
 }
 
 impl Backend {
-    pub(super) fn connect(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub(super) fn connect(_: Connect, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
         let runtime = crate::windows_rune::runtime();
         if let Some(runtime) = &runtime {
             runtime.subscribe(wake.clone());
@@ -86,12 +92,8 @@ impl Backend {
     /// listening; without a tray Rune ends the app instead.
     pub(super) fn closed(&mut self) {}
 
-    /// The runtime publishes into shared memory; nothing to pull. Runs on
-    /// the main thread before each frame, which is where the window icon
-    /// can attach once the window exists.
-    pub(super) fn refresh(&mut self) {
-        crate::windows_rune::attach_window_icon();
-    }
+    /// The runtime publishes into shared memory; nothing to pull.
+    pub(super) fn refresh(&mut self) {}
 
     pub(super) fn error(&self) -> Option<String> {
         self.runtime
@@ -208,6 +210,7 @@ pub(super) fn validate_hotkey(
 
 /// The listener's retained history, shared with the window.
 pub(super) fn history(
+    _: &Connect,
     retention: crate::history::HistoryRetention,
 ) -> Option<crate::history::History> {
     match crate::windows_rune::runtime() {

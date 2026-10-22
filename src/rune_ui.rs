@@ -50,6 +50,9 @@ use settings::Capture;
 
 /// How long typing pauses before a text field's edit is saved.
 const DRAFT_DELAY: Duration = Duration::from_millis(250);
+/// How often timed state (draft saves, "Saved" badges, the OpenCode retry,
+/// the setup beat, permission polling) is checked while the window shows.
+const WINDOW_TICK: Duration = Duration::from_millis(250);
 
 static SETTINGS_ICON: Icon = Icon {
     name: "hex-settings",
@@ -103,20 +106,17 @@ pub(crate) fn run_app(
     first: Option<crate::linux_service::Activation>,
 ) {
     use crate::linux_service::{Activation, Control};
-    let _host = host::install(host.clone());
     rune::set_app_id("hex");
-    let mut app = rune::App::new(spec())
-        .args(Vec::new())
-        .windowless()
-        .on_close(on_close);
+    let mut app = self::app(Some(host.clone())).args(Vec::new()).windowless();
     crate::linux_rune_hud::install(&mut app);
     let handle = app.handle();
-    let show = move |activation: Activation| {
-        host.set_window_open(true);
-        match activation.token.or(activation.startup_id) {
-            Some(token) => handle.activate(token),
-            None => handle.open(),
-        }
+    host.set_window_visible({
+        let handle = handle.clone();
+        Arc::new(move || handle.is_visible())
+    });
+    let show = move |activation: Activation| match activation.token.or(activation.startup_id) {
+        Some(token) => handle.activate(token),
+        None => handle.open(),
     };
     if let Some(activation) = first {
         show(activation);
@@ -139,10 +139,18 @@ pub(crate) fn run_app(
     app.run();
 }
 
-/// The window as a Rune app whose lifetime the caller chooses.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-pub(crate) fn app() -> rune::App<Ui> {
-    rune::App::new(spec()).on_close(on_close)
+/// The window as a Rune app whose lifetime the caller chooses, connected to
+/// its host through `connect`.
+pub(crate) fn app(connect: host::Connect) -> rune::App<Ui> {
+    let app = rune::App::new(spec())
+        .init(move || Ui::load_with(connect))
+        .on_close(on_close);
+    let window = app.handle();
+    window.update({
+        let window = window.clone();
+        move |ui, _| ui.window = Some(window)
+    });
+    app
 }
 
 /// Closing the window saves pending text edits and stops a shortcut
@@ -239,8 +247,9 @@ fn spec() -> AppSpec<Ui> {
 
 /// Where the window sends its requests.
 enum Service {
-    /// Not connected yet: `setup` connects unless a scene chose a fixture.
-    Pending,
+    /// Not connected yet: `setup` connects, with what the window's host handed
+    /// over, unless a scene chose a fixture.
+    Pending(host::Connect),
     Live(Box<Backend>),
     /// Snapshots and tests: requests are recorded, never sent.
     Fixture(Vec<Request>),
@@ -369,6 +378,10 @@ enum Menu {
 pub(crate) struct Ui {
     settings: AppSettings,
     service: Service,
+    /// This window's app, to know whether it shows (`app` sets it).
+    window: Option<rune::AppHandle<Ui>>,
+    /// The poll clock when the next timed check is due.
+    tick_at: f64,
     view: Option<ServiceView>,
     /// A save or policy change that failed here.
     error: Option<String>,
@@ -409,14 +422,19 @@ pub(crate) struct Ui {
 
 impl Ui {
     fn load() -> Self {
+        Self::load_with(host::Connect::default())
+    }
+
+    fn load_with(connect: host::Connect) -> Self {
         let (settings, error) = match AppSettings::load() {
             Ok(settings) => (settings, None),
             Err(error) => (AppSettings::default(), Some(format!("{error:#}"))),
         };
         crate::desktop_i18n::apply(settings.ui_language.as_deref());
-        let mut ui = Self::with(settings, Service::Pending);
+        let store = host::history(&connect, settings.history_retention);
+        let mut ui = Self::with(settings, Service::Pending(connect));
         ui.error = error;
-        ui.history = history::HistoryPane::shared(host::history(ui.settings.history_retention));
+        ui.history = history::HistoryPane::shared(store);
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
         ui.platform.developer = crate::DEVELOPER_FEATURES_ENABLED;
@@ -458,6 +476,8 @@ impl Ui {
             hud_copied: false,
             saved: 0,
             quit_requested: false,
+            window: None,
+            tick_at: 0.0,
         }
     }
 
@@ -473,7 +493,7 @@ impl Ui {
                 }
             }
             Service::Fixture(sent) => sent.push(request),
-            Service::Pending => {}
+            Service::Pending(_) => {}
         }
     }
 
@@ -494,7 +514,7 @@ impl Ui {
                 }
             }
             Service::Fixture(_) => self.saved += 1,
-            Service::Pending => {}
+            Service::Pending(_) => {}
         }
         self.error = None;
         self.settings = candidate;
@@ -618,7 +638,7 @@ impl Ui {
         match &mut self.service {
             Service::Live(backend) => backend.quit(),
             Service::Fixture(_) => self.quit_requested = true,
-            Service::Pending => {}
+            Service::Pending(_) => {}
         }
     }
 
@@ -666,20 +686,25 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 
 fn setup(ui: &mut Ui, waker: Waker) {
     ui.modes.waker = Some(waker.clone());
-    if matches!(ui.service, Service::Pending) {
+    if let Service::Pending(connect) = &mut ui.service {
+        let connect = std::mem::take(connect);
         #[cfg(target_os = "macos")]
         {
             ui.host = platform::PlatformHost::Native(host::native_host());
         }
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
-        ui.service = Service::Live(Box::new(Backend::connect(wake)));
+        ui.service = Service::Live(Box::new(Backend::connect(connect, wake)));
     }
 }
 
 /// Runs before every frame: adopts service updates, follows shortcut
 /// capture, model preparation, the OpenCode catalog, history, and setup, and
 /// saves paused text edits. True when anything shown changed.
-fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
+fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
+    if clock >= ui.tick_at && ui.window.as_ref().is_some_and(rune::AppHandle::is_visible) {
+        ui.tick_at = clock + WINDOW_TICK.as_secs_f64();
+        tx.wake_after(WINDOW_TICK);
+    }
     let now = Instant::now();
     let mut changed = ui.save_drafts(now);
     changed |= ui.models.poll(ui.live());
@@ -943,7 +968,7 @@ const SCENES: &[Scene] = &[
     // "Connecting…" at virtual time zero.
     ("live", |ui| {
         *ui = Ui::load();
-        let mut backend = Backend::connect(Arc::new(|| {}));
+        let mut backend = Backend::connect(Default::default(), Arc::new(|| {}));
         let deadline = Instant::now() + Duration::from_secs(5);
         while backend.state().is_none() && backend.error().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(25));

@@ -3,12 +3,13 @@
 HEX ships the macOS product loop: configurable hold-to-talk local dictation,
 explicit selected-text voice editing, optional context-aware OpenCode
 post-processing, a Metal HUD, bounded paste workers, settings, and a signed
-app bundle. Streaming commands are a disabled-by-default experimental opt-in;
-meetings remain a developer prototype until their product surface is redesigned.
-An x86_64 Arch/i3 X11 beta now provides hotkey dictation, automatic paste, a
-Rune window, and signed user-local updates; it does not yet include commands or
-meetings. Native wlroots-compatible Wayland and Nix packaging are implemented
-and awaiting supported-host validation before release.
+app bundle. Streaming commands are a disabled-by-default experimental opt-in,
+and Meetings (beta) is a separate persisted opt-in (`meetings.enabled`, default
+off). Windows (x64 and ARM64) and x86_64 Linux (i3/X11 and compatible wlroots
+Wayland compositors) betas provide hotkey dictation, Modes, Voice Action,
+History, the shared Rune window, and signed user-local updates; they do not yet
+include voice commands or meetings. Nix packaging for Linux is implemented and
+awaiting supported-host validation before release.
 The authenticated local transcription service now implements discovery,
 direct-child embedding, model preparation, and bounded host-audio transcription;
 `@kitlangton/hex@0.3.0` publishes ready transcribers through Promise and Effect
@@ -74,17 +75,18 @@ Run a genuine signed update between two published versions on the target
 Arch/i3 machine. Verify exact artifact validation, atomic activation, restart,
 and retained-version rollback. Smoke-test installation, model download, the CLI
 microphone override, hotkey rebinding, locked capture, cancellation, automatic
-paste, service autostart, client reconnect, and Settings closing without stopping
-accepted work. Linux no longer uses a tray.
+paste, systemd autostart, launch forwarding (`Activate`), and closing the window
+without stopping accepted work. Linux no longer uses a tray.
 
 Keep app-managed updates limited to the user-local direct-install layout. A
 future Arch package must leave updates to the package manager. Nix owns its
 packaged installation and optional Home Manager service. Validate the Wayland
 beta on a compatible compositor with physical portal shortcuts, the `hex`
 commands bound in a desktop without the portal, microphone, foreground paste,
-click-through HUD, and independent service/client shutdown. See
-[`docs/plans/linux.md`](docs/plans/linux.md). Add commands, context, meetings, or
-broader Wayland support only as explicit later capability slices.
+click-through HUD, and window close leaving the process running while `hex quit`
+drains and exits. See [`docs/plans/linux.md`](docs/plans/linux.md). Add commands,
+context, meetings, or broader Wayland support only as explicit later capability
+slices.
 
 macOS, Windows, and Linux now share one window and one `settings.json` (see
 [`docs/plans/shared-desktop-ui.md`](docs/plans/shared-desktop-ui.md)). Remaining

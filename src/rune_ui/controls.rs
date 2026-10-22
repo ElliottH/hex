@@ -190,21 +190,8 @@ pub(super) fn segmented(
     selected: usize,
     pick: fn(&mut Ui, usize),
 ) -> El {
-    // Wide (CJK) characters take about twice a Latin letter's advance.
-    let width = |label: &str| {
-        label
-            .chars()
-            .map(|c| if c as u32 >= 0x2E80 { 13.5 } else { 8.0 })
-            .sum::<f32>()
-            + 28.0
-    };
-    let widest = labels
-        .iter()
-        .map(|label| width(label))
-        .fold(60.0, f32::max)
-        .round();
     SegmentedControl::new(labels, Some(selected))
-        .width(Some(widest * labels.len() as f32))
+        .fit()
         .on_pick(move |ui: &mut Ui, index: usize, _: &mut Tx| pick(ui, index))
         .build(p.k)
         .key(key)
@@ -228,14 +215,13 @@ pub(super) fn select(
     toggle: impl Fn(&mut Ui) + 'static,
     layer: &mut Vec<El>,
 ) -> El {
-    let mut discard = Vec::new();
     let trigger = Select::new::<&str>(format!("{key}-field"), &[])
         .appearance(SelectAppearance::Field)
         .width(SELECT_WIDTH)
         .current(Some(label))
         .open(open)
         .on_toggle(toggle)
-        .build(p.k, &mut discard);
+        .trigger(p.k);
     let mut menu = Menu::new(key)
         .trigger(trigger)
         .placement(Placement::BottomEnd)

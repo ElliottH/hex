@@ -50,12 +50,14 @@ substitute for source inspection or a second roadmap.
 
 - `audio`: `cpal` device enumeration and timestamped mono float PCM delivery,
   live selection, and bounded stream recovery.
-- `moonshine`: the only Moonshine C adapter and the streaming recognizer.
+- `moonshine`, `moonshine_lab`: the only Moonshine C adapter, the streaming
+  recognizer, and the debug interactive/batch command-fixture evaluator.
 - `suppression`: the macOS event taps, shortcut suppression, and the
   configurable dictation-hotkey state machine.
 - `keyboard`: active-layout key resolution and balanced synthetic shortcuts.
-- `dictation`: warm pre-roll, growable capture, and 16 kHz
-  local-transcription resampling.
+- `dictation`, `dictation_diagnostics`: warm pre-roll, growable capture, 16 kHz
+  local-transcription resampling, and owner-only diagnostic WAV retention when
+  `HEX_RETAIN_DICTATION_AUDIO` is set.
 - `pause_segmenter`: pure 16 kHz pause detection that cuts meeting audio into
   rolling transcription chunks.
 - `dictation_audio`: the authoritative microphone timeline, lazy stream
@@ -64,24 +66,28 @@ substitute for source inspection or a second roadmap.
 - `recording_environment`: serialized RAII ownership of idle-sleep prevention,
   output muting, and supported media-player pause/resume behavior.
 - `dictation_processor`: the one OpenCode client and ordered processing policy
-  for macOS and Windows: context-selected corrections, deadline-bounded
+  for macOS, Windows, and Linux: context-selected corrections, deadline-bounded
   OpenCode rewrite profiles with corrected-transcript fallback, the ranked
-  model catalog, Voice Action generation, and the transformation stage. Both
-  apps discover the `opencode2` beta executable and link missing installs to
-  `https://v2.opencode.ai/`. On macOS, `opencode2 api get` discovers or starts
-  the managed service, and generation uses the matching owner-only service
-  registration and authenticated loopback HTTP through the system curl; request
-  bodies and credentials use stdin, never argv or new temporary files. Windows
-  sends the same requests through the `opencode2 api` CLI inside a job object.
+  model catalog, Voice Action generation, and the transformation stage. Every
+  OS discovers the `opencode2` beta executable and links missing installs to
+  `https://v2.opencode.ai/`. On macOS and Linux, `opencode2 api get` discovers
+  or starts the managed service, and generation uses the matching owner-only
+  service registration and authenticated loopback HTTP through the system curl;
+  request bodies and credentials use stdin, never argv or new temporary files.
+  Windows sends the same requests through the `opencode2 api` CLI inside a job
+  object.
 - `parakeet`: the strict-Metal `transcribe.cpp` adapter plus the dictation
   worker that hands clips to the transcription engine and runs bounded,
   ordered processing, output, paste, last-result, and meeting-delta work.
 - `apple_speech`: the Swift `SpeechAnalyzer` bridge with per-locale support
   checks, asset reservation, and batch transcription.
-- `transcription`: runtime selection and transactional warm-model activation.
+- `transcription`, `transcription_benchmark`: runtime selection, transactional
+  warm-model activation, and the fixed-corpus benchmark runner behind
+  `hex benchmark-transcription`.
 - `gguf_session`: the `transcribe.cpp` session owner shared by `parakeet` and
   `local_transcriber`; it recreates the native session around each run (and
-  each live stream) so inference scratch stays bounded.
+  each live stream) so inference scratch stays bounded, and owns chunked
+  long-audio transcription.
 - `local_transcriber`: the Linux and Windows GGUF loader, prewarm, whole-clip
   transcription, and stream entry point.
 - `transcription_engine`: the thread that owns the loaded model on every OS and
@@ -92,8 +98,9 @@ substitute for source inspection or a second roadmap.
   the whole clip. On macOS it also runs background work (meeting chunks) that
   yields to any dictation request sent before it starts.
 - `transcription_preparation`: application-owned model preparation shared by
-  Settings and the menu bar, with one worker, latest-choice pending admission,
-  cancellation fences, and an installed-only path that never downloads a model.
+  Settings and the menu bar on macOS and by the Windows runtime, with one
+  worker, latest-choice pending admission, cancellation fences, and an
+  installed-only path that never downloads a model.
 - `transcription_models`: the compiled model catalog, language recommendations,
   pinned artifact verification, and lazy installation.
 - `transcription_service`: bounded host-audio admission, hostile WAV validation,
@@ -114,7 +121,8 @@ substitute for source inspection or a second roadmap.
 - `recognition`: the semantic coordinator for Moonshine, command mode, hotkey
   and voice-delimited controls, workers, and observations. It does not own the
   authoritative microphone timeline.
-- `command_grammar`: typed command patterns, captures, overlap detection, and
+- `command_grammar`, `spoken_text`: typed command patterns, captures,
+  spoken-number and ASCII-punctuation normalization, overlap detection, and
   command catalog metadata.
 - `keys`: the platform-neutral key and modifier vocabulary of command actions.
 - `commands`: pure contextual resolution plus bounded asynchronous action
@@ -122,9 +130,10 @@ substitute for source inspection or a second roadmap.
   paths, and applications on Windows).
 - `personal_commands`: the Bun-hosted `@hex/commands` TypeScript workspace:
   managed SDK provisioning (built `dist` on macOS, the embedded TypeScript
-  `src` on Windows), the watch-reloaded user command and transformation host,
-  bounded invocation dispatch, and status snapshots. macOS and Windows share
-  it; Windows hosts transformations only.
+  `src` on Windows and Linux), the watch-reloaded user command and
+  transformation host, bounded invocation dispatch, and status snapshots.
+  macOS, Windows, and Linux share it; Windows and Linux host transformations
+  only.
 - `text_replacements`: phrase-boundary-aware compilation of configured text
   replacements applied longest-match-first to transcripts.
 - `config`: compiled commands, preferred input devices, and dictation profiles.
@@ -132,9 +141,9 @@ substitute for source inspection or a second roadmap.
   and modes, plus native macOS capture. Browser host is the domain concept;
   Brave AppleScript is the first macOS adapter and `windows_context` reads any
   browser through UI Automation.
-- `application_catalog`: cached installed-application discovery with icons for
-  the Modes picker, one module per OS: macOS bundles, Windows executables from
-  Start menu shortcuts, App Paths, and open windows, Linux `.desktop` entries.
+- `application_catalog`: cached installed-application discovery for the Modes
+  picker, one module per OS: macOS bundles, Windows executables from Start menu
+  shortcuts, App Paths, and open windows, Linux `.desktop` entries.
 - `app_settings`: the one persisted `settings.json` on every OS and its live
   runtime projection for commands, hotkeys, microphone and transcription
   selection, recording behavior, processing, sound volume, indicator position,
@@ -146,9 +155,14 @@ substitute for source inspection or a second roadmap.
 - `app_paths`: the Application Support owner for runtime logs and shared state,
   including the one-time macOS `voice-control` to `hex` folder rename, which runs
   in `main` before logging, the instance lock, or any file in the folder opens.
-- `onboarding`: required permission health, selected dictation-model
-  installation, the release startup gate, and opt-in command-model setup.
+- `onboarding`, `permission_guide`: required permission health, the native
+  floating System Settings guide, selected dictation-model installation, the
+  release startup gate, and opt-in command-model setup.
 - `sparkle`: packaged-app-only Sparkle lifecycle and manual update checks.
+- `hex_microphone`, `voice_filter`: the experimental macOS CoreAudio virtual
+  microphone (`Hex Microphone`), lock-free capture-to-sink ring buffer,
+  real-time voice-filter DSP presets, and the offline WAV renderer behind
+  `hex dev voice-filter render`.
 - `linux`, `linux_app`, `linux_dictation`, `linux_paste`, `linux_migration`:
   the Linux beta CLI (including the `hex dictation`, `hex voice-action`, and
   `hex paste-last` keybinding commands and launch forwarding), the one Linux
@@ -188,14 +202,17 @@ substitute for source inspection or a second roadmap.
   and restart handoff for user-local Linux installs.
 - `windows`, `windows_app`, `windows_rune`, `windows_dictation`,
   `windows_input`, `windows_paste`, `windows_migration`, `windows_rune_hud`,
-  `windows_updater`, `windows_context`, `windows_audio_control`,
-  `windows_login_item`: the Windows beta CLI, the listener host and
-  single-instance claim, the tray app on `rune::App` (tray, window icon, and
-  runtime thread; `rune_ui/windows_host.rs` is the window's host), the WASAPI
-  dictation loop, low-level keyboard hook, clipboard paste, the one-time
-  `windows-settings.json` migration, the HUD (the shared indicator model and
-  CPU shader in a Rune overlay), signed self-update, UI Automation context,
-  audio ducking, and the login item.
+  `desktop_indicator_model`, `desktop_indicator_shader`, `windows_updater`,
+  `windows_context`, `windows_audio_control`, `windows_login_item`: the Windows
+  beta CLI, the runtime host (`WindowsDesktopHost`: listener, model
+  preparation, OpenCode catalog, transformations, updater) and single-instance
+  claim, the tray app on `rune::App` (tray, window icon, and runtime thread;
+  `rune_ui/windows_host.rs` is the window's host), the WASAPI dictation loop,
+  low-level keyboard hook, clipboard paste, the one-time
+  `windows-settings.json` migration, the HUD (`desktop_indicator_model` springs
+  and `desktop_indicator_shader` CPU fragment shader drawn into a Rune
+  overlay), signed self-update, UI Automation context, audio ducking, and the
+  login item.
 - `dictation_modes`: the mode runtime the Windows and Linux listeners share:
   mode selection by application and website, then global replacements, mode
   corrections, OpenCode rewriting, and transformations, and the History entry.
@@ -205,13 +222,14 @@ substitute for source inspection or a second roadmap.
 - `history`: the owner-only bounded retained-dictation store: retention
   windows with hard entry and byte caps, atomic crash-safe persistence, and
   search. Text and bounded metadata only, never audio.
-- `events`: bounded asynchronous append-only NDJSON observations and bounded
-  incremental reading; `dashboard` and the Activity pane are read-only
-  projections.
+- `events`, `dashboard`: bounded asynchronous append-only NDJSON observations
+  and bounded incremental reading; the debug `dashboard` TUI and the Activity
+  pane are read-only projections.
 - `desktop_activity`: the shared listener, device, session, and latest-failure
   projection over `EventReader`. Transcript rows read retained events directly.
-- `desktop_host`: the Linux host's in-process snapshot-and-action types, shared
-  by the window and `hex status`.
+- `desktop_host`: the in-process listener, transcription, shortcut, and update
+  snapshot-and-action types shared by the Linux and Windows hosts, the window,
+  and `hex status`.
 - `rune_ui`: the one window on macOS, Windows, and Linux, on Rune with
   `rune-kit` and the OpenCode theme: Settings, Modes with mode-owned
   corrections and processing, Voice Action, History, opt-in Commands, Meetings,
@@ -232,9 +250,10 @@ substitute for source inspection or a second roadmap.
   and HUD on the main AppKit loop, and a runtime thread for model
   preparation and the window's state. `rune_ui/macos_host.rs` is the
   window's host and the panes' `NativeHost`.
-- `dictation_indicator`: the click-through native Metal/AppKit capture and
-  processing HUD (an `NSPanel` driven from `macos_rune`'s main-loop timer), with
-  `spring` for its frame-rate-independent springs and Reduce Motion.
+- `dictation_indicator`, `spring`: the click-through native Metal/AppKit
+  capture and processing HUD (an `NSPanel` driven from `macos_rune`'s main-loop
+  timer), with `spring` for its frame-rate-independent springs and Reduce
+  Motion.
 - `meeting`: explicit capture through `meeting_capture`, owner-only WAV and transcript
   artifacts, Screen Recording permission checks, final local-model publication,
   the user-facing Markdown copy, and recovery.
@@ -521,6 +540,18 @@ CoreAudio formats, AppleScript details, or event serialization.
   Secondary button with a status dot. Extend a piece instead of adding a
   parallel helper, and verify visual changes with `--snap` scenes in light and
   dark.
+- Neither Hex nor Rune (`anomalyco/rune`, public MIT) is published to
+  crates.io; never run `cargo publish`. Hex depends on `rune`, `rune-kit`, and
+  `rune-theme-opencode` at one pinned Git rev in `Cargo.toml`; every pin bump
+  must also update `cargoLock.outputHashes."rune-0.0.1"` in `nix/package.nix`
+  and keep `windows` 0.62.2 for `gpu-allocator` in `Cargo.lock`.
+- Hex runs as one long-lived process per user and data root on every OS: a
+  menu-bar process on macOS (`macos_rune`, native `NSStatusItem`, native Metal
+  `NSPanel` HUD, Rune meeting-capsule overlays), a tray process on Windows
+  (`windows_rune`, named-event single instance, Rune overlay HUD), and a
+  single-instance process on Linux (`linux_app`, socket + lock in the data
+  root, Rune overlay HUD). Closing the window never stops the runtime, listener,
+  HUD, or accepted work.
 - Public app updates are Developer ID signed, notarized, stapled, EdDSA signed,
   published artifact-first/feed-last, and installed through Sparkle.
 - Linux direct-install updates accept only a strictly newer signed stable
