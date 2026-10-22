@@ -30,8 +30,8 @@ pastes the result into the app you are using.
   recognition.
 
 The macOS app is available now. The [Windows beta](#windows-beta) covers x64 and
-ARM64 PCs, and the [Linux beta](#linux-beta) has a smaller feature set and requires
-a source build or Nix. See [Privacy and local data](#privacy-and-local-data)
+ARM64 PCs, and the [Linux beta](#linux-beta) covers x86_64 X11 and compatible
+wlroots Wayland compositors. See [Privacy and local data](#privacy-and-local-data)
 for what stays on your device and what optional features send to a provider.
 
 ## Install HEX
@@ -154,7 +154,7 @@ npx skills add anomalyco/hex --skill hex-personal-commands
 
 - Speech transcription and command recognition run locally.
 - HEX does not save dictation audio by default.
-- On macOS, History retains successfully pasted dictation and Voice Action text
+- History retains successfully pasted dictation and Voice Action text
   for seven days by default, including the local transcript, final text, and
   limited application and timing metadata. It never stores audio, full browser
   URLs, or window titles. Every retention choice has entry and byte limits.
@@ -215,8 +215,8 @@ source.
 ## Linux Beta
 
 The Linux beta targets x86_64 Linux on i3/X11 and compatible wlroots Wayland
-compositors. It supports local hotkey dictation, the Hex window, and
-signed updates for direct installs. With a Vulkan graphics driver, dictation
+compositors. It supports local hotkey dictation, Modes, Voice Action, History,
+the Hex window, and signed updates for direct installs. With a Vulkan graphics driver, dictation
 streams while you speak, as on macOS and Windows. Native Wayland requires
 compositor support for clipboard, virtual-keyboard, and layer-shell protocols.
 Shortcuts come from the desktop's GlobalShortcuts portal, or you bind

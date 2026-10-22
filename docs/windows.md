@@ -178,7 +178,7 @@ fixtures without starting anything: `hex app -- --snap out.png --scene modes`.
 hex app
 ├── named event already held -> signal it (the running app shows its window) -> exit
 └── becomes the app                                   // windows_rune::open
-    ├── runtime thread: WindowsDesktopHost + TranscriptionPreparation, publishes every 250 ms
+    ├── runtime thread: WindowsDesktopHost (listener, model preparation, OpenCode, transformations, updater), publishes every 250 ms
     ├── main thread: rune::App's winit loop, the window, the tray (rides winit's message pump)
     ├── --hidden -> windowless start; close -> hide (keep_running)
     ├── tray Show or a relaunch -> AppHandle::open (shows and focuses)

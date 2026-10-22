@@ -232,8 +232,9 @@ Settings > Voice Action > Enable                      // voice-action.linux; off
 The shortcut and commands feed the same state machine as dictation in
 [linux_input.rs](../../src/linux_input.rs), so Voice Action and dictation never
 record at once, and a command while Voice Action is off fails with an error
-from the service (`commands_reach_only_a_started_listener` in
-[linux_app.rs](../../src/linux_app.rs)). `run_voice_action` in
+from the service (`commands_route_only_to_a_started_listener` in
+[linux_app.rs](../../src/linux_app.rs) and `commands_reach_only_a_listening_route`
+in [linux_service.rs](../../src/linux_service.rs)). `run_voice_action` in
 [linux_dictation.rs](../../src/linux_dictation.rs) sends the instruction and
 selection through the same OpenCode Voice Action processing and pastes the
 reply. `voice_action_records_while_its_shortcut_is_held` and

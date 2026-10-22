@@ -126,7 +126,8 @@ LOCKED -> Speak hands-free -> Fresh shortcut press -> Finish
 
 Checks in [suppression.rs](../../src/suppression.rs):
 `callback_double_tap_locks_for_modifier_and_key_bindings`,
-`a_slow_second_release_does_not_lock`,
+`callback_hold_and_double_tap_boundaries_are_milliseconds`,
+`second_tap_finishes_as_press_and_hold_when_double_tap_cannot_lock`,
 `double_tap_only_waits_for_two_complete_key_chord_taps`,
 `locked_dictation_finishes_after_a_missing_key_release`.
 These cover gesture decisions, not hardware keyboard-layout or remapping equivalence.
@@ -211,9 +212,9 @@ owner's `Finish` ends the recording environment through
 `end_recording_environment_then` and plays the tone from the environment worker
 once a muted output is restored (at once with paused media), then drains the
 tail; `finish_dictation` plays the tone itself only for tail-free finishes. This
-macOS change has **not been compiled or run**: hailmary was unreachable on
-2026-10-22, so the tone timing and the unmute-then-tone order are unverified on
-a Mac. Linux and Windows play the stop tone at the release too. On Linux this used
+macOS change compiles and passes Clippy on hailmary (2026-10-22); physical tone
+timing and the unmute-then-tone order on a Mac audio device remain unverified.
+Linux and Windows play the stop tone at the release too. On Linux this used
 to follow the tail too: on 2026-10-22, an isolated service on apollo (ALSA
 Loopback microphone and speaker, `hex dictation stop`) measured the stop tone
 requested 203 ms after the release was handled before the fix and within the same
