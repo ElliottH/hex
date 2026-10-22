@@ -40,6 +40,9 @@ pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) -> HudHandle {
             size: (WINDOW_WIDTH, WINDOW_HEIGHT),
             edge: ScreenEdge::Top,
             margin: TOP_OFFSET,
+            align: rune::Align::Center,
+            inset: 0.0,
+            interactive: false,
             view,
         },
         Hud {
