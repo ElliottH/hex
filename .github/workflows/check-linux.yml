@@ -20,7 +20,7 @@ on:
       - "nix/**"
       - ".github/workflows/check-linux.yml"
   push:
-    branches: [main]
+    branches: [main, rune-ui]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
@@ -114,6 +114,10 @@ jobs:
       - name: Exercise service IPC and client-independent lifecycle
         run: python3 scripts/test-linux-service.py target/debug/voice-control
       - run: cargo clippy --locked --bin voice-control --tests -- -D warnings
+      - name: Check the Rune front end
+        run: |
+          cargo clippy --locked --bin voice-control --tests --features rune-ui -- -D warnings
+          cargo test --locked --bin voice-control --features rune-ui rune_ui
 
   nix:
     runs-on: ubuntu-24.04

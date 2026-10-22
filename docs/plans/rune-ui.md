@@ -7,9 +7,9 @@ the local transcription picker, and first-run setup. Windows has the same
 panes in a single-instance tray process (`hex app --ui rune`), written and
 cross-compiled but never run (see `docs/windows.md`). GPUI stays the default
 everywhere. Rune, `rune-kit`, and `rune-theme-opencode` are pinned to a
-commit on Rune's `main` (`anomalyco/rune`, private; `338d22a`). Do not merge
-to `main` until the dependency questions under [Risks](#risks) are settled
-and a person has checked [the real-window list](#needs-a-person-to-look).
+commit on Rune's `main` (`https://github.com/anomalyco/rune.git`, public,
+MIT; see [rune-dependency.md](rune-dependency.md)). Do not merge to `main`
+until a person has checked [the real-window list](#needs-a-person-to-look).
 
 **Goal:** one Rune front end for Hex on macOS, Windows, and Linux, replacing
 about 29k lines of GPUI (`app_window.rs` and its OS modules, `desktop_ui.rs`,
@@ -287,17 +287,13 @@ the Rune core work below.
 
 ## Risks
 
-- **Private dependency in a public repo.** Cargo fetches every Git dependency
-  in `Cargo.lock`, optional or not: with Rune unreachable even the default GPUI
-  build fails (verified with an empty `CARGO_HOME`). Release CI, the Nix flake,
-  and outside contributors break until Rune is public, vendored, or moved out
-  of Hex's lockfile. This is why the port stays on the branch.
+- **Dependency.** Rune is public (MIT) and fetched over HTTPS like any other
+  Git dependency; [rune-dependency.md](rune-dependency.md) records the decision
+  and the pin-bump steps (Cargo and the Nix hash).
 - **API churn.** Kit's agents change Rune's `main` daily. Hex pins a commit,
   keeps its Rune code in `src/rune_ui*`, and moves the pin deliberately. A
   pending text-quality change will shift glyph rendering; the goldens' 12/255
-  tolerance and 0.2% pixel budget may need rewriting when it lands. Rune's
-  workspace ships a vendored copy under `crates/rune-light/vendor/rune`, which
-  makes Cargo warn about a duplicate `rune` package.
+  tolerance and 0.2% pixel budget may need rewriting when it lands.
 - **Unproven platform shells.** Rune's Linux window has had one short check;
   Windows has only been cross-compiled (`cargo xwin clippy` on apollo; see
   `docs/windows.md`), never run; the macOS window kinds Hex needs do not exist yet.
