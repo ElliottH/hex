@@ -25,13 +25,14 @@ use crate::desktop_host::{
 };
 use crate::events::EventReader;
 use crate::linux_input::{LinuxHotkey, ShortcutCommand};
-use crate::linux_service::{
-    self, Activation, Control, Published, ShortcutRoute, ShortcutTarget, Status,
-};
+use crate::linux_service::{self, Activation, Control, Published, ShortcutRoute, Status};
 use crate::linux_updater::InstalledUpdate;
 
 const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(20);
+/// Drafts, the OpenCode retry, and the setup beat are timed; while the
+/// window is open, the host thread wakes it at least this often.
+const WINDOW_TICK: Duration = Duration::from_millis(250);
 /// Left by "Update" so the restarted process shows the window again; a
 /// crash restart finds none and stays in the background.
 const REOPEN_MARKER: &str = "reopen-window";
@@ -39,6 +40,15 @@ const REOPEN_MARKER: &str = "reopen-window";
 type ListenerResult = std::result::Result<(), String>;
 type PreparationResult = std::result::Result<PreparedTranscription, String>;
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// A shortcut Settings records for the listener.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ShortcutTarget {
+    #[default]
+    Dictation,
+    PasteLast,
+    VoiceAction,
+}
 
 struct PreparedTranscription {
     selection: crate::transcription_models::TranscriptionSelection,
@@ -53,16 +63,9 @@ struct TranscriptionPreparation {
     worker: JoinHandle<PreparationResult>,
 }
 
-#[derive(Clone, PartialEq)]
-enum SettingsChange {
-    Capture(ShortcutTarget),
-    Hotkey(ShortcutTarget, LinuxHotkey),
-    /// Settings the window already saved.
-    Reload(Box<AppSettings>),
-}
-
-struct SettingsEdit {
-    change: SettingsChange,
+struct ShortcutEdit {
+    target: ShortcutTarget,
+    hotkey: Option<LinuxHotkey>,
     resume: bool,
     canceled: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<AppSettings>>>,
@@ -108,6 +111,7 @@ struct LinuxDesktopHost {
     activity: DesktopActivity,
     listener: Option<Listener>,
     listen_when_ready: bool,
+    restart_listener: bool,
     status: String,
     error: Option<String>,
     dismissed_failure_at: Option<u64>,
@@ -115,7 +119,7 @@ struct LinuxDesktopHost {
     settings: AppSettings,
     // Dismissing a load error must not authorize recording with fallback defaults.
     settings_valid: bool,
-    settings_edit: Option<SettingsEdit>,
+    shortcut_edit: Option<ShortcutEdit>,
     prepared_transcriber: Option<crate::local_transcriber::LocalTranscriber>,
     transcription_preparation: Option<TranscriptionPreparation>,
     transcription_error: Option<String>,
@@ -198,12 +202,7 @@ impl HostHandle {
     }
 
     pub(crate) fn snapshot(&self) -> HostSnapshot {
-        let host = self.lock();
-        HostSnapshot {
-            desktop: host.snapshot(),
-            settings: host.settings.clone(),
-            editing: host.settings_edit.is_some(),
-        }
+        self.lock().host_snapshot()
     }
 
     pub(crate) fn request(&self, request: HostRequest) -> Result<()> {
@@ -212,11 +211,11 @@ impl HostHandle {
             match request {
                 HostRequest::Desktop(action) => host.dispatch(action),
                 HostRequest::CaptureShortcutFor(target) => {
-                    host.begin_settings_edit(SettingsChange::Capture(target));
+                    host.begin_shortcut_edit(target, None);
                     Ok(())
                 }
                 HostRequest::CancelShortcut => {
-                    host.cancel_settings_edit();
+                    host.cancel_shortcut_edit();
                     Ok(())
                 }
                 HostRequest::SetShortcut { target, shortcut } => host.set_hotkey(target, shortcut),
@@ -265,7 +264,7 @@ impl HostHandle {
         self.set_window_open(false);
         let mut host = self.lock();
         if host.capturing_hotkey() {
-            host.cancel_settings_edit();
+            host.cancel_shortcut_edit();
         }
     }
 
@@ -276,16 +275,15 @@ impl HostHandle {
         }
     }
 
-    fn status(&self) -> Status {
-        let snapshot = self.snapshot();
+    fn status(&self, snapshot: HostSnapshot, session: linux_service::Session) -> Status {
         Status {
             desktop: snapshot.desktop,
             settings: snapshot.settings,
             editing: snapshot.editing,
             hud_limitation: crate::linux_rune_hud::limitation(),
-            window_open: self.0.window_open.load(Ordering::Acquire),
+            window_open: self.window_open(),
             pid: std::process::id(),
-            session: linux_service::Session::current(),
+            session,
         }
     }
 }
@@ -293,7 +291,7 @@ impl HostHandle {
 /// Becomes the Linux instance: claims the data root, starts the host, and
 /// runs the window's event loop on this (the main) thread until `hex quit`,
 /// a signal, or the window's Quit. `activation` opens the window at once.
-pub fn run(
+pub(crate) fn run(
     event_path: PathBuf,
     shutdown: &'static AtomicBool,
     activation: Option<Activation>,
@@ -320,8 +318,9 @@ pub fn run(
         host.start();
     }
     let host = HostHandle::new(host, shutdown);
+    let session = linux_service::Session::current();
     let published = Arc::new(Published::default());
-    *published.status.lock().unwrap() = Some(host.status());
+    *published.status.lock().unwrap() = Some(host.status(host.snapshot(), session.clone()));
     let (control, requests) = mpsc::sync_channel(8);
     server.serve(published.clone(), control.clone(), shutdown);
     linux_service::notify("READY=1");
@@ -331,7 +330,7 @@ pub fn run(
         let host = host.clone();
         std::thread::Builder::new()
             .name("hex-host".into())
-            .spawn(move || run_host(host, published, server, control, shutdown))?
+            .spawn(move || run_host(host, published, server, control, session, shutdown))?
     };
     let reopen = take_reopen_marker();
     let first = activation.or(reopen.then(Activation::default));
@@ -348,12 +347,14 @@ fn run_host(
     published: Arc<Published>,
     server: linux_service::Server,
     control: mpsc::SyncSender<Control>,
+    session: linux_service::Session,
     shutdown: &'static AtomicBool,
 ) {
     let mut stopping = false;
     let mut shown: Option<HostSnapshot> = None;
+    let mut last_wake = Instant::now();
     loop {
-        let (done, route) = {
+        let (done, route, snapshot) = {
             let mut guard = host.lock();
             if shutdown.load(Ordering::Acquire) && !stopping {
                 stopping = true;
@@ -367,18 +368,17 @@ fn run_host(
             (
                 stopping && !guard.has_pending_work(),
                 guard.shortcut_route(),
+                guard.host_snapshot(),
             )
         };
         *published.shortcuts.lock().unwrap() = route;
-        let status = host.status();
-        let snapshot = HostSnapshot {
-            desktop: status.desktop.clone(),
-            settings: status.settings.clone(),
-            editing: status.editing,
-        };
-        *published.status.lock().unwrap() = Some(status);
-        if shown.as_ref() != Some(&snapshot) {
+        *published.status.lock().unwrap() = Some(host.status(snapshot.clone(), session.clone()));
+        let changed = shown.as_ref() != Some(&snapshot);
+        if changed {
             shown = Some(snapshot);
+        }
+        if changed || (host.window_open() && last_wake.elapsed() >= WINDOW_TICK) {
+            last_wake = Instant::now();
             host.wake();
         }
         if done {
@@ -460,13 +460,14 @@ impl LinuxDesktopHost {
             activity,
             listener: None,
             listen_when_ready: false,
+            restart_listener: false,
             status: "Disabled".into(),
             error: None,
             dismissed_failure_at: None,
             settings_valid: error.is_none(),
             settings_error: error,
             settings,
-            settings_edit: None,
+            shortcut_edit: None,
             prepared_transcriber: None,
             transcription_preparation: None,
             transcription_error: None,
@@ -516,10 +517,11 @@ impl LinuxDesktopHost {
     }
 
     fn start(&mut self) {
-        if self.settings_edit.is_some() {
+        if self.shortcut_edit.is_some() {
             return;
         }
         self.listen_when_ready = true;
+        self.restart_listener = false;
         if self.is_running() || self.transcription_preparation.is_some() {
             return;
         }
@@ -573,7 +575,8 @@ impl LinuxDesktopHost {
 
     fn stop(&mut self) {
         self.listen_when_ready = false;
-        if let Some(edit) = &mut self.settings_edit {
+        self.restart_listener = false;
+        if let Some(edit) = &mut self.shortcut_edit {
             edit.resume = false;
             edit.canceled.store(true, Ordering::Release);
         }
@@ -661,9 +664,14 @@ impl LinuxDesktopHost {
             .listener
             .take_if(|listener| listener.worker.is_finished())
         {
-            let result = listener.finish();
-            match result {
-                Ok(()) => self.status = "Disabled".into(),
+            let restart = std::mem::take(&mut self.restart_listener);
+            match listener.finish() {
+                Ok(()) => {
+                    self.status = "Disabled".into();
+                    if restart && self.listen_when_ready {
+                        self.start();
+                    }
+                }
                 Err(error) => {
                     self.status = "Couldn't enable".into();
                     self.error = Some(error);
@@ -671,7 +679,7 @@ impl LinuxDesktopHost {
             }
         }
 
-        self.refresh_settings_edit();
+        self.refresh_shortcut_edit();
 
         self.activity.refresh(&mut self.event_reader);
         if let Some(listener) = &mut self.listener {
@@ -693,36 +701,26 @@ impl LinuxDesktopHost {
     }
 
     fn set_hotkey(&mut self, target: ShortcutTarget, shortcut: DesktopShortcut) -> Result<()> {
-        if shortcut.function {
-            self.error = Some("The Fn modifier cannot be registered on Linux".into());
-            self.cancel_settings_edit();
-            return Err(color_eyre::eyre::eyre!(
-                "the Fn modifier cannot be registered on Linux"
-            ));
-        }
-        let binding = LinuxHotkey {
-            control: shortcut.control,
-            alt: shortcut.alt,
-            shift: shortcut.shift,
-            super_key: shortcut.platform,
-            key: if shortcut.key == " " {
-                "space".into()
-            } else {
-                shortcut.key.to_ascii_lowercase()
-            },
+        let binding = match LinuxHotkey::try_from(shortcut) {
+            Ok(binding) => binding,
+            Err(error) => {
+                self.error = Some("The Fn modifier cannot be registered on Linux".into());
+                self.cancel_shortcut_edit();
+                return Err(error);
+            }
         };
-        if let Some(edit) = &mut self.settings_edit {
-            if edit.change == SettingsChange::Capture(target) && edit.worker.is_none() {
-                edit.change = SettingsChange::Hotkey(target, binding);
+        if let Some(edit) = &mut self.shortcut_edit {
+            if edit.target == target && edit.hotkey.is_none() && edit.worker.is_none() {
+                edit.hotkey = Some(binding);
             }
         } else {
-            self.begin_settings_edit(SettingsChange::Hotkey(target, binding));
+            self.begin_shortcut_edit(target, Some(binding));
         }
         Ok(())
     }
 
-    fn begin_settings_edit(&mut self, change: SettingsChange) {
-        if self.settings_edit.is_some() {
+    fn begin_shortcut_edit(&mut self, target: ShortcutTarget, hotkey: Option<LinuxHotkey>) {
+        if self.shortcut_edit.is_some() {
             return;
         }
         if self.transcription_preparation.is_some() {
@@ -733,16 +731,17 @@ impl LinuxDesktopHost {
         let resume = self.listen_when_ready;
         self.stop();
         self.error = None;
-        self.settings_edit = Some(SettingsEdit {
-            change,
+        self.shortcut_edit = Some(ShortcutEdit {
+            target,
+            hotkey,
             resume,
             canceled: Arc::new(AtomicBool::new(false)),
             worker: None,
         });
     }
 
-    fn cancel_settings_edit(&mut self) {
-        if let Some(edit) = &self.settings_edit {
+    fn cancel_shortcut_edit(&mut self) {
+        if let Some(edit) = &self.shortcut_edit {
             edit.canceled.store(true, Ordering::Release);
         }
     }
@@ -754,52 +753,40 @@ impl LinuxDesktopHost {
         if self.settings_valid && settings == self.settings {
             return;
         }
+        let was_valid = self.settings_valid;
         let model_changed = settings.transcription != self.settings.transcription;
-        let restart = model_changed
-            || settings.dictation_hotkey != self.settings.dictation_hotkey
-            || settings.double_tap_lock != self.settings.double_tap_lock
-            || settings.shortcut_mode != self.settings.shortcut_mode
-            || settings.paste_with_shift != self.settings.paste_with_shift
-            || settings.microphone != self.settings.microphone
-            || settings.paste_last_hotkey != self.settings.paste_last_hotkey
-            || settings.double_tap_only != self.settings.double_tap_only
-            || settings.release_microphone_while_idle
-                != self.settings.release_microphone_while_idle
-            || settings.recording_audio_behavior != self.settings.recording_audio_behavior
-            || settings.indicator_position != self.settings.indicator_position
-            || settings.voice_action.enabled != self.settings.voice_action.enabled
-            || settings.edit_hotkey != self.settings.edit_hotkey;
-        if restart && self.is_running() && self.settings_edit.is_none() {
-            self.begin_settings_edit(SettingsChange::Reload(Box::new(settings)));
-            return;
-        }
+        let restart = needs_listener_restart(&self.settings, &settings);
         self.settings = settings;
         self.settings_valid = true;
         self.settings_error = None;
         self.apply_output_settings();
-        if model_changed && self.listen_when_ready && !self.is_running() {
+        if let Some(listener) = &self.listener {
+            if restart {
+                self.restart_listener = true;
+                listener.stop();
+            }
+        } else if self.listen_when_ready && (model_changed || !was_valid) {
             self.start();
         }
     }
 
     fn capturing_hotkey(&self) -> bool {
-        self.settings_edit.as_ref().is_some_and(|edit| {
-            !edit.canceled.load(Ordering::Acquire)
-                && matches!(edit.change, SettingsChange::Capture(_))
-        })
+        self.shortcut_edit
+            .as_ref()
+            .is_some_and(|edit| !edit.canceled.load(Ordering::Acquire) && edit.hotkey.is_none())
     }
 
     fn has_pending_work(&self) -> bool {
         self.is_running()
-            || self.settings_edit.is_some()
+            || self.shortcut_edit.is_some()
             || self.transcription_preparation.is_some()
     }
 
-    fn refresh_settings_edit(&mut self) {
+    fn refresh_shortcut_edit(&mut self) {
         if self.is_running() {
             return;
         }
-        let Some(edit) = &mut self.settings_edit else {
+        let Some(edit) = &mut self.shortcut_edit else {
             return;
         };
         if edit
@@ -829,19 +816,14 @@ impl LinuxDesktopHost {
                 _ => {}
             }
         } else if !canceled {
-            if matches!(edit.change, SettingsChange::Capture(_)) {
+            let Some(binding) = edit.hotkey.clone() else {
                 // Settings records the chord from its own key events.
                 self.status = "Press a shortcut".into();
                 return;
-            }
-            let change = edit.change.clone();
+            };
+            let target = edit.target;
             let canceled = edit.canceled.clone();
             edit.worker = Some(std::thread::spawn(move || {
-                let (target, binding) = match change {
-                    SettingsChange::Capture(_) => unreachable!("Settings records the chord"),
-                    SettingsChange::Hotkey(target, binding) => (target, binding),
-                    SettingsChange::Reload(settings) => return Ok(*settings),
-                };
                 binding.validate()?;
                 if crate::linux_session::LinuxSession::detect().is_wayland() {
                     // The listener asks the desktop again and reports what it granted.
@@ -867,15 +849,10 @@ impl LinuxDesktopHost {
                     }
                 })
             }));
-            self.status = if self.capturing_hotkey() {
-                "Press a shortcut"
-            } else {
-                "Saving settings"
-            }
-            .into();
+            self.status = "Saving settings".into();
             return;
         }
-        let resume = self.settings_edit.take().is_some_and(|edit| edit.resume);
+        let resume = self.shortcut_edit.take().is_some_and(|edit| edit.resume);
         self.status = "Disabled".into();
         if resume {
             self.start();
@@ -897,7 +874,7 @@ impl LinuxDesktopHost {
         model: crate::transcription_models::TranscriptionModelId,
         language: String,
     ) -> Result<()> {
-        if self.settings_edit.is_some() {
+        if self.shortcut_edit.is_some() {
             let error = "Finish the shortcut change before changing the model".to_string();
             self.transcription_error = Some(error.clone());
             return Err(color_eyre::eyre::eyre!(error));
@@ -976,6 +953,22 @@ impl LinuxDesktopHost {
     }
 }
 
+fn needs_listener_restart(current: &AppSettings, next: &AppSettings) -> bool {
+    next.transcription != current.transcription
+        || next.dictation_hotkey != current.dictation_hotkey
+        || next.double_tap_lock != current.double_tap_lock
+        || next.shortcut_mode != current.shortcut_mode
+        || next.paste_with_shift != current.paste_with_shift
+        || next.microphone != current.microphone
+        || next.paste_last_hotkey != current.paste_last_hotkey
+        || next.double_tap_only != current.double_tap_only
+        || next.release_microphone_while_idle != current.release_microphone_while_idle
+        || next.recording_audio_behavior != current.recording_audio_behavior
+        || next.indicator_position != current.indicator_position
+        || next.voice_action.enabled != current.voice_action.enabled
+        || next.edit_hotkey != current.edit_hotkey
+}
+
 /// Saves one host-owned change on top of the current `settings.json`, so
 /// edits the window saved meanwhile survive.
 fn save_with(change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
@@ -998,27 +991,18 @@ impl Drop for LinuxDesktopHost {
     fn drop(&mut self) {
         self.stop();
         self.cancel_transcription_preparation();
-        if let Some(listener) = self
-            .listener
-            .take_if(|listener| listener.worker.is_finished())
-        {
-            let _ = listener.finish();
-        }
-        if let Some(preparation) = self
-            .transcription_preparation
-            .take_if(|preparation| preparation.worker.is_finished())
-        {
-            let _ = preparation.worker.join();
-        }
-        if let Some(edit) = &mut self.settings_edit
-            && let Some(worker) = edit.worker.take_if(|worker| worker.is_finished())
-        {
-            let _ = worker.join();
-        }
     }
 }
 
 impl LinuxDesktopHost {
+    fn host_snapshot(&self) -> HostSnapshot {
+        HostSnapshot {
+            desktop: self.snapshot(),
+            settings: self.settings.clone(),
+            editing: self.shortcut_edit.is_some(),
+        }
+    }
+
     fn snapshot(&self) -> DesktopSnapshot {
         let update_status = match &self.update {
             UpdateState::Unmanaged => DesktopUpdateStatus::Unavailable,
@@ -1151,7 +1135,7 @@ mod tests {
         while !worker.is_finished() {
             std::thread::yield_now();
         }
-        host.settings_edit.as_mut().unwrap().worker = Some(worker);
+        host.shortcut_edit.as_mut().unwrap().worker = Some(worker);
     }
 
     #[test]
@@ -1175,9 +1159,7 @@ mod tests {
 
         let mut recovered = host.settings.clone();
         recovered.double_tap_lock = false;
-        host.begin_settings_edit(SettingsChange::Reload(Box::new(recovered.clone())));
-        set_finished_edit(&mut host, Ok(recovered.clone()));
-        host.refresh_settings_edit();
+        host.adopt_settings(recovered.clone());
         assert!(host.settings_valid);
         assert_eq!(host.settings, recovered);
         assert!(!host.is_running());
@@ -1334,19 +1316,26 @@ mod tests {
             let mut host = host_for_edit(running);
             let mut candidate = host.settings.clone();
             candidate.paste_with_shift = !candidate.paste_with_shift;
-            host.begin_settings_edit(SettingsChange::Reload(Box::new(candidate.clone())));
-            assert_eq!(host.settings_edit.as_ref().unwrap().resume, running);
             if running {
-                host.refresh_settings_edit();
+                let (release, held) = mpsc::channel();
+                host.listener.as_mut().unwrap().worker = std::thread::spawn(move || {
+                    held.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(())
+                });
+                host.adopt_settings(candidate.clone());
+                assert_eq!(host.settings, candidate);
                 assert!(host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
-                assert!(host.settings_edit.as_ref().unwrap().worker.is_none());
-                assert_ne!(host.settings, candidate);
+                host.refresh();
+                assert!(host.is_running());
+                release.send(()).unwrap();
+                while !host.listener.as_ref().unwrap().worker.is_finished() {
+                    std::thread::yield_now();
+                }
+            } else {
+                host.adopt_settings(candidate.clone());
             }
-            host.listener = None;
-            set_finished_edit(&mut host, Ok(candidate.clone()));
-            host.refresh_settings_edit();
+            host.refresh();
             assert_eq!(host.settings, candidate);
-            assert!(host.settings_edit.is_none());
             assert_eq!(host.listen_when_ready, running);
         }
     }
@@ -1357,22 +1346,22 @@ mod tests {
             for cancel in [false, true] {
                 let mut host = host_for_edit(running);
                 let original = host.settings.clone();
-                host.begin_settings_edit(SettingsChange::Capture(ShortcutTarget::Dictation));
+                host.begin_shortcut_edit(ShortcutTarget::Dictation, None);
                 assert!(host.capturing_hotkey());
                 host.listener = None;
                 if cancel {
-                    host.cancel_settings_edit();
+                    host.cancel_shortcut_edit();
                 } else {
                     set_finished_edit(
                         &mut host,
                         Err(color_eyre::eyre::eyre!("input permission denied")),
                     );
                 }
-                host.refresh_settings_edit();
+                host.refresh_shortcut_edit();
                 assert_eq!(host.settings, original);
                 assert_eq!(host.listen_when_ready, running);
                 assert_eq!(host.error.is_some(), !cancel);
-                assert!(host.settings_edit.is_none());
+                assert!(host.shortcut_edit.is_none());
                 assert!(!host.capturing_hotkey());
             }
         }
@@ -1381,22 +1370,22 @@ mod tests {
     #[test]
     fn cancel_signals_worker_and_does_not_wait_or_restart_until_it_finishes() {
         let mut host = host_for_edit(true);
-        host.begin_settings_edit(SettingsChange::Capture(ShortcutTarget::Dictation));
+        host.begin_shortcut_edit(ShortcutTarget::Dictation, None);
         host.listener = None;
         let (release, held) = mpsc::channel();
-        host.settings_edit.as_mut().unwrap().worker = Some(std::thread::spawn(move || {
+        host.shortcut_edit.as_mut().unwrap().worker = Some(std::thread::spawn(move || {
             let _ = held.recv();
             Err(color_eyre::eyre::eyre!("capture canceled"))
         }));
-        host.cancel_settings_edit();
-        host.refresh_settings_edit();
-        let edit = host.settings_edit.as_mut().unwrap();
+        host.cancel_shortcut_edit();
+        host.refresh_shortcut_edit();
+        let edit = host.shortcut_edit.as_mut().unwrap();
         assert!(edit.canceled.load(Ordering::Acquire));
         assert!(edit.worker.is_some());
         assert!(!host.listen_when_ready);
         release.send(()).unwrap();
         let _ = host
-            .settings_edit
+            .shortcut_edit
             .as_mut()
             .unwrap()
             .worker
@@ -1405,25 +1394,25 @@ mod tests {
             .join()
             .unwrap()
             .unwrap_err();
-        host.refresh_settings_edit();
+        host.refresh_shortcut_edit();
         assert!(host.listen_when_ready);
-        assert!(host.settings_edit.is_none());
+        assert!(host.shortcut_edit.is_none());
     }
 
     #[test]
     fn closing_the_window_cancels_only_an_uncommitted_capture() {
         static SHUTDOWN: AtomicBool = AtomicBool::new(false);
         let mut host = host_for_edit(true);
-        host.begin_settings_edit(SettingsChange::Capture(ShortcutTarget::Dictation));
+        host.begin_shortcut_edit(ShortcutTarget::Dictation, None);
         let handle = HostHandle::new(host, &SHUTDOWN);
         handle.window_closed();
         {
             let mut host = handle.lock();
-            let edit = host.settings_edit.as_ref().unwrap();
+            let edit = host.shortcut_edit.as_ref().unwrap();
             assert!(edit.resume);
             assert!(edit.canceled.load(Ordering::Acquire));
             host.listener = None;
-            host.refresh_settings_edit();
+            host.refresh_shortcut_edit();
             assert!(host.listen_when_ready);
         }
 
@@ -1470,12 +1459,12 @@ mod tests {
         let mut candidate = host.settings.clone();
         candidate.history_retention = crate::history::HistoryRetention::Off;
         host.adopt_settings(candidate.clone());
-        assert!(host.settings_edit.is_none());
+        assert!(!host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
         assert_eq!(host.settings, candidate);
         candidate.paste_with_shift = !candidate.paste_with_shift;
         host.adopt_settings(candidate.clone());
-        assert!(host.settings_edit.is_some());
-        assert_ne!(host.settings, candidate);
+        assert!(host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
+        assert_eq!(host.settings, candidate);
     }
 
     #[test]

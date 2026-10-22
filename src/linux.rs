@@ -116,12 +116,11 @@ enum ModelCommand {
     Transcribe { wav: PathBuf },
 }
 
-pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
+pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
     let activation = crate::linux_service::Activation::take_from_environment();
     color_eyre::install()?;
     let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let event_path = log_dir.join("live.ndjson");
     let command = Cli::parse().command.unwrap_or(Command::App {
         hidden: false,
@@ -139,7 +138,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Service => {
             match crate::linux_app::run(event_path, shutdown, None) {
                 // A unit start that lost the race to another launch has nothing to do.
-                Err(_) if another_instance_answers() => Ok(()),
+                Err(_) if crate::linux_service::another_instance_answers() => Ok(()),
                 result => result,
             }
         }
@@ -147,7 +146,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Restart => crate::linux_service::restart(),
         Command::Listen { device } => {
             let _instance = crate::instance::acquire("listener")?;
-            listen(&root, &event_path, device.as_deref(), shutdown)
+            listen(&event_path, device.as_deref(), shutdown)
         }
         Command::Dictation { action } => shortcut(match action {
             DictationAction::Start => ShortcutCommand::DictationStart,
@@ -260,23 +259,6 @@ fn shortcut(command: ShortcutCommand) -> Result<()> {
     Ok(())
 }
 
-/// After losing the data root to a concurrent launch, waits for that
-/// instance to answer.
-fn another_instance_answers() -> bool {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if crate::linux_service::request(Request::Status).is_ok() {
-            return true;
-        }
-        if crate::instance::acquire("service").is_ok() {
-            // Nobody holds the root: the failure was this process's own.
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
-}
-
 /// Forwards to the running Hex, starts its systemd unit, or becomes Hex.
 fn launch(
     activation: &Activation,
@@ -295,20 +277,15 @@ fn launch(
             show.then(|| activation.clone()),
         ) {
             // Another launch claimed the data root first; forward to it.
-            Err(_) if another_instance_answers() => continue,
+            Err(_) if crate::linux_service::another_instance_answers() => continue,
             result => return result,
         }
     }
 }
 
-pub(crate) fn listen(
-    project_root: &Path,
-    event_path: &Path,
-    device: Option<&str>,
-    shutdown: &AtomicBool,
-) -> Result<()> {
+fn listen(event_path: &Path, device: Option<&str>, shutdown: &AtomicBool) -> Result<()> {
     shutdown.store(false, Ordering::Relaxed);
-    let mut recognizer = Moonshine::load(project_root)?;
+    let mut recognizer = Moonshine::load(Path::new(env!("CARGO_MANIFEST_DIR")))?;
     let input = match device {
         Some(name) => AudioInput::open_matching(name)?,
         None => AudioInput::open(&[])?,

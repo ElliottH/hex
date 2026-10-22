@@ -47,7 +47,7 @@ trap 'exit 143' TERM
 export HOME="$work/home" XDG_RUNTIME_DIR="$work/runtime"
 export HEX_APPLICATION_SUPPORT_DIR="$work/support" NO_COLOR=1
 export PULSE_SERVER="unix:$work/pulse" PULSE_SOURCE=hex-fixture.monitor
-# GPUI still needs software Vulkan; only inference uses the CPU in this fixture.
+# The window uses software Vulkan on Xvfb; only inference uses the CPU in this fixture.
 export GDK_BACKEND=x11 GGML_VK_VISIBLE_DEVICES=""
 unset WAYLAND_DISPLAY VK_ICD_FILENAMES
 mkdir -m 700 "$HOME" "$XDG_RUNTIME_DIR" "$HEX_APPLICATION_SUPPORT_DIR"
@@ -84,7 +84,7 @@ grep -q 'HEX dictation is ready' "$work/listener.log"
 # A second launch forwards to the running Hex, which opens its window; the
 # complete dictation below runs beside it in the same process.
 "$binary" app >"$work/app.log" 2>&1
-xdotool search --sync --onlyvisible --all --pid "$listener" --name '^HEX$' >/dev/null
+xdotool search --sync --onlyvisible --all --pid "$listener" --name '^Hex$' >/dev/null
 kill -0 "$listener"
 # Holds the shortcut over the speech, then waits until the target holds
 # `$1` transcripts of it.
