@@ -1,10 +1,12 @@
-//! The experimental Rune front end for Linux and Windows (`hex app --ui rune`).
+//! The experimental Rune front end (`hex app --ui rune`, and `hex app` on
+//! macOS when built with `--features rune-ui`).
 //!
 //! The window talks to a host in the same process: on Linux the dictation
 //! host beside it (`linux_host`, the default window on `rune-ui` builds); on
-//! Windows the runtime thread `windows_rune` starts (`windows_host`). Either
-//! way it saves `settings.json` through the host, which adopts it, and sends
-//! the same requests for listening, shortcuts, models, and updates. It has the panes GPUI shows
+//! Windows and macOS the runtime thread `windows_rune` or `macos_rune`
+//! starts (`windows_host`, `macos_host`). Either way it saves
+//! `settings.json` through the host, which adopts it, and sends the same
+//! requests for listening, shortcuts, models, and updates. It has the panes GPUI shows
 //! there (Settings, Modes, Voice Action, History), the transcription picker,
 //! and first-run setup, drawn with `rune-kit`'s components in OpenCode's
 //! design language (`rune-theme-opencode`), not Hex's GPUI design tokens.
@@ -16,6 +18,7 @@ mod fun;
 mod history;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
 #[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
+#[cfg_attr(target_os = "macos", path = "rune_ui/macos_host.rs")]
 mod host;
 mod hud_lab;
 mod lists;
@@ -136,7 +139,7 @@ pub(crate) fn run_app(
 }
 
 /// The window as a Rune app whose lifetime the caller chooses.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn app() -> rune::App<Ui> {
     rune::App::new(spec()).on_close(on_close)
 }
@@ -150,6 +153,47 @@ fn on_close(ui: &mut Ui, _: &mut Tx) {
     picker::close(ui);
     if let Service::Live(backend) = &mut ui.service {
         backend.closed();
+    }
+    #[cfg(target_os = "macos")]
+    crate::macos_rune::window_closed();
+}
+
+/// Where the menu bar, a meeting, or the local API sends the window.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Destination {
+    Settings,
+    /// Settings with the transcription picker open.
+    Models,
+    /// The Meetings pane, with a meeting selected when given.
+    Meetings(Option<String>),
+    Modes,
+    Commands,
+    VoiceAction,
+    History,
+}
+
+/// Shows `destination` in the window (the caller opens it).
+#[cfg(target_os = "macos")]
+pub(crate) fn show(ui: &mut Ui, destination: Destination) {
+    let pane = match &destination {
+        Destination::Settings | Destination::Models => Pane::Settings,
+        Destination::Meetings(_) => Pane::Meetings,
+        Destination::Modes => Pane::Modes,
+        Destination::Commands => Pane::Commands,
+        Destination::VoiceAction => Pane::VoiceAction,
+        Destination::History => Pane::History,
+    };
+    if pane.shown(ui) {
+        ui.select_pane(pane);
+    }
+    match destination {
+        Destination::Models => {
+            let language = ui.settings.transcription.language.clone();
+            picker::open(ui, language);
+        }
+        Destination::Meetings(Some(id)) => ui.meetings.select(id),
+        _ => {}
     }
 }
 
@@ -579,6 +623,10 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 fn setup(ui: &mut Ui, waker: Waker) {
     ui.modes.waker = Some(waker.clone());
     if matches!(ui.service, Service::Pending) {
+        #[cfg(target_os = "macos")]
+        {
+            ui.host = platform::PlatformHost::Native(host::native_host());
+        }
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
         ui.service = Service::Live(Box::new(Backend::connect(wake)));
     }
@@ -678,6 +726,14 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     rune_kit::root(window, layer)
 }
 
+/// macOS draws the traffic lights over the sidebar (Rune's window has a
+/// transparent, full-size title bar), so the navigation starts below them.
+const SIDEBAR_TOP: f32 = if cfg!(target_os = "macos") {
+    40.0
+} else {
+    12.0
+};
+
 fn sidebar(ui: &Ui, p: Paint) -> El {
     let mut nav = col().key("nav").gap(1.0);
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
@@ -702,7 +758,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         .role("navigation")
         .w(220.0)
         .h_full()
-        .pt(12.0)
+        .pt(SIDEBAR_TOP)
         .pb(12.0)
         .pl(10.0)
         .pr(6.0)

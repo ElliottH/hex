@@ -232,6 +232,11 @@ substitute for source inspection or a second roadmap.
 - `status_item`: the persistent macOS menu-bar owner for Settings, Paste Last
   Dictation, meeting recording state and Stop & Transcribe, update checks, and
   orderly application shutdown.
+- `macos_rune` (`rune-ui` only): the macOS app as one menu-bar process on
+  `rune::App`: the status item, Sparkle, main menu, Dock reopen Apple event,
+  and HUD on the main AppKit loop, and a runtime thread for model
+  preparation and the window's state. `rune_ui/macos_host.rs` is the
+  window's host and the panes' `NativeHost`.
 - `dictation_indicator`: the click-through Metal/GPUI capture and processing HUD.
 - `meeting`: explicit capture through `meeting_capture`, owner-only WAV and transcript
   artifacts, Screen Recording permission checks, final local-model publication,

@@ -9,7 +9,6 @@ use core_graphics_types::geometry::CGSize;
 use core_video::base::{CVOptionFlags, CVTimeStamp, CVTimeStampFlags};
 use core_video::display_link::{CVDisplayLink, CVDisplayLinkRef};
 use core_video::r#return::CVReturn;
-use gpui::App;
 use metal::{
     CommandQueue, Device, MTLLoadAction, MTLPixelFormat, MTLPrimitiveType, MTLStoreAction,
     MetalLayer, RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState,
@@ -32,6 +31,17 @@ unsafe extern "C" {
     fn CGColorSpaceCreateWithName(name: *const c_void) -> *mut c_void;
     fn CGColorSpaceRelease(space: *mut c_void);
     fn CGMainDisplayID() -> u32;
+}
+
+/// A `CGColorSpaceRef` as Objective-C encodes it, so `setColorspace:` passes
+/// the method-signature check debug builds of objc2 run.
+#[repr(transparent)]
+struct ColorSpaceRef(*mut c_void);
+
+// SAFETY: a transparent CGColorSpace pointer, encoded as one.
+unsafe impl objc2::Encode for ColorSpaceRef {
+    const ENCODING: objc2::Encoding =
+        objc2::Encoding::Pointer(&objc2::Encoding::Struct("CGColorSpace", &[]));
 }
 
 const WINDOW_WIDTH: f32 = 112.0;
@@ -151,7 +161,7 @@ impl DictationIndicatorUi {
         Self { indicator }
     }
 
-    pub fn handle(&mut self, event: DictationIndicatorEvent, _cx: &mut App) {
+    pub fn handle(&mut self, event: DictationIndicatorEvent) {
         if self.indicator.is_none()
             && matches!(
                 event,
@@ -171,7 +181,7 @@ impl DictationIndicatorUi {
         }
     }
 
-    pub fn follow_pointer(&mut self, _cx: &mut App) {
+    pub fn follow_pointer(&mut self) {
         if let Some(indicator) = &mut self.indicator {
             indicator.maintain();
         }
@@ -635,7 +645,7 @@ impl MetalRenderer {
             if !color_space.is_null() {
                 let any_layer = &*(layer.as_ref() as *const metal::MetalLayerRef)
                     .cast::<objc2::runtime::AnyObject>();
-                let _: () = objc2::msg_send![any_layer, setColorspace: color_space];
+                let _: () = objc2::msg_send![any_layer, setColorspace: ColorSpaceRef(color_space)];
                 CGColorSpaceRelease(color_space);
             }
         }

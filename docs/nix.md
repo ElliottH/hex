@@ -76,7 +76,7 @@ running, and `hex start` starts it without the window. Closing the window never
 stops Hex, and there is no Linux tray. The unit stops with the configured target
 and retries failed starts without a tight restart loop; a crash restart opens no
 window. `hex quit` (or **Quit Hex** in the window) leaves it stopped until the
-next session or the next launch. The Nix package builds without the private
+next session or the next launch. The Nix package builds without the
 Rune front end (`rune-ui`), so its window is GPUI.
 
 Your session manager must import its current `DISPLAY`, `XAUTHORITY`,
