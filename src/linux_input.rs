@@ -251,7 +251,7 @@ impl ShortcutCommand {
 
 /// How the dictation shortcut behaves, and the shortcuts registered
 /// beside it.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct HotkeyOptions {
     pub(crate) double_tap: bool,
     /// Only a double-tap starts recording, which then stays locked.
@@ -491,13 +491,24 @@ impl ShortcutState {
     }
 }
 
+/// `hex` commands for whichever monitor runs now. The listener keeps one
+/// queue while it registers its shortcuts again after a settings change.
+#[derive(Clone)]
+pub(crate) struct CommandQueue(Arc<Mutex<Receiver<ShortcutCommand>>>);
+
+impl From<Receiver<ShortcutCommand>> for CommandQueue {
+    fn from(receiver: Receiver<ShortcutCommand>) -> Self {
+        Self(Arc::new(Mutex::new(receiver)))
+    }
+}
+
 /// The monitor thread's side: the state machine and its outputs. Backends
 /// feed inputs, update their Escape registration, then [`Dispatcher::flush`],
 /// so Escape is registered before dictation hears that recording started.
 struct Dispatcher {
     state: ShortcutState,
     sender: SyncSender<HotkeyEvent>,
-    commands: Receiver<ShortcutCommand>,
+    commands: CommandQueue,
     pending: Vec<HotkeyEvent>,
 }
 
@@ -505,7 +516,7 @@ impl Dispatcher {
     fn new(
         options: &HotkeyOptions,
         sender: SyncSender<HotkeyEvent>,
-        commands: Receiver<ShortcutCommand>,
+        commands: CommandQueue,
     ) -> Self {
         Self {
             state: ShortcutState::new(options),
@@ -523,7 +534,14 @@ impl Dispatcher {
     /// Feeds every queued `hex` command.
     fn commands(&mut self) {
         // Without a sender (`hex dictate`), only shortcuts remain.
-        while let Ok(command) = self.commands.try_recv() {
+        let commands = self
+            .commands
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let queued: Vec<_> = commands.try_iter().collect();
+        drop(commands);
+        for command in queued {
             self.input(Input::Command(command));
         }
     }
@@ -553,7 +571,7 @@ impl LinuxHotkeyMonitor {
         binding: LinuxHotkey,
         options: HotkeyOptions,
         status: HotkeyStatus,
-        commands: Receiver<ShortcutCommand>,
+        commands: CommandQueue,
     ) -> Result<Self> {
         Self::start_for(binding, options, LinuxSession::detect(), status, commands)
     }
@@ -563,7 +581,7 @@ impl LinuxHotkeyMonitor {
         options: HotkeyOptions,
         session: LinuxSession,
         status: HotkeyStatus,
-        commands: Receiver<ShortcutCommand>,
+        commands: CommandQueue,
     ) -> Result<Self> {
         let (sender, events) = mpsc::sync_channel(16);
         let (error_sender, errors) = mpsc::channel();
@@ -1678,9 +1696,14 @@ mod tests {
         status: HotkeyStatus,
     ) -> (LinuxHotkeyMonitor, SyncSender<ShortcutCommand>) {
         let (commands, receiver) = mpsc::sync_channel(4);
-        let monitor =
-            LinuxHotkeyMonitor::start_for(binding, options, LinuxSession::X11, status, receiver)
-                .unwrap();
+        let monitor = LinuxHotkeyMonitor::start_for(
+            binding,
+            options,
+            LinuxSession::X11,
+            status,
+            receiver.into(),
+        )
+        .unwrap();
         (monitor, commands)
     }
 
@@ -1800,7 +1823,11 @@ mod tests {
         // A starting listener claims no shortcut kind, not even X11's.
         assert_eq!(status.shortcuts(), DesktopShortcuts::Unregistered);
         let worker = thread::spawn(move || {
-            backend.run_commands(Dispatcher::new(&HotkeyOptions::default(), sender, receiver))
+            backend.run_commands(Dispatcher::new(
+                &HotkeyOptions::default(),
+                sender,
+                receiver.into(),
+            ))
         });
         readiness.recv().unwrap().unwrap();
         assert_eq!(status.shortcuts(), DesktopShortcuts::Commands);

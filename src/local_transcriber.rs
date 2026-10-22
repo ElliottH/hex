@@ -241,3 +241,134 @@ impl LocalTranscriber {
             .transcribe_chunked(samples, &self.options, self.max_audio_samples)
     }
 }
+
+/// A running listener's model: the one it transcribes with, and the one it
+/// changes to. A new selection loads on a worker thread while dictation goes
+/// on with the old model; the listener swaps it in once nothing records or
+/// waits on the old one. A model the host already prepared skips the load.
+pub(crate) struct ModelSwap {
+    loaded: TranscriptionSelection,
+    loading: Option<(
+        TranscriptionSelection,
+        std::sync::mpsc::Receiver<std::result::Result<LocalTranscriber, String>>,
+    )>,
+    ready: Option<(TranscriptionSelection, LocalTranscriber)>,
+}
+
+impl ModelSwap {
+    pub(crate) fn new(loaded: &TranscriptionSelection) -> Self {
+        Self {
+            loaded: runnable(loaded),
+            loading: None,
+            ready: None,
+        }
+    }
+
+    /// The selection the listener will transcribe with once swaps settle.
+    fn target(&self) -> &TranscriptionSelection {
+        self.ready
+            .as_ref()
+            .map(|(selection, _)| selection)
+            .or(self.loading.as_ref().map(|(selection, _)| selection))
+            .unwrap_or(&self.loaded)
+    }
+
+    /// A model the host loaded for `selection` (Linux prepares models
+    /// beside the listener; Windows lets the listener load them).
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub(crate) fn offer(
+        &mut self,
+        selection: &TranscriptionSelection,
+        transcriber: LocalTranscriber,
+    ) {
+        self.loading = None;
+        self.ready = Some((runnable(selection), transcriber));
+    }
+
+    /// Settings now select `selection`; loads it unless it is already the
+    /// target.
+    pub(crate) fn want(&mut self, selection: &TranscriptionSelection) {
+        let selection = runnable(selection);
+        if &selection == self.target() {
+            return;
+        }
+        self.ready = None;
+        if selection == self.loaded {
+            self.loading = None;
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let load = selection.clone();
+        let spawned = std::thread::Builder::new()
+            .name("hex-model-swap".into())
+            .spawn(move || {
+                let _ = sender
+                    .send(LocalTranscriber::load(&load).map_err(|error| format!("{error:#}")));
+            });
+        match spawned {
+            Ok(_) => self.loading = Some((selection, receiver)),
+            Err(error) => tracing::warn!(%error, "could not load the new transcription model"),
+        }
+    }
+
+    /// Collects a finished load; a failure keeps the current model.
+    pub(crate) fn poll(&mut self) -> Option<String> {
+        let (_, receiver) = self.loading.as_ref()?;
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("the model loader stopped unexpectedly".into())
+            }
+        };
+        let (selection, _) = self.loading.take()?;
+        match result {
+            Ok(transcriber) => {
+                self.ready = Some((selection, transcriber));
+                None
+            }
+            Err(error) => Some(format!("could not switch the transcription model: {error}")),
+        }
+    }
+
+    /// The model to swap in now, if one is ready.
+    pub(crate) fn take_ready(&mut self) -> Option<LocalTranscriber> {
+        let (selection, transcriber) = self.ready.take()?;
+        self.loaded = selection;
+        Some(transcriber)
+    }
+}
+
+/// `selection` without recognition hints a model cannot use, which
+/// `validate` would reject.
+fn runnable(selection: &TranscriptionSelection) -> TranscriptionSelection {
+    let mut selection = selection.clone();
+    if !crate::transcription_models::definition(selection.model).supports_recognition_hints {
+        selection.recognition_hints = String::new();
+    }
+    selection
+}
+
+#[cfg(test)]
+mod model_swap_tests {
+    use super::*;
+    use crate::transcription_models::TranscriptionModelId;
+
+    #[test]
+    fn an_unchanged_or_hint_only_change_on_a_hintless_model_loads_nothing() {
+        let selection = TranscriptionSelection {
+            model: TranscriptionModelId::default(),
+            ..Default::default()
+        };
+        let mut swap = ModelSwap::new(&selection);
+        swap.want(&selection);
+        let mut hinted = selection.clone();
+        hinted.recognition_hints = "Hex".into();
+        if !crate::transcription_models::definition(hinted.model).supports_recognition_hints {
+            swap.want(&hinted);
+        }
+        assert!(swap.loading.is_none());
+        assert!(swap.take_ready().is_none());
+        assert!(swap.poll().is_none());
+    }
+}

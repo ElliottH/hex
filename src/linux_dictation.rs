@@ -8,11 +8,14 @@ use std::time::{Duration, Instant};
 use color_eyre::Result;
 use color_eyre::eyre::eyre;
 
+use crate::app_settings::AppSettings;
 use crate::audio::{CaptureInstant, RecoveringAudioInput, RecoveringAudioInputEvent};
 use crate::dictation::{DictationCapture, Finish, POST_RELEASE_TAIL};
 use crate::events::{DictationPhase, EventLog, TranscriptPhase, VoiceEvent, VoiceState, now_ms};
 use crate::feedback::{self, Tone};
-use crate::linux_input::{HotkeyEvent, HotkeyStatus, LinuxHotkeyMonitor, ShortcutCommand};
+use crate::linux_input::{
+    CommandQueue, HotkeyEvent, HotkeyOptions, HotkeyStatus, LinuxHotkey, LinuxHotkeyMonitor,
+};
 use crate::linux_paste::LinuxPaster;
 use crate::linux_rune_hud::LinuxIndicator;
 use crate::local_transcriber::LocalTranscriber;
@@ -61,6 +64,48 @@ impl Drop for OutputWorker {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+/// What the host hands a running listener. Settings apply in place while no
+/// dictation records, so changing one never stops listening.
+pub(crate) enum ListenerUpdate {
+    Settings(Box<AppSettings>),
+    /// A model the host prepared, swapped in once no transcription is pending.
+    Transcriber {
+        selection: crate::transcription_models::TranscriptionSelection,
+        transcriber: Box<LocalTranscriber>,
+    },
+    /// True while the window records a shortcut: global matching stops.
+    SuspendShortcuts(bool),
+}
+
+/// The shortcuts a listener registers for `settings`.
+fn shortcuts(settings: &AppSettings) -> (LinuxHotkey, HotkeyOptions) {
+    let options = HotkeyOptions {
+        double_tap: settings.double_tap_lock,
+        // Double-tap-only needs the double-tap window and a non-modifier key.
+        double_tap_only: settings.double_tap_lock
+            && settings.double_tap_only
+            && settings.dictation_hotkey.key.is_some(),
+        toggle: settings.shortcut_mode == crate::dictation::ShortcutMode::Toggle,
+        paste_last: settings.paste_last_hotkey.as_ref().map(LinuxHotkey::from),
+        voice_action: settings
+            .voice_action
+            .enabled
+            .then(|| LinuxHotkey::from(&settings.edit_hotkey)),
+    };
+    (LinuxHotkey::from(&settings.dictation_hotkey), options)
+}
+
+/// Opens the microphone `settings` select, or keeps it released until a
+/// dictation starts.
+fn microphone_input(settings: &AppSettings, device: Option<&str>) -> RecoveringAudioInput {
+    let microphone = device.or(settings.microphone.as_deref());
+    if settings.release_microphone_while_idle {
+        RecoveringAudioInput::closed(None, 0, microphone)
+    } else {
+        RecoveringAudioInput::open(None, 0, microphone)
     }
 }
 
@@ -127,21 +172,24 @@ impl DictationOutput {
 
 /// Runs hotkey dictation until `shutdown`. A prepared transcriber skips the
 /// model load; otherwise the supplied transcription selection is loaded here.
+/// `updates` change settings, the model, and shortcut registration in place.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     event_path: &Path,
     device: Option<&str>,
     shutdown: &AtomicBool,
-    settings: &crate::app_settings::AppSettings,
+    settings: &AppSettings,
     output_settings: DictationOutput,
     transcriber: Option<LocalTranscriber>,
     hotkey_status: HotkeyStatus,
-    commands: mpsc::Receiver<ShortcutCommand>,
+    commands: CommandQueue,
+    updates: mpsc::Receiver<ListenerUpdate>,
 ) -> Result<()> {
+    let mut settings = settings.clone();
     let transcriber =
         transcriber.map_or_else(|| LocalTranscriber::load(&settings.transcription), Ok)?;
     // The engine outlives the output worker, which waits on its transcripts.
-    let engine = TranscriptionEngine::start(transcriber)?;
+    let mut engine = TranscriptionEngine::start(transcriber)?;
     // Drop audio/hotkeys and close the job queue before joining slow output on
     // every exit, including failures during startup or recording.
     let mut output = OutputWorker {
@@ -150,42 +198,26 @@ pub(crate) fn run(
     };
     // A missing microphone falls back to the default one. A released
     // microphone opens only while a dictation records.
-    let microphone = device.or(settings.microphone.as_deref());
-    let release_while_idle = settings.release_microphone_while_idle;
-    let mut input = if release_while_idle {
-        RecoveringAudioInput::closed(None, 0, microphone)
-    } else {
-        RecoveringAudioInput::open(None, 0, microphone)
-    };
-    let binding = crate::linux_input::LinuxHotkey::from(&settings.dictation_hotkey);
+    let mut input = microphone_input(&settings, device);
+    let mut release_while_idle = settings.release_microphone_while_idle;
+    let (binding, options) = shortcuts(&settings);
     let hotkey_label = binding.label();
-    let toggle = settings.shortcut_mode == crate::dictation::ShortcutMode::Toggle;
-    let paste_with_shift = settings.paste_with_shift;
-    let options = crate::linux_input::HotkeyOptions {
-        double_tap: settings.double_tap_lock,
-        // Double-tap-only needs the double-tap window and a non-modifier key.
-        double_tap_only: settings.double_tap_lock
-            && settings.double_tap_only
-            && settings.dictation_hotkey.key.is_some(),
-        toggle,
-        paste_last: settings
-            .paste_last_hotkey
-            .as_ref()
-            .map(crate::linux_input::LinuxHotkey::from),
-        voice_action: settings
-            .voice_action
-            .enabled
-            .then(|| crate::linux_input::LinuxHotkey::from(&settings.edit_hotkey)),
+    let mut toggle = options.toggle;
+    let start_shortcuts = |(binding, options): (LinuxHotkey, HotkeyOptions)| {
+        LinuxHotkeyMonitor::start(binding, options, hotkey_status.clone(), commands.clone())
     };
-    let hotkey = LinuxHotkeyMonitor::start(binding, options, hotkey_status, commands)?;
-    let indicator = LinuxIndicator::new(settings.indicator_position);
-    let suppressor =
+    let mut hotkey = Some(start_shortcuts((binding, options))?);
+    let mut shortcuts_suspended = false;
+    let mut indicator = LinuxIndicator::new(settings.indicator_position);
+    let mut suppressor =
         crate::linux_audio_control::AudioSuppressor::new(settings.recording_audio_behavior);
+    let paste_with_shift = Arc::new(AtomicBool::new(settings.paste_with_shift));
+    let worker_paste_with_shift = paste_with_shift.clone();
     let (jobs, job_receiver) = mpsc::sync_channel::<OutputJob>(2);
     let (result_sender, results) = mpsc::channel();
     let worker_stop = output.stop.clone();
     output.worker = Some(thread::spawn(move || {
-        let mut paster = LinuxPaster::new(worker_stop.clone(), paste_with_shift);
+        let mut paster = LinuxPaster::new(worker_stop.clone(), worker_paste_with_shift);
         let mut last_dictation: Option<String> = None;
         while let Ok(job) = job_receiver.recv() {
             if worker_stop.load(Ordering::Acquire) {
@@ -258,11 +290,21 @@ pub(crate) fn run(
     } else {
         16_000
     });
+    let released_label = |settings: &AppSettings| {
+        device
+            .or(settings.microphone.as_deref())
+            .unwrap_or("microphone")
+            .to_string()
+    };
     let mut device_label = if audio_ready {
         input.device_name().to_string()
     } else {
-        microphone.unwrap_or("microphone").to_string()
+        released_label(&settings)
     };
+    // Updates wait for a moment without a recording.
+    let mut next_settings: Option<AppSettings> = None;
+    let mut model = crate::local_transcriber::ModelSwap::new(&settings.transcription);
+    let mut next_suspended: Option<bool> = None;
     // A press that arrived while the released microphone was opening;
     // recording starts at its first chunk.
     let mut start_pending = false;
@@ -280,7 +322,69 @@ pub(crate) fn run(
     );
 
     while !shutdown.load(Ordering::Relaxed) {
-        if let Ok(error) = hotkey.errors.try_recv() {
+        for update in updates.try_iter() {
+            match update {
+                ListenerUpdate::Settings(next) => next_settings = Some(*next),
+                ListenerUpdate::Transcriber {
+                    selection,
+                    transcriber,
+                } => model.offer(&selection, *transcriber),
+                ListenerUpdate::SuspendShortcuts(suspended) => next_suspended = Some(suspended),
+            }
+        }
+        if let Some(error) = model.poll() {
+            events.dictation(DictationPhase::Failed(error), "")?;
+        }
+        if !capture.is_recording() && !start_pending && finishing.is_none() {
+            let mut register = next_suspended.take().is_some_and(|suspended| {
+                std::mem::replace(&mut shortcuts_suspended, suspended) != suspended
+            });
+            if let Some(next) = next_settings.take() {
+                register |= shortcuts(&next) != shortcuts(&settings);
+                model.want(&next.transcription);
+                toggle = next.shortcut_mode == crate::dictation::ShortcutMode::Toggle;
+                paste_with_shift.store(next.paste_with_shift, Ordering::Relaxed);
+                if next.indicator_position != settings.indicator_position {
+                    indicator = LinuxIndicator::new(next.indicator_position);
+                }
+                if next.recording_audio_behavior != settings.recording_audio_behavior {
+                    suppressor = crate::linux_audio_control::AudioSuppressor::new(
+                        next.recording_audio_behavior,
+                    );
+                }
+                if device.is_none() && next.microphone != settings.microphone
+                    || next.release_microphone_while_idle != release_while_idle
+                {
+                    drop(input);
+                    input = microphone_input(&next, device);
+                    release_while_idle = next.release_microphone_while_idle;
+                    audio_ready = input.is_open();
+                    if audio_ready {
+                        capture = DictationCapture::new(input.sample_rate());
+                        device_label = input.device_name().to_string();
+                    } else {
+                        device_label = released_label(&next);
+                    }
+                    emit_state(&mut events, active_state(false, pending), &device_label)?;
+                }
+                settings = next;
+            }
+            if register {
+                // The old registration goes first: X11 grabs the same keys again.
+                drop(hotkey.take());
+                if !shortcuts_suspended {
+                    hotkey = Some(start_shortcuts(shortcuts(&settings))?);
+                }
+            }
+            if pending == 0
+                && let Some(next) = model.take_ready()
+            {
+                engine = TranscriptionEngine::start(next)?;
+            }
+        }
+        if let Some(hotkey) = &hotkey
+            && let Ok(error) = hotkey.errors.try_recv()
+        {
             return Err(eyre!("Linux hotkey monitor stopped: {error}"));
         }
         // A release keeps recording through its tail; shortcut events wait,
@@ -318,7 +422,9 @@ pub(crate) fn run(
             )?;
         }
         while finishing.is_none()
-            && let Ok(action) = hotkey.events.try_recv()
+            && let Some(action) = hotkey
+                .as_ref()
+                .and_then(|hotkey| hotkey.events.try_recv().ok())
         {
             match action {
                 HotkeyEvent::Start | HotkeyEvent::VoiceStart

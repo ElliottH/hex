@@ -40,6 +40,8 @@ struct RunningListener {
     stop: Arc<AtomicBool>,
     result: Receiver<ListenerResult>,
     worker: JoinHandle<()>,
+    /// Saved settings the listener applies in place.
+    updates: mpsc::Sender<Box<AppSettings>>,
 }
 
 impl RunningListener {
@@ -75,7 +77,6 @@ pub(crate) struct WindowsDesktopHost {
     personal_commands_checked_at: Instant,
     voice_action_model: Arc<RwLock<Option<crate::dictation_processor::Model>>>,
     opencode_catalog_rx: Option<Receiver<Result<crate::dictation_processor::ModelCatalog>>>,
-    hints_restart_after: Option<Instant>,
     preparation: TranscriptionPreparation,
     updater: crate::windows_updater::WindowsUpdater,
 }
@@ -146,23 +147,6 @@ impl AppInstance {
     }
 }
 
-/// The settings a running listener captured when it started; a change
-/// restarts it.
-fn listener_settings_changed(previous: &AppSettings, current: &AppSettings) -> bool {
-    previous.microphone != current.microphone
-        || previous.dictation_hotkey != current.dictation_hotkey
-        || previous.paste_last_hotkey != current.paste_last_hotkey
-        || previous.voice_action.enabled != current.voice_action.enabled
-        || (current.voice_action.enabled && previous.edit_hotkey != current.edit_hotkey)
-        || previous.double_tap_lock != current.double_tap_lock
-        || previous.double_tap_only != current.double_tap_only
-        || previous.shortcut_mode != current.shortcut_mode
-        || previous.recording_audio_behavior != current.recording_audio_behavior
-        || previous.release_microphone_while_idle != current.release_microphone_while_idle
-        || previous.transcription.model != current.transcription.model
-        || previous.transcription.language != current.transcription.language
-}
-
 impl WindowsDesktopHost {
     pub(crate) fn new(
         event_path: PathBuf,
@@ -202,7 +186,6 @@ impl WindowsDesktopHost {
             personal_commands_checked_at: Instant::now(),
             voice_action_model,
             opencode_catalog_rx: None,
-            hints_restart_after: None,
             preparation: TranscriptionPreparation::default(),
             updater: crate::windows_updater::WindowsUpdater::start(),
         };
@@ -302,6 +285,7 @@ impl WindowsDesktopHost {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let (result_sender, result_receiver) = mpsc::channel();
+        let (updates, update_receiver) = mpsc::channel();
         let event_path = self.event_path.clone();
         let selection = self.runtime_selection();
         let config = crate::windows_dictation::WindowsDictationConfig {
@@ -317,7 +301,13 @@ impl WindowsDesktopHost {
             .name("windows-listener".into())
             .spawn(move || {
                 let result = crate::instance::acquire("windows-listener").and_then(|_instance| {
-                    crate::windows_dictation::run(&event_path, &selection, config, &worker_stop)
+                    crate::windows_dictation::run(
+                        &event_path,
+                        &selection,
+                        config,
+                        update_receiver,
+                        &worker_stop,
+                    )
                 });
                 let _ = result_sender.send(result.map_err(|error| format!("{error:#}")));
             });
@@ -327,6 +317,7 @@ impl WindowsDesktopHost {
                     stop,
                     result: result_receiver,
                     worker,
+                    updates,
                 });
                 self.session_before_start = self.activity.session_started_at;
                 self.awaiting_session_start = true;
@@ -374,6 +365,8 @@ impl WindowsDesktopHost {
     fn apply_settings(&mut self, settings: &AppSettings) {
         let previous = std::mem::replace(&mut self.settings, settings.clone());
         let current = settings;
+        crate::feedback::set_enabled(current.sound_effects);
+        crate::feedback::set_volume(current.sound_effect_volume.clamp(0.0, 1.0));
         if previous.indicator_position != current.indicator_position {
             self.indicator.set_position(current.indicator_position);
         }
@@ -401,21 +394,16 @@ impl WindowsDesktopHost {
         if previous.ui_language != current.ui_language {
             crate::desktop_i18n::apply(current.ui_language.as_deref());
         }
-        if previous.transcription.recognition_hints != current.transcription.recognition_hints
-            && crate::transcription_models::definition(current.transcription.model)
-                .supports_recognition_hints
-            && self.is_running()
-        {
-            self.hints_restart_after = Some(Instant::now());
-        }
         if modes_changed {
             self.refresh_personal_commands_host();
         }
         let model_changed = previous.transcription.model != current.transcription.model
             || previous.transcription.language != current.transcription.language;
-        if listener_settings_changed(&previous, current) && self.is_running() {
-            self.restart_listener_for_settings();
-        } else if model_changed && self.listen_when_ready && !self.is_running() {
+        // A running listener applies them in place, so listening never stops
+        // for a settings change.
+        if let Some(listener) = &self.listener {
+            let _ = listener.updates.send(Box::new(current.clone()));
+        } else if model_changed && self.listen_when_ready {
             // A listener waiting for a model starts once one is chosen.
             self.start();
         }
@@ -499,13 +487,6 @@ impl WindowsDesktopHost {
         }
     }
 
-    fn restart_listener_for_settings(&mut self) {
-        if self.is_running() {
-            self.listen_when_ready = true;
-            self.signal_stop("Applying settings…");
-        }
-    }
-
     pub(crate) fn refresh(&mut self) {
         if let Some(result) = self.preparation.poll() {
             let result = result.and_then(|selection| {
@@ -529,13 +510,6 @@ impl WindowsDesktopHost {
         if self.personal_commands_checked_at.elapsed() >= Duration::from_secs(2) {
             self.personal_commands_checked_at = Instant::now();
             self.refresh_personal_commands_host();
-        }
-        if self
-            .hints_restart_after
-            .is_some_and(|edited| edited.elapsed() >= Duration::from_millis(1200))
-        {
-            self.hints_restart_after = None;
-            self.restart_listener_for_settings();
         }
         let mut start_listener = false;
         if let Some(listener) = &self.listener {
@@ -653,7 +627,6 @@ fn visible_failure(activity: &DesktopActivity, last_completed_at: Option<u64>) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_settings::IndicatorPosition;
 
     fn transcript(timestamp_ms: u64, text: &str) -> VoiceEvent {
         VoiceEvent::Transcript {
@@ -691,17 +664,6 @@ mod tests {
             Some("OpenCode generation failed")
         );
         assert_eq!(visible_failure(&activity, Some(6)), None);
-    }
-
-    #[test]
-    fn listener_restarts_only_for_settings_it_captured() {
-        let previous = AppSettings::default();
-        let mut current = previous.clone();
-        current.indicator_position = IndicatorPosition::Bottom;
-        current.sound_effect_volume = 0.25;
-        assert!(!listener_settings_changed(&previous, &current));
-        current.microphone = Some("Headset".into());
-        assert!(listener_settings_changed(&previous, &current));
     }
 
     #[test]

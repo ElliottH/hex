@@ -122,10 +122,13 @@ pub fn voice_action_model(
     })
 }
 
+/// Runs hotkey dictation until `shutdown`. Settings from `updates` apply in
+/// place while no dictation records, so changing one never stops listening.
 pub fn run(
     event_path: &Path,
     selection: &TranscriptionSelection,
     config: WindowsDictationConfig,
+    updates: mpsc::Receiver<Box<crate::app_settings::AppSettings>>,
     shutdown: &AtomicBool,
 ) -> Result<()> {
     let transcriber = LocalTranscriber::load(selection)?;
@@ -156,7 +159,8 @@ pub fn run(
     {
         tracing::warn!(%error, "Windows recording feedback is unavailable");
     }
-    let release_while_idle = release_microphone_while_idle;
+    let mut release_while_idle = release_microphone_while_idle;
+    let mut device = device;
     let mut input = create_input(
         device.as_deref(),
         fallback_to_default_device,
@@ -188,19 +192,21 @@ pub fn run(
         return Ok(());
     }
     let hotkey_label = hotkey.label();
-    let toggle_mode = shortcut_mode == crate::dictation::ShortcutMode::Toggle;
-    // Double-tap-only depends on the double-tap window; without the lock
-    // there is no second tap to wait for.
-    let hotkey = WindowsHotkeyMonitor::start(
+    let mut toggle_mode = shortcut_mode == crate::dictation::ShortcutMode::Toggle;
+    let mut shortcuts = Shortcuts {
         hotkey,
         paste_last_hotkey,
         voice_action_hotkey,
         double_tap_lock,
-        double_tap_lock && double_tap_only,
+        double_tap_only,
         shortcut_mode,
-    )?;
-    let audio_suppressor = crate::windows_audio_control::AudioSuppressor::start(while_dictating);
-    let engine = TranscriptionEngine::start(transcriber)?;
+    };
+    let mut hotkey = shortcuts.start()?;
+    let mut while_dictating = while_dictating;
+    let mut audio_suppressor =
+        crate::windows_audio_control::AudioSuppressor::start(while_dictating);
+    let mut model = crate::local_transcriber::ModelSwap::new(selection);
+    let mut engine = TranscriptionEngine::start(transcriber)?;
     let mut finishing: Option<Finishing> = None;
     let (jobs, job_receiver) = mpsc::sync_channel::<OutputJob>(2);
     let (result_sender, results) = mpsc::channel();
@@ -251,6 +257,74 @@ pub fn run(
     );
 
     while !shutdown.load(Ordering::Relaxed) {
+        if let Some(error) = model.poll() {
+            events.dictation(DictationPhase::Failed(error), "")?;
+        }
+        // Only the newest saved settings matter; they wait for a moment
+        // without a recording.
+        if let Some(next) = updates.try_iter().last()
+            && !recording
+            && !start_pending
+            && finishing.is_none()
+        {
+            let next_config = WindowsDictationConfig::from_settings(&next);
+            let next_shortcuts = Shortcuts {
+                hotkey: next_config.hotkey,
+                paste_last_hotkey: next_config.paste_last_hotkey,
+                voice_action_hotkey: next_config.voice_action_hotkey,
+                double_tap_lock: next_config.double_tap_lock,
+                double_tap_only: next_config.double_tap_only,
+                shortcut_mode: next_config.shortcut_mode,
+            };
+            if next_shortcuts != shortcuts {
+                // The old hook goes first; one keyboard hook runs at a time.
+                drop(hotkey);
+                shortcuts = next_shortcuts;
+                hotkey = shortcuts.start()?;
+                toggle_mode = shortcuts.shortcut_mode == crate::dictation::ShortcutMode::Toggle;
+            }
+            if next_config.while_dictating != while_dictating {
+                while_dictating = next_config.while_dictating;
+                audio_suppressor =
+                    crate::windows_audio_control::AudioSuppressor::start(while_dictating);
+            }
+            if next_config.device != device
+                || next_config.release_microphone_while_idle != release_while_idle
+            {
+                drop(input);
+                device = next_config.device;
+                release_while_idle = next_config.release_microphone_while_idle;
+                input = create_input(
+                    device.as_deref(),
+                    fallback_to_default_device,
+                    release_while_idle,
+                )?;
+                capture = DictationCapture::new(if input.is_open() {
+                    input.sample_rate()
+                } else {
+                    16_000
+                });
+                if !release_while_idle {
+                    captured_through = prime_microphone(&mut input, &mut capture, shutdown)?;
+                }
+                audio_ready = !release_while_idle;
+                device_label = if input.is_open() {
+                    input.device_name().to_string()
+                } else {
+                    device.clone().unwrap_or_else(|| "microphone".into())
+                };
+                emit_current_state(&mut events, recording, pending, &device_label)?;
+            }
+            model.want(&next.transcription);
+        }
+        if !recording
+            && !start_pending
+            && finishing.is_none()
+            && pending == 0
+            && let Some(next) = model.take_ready()
+        {
+            engine = TranscriptionEngine::start(next)?;
+        }
         if let Ok(error) = hotkey.errors.try_recv() {
             return Err(eyre!("Windows hotkey monitor stopped: {error}"));
         }
@@ -768,6 +842,32 @@ fn job_result(kind: OutputKind, result: Result<String, String>, latency_ms: u32)
             latency_ms,
             result: Err(error),
         },
+    }
+}
+
+/// The shortcuts a listener's keyboard hook registers.
+#[derive(PartialEq)]
+struct Shortcuts {
+    hotkey: WindowsHotkey,
+    paste_last_hotkey: Option<WindowsHotkey>,
+    voice_action_hotkey: Option<WindowsHotkey>,
+    double_tap_lock: bool,
+    double_tap_only: bool,
+    shortcut_mode: crate::dictation::ShortcutMode,
+}
+
+impl Shortcuts {
+    fn start(&self) -> Result<WindowsHotkeyMonitor> {
+        // Double-tap-only depends on the double-tap window; without the lock
+        // there is no second tap to wait for.
+        WindowsHotkeyMonitor::start(
+            self.hotkey.clone(),
+            self.paste_last_hotkey.clone(),
+            self.voice_action_hotkey.clone(),
+            self.double_tap_lock,
+            self.double_tap_lock && self.double_tap_only,
+            self.shortcut_mode,
+        )
     }
 }
 

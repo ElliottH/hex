@@ -174,7 +174,14 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
                         )
                     })
                     .flatten();
-            crate::windows_dictation::run(&event_path, &selection.resolve()?, config, shutdown)
+            // Settings a foreground listener loaded stay as they are.
+            crate::windows_dictation::run(
+                &event_path,
+                &selection.resolve()?,
+                config,
+                std::sync::mpsc::channel().1,
+                shutdown,
+            )
         }
         Command::Capture {
             device,

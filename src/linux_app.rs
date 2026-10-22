@@ -24,6 +24,7 @@ use crate::desktop_host::{
     DesktopTranscriptionSnapshot, DesktopUpdateStatus,
 };
 use crate::events::EventReader;
+use crate::linux_dictation::ListenerUpdate;
 use crate::linux_input::{LinuxHotkey, ShortcutCommand};
 use crate::linux_service::{self, Activation, Control, Published, ShortcutRoute, Status};
 use crate::linux_updater::InstalledUpdate;
@@ -66,7 +67,6 @@ struct TranscriptionPreparation {
 struct ShortcutEdit {
     target: ShortcutTarget,
     hotkey: Option<LinuxHotkey>,
-    resume: bool,
     canceled: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<AppSettings>>>,
 }
@@ -78,6 +78,8 @@ struct Listener {
     hotkey_status: crate::linux_input::HotkeyStatus,
     /// `hex` commands for the listener's shortcut state machine.
     commands: mpsc::SyncSender<ShortcutCommand>,
+    /// Settings, models, and shortcut suspension the listener applies in place.
+    updates: mpsc::Sender<crate::linux_dictation::ListenerUpdate>,
 }
 
 enum ListenerStartup {
@@ -88,6 +90,11 @@ enum ListenerStartup {
 impl Listener {
     fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+
+    /// A listener that already stopped has nothing to apply.
+    fn update(&self, update: crate::linux_dictation::ListenerUpdate) {
+        let _ = self.updates.send(update);
     }
 
     fn finish(self) -> ListenerResult {
@@ -111,7 +118,6 @@ struct LinuxDesktopHost {
     activity: DesktopActivity,
     listener: Option<Listener>,
     listen_when_ready: bool,
-    restart_listener: bool,
     status: String,
     error: Option<String>,
     dismissed_failure_at: Option<u64>,
@@ -460,7 +466,6 @@ impl LinuxDesktopHost {
             activity,
             listener: None,
             listen_when_ready: false,
-            restart_listener: false,
             status: "Disabled".into(),
             error: None,
             dismissed_failure_at: None,
@@ -480,9 +485,11 @@ impl LinuxDesktopHost {
         host
     }
 
-    /// Applies saved settings the running listener reads live: modes,
-    /// history retention, and the transformations workspace.
+    /// Applies saved settings the host owns: sounds, modes, history
+    /// retention, and the transformations workspace.
     fn apply_output_settings(&mut self) {
+        crate::feedback::set_enabled(self.settings.sound_effects);
+        crate::feedback::set_volume(self.settings.sound_effect_volume.clamp(0.0, 1.0));
         *self
             .output
             .modes
@@ -521,7 +528,6 @@ impl LinuxDesktopHost {
             return;
         }
         self.listen_when_ready = true;
-        self.restart_listener = false;
         if self.is_running() || self.transcription_preparation.is_some() {
             return;
         }
@@ -546,6 +552,7 @@ impl LinuxDesktopHost {
         let hotkey_status = crate::linux_input::HotkeyStatus::default();
         let worker_hotkey_status = hotkey_status.clone();
         let (commands, command_receiver) = mpsc::sync_channel(16);
+        let (updates, update_receiver) = mpsc::channel();
         let worker = std::thread::spawn(move || {
             let result = crate::instance::acquire("listener").and_then(|_instance| {
                 crate::linux_dictation::run(
@@ -556,7 +563,8 @@ impl LinuxDesktopHost {
                     output,
                     prepared_transcriber,
                     worker_hotkey_status,
-                    command_receiver,
+                    command_receiver.into(),
+                    update_receiver,
                 )
             });
             result.map_err(|error| format!("{error:#}"))
@@ -569,15 +577,14 @@ impl LinuxDesktopHost {
             },
             hotkey_status,
             commands,
+            updates,
         });
         self.status = "Enabling…".into();
     }
 
     fn stop(&mut self) {
         self.listen_when_ready = false;
-        self.restart_listener = false;
-        if let Some(edit) = &mut self.shortcut_edit {
-            edit.resume = false;
+        if let Some(edit) = &self.shortcut_edit {
             edit.canceled.store(true, Ordering::Release);
         }
         if let Some(listener) = &self.listener {
@@ -637,11 +644,21 @@ impl LinuxDesktopHost {
                             Ok(candidate) => {
                                 self.settings = candidate;
                                 self.settings_valid = true;
-                                self.prepared_transcriber = Some(prepared.transcriber);
                                 self.transcription_error = None;
                                 self.settings_error = None;
-                                self.status = "Disabled".into();
-                                start_listener = self.listen_when_ready;
+                                // A running listener swaps the model in place.
+                                if let Some(listener) = &self.listener {
+                                    listener.update(ListenerUpdate::Transcriber {
+                                        selection: prepared.selection,
+                                        transcriber: Box::new(prepared.transcriber),
+                                    });
+                                    listener.update(ListenerUpdate::Settings(Box::new(
+                                        self.settings.clone(),
+                                    )));
+                                } else {
+                                    self.prepared_transcriber = Some(prepared.transcriber);
+                                    start_listener = self.listen_when_ready;
+                                }
                             }
                             Err(error) => {
                                 self.transcription_error = Some(format!(
@@ -664,14 +681,8 @@ impl LinuxDesktopHost {
             .listener
             .take_if(|listener| listener.worker.is_finished())
         {
-            let restart = std::mem::take(&mut self.restart_listener);
             match listener.finish() {
-                Ok(()) => {
-                    self.status = "Disabled".into();
-                    if restart && self.listen_when_ready {
-                        self.start();
-                    }
-                }
+                Ok(()) => self.status = "Disabled".into(),
                 Err(error) => {
                     self.status = "Couldn't enable".into();
                     self.error = Some(error);
@@ -727,14 +738,14 @@ impl LinuxDesktopHost {
             self.error = Some("Wait for model preparation before editing shortcut settings".into());
             return;
         }
-        // A listener waiting for a model still starts once one is ready.
-        let resume = self.listen_when_ready;
-        self.stop();
+        // Global matching stops while the window records; listening goes on.
+        if let Some(listener) = &self.listener {
+            listener.update(ListenerUpdate::SuspendShortcuts(true));
+        }
         self.error = None;
         self.shortcut_edit = Some(ShortcutEdit {
             target,
             hotkey,
-            resume,
             canceled: Arc::new(AtomicBool::new(false)),
             worker: None,
         });
@@ -746,26 +757,20 @@ impl LinuxDesktopHost {
         }
     }
 
-    /// Adopts settings the window saved. A running listener restarts when
-    /// a setting it captured at start changed; the sound volume already
-    /// applied when the window saved it.
+    /// Adopts settings the window saved. A running listener applies them in
+    /// place, so listening never stops for a settings change.
     fn adopt_settings(&mut self, settings: AppSettings) {
         if self.settings_valid && settings == self.settings {
             return;
         }
         let was_valid = self.settings_valid;
-        let model_changed = settings.transcription != self.settings.transcription;
-        let restart = needs_listener_restart(&self.settings, &settings);
         self.settings = settings;
         self.settings_valid = true;
         self.settings_error = None;
         self.apply_output_settings();
         if let Some(listener) = &self.listener {
-            if restart {
-                self.restart_listener = true;
-                listener.stop();
-            }
-        } else if self.listen_when_ready && (model_changed || !was_valid) {
+            listener.update(ListenerUpdate::Settings(Box::new(self.settings.clone())));
+        } else if self.listen_when_ready && !was_valid {
             self.start();
         }
     }
@@ -783,9 +788,6 @@ impl LinuxDesktopHost {
     }
 
     fn refresh_shortcut_edit(&mut self) {
-        if self.is_running() {
-            return;
-        }
         let Some(edit) = &mut self.shortcut_edit else {
             return;
         };
@@ -817,8 +819,7 @@ impl LinuxDesktopHost {
             }
         } else if !canceled {
             let Some(binding) = edit.hotkey.clone() else {
-                // Settings records the chord from its own key events.
-                self.status = "Press a shortcut".into();
+                // The window records the chord from its own key events.
                 return;
             };
             let target = edit.target;
@@ -834,7 +835,7 @@ impl LinuxDesktopHost {
                         binding.clone(),
                         Default::default(),
                         Default::default(),
-                        mpsc::channel().1,
+                        mpsc::channel().1.into(),
                     )?;
                 }
                 if canceled.load(Ordering::Acquire) {
@@ -849,13 +850,13 @@ impl LinuxDesktopHost {
                     }
                 })
             }));
-            self.status = "Saving settings".into();
             return;
         }
-        let resume = self.shortcut_edit.take().is_some_and(|edit| edit.resume);
-        self.status = "Disabled".into();
-        if resume {
-            self.start();
+        self.shortcut_edit = None;
+        // The listener registers the saved (or unchanged) shortcuts again.
+        if let Some(listener) = &self.listener {
+            listener.update(ListenerUpdate::Settings(Box::new(self.settings.clone())));
+            listener.update(ListenerUpdate::SuspendShortcuts(false));
         }
     }
 
@@ -897,12 +898,7 @@ impl LinuxDesktopHost {
             },
         };
         crate::transcription_models::validate(&selection)?;
-        // A running listener stops for the swap and starts again with the
-        // prepared model.
-        if self.is_running() {
-            self.stop();
-            self.listen_when_ready = true;
-        }
+        // A running listener keeps the current model until the new one is ready.
         let canceled = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(AtomicU64::new(0));
         let stage = Arc::new(AtomicU8::new(
@@ -951,22 +947,6 @@ impl LinuxDesktopHost {
         }
         self.transcription_error = None;
     }
-}
-
-fn needs_listener_restart(current: &AppSettings, next: &AppSettings) -> bool {
-    next.transcription != current.transcription
-        || next.dictation_hotkey != current.dictation_hotkey
-        || next.double_tap_lock != current.double_tap_lock
-        || next.shortcut_mode != current.shortcut_mode
-        || next.paste_with_shift != current.paste_with_shift
-        || next.microphone != current.microphone
-        || next.paste_last_hotkey != current.paste_last_hotkey
-        || next.double_tap_only != current.double_tap_only
-        || next.release_microphone_while_idle != current.release_microphone_while_idle
-        || next.recording_audio_behavior != current.recording_audio_behavior
-        || next.indicator_position != current.indicator_position
-        || next.voice_action.enabled != current.voice_action.enabled
-        || next.edit_hotkey != current.edit_hotkey
 }
 
 /// Saves one host-owned change on top of the current `settings.json`, so
@@ -1124,6 +1104,7 @@ mod tests {
                 startup: ListenerStartup::Observed,
                 hotkey_status: Default::default(),
                 commands: mpsc::sync_channel(1).0,
+                updates: mpsc::channel().0,
             });
             host.listen_when_ready = true;
         }
@@ -1175,6 +1156,7 @@ mod tests {
                 startup: ListenerStartup::Awaiting { previous_session },
                 hotkey_status: Default::default(),
                 commands: mpsc::sync_channel(1).0,
+                updates: mpsc::channel().0,
             };
             listener.observe_session(previous_session);
             assert!(matches!(listener.startup, ListenerStartup::Awaiting { .. }));
@@ -1310,34 +1292,63 @@ mod tests {
         }
     }
 
-    #[test]
-    fn preference_edits_wait_for_stop_and_only_restart_a_previously_running_listener() {
-        for running in [false, true] {
-            let mut host = host_for_edit(running);
-            let mut candidate = host.settings.clone();
-            candidate.paste_with_shift = !candidate.paste_with_shift;
-            if running {
-                let (release, held) = mpsc::channel();
-                host.listener.as_mut().unwrap().worker = std::thread::spawn(move || {
-                    held.recv_timeout(Duration::from_secs(5)).unwrap();
-                    Ok(())
-                });
-                host.adopt_settings(candidate.clone());
-                assert_eq!(host.settings, candidate);
-                assert!(host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
-                host.refresh();
-                assert!(host.is_running());
-                release.send(()).unwrap();
-                while !host.listener.as_ref().unwrap().worker.is_finished() {
-                    std::thread::yield_now();
-                }
-            } else {
-                host.adopt_settings(candidate.clone());
+    /// A running fixture listener that keeps what the host sends it.
+    fn listening_host() -> (LinuxDesktopHost, Receiver<ListenerUpdate>) {
+        let mut host = host_for_edit(true);
+        let (updates, received) = mpsc::channel();
+        let listener = host.listener.as_mut().unwrap();
+        listener.updates = updates;
+        // Runs until stopped, as a real listener does.
+        let stop = listener.stop.clone();
+        listener.worker = std::thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(5));
             }
-            host.refresh();
-            assert_eq!(host.settings, candidate);
-            assert_eq!(host.listen_when_ready, running);
-        }
+            Ok(())
+        });
+        host.status = "Enabled".into();
+        (host, received)
+    }
+
+    #[test]
+    fn settings_changes_apply_in_place_without_stopping_the_listener() {
+        let (mut host, received) = listening_host();
+        let before = host.snapshot();
+        let mut candidate = host.settings.clone();
+        candidate.paste_with_shift = !candidate.paste_with_shift;
+        candidate.indicator_position = crate::app_settings::IndicatorPosition::Bottom;
+        candidate.sound_effect_volume = 0.25;
+        host.adopt_settings(candidate.clone());
+        assert_eq!(host.settings, candidate);
+        assert!(!host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
+        assert!(matches!(
+            received.try_iter().collect::<Vec<_>>().as_slice(),
+            [ListenerUpdate::Settings(sent)] if **sent == candidate
+        ));
+        host.refresh();
+        assert!(host.is_running());
+        assert_eq!(host.snapshot().listener, before.listener);
+    }
+
+    #[test]
+    fn a_shortcut_edit_suspends_matching_without_stopping_the_listener() {
+        let (mut host, received) = listening_host();
+        host.begin_shortcut_edit(ShortcutTarget::Dictation, None);
+        assert!(host.listen_when_ready);
+        assert!(!host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
+        host.cancel_shortcut_edit();
+        host.refresh_shortcut_edit();
+        assert!(host.shortcut_edit.is_none());
+        assert_eq!(host.status, "Enabled");
+        let updates = received.try_iter().collect::<Vec<_>>();
+        assert!(matches!(
+            updates.as_slice(),
+            [
+                ListenerUpdate::SuspendShortcuts(true),
+                ListenerUpdate::Settings(_),
+                ListenerUpdate::SuspendShortcuts(false)
+            ]
+        ));
     }
 
     #[test]
@@ -1382,7 +1393,7 @@ mod tests {
         let edit = host.shortcut_edit.as_mut().unwrap();
         assert!(edit.canceled.load(Ordering::Acquire));
         assert!(edit.worker.is_some());
-        assert!(!host.listen_when_ready);
+        assert!(host.listen_when_ready);
         release.send(()).unwrap();
         let _ = host
             .shortcut_edit
@@ -1409,7 +1420,6 @@ mod tests {
         {
             let mut host = handle.lock();
             let edit = host.shortcut_edit.as_ref().unwrap();
-            assert!(edit.resume);
             assert!(edit.canceled.load(Ordering::Acquire));
             host.listener = None;
             host.refresh_shortcut_edit();
@@ -1438,6 +1448,7 @@ mod tests {
             },
             hotkey_status: Default::default(),
             commands,
+            updates: mpsc::channel().0,
         });
         // A listener still loading its model would replay the command late.
         assert!(host.shortcut_route().is_none());
@@ -1451,20 +1462,6 @@ mod tests {
             received.try_iter().collect::<Vec<_>>(),
             [ShortcutCommand::PasteLast]
         );
-    }
-
-    #[test]
-    fn adopting_saved_settings_restarts_only_for_listener_settings() {
-        let mut host = host_for_edit(true);
-        let mut candidate = host.settings.clone();
-        candidate.history_retention = crate::history::HistoryRetention::Off;
-        host.adopt_settings(candidate.clone());
-        assert!(!host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
-        assert_eq!(host.settings, candidate);
-        candidate.paste_with_shift = !candidate.paste_with_shift;
-        host.adopt_settings(candidate.clone());
-        assert!(host.listener.as_ref().unwrap().stop.load(Ordering::Relaxed));
-        assert_eq!(host.settings, candidate);
     }
 
     #[test]

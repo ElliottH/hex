@@ -556,6 +556,13 @@ CoreAudio formats, AppleScript details, or event serialization.
   failures (no display, no GPU) are logged and never stop Hex. The unit's
   `ExecStart … service`, `hex app`, `hex app --hidden`, and `hex start` stay
   valid entry points forever: self-updates replace only the executable.
+- On Linux and Windows, saved settings apply to the running listener in place
+  while no dictation records; a settings change never stops listening or
+  changes the shown status. Shortcut changes register the shortcuts again,
+  a microphone change reopens the stream, and a model or recognition-hint
+  change loads the new model beside the old one and swaps it in once no
+  transcription is pending (`local_transcriber::ModelSwap`). Recording a
+  shortcut in the window suspends only global matching.
 - Linux shortcut capture uses focused input in the window. Editing
   shortcut/double-tap settings stops and restores only a previously running
   listener; cancellation restores the old binding unless its save already
