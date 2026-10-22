@@ -807,7 +807,9 @@ Linux process                            // maintain.linux-service
 ├── Crash -> systemd Restart=on-failure -> Hex without a window
 ├── Update -> Restart the unit -> Hex reopens the window
 ├── hex restart without a display (SSH) -> Keep the saved session.env
-└── Window fails (no display, no GPU) -> Logged; Hex keeps running
+├── Window fails (no display, no GPU) -> Logged; Hex keeps running
+└── Startup -> transcribe.cpp's Vulkan instance first, on the main thread
+    └── then the model load and the window's wgpu instance never create one at once
 ```
 
 Sources: the process, host, and window seam in [linux_app.rs](../../src/linux_app.rs),
@@ -852,6 +854,9 @@ has not run since the single-process change. A throwaway `Type=notify` user unit
 on apollo (`HEX_SYSTEMD_UNIT`) started ready through `hex start`, restarted
 after SIGABRT and SIGKILL without a window, stopped cleanly on
 `systemctl stop` and `hex quit`, and an older `Type=simple` unit still started.
+Before the Vulkan ordering fix, a launch with an installed model and
+`enable_on_launch` SIGSEGVed in the Vulkan loader 3/3 in a headless sway on
+apollo (the model load raced the window's wgpu instance); with it, 6/6 ran.
 These checks do not establish a physical desktop logout, cross-version signed
 update, or microphone/target-app success on the user's devices.
 
