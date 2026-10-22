@@ -129,11 +129,17 @@ pub(crate) struct RuntimeHandle {
     meeting_requests: SyncSender<MeetingRequest>,
     recognition_controls: SyncSender<RecognitionControl>,
     history: Option<crate::history::History>,
+    indicator: crate::dictation_indicator::DictationIndicatorSender,
 }
 
 impl RuntimeHandle {
     pub(crate) fn history(&self) -> Option<crate::history::History> {
         self.history.clone()
+    }
+
+    /// The dictation HUD, for HUD Lab.
+    pub(crate) fn indicator(&self, event: DictationIndicatorEvent) {
+        self.indicator.send(event);
     }
 
     pub(crate) fn send(&self, request: Request) -> Result<()> {
@@ -319,6 +325,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         meeting_requests: meeting_requests.clone(),
         recognition_controls: recognition_controls.clone(),
         history: history.clone(),
+        indicator: indicator.clone(),
     };
     RUNTIME
         .set(handle.clone())

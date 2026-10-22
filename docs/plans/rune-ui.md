@@ -133,13 +133,25 @@ macOS data has been seen on screen.
   item status (or checking/unavailable), the Hex Microphone driver status,
   the command model state, the merged command catalog and workspace state,
   the current context, Apple Intelligence availability, folder and relaunch
-  errors. Meetings arrive as `meetings::Meeting` values (titles, day and
+  errors; and for the panes added later: `developer` (Activity and HUD Lab
+  show; `Ui::load` sets it from `DEVELOPER_FEATURES_ENABLED`),
+  `accessibility_renamed` (macOS 27's "Device Control and Data Access"
+  name, from `permission_guide::list_name`), `tuning`
+  (`hex_microphone::current_tuned_config`), `demo`
+  (`hex_microphone::demo_snapshot`, refreshed every poll while it records or
+  plays), `hud` (what HUD Lab shows; the pane owns it), and `activity_log`
+  (the `live.ndjson` the Activity pane reads). Meetings arrive as `meetings::Meeting` values (titles, day and
   clock strings, status, notes, errors, coalesced turns) because
   `meeting.rs` is macOS-only.
 - **`platform::PlatformRequest`** is every action they take: permission
   request or guide, System Audio, login item set/open settings, driver
   install/uninstall, meeting start/stop/rename/trash/summarize/reveal/folder,
-  commands config create/open, command model retry, update check, relaunch.
+  commands config create/open, command model retry, relaunch, and later
+  `SetTuning(TunedFilterConfig)` (apply to the live filter),
+  `HexMicrophoneDemo(DemoRequest)` (record, stop, choose the clip, play a
+  track, stop playback), and `ConfigureHud(HudLab)` (show HUD Lab's tuning
+  and state on the indicator, as GPUI's `apply_hud_lab`). `MacHost`
+  handles all three; the last needs `RuntimeHandle::indicator`.
   `PlatformHost::Fixture` records them for scenes and tests; `Native(Box<dyn
   NativeHost>)` is the seam a macOS/Windows host implements (`send` and a
   `poll` that refreshes `PlatformState`). Settings edits (Dock icon, meeting
@@ -154,13 +166,17 @@ macOS data has been seen on screen.
 | Meetings | Day-grouped list with status tags and row Copy, search over title/app/summary/transcript, detail with notes, live/draft/final/recovered transcript as turns with pauses, errors, Copy transcript, Rename (field, Save, Cancel, Escape), overflow menu (Copy summary, Reveal, Summarize/Regenerate, Delete…), two-step trash ("Trash recording & Markdown"), Start recording / Stop & transcribe with elapsed time, empty and runtime-error states | `meetings-{light,dark}`, `meetings-recording-{light,dark}`, `meetings-actions-dark`, `meetings-delete-light`, `meetings-rename-dark`, `meetings-empty-light` |
 | Settings, macOS | Permissions needed (Allow, a steady dot while asked, Allowed), the command model notice, Meetings section (opt-in, System Audio permission, indicator, folder Reveal/choose, Never offer with Remove, Apple Intelligence notes with availability copy), Launch at login (switch or Open settings when approval is needed, checking/unavailable), Show Dock icon, Check now, Experimental: Hex microphone (driver install/update/uninstall states, mode, comfort noise); no listener card or Terminal paste | `mac-settings-{light,dark}`, `mac-settings-permissions-dark` |
 | Settings, Windows | Listener card, Launch at login, Enable on launch; no Terminal paste or desktop shortcuts | `windows-settings-light` |
+| Fun (macOS, Hex Microphone experiment) | Driver row and status tag, nine modes, the mode's key sliders (plus Room and Level for Muffled), Reset, comfort noise in Muted, Try it: Example/Your voice, Record 5s/Stop recording, the two tracks as bar waveforms drawn with `rune::Shape` in a view box, the dictated span highlighted, progress, Play what call hears/Play your voice/Stop; Settings' Try it row opens it. Long mode labels truncate at the default width | `mac-fun-{light,dark}`, `mac-fun-muted-dark`, `mac-fun-driver-missing-light` |
+| HUD Lab (macOS debug) | Recording/Transcribing/Processing, queued 0–3, the three styles, eight sliders, the preset line and Copy preset | `mac-hud-lab-{light,dark}` |
+| Activity (debug) | The event log's newest 100 events with ages, the listener's state and device, Refresh, a detail with the event kind, timestamp, and raw JSON | `mac-activity-light` |
+| Shortcut sides (macOS) | Left/Either/Right before a modifier-only recorder (dictation, paste last, Voice Action); sides that collide with another shortcut are disabled | `mac-settings-sides-dark` |
 | Tour, macOS | Welcome (static keycap art), Setup with Microphone/Input Monitoring/Accessibility rows (Allow, waiting, refused → System Settings guide, Allowed), the background download beside the step dots (progress, ready, stopped + Retry), the relaunch notice, Give it a try with the practice field and every practice state (waiting, listening, too short, nothing heard, failed, landed, reopen Hex), Skip, Done with the menu-bar send-off; Windows uses the system-tray send-off | `mac-onboarding*` (10 states) |
 
-Not ported: the Fun pane and its "Try it" row, Activity, and HUD Lab
-(developer panes; they need custom vector drawing for waveforms and
-meters), the left/right modifier-side controls for macOS shortcuts, the
-macOS 27 "Device Control and Data Access" name for Accessibility (the host
-should supply it), and every native host.
+Every GPUI pane now has a Rune counterpart. Sliders drag through Rune's
+`on_drag`; the waveforms are `rune::Shape` round-capped segments. What the
+macOS panes do on a Mac (driver, demo audio, HUD) is unverified: the macOS
+build was type-checked and linted on hailmary with stubbed Metal and Swift,
+not run.
 
 Run it: `cargo run --release --features rune-ui` (with a custom
 `HEX_APPLICATION_SUPPORT_DIR` to stay away from an installed Hex). Headless:
@@ -177,13 +193,15 @@ preview scenes: `mac-settings`, `mac-settings-permissions`,
 `mac-onboarding-setup`, `mac-onboarding-progress`, `mac-onboarding-denied`,
 `mac-onboarding-download-failed`, `mac-onboarding-try`,
 `mac-onboarding-listening`, `mac-onboarding-landed`, `mac-onboarding-reopen`,
-`mac-onboarding-done`.
+`mac-onboarding-done`, `mac-fun`, `mac-fun-muted`,
+`mac-fun-driver-missing`, `mac-hud-lab`, `mac-activity`,
+`mac-settings-sides`.
 
-Checks: `cargo test --features rune-ui rune_ui`. 45 tests drive the Rune
+Checks: `cargo test --features rune-ui rune_ui`. 58 tests drive the Rune
 runtime headlessly without a GPU (navigation, every pane's edits and the
 requests they send, drafts, conflicts, the picker, setup, and the macOS and
-Windows surfaces from preview data); `goldens` and `platform_goldens` render
-45 PNGs offscreen (`tests/golden/rune-*.png`) and skip without a GPU adapter. `HEX_UPDATE_GOLDENS=1` rewrites them. Goldens
+Windows surfaces from preview data); `goldens`, `platform_goldens`, and
+`fun_goldens` render 53 PNGs offscreen (`tests/golden/rune-*.png`) and skip without a GPU adapter. `HEX_UPDATE_GOLDENS=1` rewrites them. Goldens
 were written on apollo (RADV); lavapipe renders the same within tolerance.
 
 ### Observed on Linux
@@ -285,6 +303,7 @@ session):
 | `on_edit` takes closures; `rune::edit_access` (`338d22a`) | a list of fields (each mode's corrections) binds each row's `TextEdit` by index |
 | `rune::Cursor`, `El::cursor`, `Runtime::cursor`; the shell sets the pointer shape; rune-kit buttons and segments use the pointer as @opencode/ui does | parity with GPUI's pointer and I-beam cursors; the drag handles grab |
 | `arboard` with `wayland-data-control` | copy and paste on Wayland without XWayland |
+| Vector shapes: `rune::Shape`, `Path`, `canvas`, `El::shape`, `KIND_SEGMENT`/`KIND_TRIANGLE` (`d666064`), `Shape::view_box` (`a5121c3`) | the Fun pane's waveforms; strokes and seam-free fills checked on lavapipe and hailmary's Metal |
 
 Built in Hex for now, to move when Rune has them: the picker's modal scrim
 (Kit's `motion-focus` agent is adding dialog, scrim, and focus trap), the
@@ -299,7 +318,7 @@ Sizes are current GPUI lines.
 
 | Surface | Today | Status / Rune needs |
 | --- | --- | --- |
-| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS rows (permissions, Launch at login, Dock icon, Meetings and Hex Microphone sections) ported behind `Capabilities`, with the macOS host behind them (compiled and launched on hailmary, not seen on screen); modifier sides remain |
+| Settings pane | `render_settings` in `app_window.rs` | Done on Linux; Windows rows written (Launch at login, Check now, Update, no terminal paste), type-checked only; macOS rows (permissions, Launch at login, Dock icon, Meetings and Hex Microphone sections) ported behind `Capabilities`, with the macOS host behind them (compiled and launched on hailmary, not seen on screen); Left/Either/Right sides for modifier-only shortcuts and macOS 27's Accessibility name ported |
 | Window shell | `app_window.rs`, `desktop_ui.rs` | Done on Linux; Windows uses the same shell under native decorations (its caption row waits on hit-testing); macOS gets a traffic-light inset (the sidebar starts at 40 pt) but no title-bar drag region yet |
 | Transcription picker | `desktop_transcription_picker.rs` (475) | Done on Linux (service-prepared); Windows and macOS prepare in-process through `transcription_preparation` on their runtime threads (Windows type-checked only; macOS compiled and tested on hailmary) |
 | Modes | ~2.5k lines in `app_window.rs` | Done on Linux minus icons and the context menu; macOS adds website rules (Brave) |
@@ -307,7 +326,7 @@ Sizes are current GPUI lines.
 | History | ~250 | Done |
 | Commands (macOS) | ~400 | Ported; the macOS host feeds the compiled and personal catalog, workspace, and model status |
 | Meetings pane (macOS, beta) | ~1k | Ported; the macOS host performs start/stop/summarize/rename/trash/reveal but lists no meetings yet (store listing, transcript reader, live refresh) |
-| Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Hex Microphone Settings section ported; Fun, Activity, HUD Lab deferred (custom vector drawing for waveforms, meters) |
+| Fun / Hex Microphone, Activity, HUD Lab (debug) | ~1.5k | Ported (waveforms on Rune's vector shapes); the macOS host performs their requests (type-checked on hailmary, not run) |
 | Onboarding tour | `app_window/tour.rs` (1.1k) | Ported for every OS through `Capabilities`; the macOS host feeds permissions and performs guide/relaunch requests; practice observations are not fed yet; art is static until looping tracks exist |
 | Text input | `text_input.rs` (1.7k) | Rune has caret, selection, undo, IME preedit; needs native IME protocols, focus rings, Tab order |
 | Dictation HUD, macOS | `dictation_indicator.rs` (1.2k), Metal, `NSPanel` | Kept as is under Rune (native NSPanel driven from a main-loop timer); moving it needs a window kind: borderless, transparent, click-through, non-activating, all spaces |
@@ -340,7 +359,8 @@ Sizes are current GPUI lines.
    meeting capsules.
 4. **Keyboard**: key-up and modifier-only events, left/right modifier sides,
    physical key codes, Globe/Fn (macOS shortcuts).
-5. **Raster images and custom vector drawing** (app icons, waveforms).
+5. **Raster images** (app icons). Vector shapes landed (`rune::Shape`,
+   `d666064`, `a5121c3`).
 6. **Platform text input and clipboard**: native IME protocols; Wayland
    clipboard: done (`arboard` with `wayland-data-control`, X11 fallback).
 7. **Accessibility** (AccessKit). Cursor shapes: done.

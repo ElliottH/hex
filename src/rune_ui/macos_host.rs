@@ -23,8 +23,8 @@ use objc2::runtime::AnyObject;
 use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
 
 use super::platform::{
-    CatalogCommand, CommandModel, MeetingRequest, NativeHost, NotesAvailability, PlatformRequest,
-    PlatformState, Workspace,
+    CatalogCommand, CommandModel, DemoRequest, HudDemo, HudLab, MeetingRequest, NativeHost,
+    NotesAvailability, PlatformRequest, PlatformState, Workspace,
 };
 use super::settings::Chord;
 use super::{HostState, ServiceView};
@@ -550,6 +550,19 @@ impl NativeHost for MacHost {
                     self.relaunch_failed = true;
                 }
             }
+            PlatformRequest::SetTuning(tuning) => {
+                crate::hex_microphone::update_tuned_config(|current| *current = tuning);
+            }
+            PlatformRequest::HexMicrophoneDemo(request) => match request {
+                DemoRequest::Record => crate::hex_microphone::start_demo_recording(),
+                DemoRequest::StopRecording => crate::hex_microphone::stop_demo_recording(),
+                DemoRequest::SelectSource(source) => {
+                    crate::hex_microphone::select_demo_source(source)
+                }
+                DemoRequest::Play(track) => crate::hex_microphone::play_demo_track(track),
+                DemoRequest::StopPlayback => crate::hex_microphone::stop_demo_playback(),
+            },
+            PlatformRequest::ConfigureHud(lab) => configure_hud(&self.runtime()?, lab),
         }
         // Show the result of an action at once, not on the next refresh.
         self.refresh_at = Instant::now();
@@ -599,11 +612,29 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
+        // The Fun pane's demo moves every frame while it records or plays.
+        if state.demo.is_none()
+            || crate::hex_microphone::demo_is_busy()
+            || crate::hex_microphone::demo_recompute_is_running()
+            || state
+                .demo
+                .as_ref()
+                .is_some_and(|demo| demo.is_recording || demo.playing.is_some())
+        {
+            state.demo = Some(crate::hex_microphone::demo_snapshot());
+            changed = true;
+        }
         if Instant::now() < self.refresh_at {
             return changed;
         }
         self.refresh_at = Instant::now() + PLATFORM_REFRESH;
         let before = state.clone();
+        state.tuning = crate::hex_microphone::current_tuned_config();
+        state.accessibility_renamed =
+            crate::permission_guide::list_name(PermissionKind::Accessibility) != "Accessibility";
+        state.activity_log = crate::app_paths::logs_dir()
+            .ok()
+            .map(|logs| logs.join("live.ndjson"));
         state.permissions = crate::onboarding::status_with_transcription_model(
             state.permissions.transcription_model,
         );
@@ -645,6 +676,50 @@ impl NativeHost for MacHost {
         state.meeting_folder_error = self.folder_error.clone();
         state.relaunch_failed = self.relaunch_failed;
         changed || !same_platform_state(&before, state)
+    }
+}
+
+/// Shows HUD Lab's tuning and demonstrated state on the dictation HUD, as
+/// GPUI's `apply_hud_lab`.
+fn configure_hud(runtime: &RuntimeHandle, lab: HudLab) {
+    use crate::dictation_indicator::{DictationIndicatorEvent as Event, HudTuning};
+    let t = lab.tuning;
+    runtime.indicator(Event::Configure(HudTuning {
+        style: t.style,
+        line_count: t.line_count,
+        curvature: t.curvature,
+        speed: t.speed,
+        sharpness: t.sharpness,
+        glow: t.glow,
+        depth: t.depth,
+        light_angle: t.light_angle,
+        outline: t.outline,
+    }));
+    runtime.indicator(Event::Reset);
+    match lab.demo {
+        HudDemo::Recording => {
+            for job_id in 0..lab.queued as u64 {
+                runtime.indicator(Event::Submitted { job_id });
+                runtime.indicator(Event::Transcribing { job_id });
+            }
+            runtime.indicator(Event::Started);
+            runtime.indicator(Event::Meter {
+                average: 0.08,
+                peak: 0.42,
+            });
+        }
+        HudDemo::Transcribing | HudDemo::Processing => {
+            runtime.indicator(Event::Submitted { job_id: 0 });
+            runtime.indicator(if lab.demo == HudDemo::Transcribing {
+                Event::Transcribing { job_id: 0 }
+            } else {
+                Event::Processing { job_id: 0 }
+            });
+            for job_id in 1..=lab.queued as u64 {
+                runtime.indicator(Event::Submitted { job_id });
+                runtime.indicator(Event::Transcribing { job_id });
+            }
+        }
     }
 }
 

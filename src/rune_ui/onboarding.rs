@@ -481,7 +481,7 @@ fn setup_row(ui: &Ui, p: Paint, row: Row) -> El {
         ),
         SetupItem::Accessibility => (
             "setup-accessibility",
-            tr("Accessibility"),
+            super::platform_settings::accessibility_name(ui.platform.accessibility_renamed),
             if waiting {
                 tr("Drag Hex into the list, or switch it on if it is there").into()
             } else {
