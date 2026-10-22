@@ -1570,7 +1570,7 @@ pub fn set_dock_icon_visible(visible: bool) {
     } else {
         NSApplicationActivationPolicy::Accessory
     };
-    if !application.setActivationPolicy(policy) {
+    if application.activationPolicy() != policy && !application.setActivationPolicy(policy) {
         tracing::warn!(visible, "could not change Dock icon visibility");
     }
 }

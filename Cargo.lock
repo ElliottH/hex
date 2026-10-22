@@ -7312,13 +7312,14 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
+source = "git+https://github.com/anomalyco/rune.git?rev=50d8d91ecd87f11e150a2e733b66aaaa477aefe4#50d8d91ecd87f11e150a2e733b66aaaa477aefe4"
 dependencies = [
  "arboard",
  "bytemuck",
  "parley",
  "png 0.18.1",
  "pollster 1.0.1",
+ "portable-atomic",
  "raw-window-handle",
  "rune-motion",
  "serde_json",
@@ -7334,7 +7335,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
+source = "git+https://github.com/anomalyco/rune.git?rev=50d8d91ecd87f11e150a2e733b66aaaa477aefe4#50d8d91ecd87f11e150a2e733b66aaaa477aefe4"
 dependencies = [
  "rune",
  "rune-motion",
@@ -7344,12 +7345,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
+source = "git+https://github.com/anomalyco/rune.git?rev=50d8d91ecd87f11e150a2e733b66aaaa477aefe4#50d8d91ecd87f11e150a2e733b66aaaa477aefe4"
 
 [[package]]
 name = "rune-theme-opencode"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=7eea3a36b72098a0814c1063928912886529e825#7eea3a36b72098a0814c1063928912886529e825"
+source = "git+https://github.com/anomalyco/rune.git?rev=50d8d91ecd87f11e150a2e733b66aaaa477aefe4#50d8d91ecd87f11e150a2e733b66aaaa477aefe4"
 dependencies = [
  "rune",
  "rune-kit",

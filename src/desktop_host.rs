@@ -3,8 +3,9 @@ use crate::transcription_models::{
     ModelPreparationStage, TranscriptionModelId, TranscriptionSelection,
 };
 
-/// The Linux service's snapshot; Windows publishes its own in-process.
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+/// The Linux service's snapshot; Windows and macOS publish their own
+/// in-process.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DesktopSnapshot {
     pub(crate) activity: DesktopActivity,

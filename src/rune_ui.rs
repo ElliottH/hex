@@ -1,8 +1,10 @@
-//! The experimental Rune front end for Linux and Windows (`hex app --ui rune`).
+//! The experimental Rune front end (`hex app --ui rune`, and `hex app` on
+//! macOS when built with `--features rune-ui`).
 //!
 //! The window talks to a host: on Linux the per-user `hex.service`, exactly
-//! like the GPUI Settings process (`linux_host`); on Windows the in-process
-//! runtime thread `windows_rune` starts (`windows_host`). Either way it saves
+//! like the GPUI Settings process (`linux_host`); on Windows and macOS the
+//! in-process runtime thread `windows_rune` or `macos_rune` starts
+//! (`windows_host`, `macos_host`). Either way it saves
 //! `settings.json`, asks the host to reload it, and sends the same requests
 //! for listening, shortcuts, models, and updates. It has the panes GPUI shows
 //! there (Settings, Modes, Voice Action, History), the transcription picker,
@@ -12,11 +14,12 @@
 mod commands;
 mod controls;
 mod history;
-mod lists;
-mod meetings;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
 #[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
+#[cfg_attr(target_os = "macos", path = "rune_ui/macos_host.rs")]
 mod host;
+mod lists;
+mod meetings;
 mod models;
 mod modes;
 mod onboarding;
@@ -83,19 +86,60 @@ pub(crate) fn run() {
 }
 
 /// The window as a Rune app whose lifetime the caller chooses.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn app() -> rune::App<Ui> {
     rune::App::new(spec()).on_close(on_close)
 }
 
 /// Closing the window saves pending text edits and stops a shortcut
 /// recording, as leaving a pane does.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 fn on_close(ui: &mut Ui, _: &mut Tx) {
     ui.flush_drafts();
     settings::cancel_capture(ui);
     ui.open = None;
     picker::close(ui);
+    #[cfg(target_os = "macos")]
+    crate::macos_rune::window_closed();
+}
+
+/// Where the menu bar, a meeting, or the local API sends the window.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Destination {
+    Settings,
+    /// Settings with the transcription picker open.
+    Models,
+    /// The Meetings pane, with a meeting selected when given.
+    Meetings(Option<String>),
+    Modes,
+    Commands,
+    VoiceAction,
+    History,
+}
+
+/// Shows `destination` in the window (the caller opens it).
+#[cfg(target_os = "macos")]
+pub(crate) fn show(ui: &mut Ui, destination: Destination) {
+    let pane = match &destination {
+        Destination::Settings | Destination::Models => Pane::Settings,
+        Destination::Meetings(_) => Pane::Meetings,
+        Destination::Modes => Pane::Modes,
+        Destination::Commands => Pane::Commands,
+        Destination::VoiceAction => Pane::VoiceAction,
+        Destination::History => Pane::History,
+    };
+    if pane.shown(ui) {
+        ui.select_pane(pane);
+    }
+    match destination {
+        Destination::Models => {
+            let language = ui.settings.transcription.language.clone();
+            picker::open(ui, language);
+        }
+        Destination::Meetings(Some(id)) => ui.meetings.select(id),
+        _ => {}
+    }
 }
 
 fn spec() -> AppSpec<Ui> {
@@ -377,8 +421,10 @@ impl Ui {
     /// Asks the OS host for something only it can do.
     fn ask(&mut self, request: platform::PlatformRequest) {
         // Windows writes its Run key from the window's own process.
-        if let (platform::PlatformHost::None, platform::PlatformRequest::SetLaunchAtLogin(enabled)) =
-            (&self.host, &request)
+        if let (
+            platform::PlatformHost::None,
+            platform::PlatformRequest::SetLaunchAtLogin(enabled),
+        ) = (&self.host, &request)
         {
             let result = host::set_launch_at_login(*enabled);
             self.platform.set_login_item(Some(result));
@@ -463,6 +509,10 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 
 fn setup(ui: &mut Ui, waker: Waker) {
     if matches!(ui.service, Service::Pending) {
+        #[cfg(target_os = "macos")]
+        {
+            ui.host = platform::PlatformHost::Native(host::native_host());
+        }
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || waker());
         ui.service = Service::Live(Box::new(Backend::connect(wake)));
     }
@@ -555,6 +605,14 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     rune_kit::root(window, layer)
 }
 
+/// macOS draws the traffic lights over the sidebar (Rune's window has a
+/// transparent, full-size title bar), so the navigation starts below them.
+const SIDEBAR_TOP: f32 = if cfg!(target_os = "macos") {
+    40.0
+} else {
+    12.0
+};
+
 fn sidebar(ui: &Ui, p: Paint) -> El {
     let mut nav = col().key("nav").gap(1.0);
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
@@ -579,7 +637,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         .role("navigation")
         .w(220.0)
         .h_full()
-        .pt(12.0)
+        .pt(SIDEBAR_TOP)
         .pb(12.0)
         .pl(10.0)
         .pr(6.0)

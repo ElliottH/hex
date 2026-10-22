@@ -26,7 +26,7 @@ mod dashboard;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod design_tokens;
 mod desktop_activity;
-#[cfg(any(target_os = "linux", all(target_os = "windows", feature = "rune-ui")))]
+#[cfg(any(target_os = "linux", feature = "rune-ui"))]
 mod desktop_host;
 #[cfg_attr(target_os = "windows", allow(dead_code))]
 mod desktop_transcription_picker;
@@ -94,6 +94,8 @@ mod local_api;
 mod local_transcriber;
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 mod login_item;
+#[cfg(all(target_os = "macos", feature = "rune-ui"))]
+mod macos_rune;
 #[cfg(target_os = "macos")]
 mod meeting;
 #[cfg(target_os = "macos")]
@@ -126,7 +128,7 @@ mod personal_commands;
 mod recognition;
 #[cfg(target_os = "macos")]
 mod recording_environment;
-#[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "rune-ui"))]
+#[cfg(feature = "rune-ui")]
 mod rune_ui;
 #[cfg(target_os = "macos")]
 mod sparkle;
@@ -221,7 +223,7 @@ pub(crate) const DEVELOPER_FEATURES_ENABLED: bool = cfg!(debug_assertions);
 #[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum Command {
-    /// Run the GPUI desktop app with local dictation.
+    /// Run the desktop app with local dictation.
     App {
         /// Override the configured microphone preference order.
         #[arg(long)]
@@ -229,6 +231,13 @@ enum Command {
         /// Preview the dictation HUD without starting recognition.
         #[arg(long)]
         preview_dictation: bool,
+        /// Which front end draws the window. Rune (`--features rune-ui`) is
+        /// the default when built in.
+        #[arg(long, value_enum, default_value_t = AppUi::default())]
+        ui: AppUi,
+        /// Arguments for the Rune front end, such as `--snap out.png --scene modes`.
+        #[arg(last = true)]
+        rune_args: Vec<String>,
     },
     /// Launch an isolated, deterministic UI preview without app services.
     Preview {
@@ -622,6 +631,8 @@ fn main() -> Result<()> {
             Command::App {
                 device: None,
                 preview_dictation: false,
+                ui: AppUi::default(),
+                rune_args: Vec::new(),
             }
         } else if bundled_service {
             Command::Service { embedded: false }
@@ -633,7 +644,12 @@ fn main() -> Result<()> {
         Command::App {
             device,
             preview_dictation,
+            ui,
+            rune_args,
         } => {
+            if ui == AppUi::Rune && !preview_dictation {
+                return open_rune(root, event_path, device, rune_args);
+            }
             let _instance = instance::acquire("listener")?;
             hex_microphone::host_service();
             let launch = if preview_dictation {
@@ -1062,6 +1078,56 @@ fn main() -> Result<()> {
             false => moonshine_lab::run(&root, &directory, device.as_deref()),
         },
     }
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum AppUi {
+    Gpui,
+    Rune,
+}
+
+#[cfg(target_os = "macos")]
+impl Default for AppUi {
+    fn default() -> Self {
+        if cfg!(feature = "rune-ui") {
+            Self::Rune
+        } else {
+            Self::Gpui
+        }
+    }
+}
+
+/// Rune reads its own flags (`--snap`, `--scene`, …) from `rune_args`; a
+/// headless run draws fixtures without starting the runtime.
+#[cfg(all(target_os = "macos", feature = "rune-ui"))]
+fn open_rune(
+    root: PathBuf,
+    event_path: PathBuf,
+    device: Option<String>,
+    rune_args: Vec<String>,
+) -> Result<()> {
+    if !rune_args.is_empty() {
+        crate::rune_ui::app().args(rune_args).run();
+        return Ok(());
+    }
+    let _instance = instance::acquire("listener")?;
+    hex_microphone::host_service();
+    macos_rune::run(
+        &SHUTDOWN,
+        meeting_watcher::ListenerConfig {
+            project_root: root,
+            event_path,
+            device,
+        },
+    )
+}
+
+#[cfg(all(target_os = "macos", not(feature = "rune-ui")))]
+fn open_rune(_: PathBuf, _: PathBuf, _: Option<String>, _: Vec<String>) -> Result<()> {
+    Err(eyre!(
+        "this Hex was built without the Rune front end; rebuild with `--features rune-ui`"
+    ))
 }
 
 /// Logs to stderr only (stdout carries MCP messages) and touches no app state.

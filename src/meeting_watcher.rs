@@ -40,7 +40,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 const COPIED_FEEDBACK_DURATION: Duration = Duration::from_millis(1_500);
 const RECORDING_TRANSCRIPT_POLL: Duration = Duration::from_millis(400);
 
-enum ControllerCommand {
+pub(crate) enum ControllerCommand {
     Record(MeetingCandidate),
     Dismiss,
     Stop,
@@ -48,7 +48,7 @@ enum ControllerCommand {
     Summarize(String),
 }
 
-enum ControllerEvent {
+pub(crate) enum ControllerEvent {
     Offer(MeetingCandidate),
     Starting,
     RecordingStarted { id: String, title: String },
@@ -312,7 +312,7 @@ fn run_panel_preview(preview: PanelPreview) -> Result<()> {
     Ok(())
 }
 
-fn should_open_app_on_launch(
+pub(crate) fn should_open_app_on_launch(
     show_dock_icon: bool,
     setup_ready: bool,
     onboarding_completed: bool,
@@ -455,7 +455,7 @@ pub fn run(shutdown: &'static AtomicBool, launch: Launch) -> Result<()> {
     }
     // The controller idles without inspecting microphone activity until the
     // user opts in to meetings (always available in developer builds).
-    let controller_worker = (!shell_preview.is_some() && !dictation_preview).then(|| {
+    let controller_worker = (shell_preview.is_none() && !dictation_preview).then(|| {
         let controller_events = event_sender.clone();
         thread::spawn(move || {
             if preview {
@@ -775,15 +775,12 @@ async fn drive_ui(
             return;
         }
         while let Ok(event) = indicator_events.try_recv() {
-            if let Some(dictation_indicator) = &mut dictation_indicator
-                && let Err(error) = cx.update(|cx| dictation_indicator.handle(event, cx))
-            {
-                tracing::error!(%error, "could not update dictation indicator");
-                return;
+            if let Some(dictation_indicator) = &mut dictation_indicator {
+                dictation_indicator.handle(event);
             }
         }
         if let Some(dictation_indicator) = &mut dictation_indicator {
-            let _ = cx.update(|cx| dictation_indicator.follow_pointer(cx));
+            dictation_indicator.follow_pointer();
         }
         while let Ok(call) = developer_calls.try_recv() {
             let reply = cx
@@ -1186,7 +1183,7 @@ fn apply_developer_command(
     }
 }
 
-fn controller_loop(
+pub(crate) fn controller_loop(
     shutdown: &AtomicBool,
     events: SyncSender<ControllerEvent>,
     commands: Receiver<ControllerCommand>,
