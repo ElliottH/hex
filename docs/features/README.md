@@ -926,7 +926,10 @@ Linux `hex app --ui rune` (--features rune-ui) -> the Linux window on Rune // de
 ├── Sidebar: Settings, Modes, Voice Action, History (the panes Linux GPUI shows)
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
-└── Not yet: app file chooser, app icons, drag reorder, right-click delete
+├── Not yet: app file chooser, app icons, drag reorder, right-click delete
+└── macOS/Windows surfaces as scenes only (Capabilities + preview data):
+    Commands, Meetings, permission rows, Launch at login, Dock icon,
+    Meetings and Hex microphone sections, the full tour // no native host yet
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```
@@ -945,8 +948,14 @@ confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
 clear, copy; Modes add/delete, corrections, transformations, application
 conflicts; the picker's ChooseModel/CancelModel; setup's download; draft
-saves) and compare 19 offscreen GPU renders (every pane, light and dark) with
-[tests/golden](../../tests/golden). They skip the goldens without a GPU
+saves; and, from macOS/Windows preview data, each OS's panes and rows, Launch
+at login, permission warnings, the command model notice, Meetings settings,
+the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
+search, copy, rename, start/stop, two-step trash, and the overflow menu, and
+the macOS tour's permissions, practice, and relaunch) and compare 45 offscreen
+GPU renders with [tests/golden](../../tests/golden). The macOS and Windows
+surfaces have no native host yet: their requests are recorded, never
+performed, and none has run on macOS or Windows. They skip the goldens without a GPU
 adapter and do not prove a real window, input method, or physical shortcut.
 A headless script against an isolated `hex service` saved a new mode, a
 correction, and Voice Action, and the service adopted them. See

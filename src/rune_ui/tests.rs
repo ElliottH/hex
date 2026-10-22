@@ -550,3 +550,5 @@ fn goldens() {
     check_golden("voice-action-unavailable", false, PANE_SIZE);
     check_golden("onboarding", true, PANE_SIZE);
 }
+
+mod panes;

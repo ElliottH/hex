@@ -269,15 +269,25 @@ pub(super) fn close_menu(ui: &mut Ui) {
 /// Whether Hex listens, how to dictate, and the one way to change it.
 /// The Settings pane's scrolling body.
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    use super::platform_settings as os;
+    let caps = ui.platform.caps;
     let mut content = col().key("content").px(24.0).pt(8.0).pb(24.0).gap(24.0);
-    content = content.child(listener_card(ui, p));
+    content = content
+        .children(os::permissions_section(ui, p))
+        .children(os::command_model_notice(ui, p))
+        .children(os::error_section(ui, p));
+    if caps.listener_control {
+        content = content.child(listener_card(ui, p));
+    }
     if let Some(shortcuts) = desktop_shortcuts(ui, p) {
         content = content.child(shortcuts);
     }
     content = content
         .child(dictation_section(ui, p, layer))
         .child(behavior_section(ui, p))
-        .child(application_section(ui, p, layer));
+        .children(os::meetings_section(ui, p))
+        .child(application_section(ui, p, layer))
+        .children(os::hex_microphone_section(ui, p));
     super::scroll_body("scroll", content)
 }
 
@@ -872,17 +882,19 @@ pub(super) fn behavior_section(ui: &Ui, p: Paint) -> El {
             },
         ),
     ));
-    rows.push(toggle_row(
-        p,
-        "terminal-paste",
-        tr("Terminal paste"),
-        tr("Paste with Ctrl+Shift+V so terminals accept it"),
-        settings.paste_with_shift,
-        |ui: &mut Ui| {
-            let enabled = !ui.settings.paste_with_shift;
-            ui.update(|settings| settings.paste_with_shift = enabled);
-        },
-    ));
+    if ui.platform.caps.terminal_paste {
+        rows.push(toggle_row(
+            p,
+            "terminal-paste",
+            tr("Terminal paste"),
+            tr("Paste with Ctrl+Shift+V so terminals accept it"),
+            settings.paste_with_shift,
+            |ui: &mut Ui| {
+                let enabled = !ui.settings.paste_with_shift;
+                ui.update(|settings| settings.paste_with_shift = enabled);
+            },
+        ));
+    }
     if ui.records_shortcuts() {
         let mut control = row()
             .key("paste-last-control")
@@ -953,17 +965,21 @@ pub(super) fn release_confirmation(ui: &Ui, p: Paint) -> El {
 
 pub(super) fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let settings = &ui.settings;
-    let mut rows = vec![toggle_row(
-        p,
-        "enable-on-launch",
-        tr("Enable on launch"),
-        tr("Turn Hex on in every app whenever it opens"),
-        settings.enable_on_launch,
-        |ui: &mut Ui| {
-            let enabled = !ui.settings.enable_on_launch;
-            ui.update(|settings| settings.enable_on_launch = enabled);
-        },
-    )];
+    let mut rows = super::platform_settings::launch_at_login_rows(ui, p);
+    if ui.platform.caps.listener_control {
+        rows.push(toggle_row(
+            p,
+            "enable-on-launch",
+            tr("Enable on launch"),
+            tr("Turn Hex on in every app whenever it opens"),
+            settings.enable_on_launch,
+            |ui: &mut Ui| {
+                let enabled = !ui.settings.enable_on_launch;
+                ui.update(|settings| settings.enable_on_launch = enabled);
+            },
+        ));
+    }
+    rows.extend(super::platform_settings::dock_icon_row(ui, p));
     let language = tr(crate::desktop_i18n::choice_name(
         settings.ui_language.as_deref(),
     ));
@@ -1051,7 +1067,22 @@ pub(super) fn software_update(ui: &Ui, p: Paint) -> Option<El> {
             .font(DESCRIPTION)
             .color(p.muted())
     };
-    Some(match ui.view.as_ref()?.update_status {
+    let status_now = ui.view.as_ref()?.update_status;
+    if ui.platform.caps.manual_update_check
+        && matches!(
+            status_now,
+            DesktopUpdateStatus::Current | DesktopUpdateStatus::Failed
+        )
+    {
+        return Some(button(
+            p,
+            "check-for-updates",
+            tr("Check now"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| ui.ask(super::platform::PlatformRequest::CheckForUpdates),
+        ));
+    }
+    Some(match status_now {
         DesktopUpdateStatus::Unavailable => return None,
         DesktopUpdateStatus::Checking => status(tr("Checking")),
         DesktopUpdateStatus::Current => status(tr("Up to date")),
