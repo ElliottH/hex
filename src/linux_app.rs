@@ -344,6 +344,8 @@ pub fn run(
     } else {
         UpdateState::Unmanaged
     };
+    // Before any thread can load a model or the window can create its GPU.
+    crate::local_transcriber::initialize_backends();
     let enable_on_launch = settings.enable_on_launch;
     let mut host = LinuxDesktopHost::new(event_path, settings, error, update);
     if enable_on_launch {
