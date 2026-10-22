@@ -18,7 +18,7 @@ fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
         system_dark: dark,
         scale: GOLDEN_SCALE,
     };
-    let text = TextSystem::new(&[], ("Inter", "Inter"));
+    let text = TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
     let mut rt = Runtime::with_text(state, view, size, env, text);
     rt.poll = Some(poll);
     rt.on_key = Some(on_key);
@@ -97,7 +97,7 @@ fn enabling_sends_the_listener_action() {
 #[test]
 fn releasing_the_microphone_asks_first() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "microphone-mode-control/segments/segment1");
+    tap(&mut rt, "microphone-mode-control/segment1");
     assert!(rt.state.confirm_release);
     assert!(!rt.state.settings.release_microphone_while_idle);
     tap(&mut rt, "confirm-release/actions/confirm-release");

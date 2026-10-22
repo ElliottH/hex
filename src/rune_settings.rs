@@ -4,16 +4,16 @@
 //! Settings process: it saves `settings.json`, asks the service to reload it,
 //! and sends the same `linux_service::Request`s for listening, shortcuts,
 //! models, and updates. It shows the Settings pane only; Modes, Voice Action,
-//! and History stay in the GPUI window. It uses Rune's own design language
-//! (`rune::tok`), not Hex's GPUI design tokens.
+//! and History stay in the GPUI window. It is drawn with `rune-kit`'s
+//! components in OpenCode's design language (`rune-theme-opencode`), not
+//! Hex's GPUI design tokens.
 
 mod controls;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rune::tok::{motion, space, type_};
-use rune::{AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, Waker, col, row, text};
+use rune::{AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, TextEdit, TextStyle, Tx, Waker, col, row, text};
 
 use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
@@ -29,8 +29,8 @@ use crate::linux_input::LinuxHotkey;
 use crate::linux_service::{Client, Request, ShortcutTarget};
 use crate::transcription_models::{self, ModelPreparationStage, TranscriptionModelId};
 use controls::{
-    ButtonKind, DESCRIPTION, Paint, button, described_row, disclosure, keycaps, menu, menu_item,
-    note, section, segmented, setting_row, status_dot, tag, text_field, toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section, segmented,
+    select, setting_row, status_dot, tag, text_field, toggle_row,
 };
 
 const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
@@ -57,8 +57,8 @@ fn spec() -> AppSpec<Ui> {
         init: Ui::load,
         view,
         scenes: SCENES,
-        fonts: &[],
-        families: ("Inter", "Inter"),
+        fonts: rune_theme_opencode::FONTS,
+        families: rune_theme_opencode::FAMILIES,
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
@@ -479,30 +479,32 @@ fn toggle_menu(ui: &mut Ui, menu: Menu) {
 fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     let dark = cx.system_dark();
     let p = Paint::new(dark, cx.env().scale);
+    // Menus mount above the page (rune-kit overlays), anchored to their field.
+    let mut layer = Vec::new();
     let mut content = col()
         .key("content")
-        .px(space::S6)
-        .pt(space::S2)
-        .pb(space::S6)
-        .gap(space::S6);
+        .px(24.0)
+        .pt(8.0)
+        .pb(24.0)
+        .gap(24.0);
     content = content.child(listener_card(ui, p));
     if let Some(shortcuts) = desktop_shortcuts(ui, p) {
         content = content.child(shortcuts);
     }
     content = content
-        .child(dictation_section(ui, p))
+        .child(dictation_section(ui, p, &mut layer))
         .child(behavior_section(ui, p))
-        .child(application_section(ui, p));
-    col()
+        .child(application_section(ui, p, &mut layer));
+    let window = col()
         .key("window")
         .role("window")
-        .fill(p.t.bg)
+        .fill(p.k.c.page)
         .child(
             row().key("titlebar").h(44.0).w_full().center().child(
                 text(tr("Settings"))
                     .key("title")
-                    .font(type_::TITLE)
-                    .color(p.t.text),
+                    .font(p.k.ty.ui_medium)
+                    .color(p.text()),
             ),
         )
         .child(
@@ -510,12 +512,17 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
                 .key("scroll")
                 .grow(1.0)
                 .shrink()
-                .clip_fade(0.0, space::S1, 0.0, space::S6)
+                .clip_fade(0.0, 4.0, 0.0, 24.0)
                 .scroll(ScrollSpec {
                     stick_bottom: false,
                 })
                 .child(content),
-        )
+        );
+    rune_kit::root(window, layer)
+}
+
+fn close_menu(ui: &mut Ui) {
+    ui.open = None;
 }
 
 /// Whether Hex listens, how to dictate, and the one way to change it.
@@ -573,14 +580,14 @@ fn listener_card(ui: &Ui, p: Paint) -> El {
     let summary = row()
         .key("listener")
         .min_h(64.0)
-        .px(space::S3)
-        .py(space::S2)
-        .gap(space::S3)
+        .px(12.0)
+        .py(8.0)
+        .gap(12.0)
         .center_y()
         .child(status_dot(if running {
-            p.success
+            p.success()
         } else {
-            p.t.text_secondary
+            p.muted()
         }))
         .child(
             col()
@@ -591,21 +598,21 @@ fn listener_card(ui: &Ui, p: Paint) -> El {
                 .child(
                     text(status)
                         .key("status")
-                        .font(type_::TITLE)
-                        .color(p.t.text),
+                        .font(p.k.ty.ui_medium)
+                        .color(p.text()),
                 )
                 .child(
                     text(hint)
                         .key("hint")
                         .font(DESCRIPTION)
-                        .color(p.t.text_secondary)
+                        .color(p.muted())
                         .wrap(),
                 )
                 .children(failure.map(|failure| {
                     text(failure)
                         .key("failure")
                         .font(DESCRIPTION)
-                        .color(p.danger)
+                        .color(p.danger())
                         .wrap()
                 })),
         )
@@ -615,9 +622,9 @@ fn listener_card(ui: &Ui, p: Paint) -> El {
         rows.push(note(
             "error-title",
             tr("Hex could not apply this change."),
-            p.danger,
+            p.danger(),
         ));
-        rows.push(note("error", &error, p.t.text_secondary));
+        rows.push(note("error", &error, p.muted()));
     }
     section(p, "listening", tr("Status"), rows)
 }
@@ -636,7 +643,7 @@ fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
                 rows.push(note(
                     "refused",
                     tr("Your desktop did not grant every shortcut. Record another one, or free it in your desktop's keyboard settings."),
-                    p.danger,
+                    p.danger(),
                 ));
             }
             rows
@@ -648,7 +655,7 @@ fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
                     tr(
                         "Your desktop has no shortcuts portal. Bind these commands in its keyboard settings.",
                     ),
-                    p.t.text_secondary,
+                    p.muted(),
                 ),
                 command_row(
                     p,
@@ -708,12 +715,12 @@ fn granted_row(p: Paint, index: usize, shortcut: &DesktopGrantedShortcut) -> El 
     let value = match &shortcut.trigger {
         Some(trigger) => text(trigger.clone())
             .key("trigger")
-            .font(type_::BODY)
-            .color(p.t.text_secondary),
+            .font(p.k.ty.ui)
+            .color(p.muted()),
         None => text(tr("Not granted"))
             .key("trigger")
-            .font(type_::BODY)
-            .color(p.danger),
+            .font(p.k.ty.ui)
+            .color(p.danger()),
     };
     setting_row(
         p,
@@ -731,14 +738,14 @@ fn command_row(p: Paint, key: &str, title: &str, description: &str, commands: &[
         .children(commands.iter().enumerate().map(|(index, command)| {
             text(*command)
                 .key(format!("command{index}"))
-                .font(type_::MONO_CAPTION.mono())
-                .color(p.t.text_secondary)
+                .font(p.k.ty.mono)
+                .color(p.muted())
                 .align(rune::Align::End)
         }));
     setting_row(p, key, title, Some(description), lines)
 }
 
-fn dictation_section(ui: &Ui, p: Paint) -> El {
+fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let selection = &ui.settings.transcription;
     let model = transcription_models::definition(selection.model);
     let label = format!(
@@ -746,95 +753,94 @@ fn dictation_section(ui: &Ui, p: Paint) -> El {
         transcription_models::language_name(&selection.language),
         model.name
     );
+    let language = selection.language.clone();
+    let choices = transcription_models::choices_for_runtime(&language)
+        .into_iter()
+        .map(|choice| {
+            let id = choice.model.id;
+            let language = language.clone();
+            Choice {
+                key: choice.model.id.as_str().to_string(),
+                label: choice.model.name.to_string(),
+                detail: Some(tr(choice.recommendation.label()).to_string()),
+                selected: id == selection.model,
+                choose: Box::new(move |ui: &mut Ui| {
+                    ui.open = None;
+                    if ui.settings.transcription.model != id {
+                        ui.send(Request::ChooseModel {
+                            model: id,
+                            language: language.clone(),
+                        });
+                    }
+                }),
+            }
+        })
+        .collect();
     let mut rows = vec![described_row(
         p,
         "transcription",
         tr("Local transcription"),
         Some(transcription_status(ui, p)),
-        disclosure(
+        select(
             p,
             "transcription-control",
             &label,
             ui.open == Some(Menu::Transcription),
+            choices,
             |ui: &mut Ui| toggle_menu(ui, Menu::Transcription),
+            close_menu,
+            layer,
         ),
     )];
-    if ui.open == Some(Menu::Transcription) {
-        let language = selection.language.clone();
-        let items = transcription_models::choices_for_runtime(&language)
-            .into_iter()
-            .map(|choice| {
-                let id = choice.model.id;
-                let language = language.clone();
-                menu_item(
-                    p,
-                    choice.model.id.as_str(),
-                    choice.model.name,
-                    Some(tr(choice.recommendation.label())),
-                    id == selection.model,
-                    move |ui: &mut Ui| {
-                        ui.open = None;
-                        if ui.settings.transcription.model != id {
-                            ui.send(Request::ChooseModel {
-                                model: id,
-                                language: language.clone(),
-                            });
-                        }
-                    },
-                )
-            })
-            .collect();
-        rows.push(menu(p, "transcription-menu", items));
-    }
     let microphone = ui
         .settings
         .microphone
         .clone()
         .unwrap_or_else(|| tr("Automatic").into());
+    let mut devices = vec![Choice {
+        key: "automatic".into(),
+        label: tr("Automatic").into(),
+        detail: None,
+        selected: ui.settings.microphone.is_none(),
+        choose: Box::new(|ui: &mut Ui| {
+            ui.open = None;
+            ui.update(|settings| settings.microphone = None);
+        }),
+    }];
+    if let Ok(names) = &ui.microphones {
+        devices.extend(names.iter().enumerate().map(|(index, device)| {
+            let name = device.clone();
+            Choice {
+                key: format!("device{index}"),
+                label: device.clone(),
+                detail: None,
+                selected: ui.settings.microphone.as_deref() == Some(device),
+                choose: Box::new(move |ui: &mut Ui| {
+                    ui.open = None;
+                    let name = name.clone();
+                    ui.update(|settings| settings.microphone = Some(name));
+                }),
+            }
+        }));
+    }
     rows.push(setting_row(
         p,
         "microphone",
         tr("Microphone"),
         Some(tr("Input device for dictation and commands")),
-        disclosure(
+        select(
             p,
             "microphone-control",
             &microphone,
             ui.open == Some(Menu::Microphone),
+            devices,
             |ui: &mut Ui| toggle_menu(ui, Menu::Microphone),
+            close_menu,
+            layer,
         ),
     ));
-    if ui.open == Some(Menu::Microphone) {
-        let mut items = vec![menu_item(
-            p,
-            "automatic",
-            tr("Automatic"),
-            None,
-            ui.settings.microphone.is_none(),
-            |ui: &mut Ui| {
-                ui.open = None;
-                ui.update(|settings| settings.microphone = None);
-            },
-        )];
-        match &ui.microphones {
-            Ok(devices) => items.extend(devices.iter().enumerate().map(|(index, device)| {
-                let name = device.clone();
-                menu_item(
-                    p,
-                    &format!("device{index}"),
-                    device,
-                    None,
-                    ui.settings.microphone.as_deref() == Some(device),
-                    move |ui: &mut Ui| {
-                        ui.open = None;
-                        let name = name.clone();
-                        ui.update(|settings| settings.microphone = Some(name));
-                    },
-                )
-            })),
-            Err(error) => items.push(note("devices-error", error, p.danger)),
-        }
-        rows.push(menu(p, "microphone-menu", items));
+    if let (Some(Menu::Microphone), Err(error)) = (ui.open, &ui.microphones) {
+        rows.push(note("devices-error", error, p.danger()));
     }
     if model.supports_recognition_hints {
         rows.push(setting_row(
@@ -898,14 +904,14 @@ fn dictation_section(ui: &Ui, p: Paint) -> El {
 fn transcription_status(ui: &Ui, p: Paint) -> (String, rune::Color) {
     let fallback = (
         tr("Language and on-device speech model").to_string(),
-        p.t.text_secondary,
+        p.muted(),
     );
     let Some(view) = &ui.view else {
         return fallback;
     };
     let transcription = &view.transcription;
     if let Some(error) = &transcription.error {
-        return (error.clone(), p.danger);
+        return (error.clone(), p.danger());
     }
     let Some(model) = transcription.preparing else {
         return fallback;
@@ -920,7 +926,7 @@ fn transcription_status(ui: &Ui, p: Paint) -> (String, rune::Color) {
             transcription.downloaded_bytes as f64 / 1_000_000.0
         ),
     };
-    (format!("{name} · {stage}"), p.accent)
+    (format!("{name} · {stage}"), p.accent())
 }
 
 fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
@@ -935,60 +941,69 @@ fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         ShortcutTarget::PasteLast => "paste-last-hotkey",
         ShortcutTarget::VoiceAction => "voice-action-hotkey",
     };
-    let frame = row()
+    let c = &p.k.c;
+    let label_style = TextStyle {
+        line_height: 16.0,
+        ..p.k.ty.ui_medium
+    };
+    let mut frame = row()
         .key(key)
         .role("button")
-        .h(30.0)
+        .h(28.0)
         .pl(4.0)
-        .pr(space::S3)
-        .gap(space::S2)
+        .pr(11.0)
+        .gap(8.0)
         .center_y()
-        .radius(rune::tok::radius::MD)
-        .motion(motion::SNAPPY)
+        .radius(p.k.radius.md)
+        .motion(p.k.motion.control)
         .on_press(move |ui: &mut Ui| begin_capture(ui, target));
+    let listening = matches!(&ui.capture, Capture::Listening { target: active, .. } if *active == target);
+    if !listening {
+        frame = frame.fill(c.bg_button_neutral);
+        for shadow in &p.k.elevation.button_neutral {
+            frame = frame.box_shadow(*shadow);
+        }
+    }
     match &ui.capture {
         Capture::Listening {
             target: active,
             message,
         } if *active == target => frame
-            .fill(p.danger.alpha(0.14))
-            .border(p.hair, p.danger.alpha(0.5))
-            .child(status_dot(p.danger).ml(space::S2))
+            .fill(c.danger.bg)
+            .border(p.hair.max(0.5), c.danger.border)
+            .child(status_dot(p.danger()).ml(8.0))
             .child(
                 text(message.unwrap_or(tr("Press shortcut")))
                     .key("prompt")
-                    .font(type_::LABEL)
-                    .color(p.t.text),
+                    .font(label_style)
+                    .color(p.text()),
             )
             .child(
                 text(tr("Esc to cancel"))
                     .key("cancel")
                     .font(DESCRIPTION)
-                    .color(p.t.text_secondary),
+                    .color(p.muted()),
             ),
         Capture::Saving { target: active, .. } if *active == target => frame
-            .fill(p.t.control_track)
             .child(keycaps(p, "keys", &caps))
             .child(
                 text(tr("Saving…"))
                     .key("label")
-                    .font(type_::LABEL)
-                    .color(p.t.text_secondary),
+                    .font(label_style)
+                    .color(p.muted()),
             ),
         Capture::Saved { target: active, .. } if *active == target => frame
-            .fill(p.t.control_track)
             .child(keycaps(p, "keys", &caps))
-            .child(tag("saved", tr("Saved"), p.success)),
+            .child(tag(p, "saved", tr("Saved"))),
         _ => frame
-            .fill(p.t.control_track)
-            .hover(p.t.hover)
-            .press(p.t.press)
+            .hover(c.hover)
+            .press(c.pressed)
             .child(keycaps(p, "keys", &caps))
             .child(
                 text(tr("Change shortcut"))
                     .key("label")
-                    .font(type_::LABEL)
-                    .color(p.t.text_secondary),
+                    .font(label_style)
+                    .color(p.text()),
             ),
     }
 }
@@ -1134,7 +1149,7 @@ fn behavior_section(ui: &Ui, p: Paint) -> El {
     if ui.records_shortcuts() {
         let mut control = row()
             .key("paste-last-control")
-            .gap(space::S2)
+            .gap(8.0)
             .center_y()
             .child(hotkey_control(ui, p, ShortcutTarget::PasteLast));
         if settings.paste_last_hotkey.is_some() {
@@ -1172,7 +1187,7 @@ fn release_confirmation(ui: &Ui, p: Paint) -> El {
         Some(description),
         row()
             .key("actions")
-            .gap(space::S2)
+            .gap(8.0)
             .child(button(
                 p,
                 "cancel-release",
@@ -1196,10 +1211,10 @@ fn release_confirmation(ui: &Ui, p: Paint) -> El {
                 },
             )),
     )
-    .fill(p.t.hover)
+    .fill(p.k.c.hover)
 }
 
-fn application_section(ui: &Ui, p: Paint) -> El {
+fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let settings = &ui.settings;
     let mut rows = vec![toggle_row(
         p,
@@ -1215,44 +1230,43 @@ fn application_section(ui: &Ui, p: Paint) -> El {
     let language = tr(crate::desktop_i18n::choice_name(
         settings.ui_language.as_deref(),
     ));
+    let languages = crate::desktop_i18n::LANGUAGE_CHOICES
+        .iter()
+        .enumerate()
+        .map(|(index, (code, name))| {
+            let code = code.map(str::to_string);
+            let selected = settings.ui_language == code;
+            Choice {
+                key: format!("language{index}"),
+                label: tr(name).to_string(),
+                detail: None,
+                selected,
+                choose: Box::new(move |ui: &mut Ui| {
+                    ui.open = None;
+                    let code = code.clone();
+                    if ui.update(|settings| settings.ui_language = code.clone()) {
+                        crate::desktop_i18n::apply(code.as_deref());
+                    }
+                }),
+            }
+        })
+        .collect();
     rows.push(setting_row(
         p,
         "interface-language",
         tr("Interface language"),
         Some(tr("Language of the Hex interface")),
-        disclosure(
+        select(
             p,
             "interface-language-control",
             language,
             ui.open == Some(Menu::Language),
+            languages,
             |ui: &mut Ui| toggle_menu(ui, Menu::Language),
+            close_menu,
+            layer,
         ),
     ));
-    if ui.open == Some(Menu::Language) {
-        let items = crate::desktop_i18n::LANGUAGE_CHOICES
-            .iter()
-            .enumerate()
-            .map(|(index, (code, name))| {
-                let code = code.map(str::to_string);
-                let selected = settings.ui_language == code;
-                menu_item(
-                    p,
-                    &format!("language{index}"),
-                    tr(name),
-                    None,
-                    selected,
-                    move |ui: &mut Ui| {
-                        ui.open = None;
-                        let code = code.clone();
-                        if ui.update(|settings| settings.ui_language = code.clone()) {
-                            crate::desktop_i18n::apply(code.as_deref());
-                        }
-                    },
-                )
-            })
-            .collect();
-        rows.push(menu(p, "language-menu", items));
-    }
     let volume_labels: Vec<&str> = SOUND_VOLUME_STEPS
         .iter()
         .map(|(label, _)| tr(label))
@@ -1298,7 +1312,7 @@ fn software_update(ui: &Ui, p: Paint) -> Option<El> {
         text(label)
             .key("update-status")
             .font(DESCRIPTION)
-            .color(p.t.text_secondary)
+            .color(p.muted())
     };
     Some(match ui.view.as_ref()?.update_status {
         DesktopUpdateStatus::Unavailable => return None,
