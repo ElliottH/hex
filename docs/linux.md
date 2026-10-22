@@ -39,6 +39,7 @@ hex app                         # open Settings; connect to/start the service
 hex status                      # query live service state, not an old log entry
 hex stop                        # stop the service and release microphone/hotkeys
 hex restart                     # restart using this desktop's environment
+                                # (over SSH: the one it last ran in)
 journalctl --user -u hex.service # service diagnostics
 ```
 
@@ -163,7 +164,8 @@ OpenCode, and pastes the reply.
 **Microphone mode** can release the microphone between dictations; it then opens
 on the shortcut press without pre-roll. **While dictating** can mute the default
 output through `wpctl` (PipeWire) or `pactl` (PulseAudio), or pause playing
-MPRIS media players over D-Bus; HEX restores only what it changed.
+MPRIS media players over D-Bus, once the hold passes 300 ms, so shortcut chords
+and short taps never do; HEX restores only what it changed.
 Cancelling shortcut capture preserves the old binding unless the new binding
 has already been saved; listening resumes only if it was previously running.
 
@@ -209,7 +211,7 @@ bindsym Ctrl+Alt+d exec hex dictation toggle
 
 The commands are safe to bind anywhere, including X11 beside the grabs. They
 talk to the running service and never start it: without one, or while Hex is
-not listening, they exit non-zero with an error. Starting while recording,
+not listening, they print a one-line error and exit non-zero. Starting while recording,
 stopping while idle, and cancelling while idle do nothing, so key repeat is
 harmless. Start and stop bypass Hold, Toggle, and double-tap: start records,
 stop finishes. A shortcut press also finishes a recording a command started.

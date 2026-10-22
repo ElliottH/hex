@@ -89,9 +89,42 @@ impl RecordingEnvironment {
     }
 }
 
+/// What the controller holds while any session is active.
+trait Environment: Sized {
+    /// Restores everything, running `then` once a muted output is audible.
+    fn restore_then(self, then: Callback) {
+        drop(self);
+        then();
+    }
+}
+
+impl Environment for () {}
+
+impl Environment for RecordingEnvironment {
+    fn restore_then(self, then: Callback) {
+        let Self {
+            _sleep: sleep,
+            _audio: audio,
+        } = self;
+        drop(sleep);
+        if matches!(audio, AudioBehaviorGuard::Muted { .. }) {
+            drop(audio);
+            then();
+        } else {
+            // Resuming media runs AppleScript; `then` never waits for it.
+            then();
+            drop(audio);
+        }
+    }
+}
+
+type Callback = Box<dyn FnOnce() + Send + Sync>;
+
 enum EnvironmentCommand {
     Start,
     Stop,
+    /// Stops, then runs the callback once a muted output is audible again.
+    StopThen(Callback),
     #[cfg(test)]
     Barrier(Sender<()>),
 }
@@ -111,23 +144,33 @@ impl RecordingEnvironmentController {
         Self::with_environment(|| ())
     }
 
-    fn with_environment<E>(start: impl Fn() -> E + Send + 'static) -> Self {
+    fn with_environment<E: Environment>(start: impl Fn() -> E + Send + 'static) -> Self {
         let (commands, receiver) = mpsc::channel();
         thread::spawn(move || {
             let mut sessions = 0_u32;
-            let mut _environment = None;
+            let mut environment = None;
             while let Ok(command) = receiver.recv() {
                 match command {
                     EnvironmentCommand::Start => {
                         sessions = sessions.saturating_add(1);
                         if sessions == 1 {
-                            _environment = Some(start());
+                            environment = Some(start());
                         }
                     }
                     EnvironmentCommand::Stop => {
                         sessions = sessions.saturating_sub(1);
                         if sessions == 0 {
-                            _environment = None;
+                            environment = None;
+                        }
+                    }
+                    EnvironmentCommand::StopThen(then) => {
+                        sessions = sessions.saturating_sub(1);
+                        match environment.take() {
+                            Some(active) if sessions == 0 => active.restore_then(then),
+                            active => {
+                                environment = active;
+                                then();
+                            }
                         }
                     }
                     #[cfg(test)]
@@ -145,18 +188,36 @@ impl RecordingEnvironmentController {
         let _ = self.commands.send(EnvironmentCommand::Start);
         RecordingEnvironmentSession {
             commands: self.commands.clone(),
+            then: None,
         }
     }
 }
 
 pub struct RecordingEnvironmentSession {
     commands: Sender<EnvironmentCommand>,
+    then: Option<Callback>,
+}
+
+impl RecordingEnvironmentSession {
+    /// Ends the session and runs `then` once a muted output is audible
+    /// again; with paused media or other live sessions it runs at once.
+    pub fn end_then(mut self, then: impl FnOnce() + Send + Sync + 'static) {
+        self.then = Some(Box::new(then));
+    }
 }
 
 impl Drop for RecordingEnvironmentSession {
     fn drop(&mut self) {
         INTENTIONAL_RECORDINGS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
-        let _ = self.commands.send(EnvironmentCommand::Stop);
+        let command = match self.then.take() {
+            Some(then) => EnvironmentCommand::StopThen(then),
+            None => EnvironmentCommand::Stop,
+        };
+        if let Err(mpsc::SendError(EnvironmentCommand::StopThen(then))) =
+            self.commands.send(command)
+        {
+            then();
+        }
     }
 }
 
@@ -455,6 +516,8 @@ mod tests {
     }
 
     struct ObservedEnvironment(Sender<Event>);
+
+    impl Environment for ObservedEnvironment {}
 
     impl Drop for ObservedEnvironment {
         fn drop(&mut self) {

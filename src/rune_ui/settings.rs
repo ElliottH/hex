@@ -420,7 +420,7 @@ pub(super) fn listener_card(ui: &Ui, p: Paint) -> El {
 /// What the desktop granted (portal) or which commands to bind (none).
 pub(super) fn desktop_shortcuts(ui: &Ui, p: Paint) -> Option<El> {
     let rows = match ui.shortcuts()? {
-        DesktopShortcuts::Registered => return None,
+        DesktopShortcuts::Unregistered | DesktopShortcuts::Registered => return None,
         DesktopShortcuts::Portal(granted) => {
             let mut rows: Vec<El> = granted
                 .iter()

@@ -2119,7 +2119,10 @@ fn finish_dictation(
             });
         }
     };
-    feedback::play(Tone::DictationStop);
+    // The audio owner already announced a release with a tail.
+    if tail.is_zero() {
+        feedback::play(Tone::DictationStop);
+    }
     events.emit(&VoiceEvent::State {
         timestamp_ms: now_ms(),
         state: VoiceState::Transcribing,
