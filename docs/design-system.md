@@ -64,7 +64,7 @@ These live in [`rune_ui/controls.rs`](../src/rune_ui/controls.rs) and
 | Short message under a control | `note` |
 | Text entry saved when typing pauses | `text_field` |
 | Keyboard highlight in a search popover | `Highlight` |
-| List + detail | `split` with `list_row`, `group_label`, `detail_header`, `detail_title`, `fact` |
+| List + detail | `split` with `list_row`, `group_label`, `detail_header`, `detail_title`, `section_label`, `fact` |
 | Nothing to show, errors | `message`, `placeholder`, `error_panel` |
 | A permission's Allow / Allowed control | `permission_control`, `allowed` |
 | Slider | `slider` |

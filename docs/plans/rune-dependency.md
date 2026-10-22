@@ -18,9 +18,10 @@ license. Commits from before that, including every rev Hex pinned earlier
 ## Why
 
 Cargo fetches every Git dependency in `Cargo.lock`, including optional ones.
-While Rune was private, even the default GPUI build failed without Rune
-access (CI, the Nix flake, and outside contributors). These options were
-rejected:
+While Rune was private, even a build without Rune enabled failed without Rune
+access (CI, the Nix flake, and outside contributors). Neither Hex nor Rune is
+published to crates.io (`publish = false`); never run `cargo publish`. These
+alternatives were rejected:
 
 - A deploy key or token secret. Fork pull requests get no secrets, and Nix's
   fixed-output fetchers can't use SSH, so every public consumer still breaks.
@@ -45,4 +46,5 @@ rejected:
   `lib.fakeHash` and run `nix build .#hex.cargoDeps`; the error prints the
   hash to use.
 - A pin bump changes the `rev` on all three crates together, followed by
-  `cargo update -p rune -p rune-kit -p rune-theme-opencode`.
+  `cargo update -p rune -p rune-kit -p rune-theme-opencode`. Keep `windows`
+  0.62.2 for `gpu-allocator` in `Cargo.lock` so Windows DX12 builds stay green.

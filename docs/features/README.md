@@ -291,9 +291,7 @@ request yet.
 Sources: [shared picker](../../src/rune_ui/picker.rs) and `remove_installed`
 in [transcription_models.rs](../../src/transcription_models.rs). The check is
 `removing_a_model_deletes_its_artifacts_unless_a_download_is_active` (real files
-and lock). The picker's two-step confirmation lost its regression with GPUI
-(`model_deletion_confirms_first_and_spares_the_dictation_model`); no Rune test
-covers it yet.
+and lock); no Rune test covers the picker's two-step confirmation yet.
 
 **Known gap:** `is_installed` checks size, not checksum. Not every native-load
 path requires verification. Picker Active means selected/installed, not live
@@ -394,10 +392,8 @@ Immediate settings controls commit a candidate before changing the saved UI
 choice or applying dependent native/history effects. A failed shortcut save
 stays in capture instead of showing Saved; failed retention saves keep the old
 choice and surface the error. Failed debounced text saves retain their drafts
-for a subsequent edit or close-time flush. The GPUI regressions that injected
-these save failures (`failed_shortcut_save_stays_in_capture_and_preserves_pending_edits`,
-`failed_retention_save_keeps_previous_choice_and_reports_the_error`) went with
-GPUI; no Rune test injects a save failure yet.
+for a subsequent edit or close-time flush; no Rune test injects a save failure
+yet.
 Persistence, conflict, and ownership checks live in
 [app_settings.rs](../../src/app_settings.rs),
 [recording_environment.rs](../../src/recording_environment.rs), and
@@ -546,9 +542,9 @@ Sources: [voice_filter.rs](../../src/voice_filter.rs),
 [HexMicrophoneDriver.c](../../macos/HexMicrophoneDriver/HexMicrophoneDriver.c),
 [build-app.sh](../../scripts/build-app.sh),
 and [rune_ui/fun.rs](../../src/rune_ui/fun.rs). Checks:
-`muffled_mode_attenuates_high_frequencies_and_preserves_length`,
-`muted_mode_with_comfort_noise_drops_speech_to_room_tone_floor`,
-`all_modes_produce_finite_bounded_samples`,
+`default_mode_is_muffled`,
+`all_nine_modes_render_finite_and_expected_levels`,
+`raised_cosine_fade_has_no_step_discontinuity`,
 `ring_buffer_transfers_samples_and_handles_underflow_and_overflow`,
 `driver_plugin_loopback_streams_at_48khz_under_20ms_latency`,
 `driver_plist_version_and_status_mismatch_are_detected`,
@@ -683,9 +679,8 @@ one and a change applies after relaunch. Speech-model downloads are unaffected.
 No automated check covers it; the read is a single preference lookup in
 [sparkle.rs](../../src/sparkle.rs).
 
-The Rune sidebar's Update button asks the host to show Sparkle's dialog. The
-GPUI click regression (`sidebar_update_click_dispatches_only_outside_preview`)
-went with GPUI; no Rune test clicks the sidebar Update yet.
+The Rune sidebar's Update button asks the host to show Sparkle's dialog; no
+Rune test clicks the sidebar Update yet.
 
 **Fixed in 2.1.13:** older releases through 2.1.12 used app-global dispatch from
 inside the sidebar click, losing the action while the active window was borrowed.
@@ -1012,7 +1007,7 @@ macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── Meeting capsules: Rune interactive overlays (offer, call ended, ready, recording)
 └── Not yet: capsule Copy new/all, hover expansion, drag
 Windows `hex app` -> one tray process, Rune window // dev.rune-ui-windows
-├── Runtime thread owns WindowsDesktopHost + TranscriptionPreparation (no service)
+├── Runtime thread owns WindowsDesktopHost (listener, model preparation, OpenCode, transformations, updater)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
 ├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
 ├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
