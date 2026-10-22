@@ -1,6 +1,9 @@
 # One Hex Process Per User, Hosting Rune Windows
 
-**Status:** design for review on `rune-ui`. Nothing here is implemented.
+**Status:** Linux is implemented on `rune-ui`: launch forwarding, the
+single-instance socket, the systemd unit, and the Rune window in the Hex
+process (see [`../linux.md`](../linux.md#one-hex-process)). The macOS and
+Windows sections track their own hosts.
 It depends on the Rune front end (`src/rune_ui*`,
 [`rune-ui.md`](rune-ui.md)) and on Rune core changes that need coordinating
 with Kit. Never merge this to `main` ahead of the Rune port.
@@ -376,6 +379,11 @@ connect(socket) ok        -> Activate{token from XDG_ACTIVATION_TOKEN / DESKTOP_
 no instance, managed unit -> write session.env; systemctl --user start hex.service (Type=notify) -> Activate{token, show}
 no instance, otherwise    -> become the instance here (custom data root, cargo run, non-systemd)
 ```
+
+**Decided (Dax, 2026-10-22):** systemd stays the supervisor that starts
+Hex at login on managed installs, with the `Type=notify` unit below. This
+is implemented; the autostart entry still runs `hex start`, which equals
+`hex --background`.
 
 Under a managed install the long-lived process is always the systemd one,
 which brings journald, `Restart=on-failure`, and
