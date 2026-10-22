@@ -51,7 +51,7 @@ substitute for source inspection or a second roadmap.
 - `audio`: `cpal` device enumeration and timestamped mono float PCM delivery,
   live selection, and bounded stream recovery.
 - `moonshine`: the only Moonshine C adapter and the streaming recognizer.
-- `suppression`: the macOS event tap, shortcut suppression, and the
+- `suppression`: the macOS event taps, shortcut suppression, and the
   configurable dictation-hotkey state machine.
 - `keyboard`: active-layout key resolution and balanced synthetic shortcuts.
 - `dictation`: warm pre-roll, growable capture, and 16 kHz
@@ -300,6 +300,11 @@ CoreAudio formats, AppleScript details, or event serialization.
   snapshot is fixed until restart; cached misses must not re-enter TIS/TSM.
   Uncached headless lookups retain live-layout resolution, with all native
   lookup and snapshot construction serialized by the same lock.
+- Another app's global shortcut (Carbon hotkeys, such as Spaceman's Option-1)
+  consumes its key before the session taps. A listen-only HID tap reports key
+  presses as chord evidence only: it discards an early hold or pending gesture
+  like any unrelated key, never tracks key state, and skips Escape and Hex's own
+  shortcuts. Its timestamps may be Mach ticks or nanoseconds.
 - Stale shortcut recovery requires at least 100 ms of sampled keyboard neutrality,
   no pending input, and no hold or pending gesture. A lock is repaired only when
   it tracks a held key, and it stays locked so a fresh press can still finish it.

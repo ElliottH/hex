@@ -40,6 +40,8 @@ Ordinary hold                            // lock activation is mapped below
   ├── Hold -> Speak -> Release -> Finish          // dictate.hold
   ├── Release before 300 ms -> Discard            // dictate.short-tap
   └── Early unrelated shortcut/click -> Discard   // not intentional dictation
+      └── Includes another app's global shortcut  // dictate.hidden-chord
+          (Spaceman's Option-1) -> Seen at HID -> Discard, no double-tap lock
 
 Ordinary shortcut -> No recording mute/pause or idle-sleep prevention
 Intentional recording -> No automatic duration limit
@@ -50,6 +52,23 @@ Checks in [suppression.rs](../../src/suppression.rs):
 `callback_timestamps_preserve_nanoseconds_and_short_tap_discard`,
 `callback_press_reaches_intentional_hold_on_the_audio_clock`.
 These cover constructed callback/reducer timing, not physical event delivery.
+
+**Fixed October 22, 2026:** a global shortcut registered with Carbon (Spaceman's
+Option-1 to Option-0 workspace keys, for example) consumes its key before the
+session taps, so Hex saw only the Option press and release. Holding Option past
+300 ms while switching workspaces recorded and pasted whatever the microphone
+heard, and two quick switches could double-tap lock. A listen-only HID tap now
+reports key presses as chord evidence only; session events still own key state,
+and Escape and Hex's own shortcuts are excluded. Evidence that overtakes its
+press still prevents the capture. Command-Tab likewise swallows Tab's release,
+which caused the routine `resynchronized stale input tracking` warnings, now
+logged with `key_codes`. Checks:
+`hid_evidence_discards_a_chord_hidden_by_a_global_shortcut`,
+`hidden_chords_in_quick_succession_never_double_tap_lock`,
+`hid_evidence_that_overtakes_its_press_prevents_the_capture`. Observed with
+listen-only session and HID taps on Kit's Studio: Spaceman's Option-1/2/3
+reached HID but never the session. The installed fix has no physical-keyboard
+run yet.
 
 ### Shortcut Mode
 

@@ -1380,7 +1380,13 @@ mod tests {
         assert!(artifacts.iter().all(|artifact| artifact.exists()));
         drop(download);
 
-        remove_installed_at(&path).unwrap();
+        // A child another test thread forks before it execs holds a copy of the
+        // download lock's descriptor for a moment, so the release can take a few tries.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while let Err(error) = remove_installed_at(&path) {
+            assert!(std::time::Instant::now() < deadline, "{error:#}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(artifacts.iter().all(|artifact| !artifact.exists()));
         remove_installed_at(&path).unwrap();
         remove_installed_at(&directory.join("missing").join("fixture.gguf")).unwrap();

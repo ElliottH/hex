@@ -2083,6 +2083,27 @@ mod tests {
             .browser_host("x.com", Profile::new("x", "x prompt"))
     }
 
+    /// Writes an executable fixture script from a child process. Writing it
+    /// here would leave its descriptor open in children other test threads
+    /// fork meanwhile, and running it would then fail with "Text file busy".
+    #[cfg(not(target_os = "windows"))]
+    fn write_script(path: &Path, contents: &str) {
+        use std::io::Write;
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(contents.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
+
     #[cfg(not(target_os = "windows"))]
     fn fake_executable(path: &Path) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -2714,25 +2735,24 @@ mod tests {
                 "api get /api/info\napi get /api/status\napi get /api/health\n",
             ),
         ] {
-            fs::write(
+            write_script(
                 &executable,
-                format!(
+                &format!(
                     "#!/bin/sh\nprintf '%s\\n' \"$*\" >> calls\ncase \"$*\" in\n'api get /api/info') {info} ;;\n'api get /api/status') {status} ;;\n'api get /api/health') {health} ;;\n'debug paths') printf 'state %s\\n' \"$PWD\" ;;\n*) exit 2 ;;\nesac\n"
                 ),
-            )
-            .unwrap();
-            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+            );
+            // No fixture times out, so a busy machine gets a generous deadline.
             let result = discover_opencode_service_with(
                 &executable,
                 &root,
-                Duration::from_secs(2),
+                Duration::from_secs(20),
                 &AtomicBool::new(false),
             );
             assert_eq!(result.is_ok(), succeeds, "{result:?}");
             assert_eq!(
-                fs::read_to_string(root.join("calls")).unwrap(),
+                fs::read_to_string(root.join("calls")).unwrap_or_default(),
                 expected_calls,
-                "fixtures: {info} / {status} / {health}"
+                "fixtures: {info} / {status} / {health}: {result:?}"
             );
             if succeeds {
                 assert_eq!(
@@ -2759,12 +2779,10 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         let executable = root.join("opencode2");
-        fs::write(
+        write_script(
             &executable,
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> calls\ncase \"$*\" in\n'api get /api/info') echo 'HTTP 404 Not Found' >&2; exit 1 ;;\n'api get /api/status') sleep 2; echo 'HTTP 404 Not Found' >&2; exit 1 ;;\n'api get /api/health') sleep 10; echo '{\"pid\":42,\"version\":\"fixture-version\"}' ;;\n*) exit 2 ;;\nesac\n",
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let error = discover_opencode_service_with(
             &executable,
             &root,
