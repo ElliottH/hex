@@ -59,7 +59,7 @@ static HISTORY_ICON: Icon = Icon {
 
 pub(crate) fn run() {
     rune::set_app_id("hex");
-    rune::run(spec());
+    rune::App::new(spec()).run();
 }
 
 fn spec() -> AppSpec<Ui> {

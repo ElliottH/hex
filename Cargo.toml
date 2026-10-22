@@ -89,9 +89,9 @@ transcribe-cpp = { version = "=0.2.4", features = ["vulkan"] }
 x11-clipboard = "0.9.3"
 x11rb = { version = "0.14.0", features = ["xtest"] }
 png = { version = "0.18", optional = true }
-rune = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "338d22a73208e20b53b7b5cad21647c42523c4b1", optional = true }
-rune-kit = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "338d22a73208e20b53b7b5cad21647c42523c4b1", optional = true }
-rune-theme-opencode = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "338d22a73208e20b53b7b5cad21647c42523c4b1", optional = true }
+rune = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "a242f5aeca578cbf3453215b3b8d344a8fd8d42c", optional = true }
+rune-kit = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "a242f5aeca578cbf3453215b3b8d344a8fd8d42c", optional = true }
+rune-theme-opencode = { git = "ssh://git@github.com/anomalyco/rune.git", rev = "a242f5aeca578cbf3453215b3b8d344a8fd8d42c", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
