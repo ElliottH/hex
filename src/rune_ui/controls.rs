@@ -1,6 +1,6 @@
 //! Settings controls on `rune-kit`, themed with OpenCode's design language
 //! (`rune-theme-opencode`): the card, row, switch, segmented control,
-//! select-style menus, buttons, keycaps, tag, note, and text field. Colours,
+//! select-style menus, buttons, keycaps, note, and text field. Colours,
 //! type, radii, elevation, and motion come from the kit's tokens.
 
 use rune::{Color, El, TextEdit, TextStyle, Tx, col, el, row, text};
@@ -63,10 +63,7 @@ pub(super) fn section(p: Paint, key: &str, title: &str, rows: Vec<El>) -> El {
         .child(
             text(title)
                 .key("header")
-                .font(TextStyle {
-                    line_height: 16.0,
-                    ..p.k.ty.ui_medium
-                })
+                .font(p.k.ty.ui_medium.lh(16.0))
                 .color(p.k.c.text_muted)
                 .ml(12.0),
         )
@@ -216,15 +213,12 @@ pub(super) fn segmented(
 
 /// One choice of a [`select`].
 pub(super) struct Choice {
-    pub(super) key: String,
     pub(super) label: String,
-    pub(super) detail: Option<String>,
     pub(super) selected: bool,
     pub(super) choose: Box<dyn Fn(&mut Ui)>,
 }
 
 /// A select field whose choices open in an anchored menu above the page.
-#[allow(clippy::too_many_arguments)] // one call per settings row; all are the row's data
 pub(super) fn select(
     p: Paint,
     key: &str,
@@ -232,7 +226,6 @@ pub(super) fn select(
     open: bool,
     choices: Vec<Choice>,
     toggle: impl Fn(&mut Ui) + 'static,
-    close: fn(&mut Ui),
     layer: &mut Vec<El>,
 ) -> El {
     let mut discard = Vec::new();
@@ -249,23 +242,13 @@ pub(super) fn select(
         .gutter(4.0)
         .min_width(SELECT_WIDTH)
         .open(open)
-        .on_close(close);
+        .on_close(|ui: &mut Ui| ui.open = None);
     for choice in choices {
-        let Choice {
-            key,
-            label,
-            detail,
-            selected,
-            choose,
-        } = choice;
-        let mut item = MenuItem::new(label)
-            .checked(selected)
-            .on_select(move |ui: &mut Ui| choose(ui));
-        if let Some(detail) = detail {
-            item = item.shortcut(detail);
-        }
-        let _ = key;
-        menu = menu.item(item);
+        menu = menu.item(
+            MenuItem::new(choice.label)
+                .checked(choice.selected)
+                .on_select(move |ui: &mut Ui| (choice.choose)(ui)),
+        );
     }
     menu.build(p.k, layer)
 }
@@ -317,10 +300,7 @@ pub(super) fn keycaps(p: Paint, key: &str, parts: &[String]) -> El {
                 .child(
                     text(part.clone())
                         .key("label")
-                        .font(TextStyle {
-                            line_height: 12.0,
-                            ..p.k.ty.small_medium
-                        })
+                        .font(p.k.ty.small_medium.lh(12.0))
                         .color(c.text_base),
                 )
         }))
@@ -328,28 +308,6 @@ pub(super) fn keycaps(p: Paint, key: &str, parts: &[String]) -> El {
 
 pub(super) fn status_dot(color: Color) -> El {
     el().key("dot").size(8.0, 8.0).radius(4.0).fill(color)
-}
-
-/// A small status label: tinted, never pressable.
-pub(super) fn tag(p: Paint, key: &str, label: &str) -> El {
-    let s = &p.k.c.success;
-    row()
-        .key(key)
-        .h(18.0)
-        .px(6.0)
-        .center()
-        .radius(p.k.radius.xs)
-        .fill(s.bg)
-        .border(0.5, s.border)
-        .child(
-            text(label)
-                .key("label")
-                .font(TextStyle {
-                    line_height: 12.0,
-                    ..p.k.ty.small_medium
-                })
-                .color(s.fg),
-        )
 }
 
 /// A one-line note inside a card, between rows.

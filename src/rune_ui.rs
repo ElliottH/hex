@@ -119,7 +119,7 @@ pub(crate) fn run_app(
         }
     };
     if let Some(activation) = first {
-        show(activation.clone());
+        show(activation);
     }
     let quit = app.handle();
     std::thread::Builder::new()
@@ -372,9 +372,9 @@ pub(crate) struct Ui {
     view: Option<ServiceView>,
     /// A save or policy change that failed here.
     error: Option<String>,
-    /// Why the client cannot reach the service.
+    /// Why the window cannot reach the host.
     connection_error: Option<String>,
-    /// The settings the service last reported, to adopt only its changes.
+    /// The settings the host last reported, to adopt only its changes.
     service_settings: Option<AppSettings>,
     pane: Pane,
     open: Option<Menu>,
@@ -414,7 +414,8 @@ impl Ui {
             Err(error) => (AppSettings::default(), Some(format!("{error:#}"))),
         };
         crate::desktop_i18n::apply(settings.ui_language.as_deref());
-        let mut ui = Self::with(settings, Service::Pending, error);
+        let mut ui = Self::with(settings, Service::Pending);
+        ui.error = error;
         ui.history = history::HistoryPane::shared(host::history(ui.settings.history_retention));
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
@@ -424,14 +425,14 @@ impl Ui {
         ui
     }
 
-    fn with(settings: AppSettings, service: Service, error: Option<String>) -> Self {
+    fn with(settings: AppSettings, service: Service) -> Self {
         let hints = TextEdit::new(settings.transcription.recognition_hints.clone());
         let modes = modes::ModesPane::new(&settings);
         Self {
             settings,
             service,
             view: None,
-            error,
+            error: None,
             connection_error: None,
             service_settings: None,
             pane: Pane::Settings,
@@ -537,18 +538,40 @@ impl Ui {
 
     /// Asks the OS host for something only it can do.
     fn ask(&mut self, request: platform::PlatformRequest) {
-        // Windows writes its Run key from the window's own process.
-        if let (
-            platform::PlatformHost::None,
-            platform::PlatformRequest::SetLaunchAtLogin(enabled),
-        ) = (&self.host, &request)
-        {
-            let result = host::set_launch_at_login(*enabled);
-            self.platform.set_login_item(Some(result));
-            return;
+        match &request {
+            platform::PlatformRequest::Permission(
+                crate::onboarding::PermissionAction::RequestMicrophone,
+            ) => self
+                .platform
+                .note_asked(crate::onboarding::PermissionKind::Microphone),
+            platform::PlatformRequest::Permission(
+                crate::onboarding::PermissionAction::ShowGuide(kind),
+            ) => self.platform.note_asked(*kind),
+            platform::PlatformRequest::SystemAudio => self
+                .platform
+                .note_asked(crate::onboarding::PermissionKind::SystemAudio),
+            platform::PlatformRequest::SetLaunchAtLogin(enabled) => match &self.host {
+                // Windows writes its Run key from the window's own process.
+                platform::PlatformHost::None => {
+                    let result = host::set_launch_at_login(*enabled);
+                    self.platform.set_login_item(Some(result));
+                    return;
+                }
+                // macOS stays the source of truth; previews flip at once.
+                platform::PlatformHost::Fixture(_) => {
+                    self.platform.set_login_item(Some(Ok(*enabled)));
+                }
+                platform::PlatformHost::Native(_) => {}
+            },
+            _ => {}
         }
+        let is_relaunch = request == platform::PlatformRequest::Relaunch;
         if let Err(error) = self.host.send(request) {
-            self.error = Some(error);
+            if is_relaunch {
+                self.platform.relaunch_failed = true;
+            } else {
+                self.error = Some(error);
+            }
         }
     }
 
@@ -566,13 +589,14 @@ impl Ui {
         self.shortcuts() != Some(&DesktopShortcuts::Commands)
     }
 
-    /// Adopts settings another client or the service saved, unless they are
-    /// the stale copy of an edit this window just made.
-    fn adopt(&mut self, service: AppSettings) {
+    /// Adopts settings the host saved, unless they are the stale copy of an
+    /// edit this window just made.
+    fn adopt(&mut self, service: AppSettings) -> bool {
         if self.service_settings.as_ref() == Some(&service) {
-            return;
+            return false;
         }
-        if service != self.settings && self.draft_since.is_none() {
+        let changed = service != self.settings && self.draft_since.is_none();
+        if changed {
             if service.transcription.recognition_hints
                 != self.settings.transcription.recognition_hints
             {
@@ -584,6 +608,7 @@ impl Ui {
             self.settings = service.clone();
         }
         self.service_settings = Some(service);
+        changed
     }
 
     /// Saves pending edits, then lets the host finish its work and exit.
@@ -656,8 +681,7 @@ fn setup(ui: &mut Ui, waker: Waker) {
 /// saves paused text edits. True when anything shown changed.
 fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
     let now = Instant::now();
-    let mut changed = settings::advance_capture(ui);
-    changed |= ui.save_drafts(now);
+    let mut changed = ui.save_drafts(now);
     changed |= ui.models.poll(ui.live());
     changed |= ui.history.poll(ui.pane == Pane::History);
     changed |= ui.modes.poll(ui.live());
@@ -688,9 +712,7 @@ fn poll(ui: &mut Ui, _clock: f64, _tx: &mut Tx) -> bool {
             changed = true;
         }
         if let Some(settings) = settings {
-            let before = ui.settings.clone();
-            ui.adopt(settings);
-            changed |= before != ui.settings;
+            changed |= ui.adopt(settings);
         }
     }
     let preparing = ui
@@ -930,29 +952,29 @@ const SCENES: &[Scene] = &[
         ui.service = Service::Live(Box::new(backend));
         poll(ui, 0.0, &mut Tx::default());
     }),
-    ("portal", |ui| *ui = fixture(portal_shortcuts())),
+    ("portal", |ui| *ui = portal_fixture()),
     ("commands", |ui| *ui = fixture(DesktopShortcuts::Commands)),
     ("disabled", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         if let Some(view) = &mut ui.view {
             view.listener.running = false;
             view.listener.status = "Disabled".into();
         }
     }),
     ("capturing", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.capture = Capture::Listening {
             target: ShortcutTarget::Dictation,
             message: None,
         };
     }),
     ("chinese", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.settings.ui_language = Some("zh".into());
         crate::desktop_i18n::apply(Some("zh"));
     }),
     ("menus", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.open = Some(Menu::Microphone);
         ui.microphones = Ok(vec![
             "Built-in Audio Analog Stereo".into(),
@@ -961,68 +983,68 @@ const SCENES: &[Scene] = &[
         ui.confirm_release = true;
     }),
     ("voice-action", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.settings.voice_action.enabled = true;
         ui.pane = Pane::VoiceAction;
     }),
     ("voice-action-off", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.pane = Pane::VoiceAction;
     }),
     ("voice-action-unavailable", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.settings.voice_action.enabled = true;
         ui.models = models::Models::fixture_missing();
         ui.pane = Pane::VoiceAction;
     }),
     ("voice-action-models", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.settings.voice_action.enabled = true;
         ui.pane = Pane::VoiceAction;
         ui.open = Some(Menu::Model);
     }),
     ("history", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.history = history::HistoryPane::fixture();
         ui.pane = Pane::History;
     }),
     ("history-empty", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         ui.history = history::HistoryPane::fixture_empty();
         ui.pane = Pane::History;
     }),
     ("modes", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         modes::fixture(ui);
         ui.pane = Pane::Modes;
     }),
     ("modes-global", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         modes::fixture(ui);
         ui.modes.select(modes::Selection::Default);
         ui.pane = Pane::Modes;
     }),
     ("modes-picker", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         modes::fixture(ui);
         ui.modes.transformation_picker_open = true;
         ui.modes.application_picker_open = true;
         ui.pane = Pane::Modes;
     }),
     ("picker", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         picker::fixture(ui, None);
     }),
     ("picker-downloading", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         picker::fixture(ui, Some(TranscriptionModelId::CohereTranscribe));
     }),
     ("onboarding", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         onboarding::fixture(ui, crate::onboarding::Step::Welcome, false);
     }),
     ("onboarding-setup", |ui| {
-        *ui = fixture(portal_shortcuts());
+        *ui = portal_fixture();
         onboarding::fixture(ui, crate::onboarding::Step::Setup, true);
     }),
     // macOS and Windows surfaces, from preview data (see `platform`).
@@ -1195,8 +1217,8 @@ fn mac_tour(ui: &mut Ui, step: onboarding::MacStep) {
     onboarding::mac_fixture(ui, step);
 }
 
-fn portal_shortcuts() -> DesktopShortcuts {
-    DesktopShortcuts::Portal(vec![
+fn portal_fixture() -> Ui {
+    fixture(DesktopShortcuts::Portal(vec![
         DesktopGrantedShortcut {
             name: "Dictation".into(),
             trigger: Some("F12".into()),
@@ -1205,7 +1227,7 @@ fn portal_shortcuts() -> DesktopShortcuts {
             name: "Paste last dictation".into(),
             trigger: Some("Ctrl+Alt+V".into()),
         },
-    ])
+    ]))
 }
 
 /// Deterministic settings and service state matching a typical Wayland
@@ -1225,7 +1247,7 @@ fn fixture(shortcuts: DesktopShortcuts) -> Ui {
         paste_with_shift: true,
         ..AppSettings::default()
     };
-    let mut ui = Ui::with(settings, Service::Fixture(Vec::new()), None);
+    let mut ui = Ui::with(settings, Service::Fixture(Vec::new()));
     ui.models = models::Models::fixture();
     ui.picker.installed = Some(vec![TranscriptionModelId::ParakeetUnifiedEnglish]);
     ui.view = Some(ServiceView {
