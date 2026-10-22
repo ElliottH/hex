@@ -2,27 +2,26 @@
 //! retention choice, two-step Clear all, and a detail view with Copy and
 //! Delete. It shares the host's store, which the listener records into.
 
-use rune::{El, TextEdit, Tx, col, el, row, text};
+use rune::{El, TextEdit, Tx, col, row, text};
 use rune_kit::{Select, SelectAppearance, TextInput};
 
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button};
+use super::lists::{message, placeholder, section_label, split};
 use super::{Menu, Ui};
 use crate::desktop_i18n::{event_age, tr, tr_fill, tr_named};
 use crate::history::{History, HistoryEntry, HistoryKind, HistoryRetention};
-
-const LIST_WIDTH: f32 = 320.0;
 
 #[derive(Default)]
 pub(super) struct HistoryPane {
     store: Option<History>,
     pub(super) entries: Vec<HistoryEntry>,
-    pub(super) search: TextEdit,
+    search: TextEdit,
     /// The query the entries were loaded for.
     searched: String,
     pub(super) selected: Option<u64>,
     pub(super) clear_armed: bool,
     pub(super) copied: Option<u64>,
-    pub(super) error: Option<String>,
+    error: Option<String>,
 }
 
 impl HistoryPane {
@@ -31,7 +30,7 @@ impl HistoryPane {
         Self {
             error: store
                 .is_none()
-                .then(|| crate::desktop_i18n::tr("History could not be loaded.").to_string()),
+                .then(|| tr("History could not be loaded.").to_string()),
             store,
             ..Self::default()
         }
@@ -295,64 +294,19 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         }
         list = list.child(item);
     }
-    let list = col()
-        .key("history-column")
-        .w(LIST_WIDTH)
-        .h_full()
-        .pl(16.0)
-        .pr(8.0)
-        .child(super::scroll_body("history-scroll", list));
-    let body = row()
-        .key("history-body")
-        .grow(1.0)
-        .shrink()
-        .child(list)
-        .child(
-            el().key("history-rule")
-                .w(p.hair)
-                .h_full()
-                .fill(c.border_weak),
-        )
-        .child(detail(ui, p));
+    let body = split(
+        p,
+        "history-body",
+        super::scroll_body("history-scroll", list),
+        detail(ui, p),
+    );
     (actions, body)
-}
-
-fn message(p: Paint, key: &str, title: &str, detail: Option<&str>) -> El {
-    col()
-        .key(key)
-        .px(10.0)
-        .py(24.0)
-        .gap(4.0)
-        .child(
-            text(title)
-                .key("title")
-                .font(p.k.ty.ui)
-                .color(p.muted())
-                .wrap(),
-        )
-        .children(detail.map(|detail| {
-            text(detail)
-                .key("detail")
-                .font(DESCRIPTION)
-                .color(p.danger())
-                .wrap()
-        }))
 }
 
 fn detail(ui: &Ui, p: Paint) -> El {
     let pane = &ui.history;
     let Some(entry) = pane.selected.and_then(|id| pane.entry(id)) else {
-        return col()
-            .key("history-detail")
-            .grow(1.0)
-            .shrink()
-            .center()
-            .child(
-                text(tr("Select a history entry."))
-                    .key("placeholder")
-                    .font(p.k.ty.ui)
-                    .color(p.muted()),
-            );
+        return placeholder(p, "history-detail", tr("Select a history entry."));
     };
     let id = entry.id;
     let copied = pane.copied == Some(id);
@@ -459,12 +413,7 @@ fn block(p: Paint, key: &str, label: &str, value: &str, color: rune::Color) -> E
     col()
         .key(key)
         .gap(6.0)
-        .child(
-            text(label)
-                .key("label")
-                .font(p.k.ty.small_medium)
-                .color(p.muted()),
-        )
+        .child(section_label(p, "label", label))
         .child(
             text(value)
                 .key("value")

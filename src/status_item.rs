@@ -190,14 +190,7 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
         &NSString::from_str("Transcription Model"),
     );
     models.setAutoenablesItems(false);
-    let heading = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &NSString::from_str("Transcription Model"),
-            None,
-            &NSString::new(),
-        )
-    };
+    let heading = plain_item("Transcription Model", mtm);
     heading.setSubmenu(Some(&models));
     menu.addItem(&heading);
     let model_items = MODELS
@@ -243,15 +236,7 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     if crate::sparkle::updates_managed() {
         // An item without an action is shown disabled.
-        let managed = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str(crate::sparkle::MANAGED_UPDATES_LABEL),
-                None,
-                &NSString::new(),
-            )
-        };
-        menu.addItem(&managed);
+        menu.addItem(&plain_item(crate::sparkle::MANAGED_UPDATES_LABEL, mtm));
     } else {
         add_item(
             &menu,
@@ -305,6 +290,17 @@ fn status_bar_icon(png: &[u8], accessibility_description: &str) -> Result<Retain
     image.setTemplate(true);
     image.setAccessibilityDescription(Some(&NSString::from_str(accessibility_description)));
     Ok(image)
+}
+
+fn plain_item(title: &str, mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+    unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(title),
+            None,
+            &NSString::new(),
+        )
+    }
 }
 
 fn add_item(

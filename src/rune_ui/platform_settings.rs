@@ -22,26 +22,30 @@ use crate::login_item::LoginItemStatus;
 use crate::onboarding::{PermissionKind, PermissionWarning};
 use crate::voice_filter::VoiceFilterMode;
 
-/// A permission's name as System Settings lists it, and what Hex cannot do
-/// without it.
-pub(super) fn permission_copy(
+/// A permission's row key, its name as System Settings lists it, and what
+/// Hex cannot do without it.
+fn permission_copy(
     kind: PermissionKind,
     accessibility_renamed: bool,
-) -> (&'static str, &'static str) {
+) -> (&'static str, &'static str, &'static str) {
     match kind {
         PermissionKind::Microphone => (
+            "permission-microphone",
             tr("Microphone"),
             tr("Hex cannot record dictation until microphone access is restored."),
         ),
         PermissionKind::InputMonitoring => (
+            "permission-input-monitoring",
             tr("Input Monitoring"),
             tr("Hex cannot recognize the dictation shortcut in other apps."),
         ),
         PermissionKind::Accessibility => (
+            "permission-accessibility",
             accessibility_name(accessibility_renamed),
             tr("Hex cannot paste completed dictation into the foreground app."),
         ),
         PermissionKind::SystemAudio => (
+            "permission-system-audio",
             tr("Screen & System Audio Recording"),
             tr("Required to hear the other participants."),
         ),
@@ -57,20 +61,6 @@ pub(super) fn accessibility_name(renamed: bool) -> &'static str {
     }
 }
 
-const fn permission_key(kind: PermissionKind) -> &'static str {
-    match kind {
-        PermissionKind::Microphone => "permission-microphone",
-        PermissionKind::InputMonitoring => "permission-input-monitoring",
-        PermissionKind::Accessibility => "permission-accessibility",
-        PermissionKind::SystemAudio => "permission-system-audio",
-    }
-}
-
-fn perform(ui: &mut Ui, warning: PermissionWarning) {
-    ui.ask(PlatformRequest::Permission(warning.action));
-    ui.platform.note_asked(warning.kind);
-}
-
 /// The missing permissions above everything else, while the tour is closed.
 pub(super) fn permissions_section(ui: &Ui, p: Paint) -> Option<El> {
     if !ui.platform.caps.permissions || ui.tour.is_some() {
@@ -82,10 +72,9 @@ pub(super) fn permissions_section(ui: &Ui, p: Paint) -> Option<El> {
     }
     let rows = warnings
         .into_iter()
-        .map(|warning| {
-            let (name, description) =
+        .map(|warning: PermissionWarning| {
+            let (key, name, description) =
                 permission_copy(warning.kind, ui.platform.accessibility_renamed);
-            let key = permission_key(warning.kind);
             let control = permission_control(
                 p,
                 &format!("{key}-allow"),
@@ -95,7 +84,7 @@ pub(super) fn permissions_section(ui: &Ui, p: Paint) -> Option<El> {
                     PermissionControl::Allow
                 },
                 ButtonKind::Secondary,
-                move |ui: &mut Ui| perform(ui, warning),
+                move |ui: &mut Ui| ui.ask(PlatformRequest::Permission(warning.action)),
             );
             setting_row(p, key, name, Some(description), control)
         })
@@ -124,14 +113,7 @@ pub(super) fn error_section(ui: &Ui, p: Paint) -> Option<El> {
         p,
         "save-error",
         tr("Status"),
-        vec![
-            note(
-                "error-title",
-                tr("Hex could not apply this change."),
-                p.danger(),
-            ),
-            note("error", error, p.muted()),
-        ],
+        super::settings::error_notes(p, error).into(),
     ))
 }
 
@@ -211,7 +193,6 @@ pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Option<El> {
                     // macOS prompts once; after that the switch is in
                     // System Settings, with the guide beside it.
                     ui.ask(PlatformRequest::SystemAudio);
-                    ui.platform.note_asked(PermissionKind::SystemAudio);
                 },
             ),
         ));
@@ -356,14 +337,6 @@ pub(super) fn launch_at_login_rows(ui: &Ui, p: Paint) -> Vec<El> {
             .on_press(|ui: &mut Ui| {
                 let enabled = ui.platform.login_item != Some(LoginItemStatus::Enabled);
                 ui.ask(PlatformRequest::SetLaunchAtLogin(enabled));
-                // macOS stays the source of truth; previews flip at once.
-                if ui.host.is_fixture() {
-                    ui.platform.login_item = Some(if enabled {
-                        LoginItemStatus::Enabled
-                    } else {
-                        LoginItemStatus::Disabled
-                    });
-                }
             });
     }
     let mut rows = vec![row];
@@ -431,15 +404,16 @@ pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
             PlatformRequest::UninstallHexMicrophone,
         )
     };
+    let state_tag = |label: &str, tone: Tone| tone_tag(p, "state", label, tone);
     let controls = row().key("controls").gap(8.0).center_y();
     let (description, controls) = match &status.action_state {
         DriverActionState::Installing => (
             tr("Installing driver and restarting Core Audio…").to_string(),
-            controls.child(tone_tag(p, "state", tr("Installing…"), Tone::Neutral)),
+            controls.child(state_tag(tr("Installing…"), Tone::Neutral)),
         ),
         DriverActionState::Uninstalling => (
             tr("Removing driver and restarting Core Audio…").to_string(),
-            controls.child(tone_tag(p, "state", tr("Uninstalling…"), Tone::Neutral)),
+            controls.child(state_tag(tr("Uninstalling…"), Tone::Neutral)),
         ),
         state if status.needs_update() => {
             let installed = status.installed_version.as_deref().unwrap_or("1.0.0");
@@ -452,9 +426,7 @@ pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
                     _ => tr_fill("Update driver to v{}", &status.bundled_version),
                 },
                 controls
-                    .child(tone_tag(
-                        p,
-                        "state",
+                    .child(state_tag(
                         &tr_fill("v{} installed", installed),
                         Tone::Accent,
                     ))
@@ -486,31 +458,26 @@ pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
                     }
                 },
                 controls
-                    .child(tone_tag(
-                        p,
-                        "state",
-                        &tr_fill("Installed v{}", version),
-                        Tone::Success,
-                    ))
+                    .child(state_tag(&tr_fill("Installed v{}", version), Tone::Success))
                     .child(uninstall()),
             )
         }
         DriverActionState::DoneUninstalled => (
             tr("Driver removed").into(),
             controls
-                .child(tone_tag(p, "state", tr("Removed"), Tone::Neutral))
+                .child(state_tag(tr("Removed"), Tone::Neutral))
                 .child(install()),
         ),
         DriverActionState::Cancelled => (
             tr("Installation cancelled").into(),
             controls
-                .child(tone_tag(p, "state", tr("Cancelled"), Tone::Neutral))
+                .child(state_tag(tr("Cancelled"), Tone::Neutral))
                 .child(install()),
         ),
         DriverActionState::Failed(reason) => (
             tr_fill("Could not install driver: {}", reason),
             controls
-                .child(tone_tag(p, "state", tr("Failed"), Tone::Danger))
+                .child(state_tag(tr("Failed"), Tone::Danger))
                 .child(install()),
         ),
         _ => (
@@ -587,14 +554,6 @@ pub(super) fn hex_microphone_section(ui: &Ui, p: Paint) -> Option<El> {
     ))
 }
 
-fn binding(settings: &AppSettings, target: ShortcutTarget) -> Option<&HotkeyBinding> {
-    match target {
-        ShortcutTarget::Dictation => Some(&settings.dictation_hotkey),
-        ShortcutTarget::PasteLast => settings.paste_last_hotkey.as_ref(),
-        ShortcutTarget::VoiceAction => Some(&settings.edit_hotkey),
-    }
-}
-
 /// `target`'s modifier-only shortcut moved to `side`, unless that collides
 /// with another shortcut.
 pub(super) fn side_binding(
@@ -602,7 +561,7 @@ pub(super) fn side_binding(
     target: ShortcutTarget,
     side: ModifierSide,
 ) -> Option<HotkeyBinding> {
-    let mut candidate = binding(settings, target)?.clone();
+    let mut candidate = super::settings::binding(settings, target)?.clone();
     candidate.standalone_side()?;
     candidate.set_standalone_side(side);
     (!super::settings::conflicts(settings, target, &candidate)).then_some(candidate)
@@ -620,7 +579,7 @@ pub(super) fn side_selector(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option
     if !ui.platform.caps.modifier_sides {
         return None;
     }
-    let side = binding(&ui.settings, target)?.standalone_side()?;
+    let side = super::settings::binding(&ui.settings, target)?.standalone_side()?;
     let key = match target {
         ShortcutTarget::Dictation => "dictation-side",
         ShortcutTarget::PasteLast => "paste-last-side",

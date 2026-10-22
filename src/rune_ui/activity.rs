@@ -18,8 +18,8 @@ const LIMIT: usize = 100;
 #[derive(Default)]
 pub(super) struct ActivityPane {
     reader: Option<(PathBuf, EventReader)>,
-    pub(super) events: Vec<VoiceEvent>,
-    pub(super) activity: DesktopActivity,
+    events: Vec<VoiceEvent>,
+    activity: DesktopActivity,
     pub(super) selected: Option<usize>,
 }
 

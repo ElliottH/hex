@@ -189,8 +189,7 @@ pub fn check_for_updates() {
                 can_check.as_bool(),
                 session_in_progress.as_bool(),
             );
-            #[allow(deprecated)]
-            NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+            NSApplication::sharedApplication(mtm).activate();
             let _: () =
                 msg_send![&*updater.controller, checkForUpdates: std::ptr::null_mut::<AnyObject>()];
             let user_driver: *mut AnyObject = msg_send![&*updater.controller, userDriver];

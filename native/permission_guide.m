@@ -233,11 +233,16 @@ static void updateGuidePosition(void) {
     sawSettingsWindow = YES;
     NSRect settings = appKitFrame(quartzFrame);
     NSSize size = guidePanel.frame.size;
-    NSScreen *screen = [NSScreen.screens filteredArrayUsingPredicate:
-        [NSPredicate predicateWithBlock:^BOOL(NSScreen *candidate, NSDictionary *bindings) {
-            (void)bindings;
-            return NSIntersectsRect(candidate.frame, settings);
-        }]].firstObject ?: NSScreen.mainScreen;
+    NSScreen *screen = nil;
+    for (NSScreen *candidate in NSScreen.screens) {
+        if (NSIntersectsRect(candidate.frame, settings)) {
+            screen = candidate;
+            break;
+        }
+    }
+    if (screen == nil) {
+        screen = NSScreen.mainScreen;
+    }
     NSRect visible = screen != nil ? screen.visibleFrame : settings;
     CGFloat x = NSMaxX(settings) - size.width - 16;
     CGFloat y = NSMinY(settings) + 16;
