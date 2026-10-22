@@ -110,8 +110,33 @@ were written on apollo (RADV); lavapipe renders the same within tolerance.
 
 ### Observed on Linux
 
-All renders are headless (`--snap`, offscreen wgpu); no window was opened on
-apollo after the first pass's single check.
+Renders below are headless (`--snap`, offscreen wgpu) unless marked as the
+real window.
+
+- **Real window on apollo (niri, 2026-10-22):** the release build
+  (`--features rune-ui`) ran as a client of the installed 2.3.1
+  `hex.service` in Dax's session. Observed through `niri msg` and
+  `screenshot-window`, without synthetic input:
+  - niri lists it as `Hex` with `app_id: hex` (matches `hex.desktop`); with
+    niri's `prefer-no-csd` it has no title bar, like every other window,
+    and niri's focus-stealing prevention left the focused window alone.
+    The 980×760 request is replaced by niri's column width (half the
+    output), as for any tiled window; floating keeps the tiled size.
+  - Settings showed the live service: Enabled, the portal's F12 and
+    Ctrl+Alt+V grants, and the service's last listener error, as GPUI does.
+  - Scale 2 (DP-7) and fractional 1.5 (DP-8, moved there and back) both
+    rendered at native resolution (buffer = logical × scale), text crisp
+    ([1.5](rune-ui/hex-rune-real-niri-fractional.png)).
+  - Resizing the column to 700 and 640 logical px squeezed row descriptions
+    to a word per line beside wide segmented controls: tiling desktops
+    ignore GPUI's 860 px minimum and Rune's floor is 420. Rows now keep
+    their copy at least 100 px wide and move the control below it when it
+    does not fit ([before](rune-ui/hex-rune-real-niri-narrow-before.png),
+    [after](rune-ui/hex-rune-real-niri-narrow.png)); the Modes editor's model row now wraps that way at the
+    default size too (goldens updated).
+  - Closing the window (`niri msg action close-window`) exited the client
+    cleanly; `hex.service` stayed active with no restart.
+  - The client log had no warnings or errors.
 
 - **Against an isolated service** (`HEX_APPLICATION_SUPPORT_DIR`, no display,
   listener off, no OpenCode on `PATH`): one scripted run switched to Modes,
@@ -135,16 +160,16 @@ apollo after the first pass's single check.
 
 ### Needs a person to look
 
-These can only be judged in a real window:
+These need a person at the keyboard (no input was synthesized in Dax's
+session):
 
-- Window decorations, resize, and the 980×760 default size on niri and X11.
-- Pointer cursor shapes (Rune never sets one).
+- Pointer: hover and press states, cursor shapes (Rune never sets one, so
+  expect the default arrow over buttons and text fields).
 - Keyboard focus and IME in every text field; whether the model and
   application search fields take focus when their popover opens.
 - Recording a physical F-key or Super shortcut through the service.
 - Scrolling feel, the picker's scrim over the page, and menus near window edges.
-- Fractional scaling.
-- Closing the window while the service keeps running.
+- The 980×760 default as a floating window and on X11 (niri tiles it).
 
 ## What's left for Linux parity
 

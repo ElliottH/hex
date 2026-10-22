@@ -17,6 +17,10 @@ pub(super) const DESCRIPTION: TextStyle = TextStyle::new(12.0, 440.0).lh(16.0);
 const ROW_HEIGHT: f32 = 44.0;
 const ROW_HEIGHT_DESCRIBED: f32 = 56.0;
 const SELECT_WIDTH: f32 = 220.0;
+/// Narrower than this, a row moves its control below the copy instead of
+/// squeezing the description to a word per line (tiling desktops ignore
+/// GPUI's 860 px minimum width).
+const COPY_MIN_WIDTH: f32 = 100.0;
 
 /// Everything a control needs to paint itself.
 #[derive(Clone, Copy)]
@@ -135,16 +139,18 @@ pub(super) fn described_row(
         .min_h(height)
         .px(12.0)
         .py(8.0)
-        .gap(24.0)
+        .gaps(8.0, 24.0)
         .center_y()
         .justify_between()
+        .flex_wrap()
         .radius(p.k.radius.md)
         .label(title)
         .child(
             col()
                 .key("copy")
+                .w(COPY_MIN_WIDTH)
+                .min_w(COPY_MIN_WIDTH)
                 .grow(1.0)
-                .shrink()
                 .gap(2.0)
                 .child(text(title).key("label").font(p.k.ty.ui).color(p.text()))
                 .children(description.map(|(copy, color)| {
