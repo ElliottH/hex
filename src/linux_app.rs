@@ -432,14 +432,15 @@ fn run_windows(
     match ui {
         #[cfg(feature = "rune-ui")]
         WindowUi::Rune => {
-            let host = host.clone();
             // A missing display or GPU fails the window, never Hex.
+            let app = host.clone();
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::rune_ui::run_app(host, requests, first)
+                crate::rune_ui::run_app(app, requests, first)
             }))
             .is_err()
             {
                 tracing::error!("the Hex window failed; Hex keeps running without it");
+                host.set_window_open(false);
                 while !shutdown.load(Ordering::Acquire) {
                     std::thread::sleep(Duration::from_millis(100));
                 }

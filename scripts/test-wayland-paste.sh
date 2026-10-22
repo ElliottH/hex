@@ -136,11 +136,14 @@ printf '# No physical audio devices in this fixture.\n' > "$ALSA_CONFIG_PATH"
 mkdir -m 700 "$XDG_RUNTIME_DIR"
 cc "$root/tests/fixtures/wayland-paste-target.c" $(pkg-config --cflags --libs gtk+-3.0) -o "$HEX_WAYLAND_TEST_TARGET"
 unset DISPLAY WAYLAND_DISPLAY SWAYSOCK
-export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 GDK_BACKEND=wayland
+# Hardware Vulkan drivers need a GPU renderer (WLR_RENDERER=gles2) to share
+# surfaces with the compositor; Mesa's software driver works with pixman.
+export WLR_BACKENDS=headless WLR_RENDERER=${WLR_RENDERER:-pixman} WLR_LIBINPUT_NO_DEVICES=1 GDK_BACKEND=wayland
 if ! timeout 25 dbus-run-session -- sway --config "$root/tests/fixtures/wayland-paste.conf" >"$work/compositor.log" 2>&1 \
   || [[ ! -f "$work/result" || $(<"$work/result") != 0 ]]; then
   cat "$work/compositor.log"
   if [[ -f "$work/hex.log" ]]; then cat "$work/hex.log"; fi
+  if [[ -f "$work/hex.log.service" ]]; then cat "$work/hex.log.service"; fi
   exit 1
 fi
 echo "Native Wayland clipboard insertion and the single-process window checks passed."
