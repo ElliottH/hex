@@ -7284,7 +7284,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+ssh://git@github.com/anomalyco/rune.git?branch=hex-port#13d36b0396c77ce6aa1d13547d1fa168a7665ecc"
+source = "git+ssh://git@github.com/anomalyco/rune.git?rev=1177fbdcb845bdeacab934141eecd210158b367d#1177fbdcb845bdeacab934141eecd210158b367d"
 dependencies = [
  "arboard",
  "bytemuck",
@@ -7300,9 +7300,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-kit"
+version = "0.0.1"
+source = "git+ssh://git@github.com/anomalyco/rune.git?rev=1177fbdcb845bdeacab934141eecd210158b367d#1177fbdcb845bdeacab934141eecd210158b367d"
+dependencies = [
+ "rune",
+ "rune-motion",
+ "serde_json",
+]
+
+[[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+ssh://git@github.com/anomalyco/rune.git?branch=hex-port#13d36b0396c77ce6aa1d13547d1fa168a7665ecc"
+source = "git+ssh://git@github.com/anomalyco/rune.git?rev=1177fbdcb845bdeacab934141eecd210158b367d#1177fbdcb845bdeacab934141eecd210158b367d"
+
+[[package]]
+name = "rune-theme-opencode"
+version = "0.0.1"
+source = "git+ssh://git@github.com/anomalyco/rune.git?rev=1177fbdcb845bdeacab934141eecd210158b367d#1177fbdcb845bdeacab934141eecd210158b367d"
+dependencies = [
+ "rune",
+ "rune-kit",
+ "serde_json",
+]
 
 [[package]]
 name = "rust-embed"
@@ -9486,6 +9506,8 @@ dependencies = [
  "rodio",
  "rubato",
  "rune",
+ "rune-kit",
+ "rune-theme-opencode",
  "screencapturekit 11.0.0",
  "semver",
  "serde",
