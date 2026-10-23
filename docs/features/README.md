@@ -48,8 +48,8 @@ Download Hex                              // setup.download-recovery
 │   ├── Phone -> Send yourself the link
 │   └── Other platforms -> every build, Homebrew, the GitHub release
 ├── hex.kitlangton.dev/* -> 301 same path on .com
-├── Website / README / installers -> downloads.hex.kitlangton.com -> R2 bytes
-├── Apps, feeds, appcast, Homebrew -> downloads.hex.kitlangton.dev -> same R2 bytes
+├── Website, README, installers, apps, feeds, appcast -> downloads.hex.anoma.ly -> R2 bytes
+├── Releases up to 2.3.1, Homebrew -> downloads.hex.kitlangton.dev -> redirect to the same bytes
 ├── GitHub app-v<version> -> identical DMG, Setup.exe, and Linux bytes
 └── Older app cannot reach its update feed -> manually install the DMG
 
@@ -94,7 +94,7 @@ observed. The Linux library diagnosis has no automated check. The site's
 platform states were captured once in headless Chromium with `?platform=`.
 
 Sources: [website](../../site/src/Download.tsx), [installer](../../packaging/windows/hex.iss),
-[download publisher](../../scripts/publish-desktop-downloads.sh),
+[release publisher](../../scripts/publish-release.sh),
 [mirror publisher](../../scripts/publish-app-mirror.sh),
 [macOS release publisher](../../scripts/release-app.sh),
 [Linux installer](../../scripts/install-linux-release.sh), and

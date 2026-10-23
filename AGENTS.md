@@ -724,13 +724,11 @@ build requires Xcode 26 for Icon Composer compilation and a Developer ID signing
 identity. `scripts/release-app.sh` prepares a notarized and stapled DMG plus its
 signed Sparkle appcast; run `scripts/release-app.sh publish` only after validating
 the prepared artifact. Public app downloads and update feeds use
-`https://downloads.hex.kitlangton.dev`, connected directly to the `hex-releases`
-R2 bucket through Custom Domains. The same bucket is also
-`https://downloads.hex.kitlangton.com`, which the website, docs, and script
-installers use; apps, feeds, the appcast, and release scripts keep the `.dev`
-host, which must keep working unchanged. Preserve the legacy public R2 endpoint for
-installed clients. The publisher verifies both R2 artifacts and the identical
-GitHub DMG mirror before publishing the appcast. GitHub app releases use
+`https://downloads.hex.anoma.ly`, Anomaly's `hex-releases` R2 bucket through a
+Custom Domain; [`docs/releasing.md`](docs/releasing.md) owns the release
+workflow, channels, secrets, and the transition from Kit's
+`downloads.hex.kitlangton.dev`/`.com`, which must keep redirecting to the new
+origin for installed clients. GitHub app releases use
 `app-v<VERSION>` tags with `--latest=false`, keeping them distinct from SDK
 releases. Never overwrite a published artifact with different bytes.
 `https://hex.kitlangton.com` (in-repo `site/`, Worker `hex-voice-site`) is the
@@ -784,10 +782,11 @@ Verify both registration and unregistration with `sfltool dumpbtm`, and restore
 the user's original login-item state after the test. Do not add release test
 hooks or persist a second launch-at-login flag.
 
-Linux and Windows releases are built and signed by
-`.github/workflows/release-desktop.yml`, then published from the release Mac.
-Run the workflow with `workflow_dispatch` and a `ref` (or push an
-`app-v<VERSION>` tag, which must match the crate version). It builds Linux
+Every platform is built, signed, and published by one run of
+`.github/workflows/release-desktop.yml` ("Release"; see `docs/releasing.md`).
+Run it with `workflow_dispatch` (`ref`, `channel`: `staging` dry run under
+`staging/<run-id>/` with a draft GitHub release, or `stable`), or push an
+`app-v<VERSION>` tag, which must match the crate version. It builds Linux
 x86_64 in an Arch container and Windows x64 and ARM64 on native runners with
 each script's `build` mode, through the reusable
 `.github/workflows/build-desktop.yml`. `.github/workflows/test-builds.yml`
@@ -797,23 +796,16 @@ ID `com.kitlangton.hex2.test`, no Sparkle), as unsigned 14-day artifacts for
 teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` also compiles Windows
 builds that never check for updates. A job that compiles nothing then signs all three
 feeds with `scripts/release-feed.sh` and validates signatures, sizes, SHA-256,
-version order against the live feeds, and the absence of Visual C++ runtime
-imports. The `release` environment, limited to `main` and `app-v*` tags, holds
-only `HEX_RELEASE_SIGNING_KEY`. The run's `signed-release` artifact holds the
-executables, the signed feeds, and `release.json` (commit and version).
-
-Publish a successful run from `main` or a tag on the Pro, whose Wrangler login is
-the personal account that owns `hex-releases`:
-`scripts/publish-desktop-release.sh <run-id>`. It downloads the signed artifact,
-re-verifies it, uploads content-addressed artifacts first (never replacing
-different bytes), then the installers as committed at the release commit, then
-the feeds after rechecking that the version is newer, and re-downloads each
-object from `downloads.hex.kitlangton.dev`. It then runs
-`scripts/publish-desktop-downloads.sh`, which uploads the immutable
-`releases/HEX-Setup-<version>-x64.exe` and `-arm64.exe` and attaches them and
-`HEX-<version>-x86_64-linux` to the `app-v<version>` GitHub release as
-identical-byte mirrors. Rerunning either after an interruption is safe. `gh` on
-the Pro is not logged in; pass `GH_TOKEN` for the session only.
+version order against the live feeds, the absence of Visual C++ runtime
+imports, and (stable) Authenticode signatures. The `release` environment is
+limited to `main` and `app-v*` tags. `scripts/publish-release.sh` then uploads
+through `scripts/r2-put.sh`: immutable downloads first (never replacing
+different bytes), the GitHub release mirror (verified byte for byte), the
+content-addressed artifacts, installers as committed at the release commit,
+and the feeds after rechecking that the version is newer, then
+`HEX-latest-arm64.dmg` and the appcast. The `aur` job builds, installs, and
+tests `hex-voice-bin` and pushes it to the AUR for stable releases.
+Rerunning after an interruption is safe.
 
 `HEX-Setup-<version>-<x64|arm64>.exe` is a per-user Inno Setup installer
 (`packaging/windows/hex.iss`, built by `scripts/build-windows-installer.ps1`)
@@ -837,12 +829,12 @@ the Azure values exist in `release`. See `docs/windows-signing.md`.
 
 Both scripts still work locally: `prepare` builds and signs with the Ed25519
 private PEM in `HEX_RELEASE_SIGNING_KEY` (or `HEX_LINUX_SIGNING_KEY`), and
-`publish` uploads after validation. Run the Linux script on x86_64 Linux and the
+`publish` uploads after validation with the R2 credentials in the environment. Run the Linux script on x86_64 Linux and the
 Windows script from Git Bash once per architecture with `HEX_WINDOWS_ARCH=x86_64`
 (the default; Vulkan SDK required) or `aarch64` (clang-cl and Ninja; best on an
 ARM64 host). The feeds are `linux-update.json`, `windows-update.json` for x64,
 and `windows-aarch64-update.json` for ARM64, all on the same key, bucket, and
-`downloads.hex.kitlangton.dev` origin. Signing refuses a key that does not match
+`downloads.hex.anoma.ly` origin. Signing refuses a key that does not match
 the public key compiled into HEX, and publishing refuses a non-monotonic stable
 release. Builds use `-DGGML_NATIVE=OFF` so the CPU kernels stay portable, and the
 static runtime in `.cargo/config.toml` keeps the Visual C++ Redistributable

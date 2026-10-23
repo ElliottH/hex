@@ -1,0 +1,42 @@
+# Maintainer: dax
+#
+# Generated from anomalyco/hex packaging/aur by scripts/release-aur.sh, which
+# sets pkgver and the checksums for each release.
+pkgname=hex-voice-bin
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Hex: local voice dictation (Linux beta)'
+arch=('x86_64')
+url='https://github.com/anomalyco/hex'
+license=('MIT')
+depends=(
+  'alsa-lib' 'curl' 'fontconfig' 'freetype2' 'gcc-libs' 'glib2' 'glibc'
+  'libx11' 'libxcb' 'libxcursor' 'libxi' 'libxkbcommon' 'libxkbcommon-x11'
+  'libxrandr' 'openblas' 'openssl' 'systemd-libs' 'vulkan-icd-loader' 'wayland'
+)
+optdepends=(
+  'wl-clipboard: paste on Wayland'
+  'wtype: paste on Wayland'
+  'vulkan-driver: GPU transcription'
+)
+provides=('hex-voice')
+conflicts=('hex-voice')
+options=('!strip' '!debug')
+install=hex-voice-bin.install
+source=(
+  "HEX-${pkgver}-x86_64-linux::https://github.com/anomalyco/hex/releases/download/app-v${pkgver}/HEX-${pkgver}-x86_64-linux"
+  'hex.desktop'
+  'hex.service'
+  'LICENSE'
+)
+sha256sums=('@SHA256@'
+            '@DESKTOP_SHA256@'
+            '@SERVICE_SHA256@'
+            '@LICENSE_SHA256@')
+
+package() {
+  install -Dm755 "HEX-${pkgver}-x86_64-linux" "$pkgdir/usr/bin/hex"
+  install -Dm644 hex.desktop "$pkgdir/usr/share/applications/hex.desktop"
+  install -Dm644 hex.service "$pkgdir/usr/lib/systemd/user/hex.service"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

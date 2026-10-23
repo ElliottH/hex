@@ -28,8 +28,8 @@ app and **Disabled** when it does nothing.
 
 Download and run the installer for your PC:
 
-- x64: [`HEX-Setup-2.3.1-x64.exe`](https://downloads.hex.kitlangton.com/releases/HEX-Setup-2.3.1-x64.exe)
-- ARM64: [`HEX-Setup-2.3.1-arm64.exe`](https://downloads.hex.kitlangton.com/releases/HEX-Setup-2.3.1-arm64.exe)
+- x64: [`HEX-Setup-2.3.1-x64.exe`](https://downloads.hex.anoma.ly/releases/HEX-Setup-2.3.1-x64.exe)
+- ARM64: [`HEX-Setup-2.3.1-arm64.exe`](https://downloads.hex.anoma.ly/releases/HEX-Setup-2.3.1-arm64.exe)
 
 [hex.kitlangton.com](https://hex.kitlangton.com/) picks the right one. The
 installer needs no administrator rights: it installs for the current user,
@@ -52,7 +52,7 @@ The installer and the script below create the same managed layout, so either
 can replace the other. For a scripted install:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "iwr https://downloads.hex.kitlangton.com/install-windows.ps1 -OutFile install-windows.ps1; ./install-windows.ps1"
+powershell -ExecutionPolicy Bypass -Command "iwr https://downloads.hex.anoma.ly/install-windows.ps1 -OutFile install-windows.ps1; ./install-windows.ps1"
 ```
 
 Uninstall a script install with `install-windows.ps1 -Uninstall`.
@@ -272,7 +272,7 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Recognition hints for Whisper-family models | Implemented |
 | Release microphone while idle | Implemented; mutually exclusive with audio pre-roll, as documented in Settings |
 | While-dictating audio control (mute other apps or pause media) | Implemented via WASAPI session volumes and GSMTC |
-| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `downloads.hex.kitlangton.dev` origin as Linux, one feed per architecture, activating into a user-local versions directory. Checks 10 s after launch and every 6 h (or Check now); a staged update shows Restart to update in the tray menu, the window's sidebar, and Settings, and the tray tooltip says an update is available. Source builds keep the GitHub release link (Download update); CI test builds never check |
+| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `downloads.hex.anoma.ly` origin as Linux, one feed per architecture, activating into a user-local versions directory. Checks 10 s after launch and every 6 h (or Check now); a staged update shows Restart to update in the tray menu, the window's sidebar, and Settings, and the tray tooltip says an update is available. Source builds keep the GitHub release link (Download update); CI test builds never check |
 | Web-domain mode rules and browser context via UI Automation | Implemented; the page URL comes from the browser's UIA document element, bounded so a hung provider degrades to application-only context |
 | Opt-in voice Commands | Missing; blocked on a Windows streaming command model |
 | Managed installer with Start Menu integration and clean uninstall | Implemented as `scripts/install-windows.ps1`; it creates the self-updating versions layout, and updates retarget the managed shortcut and Launch-at-login entry |

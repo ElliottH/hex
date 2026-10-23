@@ -10,14 +10,13 @@
 # <feed> is linux-update.json, windows-update.json, or
 # windows-aarch64-update.json. `sign` reads the unsigned payload a build left
 # at <dist>/<feed>.payload.json. Set HEX_VERSION to pin the expected version.
-# `publish` uploads through the local Wrangler login.
+# `publish` uploads with scripts/r2-put.sh to HEX_RELEASE_BASE_URL, whose
+# objects live under HEX_RELEASE_PREFIX in the bucket.
 set -eu
 
 script_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 source_root=${HEX_RELEASE_SOURCE:-$script_root}
-bucket=${HEX_RELEASE_BUCKET:-hex-releases}
 base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
-wrangler=${HEX_WRANGLER:-wrangler}
 expected_public_key=bfad02e62208ff144b5c9d21c7e79c7c16c6904299a437d857303007cd4ff7d8
 public_key_prefix=302a300506032b6570032100
 max_bytes=536870912
@@ -44,9 +43,6 @@ require() {
 for command in cmp curl jq openssl sort xxd; do
   require "$command"
 done
-if [ "$mode" = publish ]; then
-  require "${wrangler%% *}"
-fi
 
 sha256_of() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -218,11 +214,8 @@ for feed_name in "$@"; do
 done
 [ "$mode" = publish ] || exit 0
 
-# put <key> <file> <content-type> <cache-control> [content-disposition]
 put() {
-  key=$1 file=$2
-  set -- --remote --file "$file" --content-type "$3" --cache-control "$4" ${5:+--content-disposition} ${5:+"$5"}
-  $wrangler r2 object put "$bucket/$key" "$@"
+  "$script_root/scripts/r2-put.sh" "$@"
 }
 
 # Artifacts are content-addressed and immutable: an existing object must hold

@@ -1,9 +1,17 @@
-name: Release desktop
+name: Release
 
-# Builds the Linux and Windows releases from one exact commit and signs their
-# update feeds in a job that never compiles code. The signed artifacts are
-# published from the release Mac with scripts/publish-desktop-release.sh, as
-# macOS is released with scripts/release-app.sh.
+# Builds, signs, and publishes Hex for macOS, Windows, and Linux from one
+# exact commit. Feeds are signed in a job that never compiles code; the
+# publish job uploads to the hex-releases R2 bucket behind
+# https://downloads.hex.anoma.ly, mirrors the downloads to a GitHub release,
+# and updates the AUR package.
+#
+# channel=staging (the default) is a dry run: everything lands under
+# staging/<run-id>/ in the bucket and in a draft GitHub release, and the AUR
+# package is built and tested but not pushed. Installed apps never read the
+# staging prefix unless HEX_RELEASE_BASE_URL points them at it.
+# channel=stable (or an app-v<version> tag) publishes the public release.
+# See docs/releasing.md.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +19,11 @@ on:
         description: Commit, tag, or branch to release
         required: true
         default: main
+      channel:
+        description: staging (dry run under staging/<run-id>/) or stable (public)
+        type: choice
+        options: [staging, stable]
+        default: staging
   push:
     tags: ["app-v*"]
 
@@ -18,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-desktop
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'stable' }}
   cancel-in-progress: false
 
 jobs:
@@ -27,6 +40,10 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       version: ${{ steps.resolve.outputs.version }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      prefix: ${{ steps.resolve.outputs.prefix }}
+      base-url: ${{ steps.resolve.outputs.base-url }}
+      tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,22 +54,33 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
+          CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'stable' }}
         run: |
           sha=$(git rev-parse HEAD)
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Stable releases need a non-prerelease version, not $version."
+            echo "::error::Releases need a non-prerelease version, not $version."
             exit 1
           fi
           if [ "$EVENT:$REF_TYPE" = push:tag ] && [ "$REF_NAME" != "app-v$version" ]; then
             echo "::error::Tag $REF_NAME does not match version $version."
             exit 1
           fi
+          base=https://downloads.hex.anoma.ly
+          case "$CHANNEL" in
+            stable) prefix= tag="app-v$version" ;;
+            staging) prefix="staging/$GITHUB_RUN_ID/" tag="staging-$GITHUB_RUN_ID" ;;
+            *) echo "::error::Unknown channel $CHANNEL."; exit 1 ;;
+          esac
           {
             echo "sha=$sha"
             echo "version=$version"
+            echo "channel=$CHANNEL"
+            echo "prefix=$prefix"
+            echo "base-url=$base${prefix:+/${prefix%/}}"
+            echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
-          echo "Building $version from $sha." >> "$GITHUB_STEP_SUMMARY"
+          echo "Releasing $version ($CHANNEL) from $sha to $base${prefix:+/${prefix%/}}." >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: resolve
@@ -80,6 +108,8 @@ jobs:
     environment: release
     env:
       HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_RELEASE_BASE_URL: ${{ needs.resolve.outputs.base-url }}
+      CHANNEL: ${{ needs.resolve.outputs.channel }}
       FEEDS: linux-update.json windows-update.json windows-aarch64-update.json
     steps:
       - uses: actions/checkout@v7
@@ -109,6 +139,25 @@ jobs:
             test "$(head -c 2 "dist/HEX-Setup-$HEX_VERSION-$label.exe")" = MZ
           done
           (cd dist && sha256sum HEX-Setup-*.exe) | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Require Authenticode signatures for stable
+        run: |
+          sudo apt-get install -y -qq osslsigncode >/dev/null
+          unsigned=
+          for exe in dist/*.exe; do
+            if osslsigncode extract-signature -in "$exe" -out "$RUNNER_TEMP/signature" >/dev/null 2>&1; then
+              echo "Signed: $(basename "$exe")" >> "$GITHUB_STEP_SUMMARY"
+            else
+              unsigned="$unsigned $(basename "$exe")"
+            fi
+            rm -f "$RUNNER_TEMP/signature"
+          done
+          if [ -n "$unsigned" ]; then
+            if [ "$CHANNEL" = stable ]; then
+              echo "::error::Stable releases need Authenticode-signed Windows executables:$unsigned"
+              exit 1
+            fi
+            echo "::warning::Unsigned Windows executables:$unsigned"
+          fi
       - uses: actions/upload-artifact@v7
         with:
           name: signed-release
@@ -117,3 +166,80 @@ jobs:
             dist/*-update.json
             dist/release.json
           if-no-files-found: error
+
+  publish:
+    name: Publish (${{ needs.resolve.outputs.channel }})
+    needs: [resolve, sign]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    env:
+      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_RELEASE_COMMIT: ${{ needs.resolve.outputs.sha }}
+      HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.channel }}
+      HEX_RELEASE_BASE_URL: ${{ needs.resolve.outputs.base-url }}
+      HEX_RELEASE_PREFIX: ${{ needs.resolve.outputs.prefix }}
+      HEX_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+      HEX_RELEASE_SOURCE: ${{ github.workspace }}/source
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-release
+          path: dist
+      - uses: actions/download-artifact@v8
+        continue-on-error: ${{ needs.resolve.outputs.channel != 'stable' }}
+        with:
+          name: hex-macos-arm64
+          path: dist
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R2_ACCESS_KEY_ID: ${{ vars.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: tools/scripts/publish-release.sh dist
+
+  aur:
+    name: AUR (${{ needs.resolve.outputs.channel == 'stable' && 'publish' || 'build and test' }})
+    needs: [resolve, sign, publish]
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    environment: release
+    env:
+      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+      - name: Install tools
+        run: |
+          pacman -Syu --noconfirm --needed git openssh jq openssl
+          useradd --create-home builder
+      - uses: actions/checkout@v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: signed-release
+          path: dist
+      - name: Stage and test hex-voice-bin
+        run: |
+          artifact=$(jq -r .payload dist/linux-update.json | openssl base64 -d -A | jq -r .artifact)
+          chown -R builder: "$GITHUB_WORKSPACE"
+          runuser -u builder -- tools/scripts/release-aur.sh stage "$HEX_VERSION" "dist/$artifact" aur
+          runuser -u builder -- tools/scripts/release-aur.sh test aur
+          pacman -U --noconfirm aur/hex-voice-bin-*.pkg.tar.zst
+          test "$(hex --version | awk 'NF { value=$NF } END { print value }')" = "$HEX_VERSION"
+          { echo '### AUR PKGBUILD'; echo '```'; cat aur/PKGBUILD; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Push to the AUR
+        if: needs.resolve.outputs.channel == 'stable'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: tools/scripts/release-aur.sh publish aur

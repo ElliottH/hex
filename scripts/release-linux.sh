@@ -123,7 +123,6 @@ case "$mode" in
       exit 1
     fi
     test "$(cat "$prepared_commit")" = "$(git -C "$root" rev-parse HEAD)"
-    require wrangler
     "$release_feed" publish "$dist" "$feed_name"
     ;;
 esac
