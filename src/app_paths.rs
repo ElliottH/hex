@@ -12,6 +12,16 @@ pub fn is_macos_test_build() -> bool {
     cfg!(target_os = "macos") && option_env!("HEX_TEST_BUILD") == Some("1")
 }
 
+/// The name menus show, so a test build running beside Hex reads as itself.
+#[cfg(target_os = "macos")]
+pub fn app_name() -> &'static str {
+    if is_macos_test_build() {
+        "Hex Test"
+    } else {
+        "Hex"
+    }
+}
+
 pub fn support_dir() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("HEX_APPLICATION_SUPPORT_DIR") {
         return Ok(path.into());

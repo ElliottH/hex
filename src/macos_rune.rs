@@ -932,6 +932,8 @@ fn with_window(f: impl FnOnce(&rune::AppHandle<Ui>)) {
 /// Rune draws no Edit menu items, so ⌘C/⌘V reach its text fields as keys.
 fn install_main_menu(target: &MenuTarget, mtm: MainThreadMarker) {
     let main = NSMenu::new(mtm);
+    let name = crate::app_paths::app_name();
+    let (hide, quit) = (format!("Hide {name}"), format!("Quit {name}"));
     let mut application = vec![];
     if !crate::sparkle::updates_managed() {
         application.push(Some(("Check for Updates…", sel!(checkForUpdates:), "")));
@@ -940,12 +942,12 @@ fn install_main_menu(target: &MenuTarget, mtm: MainThreadMarker) {
     application.extend([
         Some(("Settings…", sel!(showSettings:), ",")),
         None,
-        Some(("Hide Hex", sel!(hideHex:), "h")),
+        Some((hide.as_str(), sel!(hideHex:), "h")),
         None,
-        Some(("Quit Hex", sel!(quitHex:), "q")),
+        Some((quit.as_str(), sel!(quitHex:), "q")),
     ]);
     for (title, items) in [
-        ("Hex", application),
+        (name, application),
         (
             "File",
             vec![Some(("Close Window", sel!(closeWindow:), "w"))],

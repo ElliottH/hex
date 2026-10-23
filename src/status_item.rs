@@ -250,7 +250,13 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
         ))
     };
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add_item(&menu, &target, "Quit Hex", sel!(quit:), mtm);
+    add_item(
+        &menu,
+        &target,
+        &format!("Quit {}", crate::app_paths::app_name()),
+        sel!(quit:),
+        mtm,
+    );
 
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(-2.0);
     let button = item
