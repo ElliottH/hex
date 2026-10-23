@@ -695,11 +695,27 @@ impl Ui {
     }
 }
 
-/// Shortcut recording takes every key; otherwise Escape closes the picker
-/// or the open menu.
+/// Shortcut recording takes every key; Command-1 through 9 open the
+/// sidebar's panes in order; otherwise Escape closes the picker or the open
+/// menu.
 fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if settings::on_key(ui, event, tx) {
         return true;
+    }
+    if let rune::Key::Command(digit @ '1'..='9') = event.key
+        && !event.mods.alt
+        && ui.picker.language.is_none()
+        && ui.tour.is_none()
+    {
+        let index = digit as usize - '1' as usize;
+        let pane = Pane::ALL
+            .into_iter()
+            .filter(|pane| pane.shown(ui))
+            .nth(index);
+        if let Some(pane) = pane {
+            ui.select_pane(pane, tx);
+        }
+        return pane.is_some();
     }
     if event.key != rune::Key::Escape {
         return false;
@@ -867,7 +883,7 @@ fn title_bar(element: El) -> El {
 
 fn sidebar(ui: &Ui, p: Paint) -> El {
     // Rows touch, so the pointer is always over one, as in a native source list.
-    let mut nav = col().key("nav");
+    let mut nav = lists::source_list(col().key("nav"));
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
@@ -954,7 +970,7 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
     if on {
         item = item.fill(c.layer_02);
     }
-    item
+    lists::source_item(p, item, on)
 }
 
 /// Linux has no tray: the window's way to stop Hex. Closing the window
@@ -973,6 +989,8 @@ fn quit_item(p: Paint) -> El {
         .hover(c.hover)
         .press(c.pressed)
         .on_press(|ui: &mut Ui| ui.quit())
+        .focusable(true)
+        .focus_ring(2.0, -2.0, c.border_focus)
         .child(
             text(tr("Quit Hex"))
                 .key("label")

@@ -16,7 +16,7 @@ use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, Text
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, card, note, setting_row};
-use super::lists::list_row;
+use super::lists::{list_row, source_list};
 use super::models::{self, Target};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::application_catalog::InstalledApplication;
@@ -672,7 +672,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         .h_full()
         .pl(16.0)
         .pr(8.0)
-        .child(super::scroll_body("modes-scroll", list));
+        .child(super::scroll_body("modes-scroll", source_list(list)));
     let body = row()
         .key("modes-body")
         .grow(1.0)

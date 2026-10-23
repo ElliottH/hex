@@ -11,7 +11,7 @@ use rune_kit::{Badge, ButtonSize, IconButton, IconButtonVariant, Progress};
 use super::Request;
 use super::Ui;
 use super::controls::{ButtonKind, Paint, button};
-use super::lists::error_panel;
+use super::lists::{error_panel, source_item, source_list};
 use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::transcription_models::{
@@ -124,7 +124,7 @@ fn delete(ui: &mut Ui, model: &'static ModelDefinition) {
 pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
     let language = ui.picker.language.clone()?;
     let c = &p.k.c;
-    let mut languages = col().key("languages");
+    let mut languages = source_list(col().key("languages"));
     for (index, (code, name)) in transcription_models::LANGUAGES.iter().enumerate() {
         let selected = *code == language;
         let code = code.to_string();
@@ -149,7 +149,7 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         if selected {
             item = item.fill(c.layer_02);
         }
-        languages = languages.child(item);
+        languages = languages.child(source_item(p, item, selected));
     }
     let mut models = col().key("models").gap(8.0);
     let transcription = ui.view.as_ref().map(|view| &view.transcription);
@@ -266,7 +266,9 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         layer("picker-layer")
             .center()
             .transition(Transition::scale(0.96).springs(springs))
-            .child(panel),
+            // Keys stay inside, Escape or a press outside closes, and focus
+            // returns to the control that opened it.
+            .child(panel.modal(true, close)),
     ])
 }
 

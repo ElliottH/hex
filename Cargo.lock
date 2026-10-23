@@ -3578,7 +3578,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -4412,7 +4412,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=48e5b209b6393e87568c841a0667650d1dcaae13#48e5b209b6393e87568c841a0667650d1dcaae13"
+source = "git+https://github.com/anomalyco/rune.git?rev=853d832647c5b7f2dd73b3582f3b14af2f3f7b4d#853d832647c5b7f2dd73b3582f3b14af2f3f7b4d"
 dependencies = [
  "arboard",
  "blake3",
@@ -4460,7 +4460,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=48e5b209b6393e87568c841a0667650d1dcaae13#48e5b209b6393e87568c841a0667650d1dcaae13"
+source = "git+https://github.com/anomalyco/rune.git?rev=853d832647c5b7f2dd73b3582f3b14af2f3f7b4d#853d832647c5b7f2dd73b3582f3b14af2f3f7b4d"
 dependencies = [
  "rune",
  "rune-motion",
@@ -4471,12 +4471,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune.git?rev=48e5b209b6393e87568c841a0667650d1dcaae13#48e5b209b6393e87568c841a0667650d1dcaae13"
+source = "git+https://github.com/anomalyco/rune.git?rev=853d832647c5b7f2dd73b3582f3b14af2f3f7b4d#853d832647c5b7f2dd73b3582f3b14af2f3f7b4d"
 
 [[package]]
 name = "rune-theme-opencode"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=48e5b209b6393e87568c841a0667650d1dcaae13#48e5b209b6393e87568c841a0667650d1dcaae13"
+source = "git+https://github.com/anomalyco/rune.git?rev=853d832647c5b7f2dd73b3582f3b14af2f3f7b4d#853d832647c5b7f2dd73b3582f3b14af2f3f7b4d"
 dependencies = [
  "rune",
  "rune-kit",

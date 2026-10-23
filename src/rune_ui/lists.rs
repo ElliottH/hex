@@ -57,6 +57,20 @@ pub(super) fn group_label(p: Paint, key: &str, label: &str, first: bool) -> El {
         .pb(6.0)
 }
 
+/// A source list, as in a native sidebar: Tab enters at the selected row,
+/// Up and Down select as they move, and typing selects a row by its name.
+pub(super) fn source_list(list: El) -> El {
+    list.role("list").focus_group().focus_follows()
+}
+
+/// A row of a [`source_list`]. Its ring is inset because rows touch and
+/// their scroll view clips.
+pub(super) fn source_item(p: Paint, item: El, selected: bool) -> El {
+    item.focusable(true)
+        .focus_selected(selected)
+        .focus_ring(2.0, -2.0, p.k.c.border_focus)
+}
+
 /// A selectable list row: title (with trailing pieces) over a meta line.
 pub(super) fn list_row(
     p: Paint,
@@ -105,7 +119,7 @@ pub(super) fn list_row(
     if selected {
         item = item.fill(c.layer_02);
     }
-    item
+    source_item(p, item, selected)
 }
 
 /// A quiet message in a list or detail (empty, no matches, failed load).

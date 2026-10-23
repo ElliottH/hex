@@ -56,7 +56,7 @@ These live in [`rune_ui/controls.rs`](../src/rune_ui/controls.rs) and
 | Job | Piece |
 |---|---|
 | Settings card, titled card | `card`, `section` |
-| Settings row (title, description, control) | `setting_row`, `described_row`, `toggle_row` |
+| Settings row (title, description, control) | `setting_row`, `described_row`, `toggle_row`; a row that toggles shows `row_switch` |
 | A few exclusive choices / a dropdown | `segmented`, `select` |
 | Main, other, and destructive actions | `button(…, ButtonKind::{Primary, Secondary, Danger}, …)`; inside a row: `small_button` |
 | Shortcut keycaps | `keycaps`; the recorder is `settings::hotkey_control` |
@@ -65,6 +65,7 @@ These live in [`rune_ui/controls.rs`](../src/rune_ui/controls.rs) and
 | Text entry saved when typing pauses | `text_field` |
 | Keyboard highlight in a search popover | `Highlight` |
 | List + detail | `split` with `list_row`, `group_label`, `detail_header`, `detail_title`, `section_label`, `fact` |
+| Keyboard-selectable list (sidebar, list + detail, picker languages) | `source_list` around rows made with `list_row` or `source_item` |
 | Nothing to show, errors | `message`, `placeholder`, `error_panel` |
 | A permission's Allow / Allowed control | `permission_control`, `allowed` |
 | Slider | `slider` |

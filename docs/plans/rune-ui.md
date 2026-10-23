@@ -145,8 +145,13 @@ Before cutting the first release with the Rune front end:
   macOS host keeps an NSEvent monitor), and the event loop panics without a
   display (Linux catches that unwind). Queued in Rune behind the current core
   work.
-- **Focus trap and menu keyboard navigation:** modal focus trap for the
-  transcription picker scrim and arrow-key navigation in `rune-kit` selects and
-  menus (model and application search popovers already support Up/Down/Enter
-  via `controls::Highlight`).
+- **Keyboard navigation (landed Oct 23):** Rune's focus model now covers Tab
+  in visual order with keyboard-only rings, macOS Full Keyboard Access,
+  menu and select arrows with type-select, modal focus traps that return focus
+  to the opener, and focus that scrolls into view. Hex's sidebar and list
+  panes are source lists (Up/Down select, typing jumps to a row), Command-1…9
+  open the shown panes, toggle rows and shortcut recorders take focus, and the
+  transcription picker traps focus. Still open: the model and application
+  search popovers (`rune-kit` `Popover`) don't trap focus, and list arrows
+  wrap at the ends until Hex pins Rune `18a0641` or later.
 - **Windows custom caption:** uses the native Win32 title bar for now.

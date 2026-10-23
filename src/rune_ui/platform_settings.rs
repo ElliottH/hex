@@ -6,11 +6,10 @@
 //! data and their actions are [`PlatformRequest`]s.
 
 use rune::{El, Icon, row, text};
-use rune_kit::Switch;
 
 use super::controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, note, section, segmented, select, setting_row,
-    toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, note, row_switch, section, segmented, select,
+    setting_row, toggle_row,
 };
 use super::lists::{PermissionControl, Tone, permission_control, tone_tag};
 use super::platform::{CalendarRequest, MeetingRequest, NotesAvailability, PlatformRequest};
@@ -595,9 +594,7 @@ pub(super) fn launch_at_login_rows(ui: &Ui, p: Paint) -> Vec<El> {
             ButtonKind::Secondary,
             |ui: &mut Ui, _| ui.ask(PlatformRequest::OpenLoginItemSettings),
         ),
-        Some(status) => Switch::new(status == LoginItemStatus::Enabled)
-            .build(p.k)
-            .key("switch"),
+        Some(status) => row_switch(p, status == LoginItemStatus::Enabled),
     };
     let mut row = setting_row(
         p,
@@ -612,6 +609,7 @@ pub(super) fn launch_at_login_rows(ui: &Ui, p: Paint) -> Vec<El> {
     ) {
         row = row
             .role("toggle")
+            .focusable(true)
             .hover(p.k.c.hover)
             .press(p.k.c.pressed)
             .on_press(|ui: &mut Ui| {

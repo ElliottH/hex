@@ -8,7 +8,10 @@ use rune::{El, col, row, text};
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, status_dot};
-use super::lists::{detail_header, detail_title, fact, message, placeholder, section_label, split};
+use super::lists::{
+    detail_header, detail_title, fact, message, placeholder, section_label, source_item,
+    source_list, split,
+};
 use crate::desktop_activity::DesktopActivity;
 use crate::desktop_i18n::{event_age, tr};
 use crate::events::{EventReader, VoiceEvent, VoiceState};
@@ -176,9 +179,11 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
     for (index, event) in pane.events.iter().enumerate() {
         let selected = pane.selected == Some(index);
         let boundary = matches!(event, VoiceEvent::SessionStarted { .. });
+        let summary = crate::desktop_activity::event_summary(event);
         let mut item = row()
             .key(format!("activity-event{index}"))
             .role("button")
+            .label(summary.clone())
             .px(10.0)
             .py(8.0)
             .gap(12.0)
@@ -187,7 +192,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
             .press(c.pressed)
             .on_press(move |ui: &mut Ui| ui.activity.selected = Some(index))
             .child(
-                text(crate::desktop_activity::event_summary(event))
+                text(summary)
                     .key("summary")
                     .font(if boundary {
                         p.k.ty.small_medium
@@ -208,9 +213,9 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
         if selected {
             item = item.fill(c.layer_02);
         }
-        list = list.child(item);
+        list = list.child(source_item(p, item, selected));
     }
-    let list = super::scroll_body("activity-scroll", list);
+    let list = super::scroll_body("activity-scroll", source_list(list));
     let detail = match pane.selected.and_then(|index| pane.events.get(index)) {
         None => placeholder(p, "activity-detail", "Select an activity row."),
         Some(event) => {

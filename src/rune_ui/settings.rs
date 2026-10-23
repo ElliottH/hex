@@ -778,6 +778,10 @@ pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         .on_press(move |ui: &mut Ui| begin_capture(ui, target));
     let listening =
         matches!(ui.capture, Capture::Listening { target: active, .. } if active == target);
+    // While listening, keys reach the recorder rather than pressing it again.
+    frame = frame
+        .focusable(!listening)
+        .focus_ring(2.0, 2.5, c.border_focus);
     if !listening {
         frame = frame.fill(c.bg_button_neutral);
         for shadow in &p.k.elevation.button_neutral {

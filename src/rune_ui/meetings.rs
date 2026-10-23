@@ -15,7 +15,7 @@ use rune_kit::{IconButton, IconButtonVariant, Menu as KitMenu, MenuItem, Placeme
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot};
 use super::lists::{
     Tone, detail_header, detail_title, error_panel, group_label, list_row, message, placeholder,
-    section_label, small_button, split, tone_tag,
+    section_label, small_button, source_list, split, tone_tag,
 };
 use super::platform::{MeetingRequest, PlatformRequest};
 use super::{Menu, Ui};
@@ -515,17 +515,22 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
                 .copied
                 .as_ref()
                 .is_some_and(|(copied, what)| copied == &meeting.id && *what == "row");
-            trailing.push(small_button(
-                p,
-                "row-copy",
-                if copied { tr("Copied") } else { tr("Copy") },
-                move |ui: &mut Ui, tx: &mut Tx| {
-                    if let Some(meeting) = ui.meetings.meeting(&id) {
-                        let markdown = transcript_markdown(meeting.turns());
-                        copy(ui, tx, id.clone(), "row", markdown);
-                    }
-                },
-            ));
+            // A pointer shortcut: keys move between rows, and the detail
+            // has its own Copy.
+            trailing.push(
+                small_button(
+                    p,
+                    "row-copy",
+                    if copied { tr("Copied") } else { tr("Copy") },
+                    move |ui: &mut Ui, tx: &mut Tx| {
+                        if let Some(meeting) = ui.meetings.meeting(&id) {
+                            let markdown = transcript_markdown(meeting.turns());
+                            copy(ui, tx, id.clone(), "row", markdown);
+                        }
+                    },
+                )
+                .focusable(false),
+            );
         }
         let id = meeting.id.clone();
         list = list.child(list_row(
@@ -538,7 +543,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
             move |ui: &mut Ui| ui.meetings.select(id.clone()),
         ));
     }
-    let column = super::scroll_body("meetings-scroll", list);
+    let column = super::scroll_body("meetings-scroll", source_list(list));
     let selected = pane.selected.as_deref().and_then(|id| pane.meeting(id));
     let detail = match selected {
         Some(meeting) => detail(ui, p, meeting, layer),

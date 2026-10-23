@@ -585,6 +585,95 @@ fn a_download_in_progress_can_be_cancelled() {
     assert!(matches!(sent(&rt), [Request::CancelModel]));
 }
 
+fn focused(rt: &Runtime<Ui>) -> String {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.focused)
+        .map(|e| e.path)
+        .unwrap_or_default()
+}
+
+fn tab_to(rt: &mut Runtime<Ui>, target: &str) {
+    let mut seen = Vec::new();
+    for _ in 0..60 {
+        if focused(rt).ends_with(target) {
+            return;
+        }
+        seen.push(focused(rt));
+        key(rt, Key::Tab, Mods::default());
+    }
+    panic!("Tab never reached {target}: {seen:?}");
+}
+
+#[test]
+fn the_sidebar_moves_with_arrows_and_command_numbers() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    key(&mut rt, Key::Tab, Mods::default());
+    assert!(
+        focused(&rt).ends_with("nav-settings"),
+        "Tab enters at the current pane"
+    );
+    key(&mut rt, Key::Down, Mods::default());
+    assert_eq!(rt.state.pane, Pane::Modes, "selection follows the arrows");
+    let command = Mods {
+        cmd: true,
+        ..Mods::default()
+    };
+    let shown: Vec<_> = Pane::ALL
+        .into_iter()
+        .filter(|pane| pane.shown(&rt.state))
+        .collect();
+    key(&mut rt, Key::Command('3'), command);
+    assert_eq!(rt.state.pane, shown[2]);
+    key(&mut rt, Key::Command('1'), command);
+    assert_eq!(rt.state.pane, Pane::Settings);
+    key(&mut rt, Key::Command('9'), command);
+    assert_eq!(rt.state.pane, Pane::Settings, "no ninth pane");
+}
+
+#[test]
+fn toggle_rows_take_focus_and_flip_on_space() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    assert!(rt.state.settings.paste_with_shift);
+    tab_to(&mut rt, "terminal-paste");
+    key(&mut rt, Key::Text(" ".into()), Mods::default());
+    assert!(!rt.state.settings.paste_with_shift);
+}
+
+#[test]
+fn the_picker_keeps_focus_inside_and_escape_returns_it() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    tab_to(&mut rt, "transcription-control-field-trigger");
+    key(&mut rt, Key::Enter, Mods::default());
+    settle(&mut rt);
+    assert_eq!(rt.state.picker.language.as_deref(), Some("en"));
+    for _ in 0..12 {
+        key(&mut rt, Key::Tab, Mods::default());
+        assert!(
+            focused(&rt).contains("transcription-picker"),
+            "focus left the picker: {}",
+            focused(&rt)
+        );
+    }
+    tab_to(&mut rt, "language1");
+    key(&mut rt, Key::Down, Mods::default());
+    assert_ne!(rt.state.picker.language.as_deref(), Some("en"));
+    key(&mut rt, Key::Escape, Mods::default());
+    settle(&mut rt);
+    assert_eq!(rt.state.picker.language, None);
+    assert!(focused(&rt).ends_with("transcription-control-field-trigger"));
+}
+
+#[test]
+fn history_rows_select_with_arrows() {
+    let mut rt = runtime("history", true, PANE_SIZE);
+    tap(&mut rt, "history-entry3");
+    key(&mut rt, Key::Down, Mods::default());
+    assert_ne!(rt.state.history.selected, Some(3));
+    key(&mut rt, Key::Up, Mods::default());
+    assert_eq!(rt.state.history.selected, Some(3));
+}
+
 #[test]
 fn settings_opens_the_picker_on_the_current_language() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);

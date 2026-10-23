@@ -5,13 +5,13 @@
 //! [`PlatformState`](super::platform::PlatformState) data.
 
 use rune::{El, TextEdit, Tx, col, el, row, text};
-use rune_kit::{Switch, TextInput};
+use rune_kit::TextInput;
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, setting_row};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, row_switch, setting_row};
 use super::lists::{
     detail_header, detail_title, error_panel, fact, group_label, list_row, message, placeholder,
-    split,
+    source_list, split,
 };
 use super::platform::{CatalogCommand, CommandModel, PlatformRequest, Workspace};
 use crate::commands::CommandScope;
@@ -166,6 +166,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
             .key("commands-enabled")
             .role("toggle")
             .label(tr("Voice commands"))
+            .focusable(true)
             .gap(8.0)
             .center_y()
             .on_press(|ui: &mut Ui| {
@@ -178,11 +179,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
                     .font(DESCRIPTION)
                     .color(p.muted()),
             )
-            .child(
-                Switch::new(ui.settings.commands_enabled)
-                    .build(p.k)
-                    .key("switch"),
-            )
+            .child(row_switch(p, ui.settings.commands_enabled))
     });
 
     let query = ui.commands.search.text.trim().to_lowercase();
@@ -247,7 +244,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
         .h_full()
         .gap(8.0)
         .child(search)
-        .child(super::scroll_body("commands-scroll", list));
+        .child(super::scroll_body("commands-scroll", source_list(list)));
     let detail = detail(
         ui,
         p,

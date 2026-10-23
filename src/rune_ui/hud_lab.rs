@@ -212,14 +212,22 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
             "Curved bands retained for comparison and tuning.",
         ),
     ];
-    let mut cards = row().key("hud-styles").gap(12.0).flex_wrap();
+    let mut cards = row()
+        .key("hud-styles")
+        .role("radiogroup")
+        .focus_group()
+        .gap(12.0)
+        .flex_wrap();
     for (index, (letter, name, description)) in styles.into_iter().enumerate() {
         let selected = lab.tuning.style as usize == index;
         cards = cards.child(
             col()
                 .key(format!("hud-style{index}"))
-                .role("button")
+                .role("radio")
                 .label(name)
+                .focusable(true)
+                .focus_selected(selected)
+                .focus_ring(2.0, 2.5, c.border_focus)
                 .w(190.0)
                 .padding(12.0)
                 .gap(4.0)

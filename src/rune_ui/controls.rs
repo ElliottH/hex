@@ -160,6 +160,12 @@ pub(super) fn described_row(
         .child(control)
 }
 
+/// The switch of a row that toggles: the row takes focus and presses, and
+/// the switch shows its state and the focus ring.
+pub(super) fn row_switch(p: Paint, on: bool) -> El {
+    Switch::new(on).build(p.k).key("switch").focusable(false)
+}
+
 /// A whole-row switch: the row presses, the switch shows the state.
 pub(super) fn toggle_row(
     p: Paint,
@@ -169,17 +175,12 @@ pub(super) fn toggle_row(
     on: bool,
     flip: impl Fn(&mut Ui) + 'static,
 ) -> El {
-    setting_row(
-        p,
-        key,
-        title,
-        Some(description),
-        Switch::new(on).build(p.k).key("switch"),
-    )
-    .role("toggle")
-    .hover(p.k.c.hover)
-    .press(p.k.c.pressed)
-    .on_press(flip)
+    setting_row(p, key, title, Some(description), row_switch(p, on))
+        .role("toggle")
+        .focusable(true)
+        .hover(p.k.c.hover)
+        .press(p.k.c.pressed)
+        .on_press(flip)
 }
 
 /// A few exclusive choices: equal segments sized for the longest label.
