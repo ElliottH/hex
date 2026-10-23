@@ -120,10 +120,11 @@ pub(super) fn poll(ui: &mut Ui) -> bool {
             tracing::warn!(%error, "could not record onboarding completion");
         }
     }
+    let refocused = focus_practice(tour, live);
     let practicing = tour.flow.step() == Step::TryIt;
     apply(ui, effect);
     let heard = ui.host.tour_inputs(practicing);
-    let changed = !heard.is_empty();
+    let changed = refocused || !heard.is_empty();
     for heard in heard {
         input(ui, heard);
     }
@@ -132,11 +133,26 @@ pub(super) fn poll(ui: &mut Ui) -> bool {
 }
 
 pub(super) fn input(ui: &mut Ui, input: Input) {
+    let live = ui.live();
     let Some(tour) = &mut ui.tour else {
         return;
     };
     let effect = tour.flow.on(input);
+    focus_practice(tour, live);
     apply(ui, effect);
+}
+
+/// The practice dictation pastes into the focused field, so Try it keeps
+/// the field focused until the dictation lands. Fixtures leave it alone.
+/// True when it moved focus back to the field.
+fn focus_practice(tour: &mut Tour, live: bool) -> bool {
+    let view = tour.flow.view();
+    let wanted = live && view.step == Step::TryIt && view.practice != Practice::Landed;
+    let refocus = wanted && !tour.practice.focused;
+    if refocus {
+        tour.practice.focused = true;
+    }
+    refocus
 }
 
 fn apply(ui: &mut Ui, effect: Effect) {
@@ -863,5 +879,39 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
     }
     if state == MacStep::Done {
         input(ui, Input::Skip);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_it_focuses_the_practice_field_until_the_dictation_lands() {
+        let ready = crate::onboarding::SetupStatus {
+            microphone: PermissionState::Ready,
+            input_monitoring: PermissionState::Ready,
+            accessibility: PermissionState::Ready,
+            transcription_model: true,
+        };
+        let mut tour = Tour::new(Flow::new(Step::TryIt, ready, true, true), true);
+        assert_eq!(tour.flow.step(), Step::TryIt);
+        assert!(!focus_practice(&mut tour, false));
+        assert!(!tour.practice.focused, "fixtures leave the field alone");
+        assert!(focus_practice(&mut tour, true));
+        assert!(tour.practice.focused);
+        assert!(!focus_practice(&mut tour, true), "already focused");
+
+        let mut tour = Tour::new(Flow::new(Step::TryIt, ready, true, true), true);
+        for observation in [
+            Observation::Started,
+            Observation::Transcribing,
+            Observation::Pasted,
+        ] {
+            tour.flow.on(Input::Dictation(observation));
+        }
+        assert_eq!(tour.flow.view().practice, Practice::Landed);
+        assert!(!focus_practice(&mut tour, true));
+        assert!(!tour.practice.focused, "a landed practice frees the field");
     }
 }
