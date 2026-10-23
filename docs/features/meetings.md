@@ -281,9 +281,18 @@ joining sentences lost its words on one side (10% word error on `You` lines).
 In-call text was a Moonshine draft until 2026-10-22: the pane showed Parakeet
 only for time rolling had covered, and Option-Control-V and the GPUI capsule's
 Copy new pasted the Moonshine draft alone, which garbled names and jargon. The
-meeting now loads no Moonshine; short Parakeet chunks replace it. Streaming
-Parakeet was rejected: a live stream holds the engine's compute lease, so two
-continuous meeting streams would delay dictation.
+meeting now loads no Moonshine; short Parakeet chunks replace it. Always-on
+streaming Parakeet was rejected because one loaded model cannot serve it:
+transcribe-cpp 0.2.4 allows one active stream per model across all sessions,
+and refuses any other run or stream with `Busy` while it is open
+(`Session::stream`). Two tracks would need a mixed track (losing You/Them and
+echo suppression) or a model copy per track (about 0.7 GB each), and every
+dictation would have to close the meeting stream and lose its 5.6 s left
+context. The buffered stream also re-encodes a 7.7 s window (5.6 s left,
+1.04 s chunk, 1.04 s right) per 1.04 s step, where chunks encode each second
+about once: Studio's 1,619 dictation streams of 3 s or longer (3.2 h of audio,
+2026-10-23 log) spent 44 ms of feed time per second of audio, which for two
+tracks would hold the engine about 9% of the time.
 
 Cost: observed 2026-10-22 on the Pro with `meeting_live_replay`: 10 minutes of
 a recorded speaker-mode call fed at real time to the production recorder beside
