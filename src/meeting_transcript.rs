@@ -525,20 +525,31 @@ impl ChunkModel {
         samples: &[f32],
     ) -> Option<Result<Chunked>> {
         let samples = samples.to_vec();
+        enum Shared {
+            Busy,
+            NoModel,
+            Ran(Result<Transcript>),
+        }
         let ran = engine.background(move |model| {
+            // A capture that began after the meeting checked comes first.
+            if crate::parakeet::dictation_busy() {
+                return Shared::Busy;
+            }
             // Apple Speech runs outside this process, so a meeting keeps its
             // own rather than queue dictation behind it.
-            let transcriber = model
-                .active()
-                .filter(|model| matches!(model, Transcriber::Gguf(_)))?;
-            Some(crate::parakeet::at_background_priority(|| {
-                transcriber.transcribe_segments(samples)
-            }))
+            match model.active() {
+                Some(transcriber @ Transcriber::Gguf(_)) => {
+                    Shared::Ran(crate::parakeet::at_background_priority(|| {
+                        transcriber.transcribe_segments(samples)
+                    }))
+                }
+                _ => Shared::NoModel,
+            }
         });
         match ran {
-            Ok(None) => Some(Ok(Chunked::Preempted)),
-            Ok(Some(Some(result))) => Some(result.map(Chunked::Done)),
-            Ok(Some(None)) | Err(_) => None,
+            Ok(None | Some(Shared::Busy)) => Some(Ok(Chunked::Preempted)),
+            Ok(Some(Shared::Ran(result))) => Some(result.map(Chunked::Done)),
+            Ok(Some(Shared::NoModel)) | Err(_) => None,
         }
     }
 

@@ -352,6 +352,9 @@ pub struct DictationClip {
     samples: Vec<f32>,
     /// The live stream fed with this clip's audio during capture, if any.
     stream: Option<LiveStream>,
+    /// Keeps background work deferring until the clip is submitted.
+    #[cfg(target_os = "macos")]
+    capture: Option<crate::recording_environment::CaptureMarker>,
 }
 
 impl DictationClip {
@@ -364,11 +367,20 @@ impl DictationClip {
         self.stream.take()
     }
 
+    /// Takes the marker that defers background work; hold it until the clip
+    /// is submitted.
+    #[cfg(target_os = "macos")]
+    pub fn take_capture_marker(&mut self) -> Option<crate::recording_environment::CaptureMarker> {
+        self.capture.take()
+    }
+
     #[cfg(test)]
     pub fn for_test(samples: Vec<f32>) -> Self {
         Self {
             samples,
             stream: None,
+            #[cfg(target_os = "macos")]
+            capture: None,
         }
     }
 
@@ -539,6 +551,8 @@ struct Recording {
     stream: Option<LiveStream>,
     #[cfg(target_os = "macos")]
     environment: RecordingEnvironmentState,
+    #[cfg(target_os = "macos")]
+    capture: Option<crate::recording_environment::CaptureMarker>,
 }
 
 #[cfg(target_os = "macos")]
@@ -598,6 +612,8 @@ impl Recording {
             stream: None,
             #[cfg(target_os = "macos")]
             environment: RecordingEnvironmentState::Disabled,
+            #[cfg(target_os = "macos")]
+            capture: None,
         })
     }
 
@@ -786,6 +802,10 @@ impl DictationCapture {
                 Some(controller) => RecordingEnvironmentState::Pending(controller.clone()),
                 None => RecordingEnvironmentState::Disabled,
             };
+            recording.capture = self
+                .recording_environment
+                .is_some()
+                .then(crate::recording_environment::CaptureMarker::new);
         }
         let skip = self.ring.len() - pre_roll;
         let (front, back) = self.ring.as_slices();
@@ -933,8 +953,15 @@ impl DictationCapture {
         };
 
         let stream = recording.stream.take();
+        #[cfg(target_os = "macos")]
+        let capture = recording.capture.take();
         let samples = recording.finish(Some(ended_at + tail));
-        Finish::Transcribe(DictationClip { samples, stream })
+        Finish::Transcribe(DictationClip {
+            samples,
+            stream,
+            #[cfg(target_os = "macos")]
+            capture,
+        })
     }
 }
 

@@ -160,12 +160,16 @@ Design choice: chunks are background jobs on the dictation transcription engine
 (`TranscriptionEngine::background`), using whatever model dictation has loaded,
 rather than a second copy of the model (about 0.7 GB). Before each chunk the
 meeting waits (up to 20 s per chunk) while `parakeet::dictation_busy()` reports
-an intentional capture or dictation inference. A job never interrupts a live
-stream: one that arrives during a stream, or after a newer dictation request
-was sent, is turned away and retried 250 ms later, once dictation is idle. A
-chunk already running cannot be aborted (transcribe.cpp ignores its cancel
-callback on Metal), so a dictation request that lands mid-chunk waits for it:
-up to about 0.3 s for a 30 s chunk on the Pro. The job runs at utility QoS on
+a capture, counted from the shortcut press until its clip is submitted, or
+dictation inference; the engine thread checks again before running the job. A
+job never interrupts a live stream: one that arrives during a stream, or after
+a newer dictation request was sent, is turned away and retried 250 ms later,
+once dictation is idle. A chunk already running cannot be aborted
+(transcribe.cpp ignores its cancel callback on Metal), but it can only have
+started before the press, so it finishes during the 300 ms hold threshold and
+200 ms release tail (a 30 s chunk takes 0.25 to 0.45 s on the Pro). Gating at
+the intentional hold instead let a chunk start just before the threshold; with
+the shortest hold that added about 85 ms at p95 on the Pro. The job runs at utility QoS on
 the engine thread, which returns to user-interactive afterwards. Apple Speech runs outside the process, so with
 Apple Speech selected, and in a process without the engine (the CLI), the
 meeting loads its own transcriber as before.

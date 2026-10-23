@@ -428,10 +428,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   visible and stoppable from the menu bar without the Settings window.
 - Meeting transcription defers to dictation and never loads a second copy of
   the model: each chunk runs on the dictation engine's loaded model at utility
-  QoS, waits while an intentional dictation capture or dictation inference is
-  active, never interrupts a live stream, and is retried when a dictation
-  request was sent first. A chunk already running cannot be aborted on Metal,
-  so it can delay a dictation by one chunk's inference. It uses whatever model
+  QoS, starts only while no dictation capture (from the shortcut press) or
+  dictation inference is active, never interrupts a live stream, and is retried
+  when a dictation request was sent first. A chunk already running cannot be
+  aborted on Metal; it finishes during the hold threshold and release tail. It uses whatever model
   dictation has loaded, so a model switch applies from the next chunk; Apple
   Speech and a process without the engine use their own transcriber. Its queue
   (one-second audio blocks) and chunk backlog stay bounded; a source that falls

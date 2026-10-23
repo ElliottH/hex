@@ -351,6 +351,7 @@ impl DictationWorker {
         // A voice-delimited clip is retranscribed without its control phrase,
         // which a stream cannot do.
         let stream = clip.take_stream().filter(|_| protocol.is_none());
+        let _capture = clip.take_capture_marker();
         let samples = clip.into_transcription_samples();
         crate::dictation_diagnostics::persist(&samples);
         let prepare_ms = submitted_at.elapsed().as_millis();
@@ -774,10 +775,12 @@ impl Drop for DictationInference {
 }
 
 /// Whether dictation is capturing or running inference. Meeting
-/// transcription waits for this to clear before each chunk so it never
-/// competes with a dictation job for the model hardware.
+/// transcription starts no chunk while this holds. A capture counts from its
+/// press: a chunk already running then finishes during the hold threshold
+/// and release tail, before the clip needs the model.
 pub(crate) fn dictation_busy() -> bool {
     DICTATION_INFERENCE.load(Ordering::Acquire) > 0
+        || crate::recording_environment::capture_active()
         || crate::recording_environment::intentional_recording_active()
 }
 
