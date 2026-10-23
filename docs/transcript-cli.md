@@ -7,6 +7,7 @@ on your PATH.
 ```sh
 hex history --since 3d --app 'OpenCode Beta' --grep problems --json
 hex history --since 2026-10-20 --until 2026-10-21 --raw --oldest-first --limit 500
+hex history --since 7d --search 'problems board' --json
 hex meetings list --since 7d --json
 hex meetings show latest --md
 hex meetings show 1790000500000-1002 --json
@@ -28,8 +29,15 @@ may have no app or mode; Hex does not infer missing metadata.
 - `--app` matches the entire application name, ignoring case.
 - `--grep` matches a case-insensitive literal substring in raw or final text,
   including raw text when `--raw` is absent. It is not a regular expression.
-- Results sort by timestamp and then ID, newest first. `--oldest-first` reverses
-  that order. `--limit` defaults to 50 and accepts 1–10,000.
+- `--search QUERY` ranks the remaining entries with the meeting search's
+  stemmed, fuzzy BM25 over final and raw text, so `bord` finds `board` and
+  `scheduling` finds `schedule`. Quoted phrases are required, exact (stemmed)
+  matches. Unmatched entries are dropped. It combines with the other filters and
+  cannot be used with `--oldest-first`. Statistics cover only the filtered,
+  unexpired entries, so scores compare within one response, not across queries.
+- Results sort by timestamp and then ID, newest first; with `--search`, by score
+  and then newest first. `--oldest-first` reverses the time order. `--limit`
+  defaults to 50 and accepts 1–10,000.
 - The saved retention window filters expired entries even before the app's next
   cleanup. Missing settings use seven days. Invalid settings fail rather than
   silently widening the retention window. Off preserves existing entries and
@@ -62,7 +70,8 @@ path too. The plural `meetings` commands are available in release builds.
 Every JSON response has integer `version: 1`. Consumers should ignore unknown
 fields; incompatible field changes require a new version. All `*_ms` fields are
 integer milliseconds. Absolute timestamps use Unix time. Nullable fields are
-present as `null`, except `raw_text`, which is omitted without `--raw`.
+present as `null`, except `raw_text`, which is omitted without `--raw`, and
+`score` and `snippet`, which are omitted without `--search`.
 JSON goes to stdout; errors go to stderr with a nonzero exit status. Empty
 results are successful responses. `truncated` reports the query's output limit,
 not data already expired or evicted from the store.
@@ -80,6 +89,8 @@ type History = {
     kind: "dictation" | "send" | "voice_action"
     final_text: string
     raw_text?: string // present only with --raw
+    score?: number // present only with --search; higher is more relevant
+    snippet?: string // present only with --search; matches wrapped in **
   }[]
 }
 

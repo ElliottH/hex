@@ -4,6 +4,7 @@
 Agent or terminal                                // transcripts.cli; macOS release
 ├── hex history -> Timestamp, app, recorded mode, final text
 │   ├── --since / --until / --app / --grep -> Filter, then limit
+│   ├── --search <query> -> Rank filtered entries with meetings' fuzzy BM25
 │   ├── --raw -> Include the stored pre-processing transcript
 │   ├── --oldest-first -> Reverse timestamp order
 │   └── --json -> Version 1 response, with truncation flag
@@ -33,7 +34,7 @@ and early dispatch in [main.rs](../../src/main.rs).
 [Command and JSON contracts](../transcript-cli.md) document flags and schema.
 
 Checks in [transcript_cli_tests.rs](../../src/transcript_cli_tests.rs) cover
-filters/order, retention and malformed settings, JSON snapshots, atomic-replace
+filters/order, ranked `--search` within retention, retention and malformed settings, JSON snapshots, atomic-replace
 reads, legacy/symlink paths, and parsing. Existing history checks cover bounded
 storage, owner-only files, and expiry. Meeting query fixtures cover locks, partial
 NDJSON, interrupted drafts, and search parity with MCP. These fixture checks do

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::history::{HistoryEntry, HistoryKind, HistoryRetention};
 use crate::meeting::query::{
-    Library, ListQuery, Meeting, SearchQuery, TimeRange, TranscriptSource,
+    Library, ListQuery, Meeting, SearchQuery, TextHit, TimeRange, TranscriptSource, search_texts,
 };
 
 #[derive(Args, Debug)]
@@ -26,6 +26,9 @@ pub struct HistoryArgs {
     /// Case-insensitive substring in final or raw text.
     #[arg(long)]
     grep: Option<String>,
+    /// Rank by relevance with the meeting search's stemmed, fuzzy BM25.
+    #[arg(long, conflicts_with = "oldest_first")]
+    search: Option<String>,
     #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=10_000))]
     limit: u32,
     /// Include the stored pre-processing transcript.
@@ -96,6 +99,10 @@ struct HistoryRow<'a> {
     final_text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     raw_text: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snippet: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -139,11 +146,18 @@ fn history_output<'a>(
     if !args.oldest_first {
         matching.reverse();
     }
-    let truncated = matching.len() > args.limit as usize;
-    let entries = matching
+    let ranked: Vec<(&HistoryEntry, Option<TextHit>)> = match &args.search {
+        Some(query) => rank_history(&matching, query)?
+            .into_iter()
+            .map(|(entry, hit)| (entry, Some(hit)))
+            .collect(),
+        None => matching.into_iter().map(|entry| (entry, None)).collect(),
+    };
+    let truncated = ranked.len() > args.limit as usize;
+    let entries = ranked
         .into_iter()
         .take(args.limit as usize)
-        .map(|entry| HistoryRow {
+        .map(|(entry, hit)| HistoryRow {
             id: entry.id,
             timestamp_ms: entry.timestamp_ms,
             application: entry.application.as_deref(),
@@ -151,6 +165,8 @@ fn history_output<'a>(
             kind: entry.kind,
             final_text: &entry.final_text,
             raw_text: args.raw.then_some(entry.raw_text.as_str()),
+            score: hit.as_ref().map(|hit| (hit.score * 100.0).round() / 100.0),
+            snippet: hit.map(|hit| hit.snippet),
         })
         .collect();
     Ok(HistoryOutput {
@@ -159,6 +175,30 @@ fn history_output<'a>(
         entries,
         truncated,
     })
+}
+
+/// Rank newest-first entries by their final text and, when it differs, their
+/// raw transcript, keeping each entry's better match. Ties stay newest first.
+fn rank_history<'a>(
+    entries: &[&'a HistoryEntry],
+    query: &str,
+) -> Result<Vec<(&'a HistoryEntry, TextHit)>> {
+    let mut owners = Vec::new();
+    let mut texts = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        owners.push(index);
+        texts.push(entry.final_text.as_str());
+        if !entry.raw_text.is_empty() && entry.raw_text != entry.final_text {
+            owners.push(index);
+            texts.push(entry.raw_text.as_str());
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    Ok(search_texts(&texts, query)?
+        .into_iter()
+        .filter(|hit| seen.insert(owners[hit.index]))
+        .map(|hit| (entries[owners[hit.index]], hit))
+        .collect())
 }
 
 /// Read only this setting, without loading AppSettings (which migrates and writes).
@@ -203,6 +243,9 @@ pub fn history(args: &HistoryArgs) -> Result<()> {
         )?;
         if let Some(mode) = row.mode {
             write!(out, " · {mode}")?;
+        }
+        if let Some(score) = row.score {
+            write!(out, " · score {score:.1}")?;
         }
         writeln!(out, "\n{}", row.final_text)?;
         if let Some(raw) = row.raw_text {

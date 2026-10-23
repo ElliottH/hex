@@ -988,18 +988,56 @@ struct Hit {
 }
 
 fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit> {
-    let mut document_frequency: HashMap<&String, u32> = HashMap::new();
-    let mut documents = 0_u32;
-    let mut total_length = 0_usize;
-    for meeting in meetings {
-        for passage in &meeting.passages {
-            documents += 1;
-            total_length += passage.tokens.len();
-            for stem in passage.frequencies.keys() {
-                *document_frequency.entry(stem).or_insert(0) += 1;
+    let owners = meetings
+        .iter()
+        .flat_map(|meeting| (0..meeting.passages.len()).map(move |index| (meeting, index)))
+        .collect::<Vec<_>>();
+    let passages = owners
+        .iter()
+        .map(|(meeting, index)| &meeting.passages[*index])
+        .collect::<Vec<_>>();
+    let mut hits = score(&passages, query, fuzzy)
+        .into_iter()
+        .map(|scored| {
+            let (meeting, passage) = owners[scored.document];
+            Hit {
+                meeting: meeting.clone(),
+                passage,
+                score: scored.score,
+                matched: scored.matched,
+                labels: scored.labels,
             }
+        })
+        .collect::<Vec<_>>();
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| right.meeting.start_ms().cmp(&left.meeting.start_ms()))
+            .then_with(|| left.passage.cmp(&right.passage))
+    });
+    hits
+}
+
+struct Scored {
+    document: usize,
+    score: f32,
+    matched: Vec<usize>,
+    labels: Vec<String>,
+}
+
+/// BM25 over `passages` as one corpus, with stemmed, optionally fuzzy terms.
+/// Unsorted; passages that match nothing are omitted.
+fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored> {
+    let mut document_frequency: HashMap<&String, u32> = HashMap::new();
+    let mut total_length = 0_usize;
+    for passage in passages {
+        total_length += passage.tokens.len();
+        for stem in passage.frequencies.keys() {
+            *document_frequency.entry(stem).or_insert(0) += 1;
         }
     }
+    let documents = passages.len() as u32;
     if documents == 0 {
         return Vec::new();
     }
@@ -1025,106 +1063,134 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
         })
         .collect::<Vec<_>>();
     let mut hits = Vec::new();
-    for meeting in meetings {
-        for (index, passage) in meeting.passages.iter().enumerate() {
-            let length_norm =
-                1.0 - BM25_B + BM25_B * passage.tokens.len() as f32 / average_length.max(1.0);
-            let saturate = |frequency: u32| {
-                let frequency = frequency as f32;
-                frequency * (BM25_K1 + 1.0) / (frequency + BM25_K1 * length_norm)
-            };
-            let mut matched_stems: HashSet<&str> = HashSet::new();
-            let mut matched_positions = Vec::new();
-            let mut labels = Vec::new();
-            let mut phrase_score = 0.0;
-            let mut missing_phrase = false;
-            for phrase in &query.phrases {
-                let starts = phrase_starts(passage, phrase);
-                if starts.is_empty() {
-                    missing_phrase = true;
-                    break;
-                }
-                let phrase_idf = phrase.iter().map(|stem| idf(stem)).sum::<f32>();
-                phrase_score += 1.5 * phrase_idf * saturate(starts.len() as u32);
-                for start in starts {
-                    matched_positions.extend(start..start + phrase.len());
-                }
-                labels.push(format!("\"{}\"", phrase.join(" ")));
+    for (document, passage) in passages.iter().enumerate() {
+        let length_norm =
+            1.0 - BM25_B + BM25_B * passage.tokens.len() as f32 / average_length.max(1.0);
+        let saturate = |frequency: u32| {
+            let frequency = frequency as f32;
+            frequency * (BM25_K1 + 1.0) / (frequency + BM25_K1 * length_norm)
+        };
+        let mut matched_stems: HashSet<&str> = HashSet::new();
+        let mut matched_positions = Vec::new();
+        let mut labels = Vec::new();
+        let mut phrase_score = 0.0;
+        let mut missing_phrase = false;
+        for phrase in &query.phrases {
+            let starts = phrase_starts(passage, phrase);
+            if starts.is_empty() {
+                missing_phrase = true;
+                break;
             }
-            if missing_phrase {
-                continue;
+            let phrase_idf = phrase.iter().map(|stem| idf(stem)).sum::<f32>();
+            phrase_score += 1.5 * phrase_idf * saturate(starts.len() as u32);
+            for start in starts {
+                matched_positions.extend(start..start + phrase.len());
             }
-            let mut term_score = 0.0;
-            let mut matched_terms = 0;
-            let mut exact_terms = Vec::with_capacity(query.terms.len());
-            for (term, candidates) in query.terms.iter().zip(&expansions) {
-                let mut best: Option<(f32, &str, MatchKind)> = None;
-                for (stem, kind, weight) in candidates {
-                    if let Some(frequency) = passage.frequencies.get(stem) {
-                        matched_stems.insert(stem);
-                        let score = weight * saturate(*frequency);
-                        if best.is_none_or(|(best, _, _)| score > best) {
-                            best = Some((score, stem, *kind));
-                        }
+            labels.push(format!("\"{}\"", phrase.join(" ")));
+        }
+        if missing_phrase {
+            continue;
+        }
+        let mut term_score = 0.0;
+        let mut matched_terms = 0;
+        let mut exact_terms = Vec::with_capacity(query.terms.len());
+        for (term, candidates) in query.terms.iter().zip(&expansions) {
+            let mut best: Option<(f32, &str, MatchKind)> = None;
+            for (stem, kind, weight) in candidates {
+                if let Some(frequency) = passage.frequencies.get(stem) {
+                    matched_stems.insert(stem);
+                    let score = weight * saturate(*frequency);
+                    if best.is_none_or(|(best, _, _)| score > best) {
+                        best = Some((score, stem, *kind));
                     }
                 }
-                exact_terms.push(matches!(best, Some((_, _, MatchKind::Exact))));
-                if let Some((score, stem, kind)) = best {
-                    term_score += score;
-                    matched_terms += 1;
-                    labels.push(if kind == MatchKind::Exact {
-                        term.clone()
-                    } else {
-                        format!("{stem}~{term}")
-                    });
-                }
             }
-            if term_score == 0.0 && phrase_score == 0.0 {
+            exact_terms.push(matches!(best, Some((_, _, MatchKind::Exact))));
+            if let Some((score, stem, kind)) = best {
+                term_score += score;
+                matched_terms += 1;
+                labels.push(if kind == MatchKind::Exact {
+                    term.clone()
+                } else {
+                    format!("{stem}~{term}")
+                });
+            }
+        }
+        if term_score == 0.0 && phrase_score == 0.0 {
+            continue;
+        }
+        let coverage = if query.terms.is_empty() {
+            1.0
+        } else {
+            0.5 + 0.5 * matched_terms as f32 / query.terms.len() as f32
+        };
+        let mut adjacency = 0.0;
+        for pair in 0..query.terms.len().saturating_sub(1) {
+            if !(exact_terms[pair] && exact_terms[pair + 1]) {
                 continue;
             }
-            let coverage = if query.terms.is_empty() {
-                1.0
-            } else {
-                0.5 + 0.5 * matched_terms as f32 / query.terms.len() as f32
-            };
-            let mut adjacency = 0.0;
-            for pair in 0..query.terms.len().saturating_sub(1) {
-                if !(exact_terms[pair] && exact_terms[pair + 1]) {
-                    continue;
-                }
-                let (first, second) = (&query.terms[pair], &query.terms[pair + 1]);
-                if passage
-                    .tokens
-                    .windows(2)
-                    .any(|window| window[0].stem == *first && window[1].stem == *second)
-                {
-                    adjacency += 0.5 * (idf(first) + idf(second));
-                }
+            let (first, second) = (&query.terms[pair], &query.terms[pair + 1]);
+            if passage
+                .tokens
+                .windows(2)
+                .any(|window| window[0].stem == *first && window[1].stem == *second)
+            {
+                adjacency += 0.5 * (idf(first) + idf(second));
             }
-            for (position, token) in passage.tokens.iter().enumerate() {
-                if matched_stems.contains(token.stem.as_str()) {
-                    matched_positions.push(position);
-                }
-            }
-            matched_positions.sort_unstable();
-            matched_positions.dedup();
-            hits.push(Hit {
-                meeting: meeting.clone(),
-                passage: index,
-                score: term_score * coverage + phrase_score + adjacency,
-                matched: matched_positions,
-                labels,
-            });
         }
+        for (position, token) in passage.tokens.iter().enumerate() {
+            if matched_stems.contains(token.stem.as_str()) {
+                matched_positions.push(position);
+            }
+        }
+        matched_positions.sort_unstable();
+        matched_positions.dedup();
+        hits.push(Scored {
+            document,
+            score: term_score * coverage + phrase_score + adjacency,
+            matched: matched_positions,
+            labels,
+        });
     }
+    hits
+}
+
+/// One ranked match from [`search_texts`].
+#[derive(Debug)]
+pub struct TextHit {
+    pub index: usize,
+    pub score: f32,
+    /// A window of the text around the matches, which are wrapped in `**`.
+    pub snippet: String,
+}
+
+/// Rank plain texts, one document each, with the meeting search's stemmed,
+/// fuzzy BM25 and quoted-phrase rules. Best first; ties keep input order.
+pub fn search_texts(texts: &[&str], query: &str) -> Result<Vec<TextHit>> {
+    let parsed = ParsedQuery::parse(query);
+    if parsed.is_empty() {
+        return Err(eyre!("The search query has no words."));
+    }
+    let passages = texts
+        .iter()
+        .map(|text| Passage::new(PassageKind::Notes, 0, (*text).to_owned()))
+        .collect::<Vec<_>>();
+    let documents = passages.iter().collect::<Vec<_>>();
+    let mut hits = score(&documents, &parsed, true)
+        .into_iter()
+        .map(|scored| TextHit {
+            index: scored.document,
+            score: scored.score,
+            snippet: snippet(&passages[scored.document], &scored.matched),
+        })
+        .collect::<Vec<_>>();
     hits.sort_by(|left, right| {
         right
             .score
             .total_cmp(&left.score)
-            .then_with(|| right.meeting.start_ms().cmp(&left.meeting.start_ms()))
-            .then_with(|| left.passage.cmp(&right.passage))
+            .then_with(|| left.index.cmp(&right.index))
     });
-    hits
+    Ok(hits)
 }
 
 fn phrase_starts(passage: &Passage, phrase: &[String]) -> Vec<usize> {

@@ -93,6 +93,59 @@ fn history_filters_and_order_apply_before_the_limit() {
 }
 
 #[test]
+fn history_search_ranks_fuzzy_stemmed_matches_within_retention() {
+    let mut entries = entries();
+    entries.push(HistoryEntry {
+        id: 5,
+        timestamp_ms: 1_792_650_000_000,
+        final_text: "Board games tonight.".into(),
+        ..entries[2].clone()
+    });
+    let output = history_output(
+        &entries,
+        &args(&["--search", "problem bord"]),
+        HistoryRetention::Week,
+        NOW,
+    )
+    .unwrap();
+    // Entry 2 matches both words; 5 only one; 1 has expired; 3 and 4 miss.
+    assert_eq!(
+        output.entries.iter().map(|e| e.id).collect::<Vec<_>>(),
+        [2, 5]
+    );
+    assert!(output.entries[0].score.unwrap() > output.entries[1].score.unwrap());
+    assert_eq!(
+        output.entries[0].snippet.as_deref(),
+        Some("The **Problems** **board**.")
+    );
+    // The raw transcript is searched too, and filters still apply first.
+    let output = history_output(
+        &entries,
+        &args(&["--search", "needle", "--app", "opencode beta"]),
+        HistoryRetention::Week,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(output.entries[0].id, 4);
+    assert_eq!(
+        output.entries[0].snippet.as_deref(),
+        Some("raw only **NEEDLE**")
+    );
+    assert!(
+        history_output(
+            &entries,
+            &args(&["--search", "\"\""]),
+            HistoryRetention::Week,
+            NOW
+        )
+        .is_err()
+    );
+    assert!(
+        crate::Cli::try_parse_from(["hex", "history", "--search", "x", "--oldest-first"]).is_err()
+    );
+}
+
+#[test]
 fn history_json_contract_snapshot() {
     let entries = entries();
     let output = history_output(
