@@ -785,6 +785,20 @@ release flow; [check-windows](../../.github/workflows/check-windows.yml) builds,
 lints, and tests x64 and builds and tests ARM64 on every pull request. Physical
 smoke tests on Windows 10 and on ARM64 hardware have not been run.
 
+```ts
+Linux updates                            // maintain.linux-updates
+├── Direct install (user-local versions/) -> signed feed -> staged -> sidebar Update, Settings: Restart to update
+├── Source install (source-build marker) -> Settings: Updated from your source checkout
+├── pacman (/usr/bin, root-owned) or Nix store -> Settings: Updated by your package manager
+└── Anything else (a downloaded executable) -> no update row
+```
+
+The install kind comes from `linux_updater::install()`. Observed 2026-10-23 on
+apollo in headless sway: a 2.3.0 build in an isolated direct-install layout,
+pointed with `HEX_RELEASE_BASE_URL` at a staging release, staged 2.3.1 and
+showed the sidebar Update button. Clicking it (a unit restart) was not tested
+there, nor the package-manager row; see [releasing](../releasing.md).
+
 No Linux voice Commands or meetings. `hex listen` instead prints Moonshine
 transcripts. Wayland shortcuts need either the desktop's GlobalShortcuts portal
 or the user's own keybindings for the `hex` commands; Hex reads no input
