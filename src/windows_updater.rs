@@ -135,8 +135,12 @@ impl WindowsUpdater {
 /// ownership checks: default profile ACLs deny other users write access,
 /// while a redirected or machine-wide tree offers no such guarantee, so
 /// those installs keep the release-page link behavior, like source
-/// builds and unpacked zips.
+/// builds and unpacked zips. CI test builds (`HEX_TEST_BUILD=1`) never
+/// self-update, so the signed feed cannot replace the build under test.
 fn managed_install() -> bool {
+    if option_env!("HEX_TEST_BUILD") == Some("1") {
+        return false;
+    }
     let Ok(executable) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
         return false;
     };

@@ -1,0 +1,187 @@
+name: Build desktop
+
+# Builds the Linux x86_64 executable and the Windows x64 and ARM64
+# executables and installers from one commit. Release desktop calls it to
+# release; Test builds calls it with test-build so every push to main has
+# downloadable builds that never self-update from the signed feeds.
+on:
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      test-build:
+        type: boolean
+        default: false
+      artifact-prefix:
+        type: string
+        default: hex
+      retention-days:
+        type: number
+        default: 0
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # The supported Linux host is x86_64 Arch, so the release links against
+    # current Arch libraries; the glibc floor is reported in the summary.
+    container: archlinux:base-devel
+    env:
+      HEX_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git rustup python alsa-lib curl jq openssl \
+            xxd file binutils util-linux glib2 \
+            libxkbcommon libxkbcommon-x11 libx11 libxcb libxcursor libxi libxrandr \
+            fontconfig freetype2 wayland systemd-libs openblas vulkan-headers \
+            vulkan-icd-loader shaderc spirv-headers clang cmake pkgconf
+          useradd --create-home builder
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          path: tools
+          persist-credentials: false
+      - name: Restore the Cargo cache
+        if: inputs.test-build
+        uses: actions/cache@v6
+        with:
+          path: |
+            /home/builder/.cargo/registry
+            /home/builder/.cargo/git
+            source/target
+          key: test-build-linux-${{ hashFiles('source/Cargo.lock') }}
+      - name: Build
+        run: |
+          mkdir -p dist
+          chown -R builder: "$GITHUB_WORKSPACE" /home/builder
+          runuser -u builder -- env HOME=/home/builder \
+            HEX_RELEASE_SOURCE="$GITHUB_WORKSPACE/source" \
+            HEX_RELEASE_DIST="$GITHUB_WORKSPACE/dist" \
+            CARGO_BUILD_JOBS=4 BLA_VENDOR=OpenBLAS OPENSSL_NO_VENDOR=1 \
+            CC=clang CXX=clang++ \
+            sh -c 'rustup default stable && tools/scripts/release-linux.sh build'
+      - name: Report the glibc floor
+        run: |
+          artifact=$(jq -r .artifact dist/linux-update.json.payload.json)
+          floor=$(objdump -T "dist/$artifact" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          ldd --version | head -1
+          echo "Linux artifact requires $floor." | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}-linux-x86_64
+          path: ${{ inputs.test-build && 'dist/HEX-*' || 'dist/' }}
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            dumpbin_host: Hostx64\\x64
+          - arch: aarch64
+            runner: windows-11-arm
+            dumpbin_host: Hostarm64\\arm64
+    env:
+      HEX_VERSION: ${{ inputs.version }}
+      HEX_WINDOWS_ARCH: ${{ matrix.arch }}
+      # Compiled into src/windows_updater.rs: test builds never self-update.
+      HEX_TEST_BUILD: ${{ inputs.test-build && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch }}-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        if: inputs.test-build
+        with:
+          workspaces: source -> target
+          key: test-build
+          cache-on-failure: true
+      - name: Install the Vulkan SDK
+        if: matrix.arch == 'x86_64'
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: 1.4.309.0
+          cache: true
+      - name: Install SPIRV-Headers for the Vulkan backend
+        if: matrix.arch == 'x86_64'
+        shell: pwsh
+        run: |
+          vcpkg install spirv-headers:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install spirv-headers failed" }
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows" -replace '\\','/'
+          $combined = if ($env:CMAKE_PREFIX_PATH) { "$prefix;$env:CMAKE_PREFIX_PATH" } else { $prefix }
+          Add-Content $env:GITHUB_ENV "CMAKE_PREFIX_PATH=$combined"
+      - name: Configure clang-cl for ARM64
+        if: matrix.arch == 'aarch64'
+        shell: pwsh
+        run: |
+          @(
+            "CMAKE_C_COMPILER=clang-cl",
+            "CMAKE_CXX_COMPILER=clang-cl",
+            "CMAKE_C_COMPILER_TARGET=aarch64-pc-windows-msvc",
+            "CMAKE_CXX_COMPILER_TARGET=aarch64-pc-windows-msvc",
+            "CL=/EHsc"
+          ) | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Build
+        shell: bash
+        run: |
+          # Git Bash would rewrite CL=/EHsc into a path that clang-cl reads as
+          # a second source file.
+          export MSYS2_ENV_CONV_EXCL=CL
+          export HEX_RELEASE_SOURCE="$(cygpath -u "$GITHUB_WORKSPACE")/source"
+          export HEX_RELEASE_DIST="$(cygpath -u "$GITHUB_WORKSPACE")/dist"
+          tools/scripts/release-windows.sh build
+      - name: Check the executable needs no Visual C++ Redistributable
+        shell: pwsh
+        run: |
+          $payload = Get-Content "dist/$(if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }).payload.json" | ConvertFrom-Json
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '${{ matrix.dumpbin_host }}' } | Select-Object -First 1
+          if (-not $dumpbin) { throw "dumpbin.exe was not found" }
+          $imports = & $dumpbin.FullName /dependents "dist/$($payload.artifact)"
+          $imports
+          $redist = $imports | Select-String -Pattern 'VCRUNTIME|MSVCP|vcomp'
+          if ($redist) { throw "hex.exe imports Visual C++ runtime DLLs: $redist" }
+      - name: Build and silently test the Setup.exe installer
+        shell: pwsh
+        run: |
+          $feed = if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }
+          $label = if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'x64' } else { 'arm64' }
+          $payload = Get-Content "dist/$feed.payload.json" | ConvertFrom-Json
+          $exe = "dist/$($payload.artifact)"
+          tools/scripts/build-windows-installer.ps1 -Executable $exe -Version $env:HEX_VERSION -Arch $env:HEX_WINDOWS_ARCH -OutDir dist
+          tools/scripts/test-windows-installer.ps1 -Installer "dist/HEX-Setup-$env:HEX_VERSION-$label.exe" -Executable $exe -Version $env:HEX_VERSION
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}-windows-${{ matrix.arch }}
+          path: ${{ inputs.test-build && 'dist/HEX-*' || 'dist/' }}
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error

@@ -770,7 +770,13 @@ Linux and Windows releases are built and signed by
 Run the workflow with `workflow_dispatch` and a `ref` (or push an
 `app-v<VERSION>` tag, which must match the crate version). It builds Linux
 x86_64 in an Arch container and Windows x64 and ARM64 on native runners with
-each script's `build` mode. A job that compiles nothing then signs all three
+each script's `build` mode, through the reusable
+`.github/workflows/build-desktop.yml`. `.github/workflows/test-builds.yml`
+calls the same workflow on every push to `main` with `test-build`, plus an
+ad-hoc signed `Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle
+ID `com.kitlangton.hex2.test`, no Sparkle), as unsigned 14-day artifacts for
+teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` also compiles Windows
+builds that never self-update. A job that compiles nothing then signs all three
 feeds with `scripts/release-feed.sh` and validates signatures, sizes, SHA-256,
 version order against the live feeds, and the absence of Visual C++ runtime
 imports. The `release` environment, limited to `main` and `app-v*` tags, holds
