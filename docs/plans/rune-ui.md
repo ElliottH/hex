@@ -151,7 +151,7 @@ Before cutting the first release with the Rune front end:
   to the opener, and focus that scrolls into view. Hex's sidebar and list
   panes are source lists (Up/Down select, typing jumps to a row), Command-1…9
   open the shown panes, toggle rows and shortcut recorders take focus, and the
-  transcription picker traps focus. Still open: the model and application
-  search popovers (`rune-kit` `Popover`) don't trap focus, and list arrows
-  wrap at the ends until Hex pins Rune `18a0641` or later.
+  transcription picker traps focus. List arrows stop at the ends, and focus
+  follows a Command-digit selection. Still open: the model and application
+  search popovers (`rune-kit` `Popover`) don't trap focus.
 - **Windows custom caption:** uses the native Win32 title bar for now.

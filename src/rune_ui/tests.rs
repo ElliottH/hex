@@ -625,10 +625,24 @@ fn the_sidebar_moves_with_arrows_and_command_numbers() {
         .collect();
     key(&mut rt, Key::Command('3'), command);
     assert_eq!(rt.state.pane, shown[2]);
+    assert!(
+        focused(&rt).ends_with(shown[2].key()),
+        "focus follows the shortcut"
+    );
     key(&mut rt, Key::Command('1'), command);
     assert_eq!(rt.state.pane, Pane::Settings);
     key(&mut rt, Key::Command('9'), command);
     assert_eq!(rt.state.pane, Pane::Settings, "no ninth pane");
+    key(&mut rt, Key::Up, Mods::default());
+    assert_eq!(rt.state.pane, Pane::Settings, "Up stops at the first pane");
+    let last = *shown.last().unwrap();
+    key(
+        &mut rt,
+        Key::Command(char::from(b'0' + shown.len() as u8)),
+        command,
+    );
+    key(&mut rt, Key::Down, Mods::default());
+    assert_eq!(rt.state.pane, last, "Down stops at the last pane");
 }
 
 #[test]
