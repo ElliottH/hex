@@ -5,21 +5,34 @@
 #   release-aur.sh stage   <version> <executable> <dir>  # PKGBUILD, .SRCINFO, files
 #   release-aur.sh test    <dir>                         # makepkg and install it
 #   release-aur.sh publish <dir>                         # push to the AUR
+#   release-aur.sh check                                 # the AUR accepts the key
 #
 # The package downloads the executable from the GitHub release app-v<version>,
-# so publish only after that release is public. `publish` reads the AUR SSH
-# private key from AUR_SSH_PRIVATE_KEY.
+# so publish only after that release is public. `publish` and `check` read the
+# AUR SSH private key from AUR_SSH_PRIVATE_KEY.
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 package=hex-voice-bin
 usage() {
-  echo "Usage: $0 stage <version> <executable> <dir> | test <dir> | publish <dir>" >&2
+  echo "Usage: $0 stage <version> <executable> <dir> | test <dir> | publish <dir> | check" >&2
   exit 1
 }
-[ $# -ge 2 ] || usage
+[ $# -ge 1 ] || usage
 mode=$1
 shift
+
+# Points GIT_SSH_COMMAND and $aur_ssh at the AUR with the CI key.
+aur_ssh_setup() {
+  : "${AUR_SSH_PRIVATE_KEY:?Set AUR_SSH_PRIVATE_KEY to the AUR SSH private key}"
+  temporary=$(mktemp -d)
+  trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+  (umask 077 && printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$temporary/key")
+  # aur.archlinux.org's published ED25519 host key.
+  echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' > "$temporary/known_hosts"
+  aur_ssh="ssh -i $temporary/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$temporary/known_hosts -o StrictHostKeyChecking=yes"
+  export GIT_SSH_COMMAND="$aur_ssh"
+}
 
 sha256_of() {
   sha256sum < "$1" | awk '{ print $1 }'
@@ -63,14 +76,8 @@ case "$mode" in
     ;;
   publish)
     dir=$1
-    : "${AUR_SSH_PRIVATE_KEY:?Set AUR_SSH_PRIVATE_KEY to the AUR SSH private key}"
     version=$(sed -n 's/^pkgver=//p' "$dir/PKGBUILD")
-    temporary=$(mktemp -d)
-    trap 'rm -rf "$temporary"' EXIT HUP INT TERM
-    (umask 077 && printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$temporary/key")
-    # aur.archlinux.org's published ED25519 host key.
-    echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' > "$temporary/known_hosts"
-    export GIT_SSH_COMMAND="ssh -i $temporary/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$temporary/known_hosts -o StrictHostKeyChecking=yes"
+    aur_ssh_setup
     git clone -q "ssh://aur@aur.archlinux.org/$package.git" "$temporary/aur"
     for file in PKGBUILD .SRCINFO hex.desktop hex.service LICENSE "$package.install"; do
       cp "$dir/$file" "$temporary/aur/$file"
@@ -84,6 +91,11 @@ case "$mode" in
     git -c user.name='Hex release' -c user.email='hex@anoma.ly' commit -qm "Update to $version"
     git push -q origin HEAD:master
     echo "https://aur.archlinux.org/packages/$package"
+    ;;
+  check)
+    aur_ssh_setup
+    # list-repos succeeds only for a registered key; it names the account's packages.
+    $aur_ssh aur@aur.archlinux.org list-repos
     ;;
   *) usage ;;
 esac
