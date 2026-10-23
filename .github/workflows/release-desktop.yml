@@ -126,9 +126,15 @@ jobs:
         with:
           path: tools
           persist-credentials: false
+      # Named per platform: hex-macos-arm64 belongs to the publish job.
       - uses: actions/download-artifact@v8
         with:
-          pattern: hex-*-*
+          pattern: hex-linux-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hex-windows-*
           path: dist
           merge-multiple: true
       - name: Sign the update feeds
