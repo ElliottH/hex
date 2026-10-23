@@ -922,6 +922,11 @@ impl MenuTarget {
     }
 }
 
+/// Runs `f` on the AppKit main thread through the window's event loop.
+pub(crate) fn on_main_thread(f: impl FnOnce() + Send + 'static) {
+    with_window(|window| window.update(move |_, _| f()));
+}
+
 fn with_window(f: impl FnOnce(&rune::AppHandle<Ui>)) {
     if let Some(window) = WINDOW.get() {
         f(window);

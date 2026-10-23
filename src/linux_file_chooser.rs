@@ -1,7 +1,7 @@
-//! The desktop's file chooser (`org.freedesktop.portal.FileChooser`), for
-//! picking an application the catalog does not list. One private session-bus
-//! connection per dialog; the call blocks its thread until the person picks
-//! a file or closes the dialog.
+//! The desktop's file chooser (`org.freedesktop.portal.FileChooser`), the
+//! Linux adapter of `file_dialog`. One private session-bus connection per
+//! dialog; the call blocks its thread until the person picks a file or
+//! folder or closes the dialog.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -12,20 +12,15 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use gio::prelude::FileExt;
 use glib::{ToVariant, Variant};
 
+use crate::file_dialog::{Dialog, Target};
 use crate::linux_portal::{CALL_TIMEOUT_MS, DESKTOP, DESKTOP_PATH, connect_bus};
 
 const FILE_CHOOSER: &str = "org.freedesktop.portal.FileChooser";
 
 type Response = Rc<RefCell<Option<(u32, HashMap<String, Variant>)>>>;
 
-/// What the dialog offers to filter by: a label and its glob patterns.
-pub(crate) struct Filter {
-    pub(crate) label: String,
-    pub(crate) patterns: Vec<&'static str>,
-}
-
-/// Opens one file. `Ok(None)` when the person closed the dialog.
-pub(crate) fn open_file(title: &str, accept: &str, filters: &[Filter]) -> Result<Option<PathBuf>> {
+/// Opens one file or folder. `Ok(None)` when the person closed the dialog.
+pub(crate) fn open(dialog: &Dialog) -> Result<Option<PathBuf>> {
     let (connection, sender) = connect_bus()?;
     let token = format!("hex{}_file", std::process::id());
     let request = format!("{DESKTOP_PATH}/request/{sender}/{token}");
@@ -53,7 +48,7 @@ pub(crate) fn open_file(title: &str, accept: &str, filters: &[Filter]) -> Result
                 DESKTOP_PATH,
                 FILE_CHOOSER,
                 "OpenFile",
-                Some(&("", title, options(&token, accept, filters)).to_variant()),
+                Some(&("", dialog.title.as_str(), options(&token, dialog)).to_variant()),
                 None,
                 gio::DBusCallFlags::NONE,
                 CALL_TIMEOUT_MS,
@@ -76,26 +71,34 @@ pub(crate) fn open_file(title: &str, accept: &str, filters: &[Filter]) -> Result
     result
 }
 
-fn options(token: &str, accept: &str, filters: &[Filter]) -> HashMap<String, Variant> {
-    let filters: Vec<(String, Vec<(u32, String)>)> = filters
-        .iter()
-        .map(|filter| {
-            let patterns = filter
-                .patterns
-                .iter()
-                .map(|pattern| (0, (*pattern).to_string()))
-                .collect();
-            (filter.label.clone(), patterns)
-        })
-        .collect();
+fn options(token: &str, dialog: &Dialog) -> HashMap<String, Variant> {
     let mut options = HashMap::from([
         ("handle_token".to_string(), token.to_variant()),
-        ("accept_label".to_string(), accept.to_variant()),
+        ("accept_label".to_string(), dialog.accept.to_variant()),
         ("modal".to_string(), true.to_variant()),
         ("multiple".to_string(), false.to_variant()),
     ]);
-    if !filters.is_empty() {
-        options.insert("filters".into(), filters.to_variant());
+    match &dialog.target {
+        Target::Folder => {
+            options.insert("directory".into(), true.to_variant());
+        }
+        Target::File(filters) if !filters.is_empty() => {
+            let filters: Vec<(String, Vec<(u32, String)>)> = filters
+                .iter()
+                .map(|filter| {
+                    let patterns = filter.patterns().into_iter().map(|p| (0, p)).collect();
+                    (filter.label.clone(), patterns)
+                })
+                .collect();
+            options.insert("filters".into(), filters.to_variant());
+        }
+        Target::File(_) => {}
+    }
+    if let Some(directory) = dialog.directory.as_deref().filter(|path| path.is_dir()) {
+        // The portal takes a NUL-terminated byte path.
+        let mut bytes = std::os::unix::ffi::OsStrExt::as_bytes(directory.as_os_str()).to_vec();
+        bytes.push(0);
+        options.insert("current_folder".into(), bytes.to_variant());
     }
     options
 }
@@ -117,15 +120,35 @@ mod tests {
     fn options_carry_the_token_and_filters_in_the_portal_signature() {
         let options = options(
             "hex1_file",
-            "Add",
-            &[Filter {
-                label: "Applications".into(),
-                patterns: vec!["*.desktop"],
-            }],
+            &Dialog {
+                title: "Add Application".into(),
+                accept: "Add".into(),
+                target: Target::File(vec![crate::file_dialog::Filter {
+                    label: "Applications".into(),
+                    extensions: &["desktop"],
+                }]),
+                directory: Some(PathBuf::from("/")),
+            },
         );
         assert_eq!(options["handle_token"].str(), Some("hex1_file"));
         assert_eq!(options["filters"].type_().as_str(), "a(sa(us))");
+        assert_eq!(options["current_folder"].type_().as_str(), "ay");
         assert_eq!(options.to_variant().type_().as_str(), "a{sv}");
+    }
+
+    #[test]
+    fn folder_dialogs_ask_for_a_directory() {
+        let options = options(
+            "hex1_file",
+            &Dialog {
+                title: "Meetings folder".into(),
+                accept: "Use Folder".into(),
+                target: Target::Folder,
+                directory: None,
+            },
+        );
+        assert_eq!(options["directory"].get::<bool>(), Some(true));
+        assert!(!options.contains_key("filters"));
     }
 
     #[test]

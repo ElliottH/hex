@@ -183,8 +183,7 @@ substitute for source inspection or a second roadmap.
   session binding Escape only while recording, granted-trigger descriptions,
   and session-closed reporting.
 - `linux_file_chooser`: one blocking `OpenFile` call on the FileChooser
-  portal over a private bus connection, for the Modes picker's
-  "Choose a file…".
+  portal over a private bus connection: `file_dialog`'s Linux adapter.
 - `linux_context`: the frontmost X11 application for modes; Wayland has none.
 - `linux_audio_control`: While-dictating mute through `wpctl`/`pactl` and
   MPRIS pause over D-Bus, restoring only what it changed.
@@ -293,6 +292,11 @@ substitute for source inspection or a second roadmap.
 - `meeting_watcher`: the meeting controller loop: call detection, offers,
   recording workers, call-ended presence, notes, and the menu-bar meeting
   state. The capsules that show its events are `rune_ui::meeting_capsules`.
+- `file_dialog`: the one native open dialog for a file or folder (Modes'
+  "Choose a file…", the macOS meetings folder): `NSOpenPanel` modeless on
+  AppKit's main thread, `IFileOpenDialog` on its own STA thread, the portal on
+  its own thread. Answers on a channel; cancel and a dialog that never opened
+  read as nothing chosen.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
 - `feedback`: bounded volume-controlled mode, capture, cancellation, and

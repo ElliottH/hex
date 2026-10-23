@@ -20,10 +20,7 @@ use color_eyre::Result;
 use color_eyre::eyre::eyre;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2_app_kit::{
-    NSEvent, NSEventMask, NSEventType, NSModalResponse, NSModalResponseOK, NSOpenPanel,
-};
-use objc2_foundation::{MainThreadMarker, NSString};
+use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
 
 use super::meetings::{Meeting, Status, Transcript, Turn};
 use super::platform::{
@@ -411,8 +408,8 @@ struct MacHost {
     notes: Option<NotesAvailability>,
     meetings: MeetingFeed,
     practice: Option<PracticeFeed>,
-    /// The meetings folder the open panel returned.
-    folder_choice: Option<Receiver<PathBuf>>,
+    /// The meetings folder panel, while it is open.
+    folder_choice: Option<crate::file_dialog::Pending>,
 }
 
 impl MacHost {
@@ -485,7 +482,9 @@ impl MacHost {
                 Ok(())
             }
             MeetingRequest::ChooseFolder => {
-                self.folder_choice = Some(choose_folder()?);
+                if self.folder_choice.is_none() {
+                    self.folder_choice = Some(choose_folder());
+                }
                 Ok(())
             }
         }
@@ -607,11 +606,13 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
-        if let Some(receiver) = &self.folder_choice
-            && let Ok(folder) = receiver.try_recv()
-        {
+        if let Some(choice) = self.folder_choice.as_ref().and_then(|p| p.poll()) {
             self.folder_choice = None;
-            self.folder_error = save_meetings_folder(folder).err();
+            match choice {
+                Ok(Some(folder)) => self.folder_error = save_meetings_folder(folder).err(),
+                Ok(None) => {}
+                Err(error) => self.folder_error = Some(error),
+            }
             changed = true;
         }
         // The Fun pane's demo moves every frame while it records or plays.
@@ -875,27 +876,19 @@ impl PracticeFeed {
     }
 }
 
-/// Opens the folder panel beside the window; the chosen folder arrives on
-/// the returned channel (nothing when the person cancels).
-fn choose_folder() -> Result<Receiver<PathBuf>, String> {
-    let mtm = MainThreadMarker::new().ok_or("the folder panel needs the main thread")?;
-    let panel = NSOpenPanel::openPanel(mtm);
-    panel.setCanChooseFiles(false);
-    panel.setCanChooseDirectories(true);
-    panel.setCanCreateDirectories(true);
-    panel.setAllowsMultipleSelection(false);
-    panel.setPrompt(Some(&NSString::from_str(tr("Use Folder"))));
-    let (sender, receiver) = mpsc::channel();
-    let chosen = panel.clone();
-    let handler = RcBlock::new(move |response: NSModalResponse| {
-        if response == NSModalResponseOK
-            && let Some(path) = chosen.URL().and_then(|url| url.path())
-        {
-            let _ = sender.send(PathBuf::from(path.to_string()));
-        }
-    });
-    panel.beginWithCompletionHandler(&handler);
-    Ok(receiver)
+/// Opens the folder panel beside the window, starting at the current
+/// meetings folder.
+fn choose_folder() -> crate::file_dialog::Pending {
+    use crate::file_dialog::{Dialog, Target};
+    crate::file_dialog::open(
+        Dialog {
+            title: tr("Transcript folder").into(),
+            accept: tr("Use Folder").into(),
+            target: Target::Folder,
+            directory: Some(crate::app_settings::meeting_output_folder()),
+        },
+        || crate::macos_rune::on_main_thread(|| {}),
+    )
 }
 
 /// Saves the chosen meetings folder; the runtime publishes it to the window.

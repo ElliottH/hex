@@ -1018,7 +1018,7 @@ Linux `hex` -> the Linux window on Rune, in the Hex process // dev.rune-ui
 ├── Sidebar: Settings, Modes, Voice Action, History
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
-├── Modes: "Choose a file…" through the FileChooser portal; drag to reorder
+├── Modes: "Choose a file…" through file_dialog (FileChooser portal); drag to reorder
 ├── Model and application searches: Up/Down highlight, Enter picks it
 ├── Not yet: app icons, right-click delete
 └── macOS/Windows surfaces as scenes too (Capabilities + preview data):
@@ -1033,7 +1033,8 @@ macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── macos_host: AppKit event monitor records chords (Option, Fn); NativeHost does permissions,
 │   login item, Hex Microphone, meeting start/stop/rename/trash/reveal, commands workspace, relaunch
 ├── Meetings pane lists the store through meeting::query (1 s rescan, sent only when changed);
-│   a controller failure shows in the pane; NSOpenPanel chooses the meetings folder
+│   a controller failure shows in the pane; NSOpenPanel (file_dialog) chooses the meetings
+│   folder and Modes' "Choose a file…" .app, modeless on the main thread
 ├── Tour: practice dictations from the listener's event log; a listener that failed to start
 ├── Sidebar and pane header move the window (Rune El::window_drag; the title bar is transparent)
 ├── While the window shows, its poll re-checks timed state every 250 ms (Rune Tx::wake_after); close hides it (Dock policy restored)
@@ -1047,7 +1048,8 @@ Windows `hex app` -> one tray process, Rune window // dev.rune-ui-windows
 ├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
 ├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
 ├── HUD: shared indicator model + CPU shader in a Rune overlay
-└── Not yet: custom caption, app icons, file dialog
+├── Modes: "Choose a file…" opens IFileOpenDialog (file_dialog) on its own STA thread, no owner window
+└── Not yet: custom caption, app icons
 iOS prototype -> Record/transcribe/copy and keyboard handoff
 Unmerged Windows / deferred features -> Not part of this map
 ```

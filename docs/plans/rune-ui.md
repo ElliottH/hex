@@ -70,7 +70,7 @@ src/rune_ui/tests/panes.rs       macOS and Windows surface tests and goldens
 | Shell & Settings (Linux) | Sidebar navigation, status card, desktop shortcuts (X11 / portal / commands), dictation, behavior, application rows, Quit Hex, Update button when ready | `rune-portal-{light,dark}`, `rune-commands-dark`, `rune-disabled-light`, `rune-capturing-dark`, `rune-chinese-dark`, `rune-menus-light` |
 | Voice Action | Opt-in with shortcut conflict check, recorder, searchable OpenCode model and thinking pickers, missing/unavailable OpenCode notice | `rune-voice-action-{light,dark}`, `rune-voice-action-off-light`, `rune-voice-action-unavailable-{light,dark}`, `rune-voice-action-models-dark` |
 | History | Search, retention select, two-step Clear all, detail with Copy and Delete, latency and processing facts | `rune-history-{light,dark}`, `rune-history-empty-light` |
-| Modes | Global + custom modes, searchable application picker, FileChooser portal ("Choose a file…"), website rules, corrections, OpenCode rewriting, drag-reordered transformations, two-step delete | `rune-modes-{light,dark}`, `rune-modes-global-light`, `rune-modes-picker-{light,dark}` |
+| Modes | Global + custom modes, searchable application picker, native file dialog ("Choose a file…": FileChooser portal, `NSOpenPanel`, `IFileOpenDialog`), website rules, corrections, OpenCode rewriting, drag-reordered transformations, two-step delete | `rune-modes-{light,dark}`, `rune-modes-global-light`, `rune-modes-picker-{light,dark}` |
 | Transcription picker | Modal over scrim: languages, model cards with recommendation and `Streams` tags, Use/Download/Cancel/Delete (two-step), live progress | `rune-picker-{light,dark}`, `rune-picker-downloading-{light,dark}` |
 | Onboarding tour | `onboarding::Flow`: Linux/Windows Welcome → Model setup → Done; macOS adds Microphone/Input Monitoring/Accessibility rows, System Settings guides, Give it a try practice field, and relaunch recovery | `rune-onboarding-dark`, `rune-onboarding-setup-{light,dark}`, `rune-mac-onboarding*` (10 states) |
 | Settings (macOS & Windows) | macOS permissions, command model notice, Meetings section, Launch at login, Show Dock icon, Check now, Experimental Hex microphone, shortcut sides; Windows listener card, Launch at login, Enable on launch | `rune-mac-settings-{light,dark}`, `rune-mac-settings-permissions-dark`, `rune-mac-settings-sides-dark`, `rune-windows-settings-light` |
@@ -128,20 +128,20 @@ Before cutting the first release with the Rune front end:
   `El::window_drag` on a real display; menu-bar status item, Dock reopen, and
   Sparkle update dialog; AppKit modifier-only/Fn shortcut capture; native Metal
   dictation HUD (`dictation_indicator.rs`) and interactive Rune meeting
-  capsules (`meeting_capsules.rs`); `NSOpenPanel` folder picker.
+  capsules (`meeting_capsules.rs`); choosing a file or folder in `NSOpenPanel`
+  from Modes and Meetings inside the real app (a Pro harness checked the
+  panel's configuration, cancel, and that the loop keeps running; no capture).
 - **Windows (x64 and ARM64):** first real launch of `windows_rune.rs`; tray
   icon and menu; relaunch focus handoff; keyboard-polling shortcut capture;
   `windows_rune_hud.rs` layered click-through overlay above the taskbar; Launch
-  at login and self-update restart.
+  at login and self-update restart; Modes' "Choose a file…" `IFileOpenDialog`
+  (type-checked only).
 
 ## Remaining Rune And Parity Gaps
 
 - **Application icons in Modes:** Rune has no raster image element yet, so
   Modes shows monograms; restore the per-OS icon loaders from git history once
   Rune lands raster images.
-- **Native file dialogs on macOS and Windows:** Linux uses
-  `linux_file_chooser.rs` (`OpenFile` portal); macOS (`NSOpenPanel` for Modes
-  applications) and Windows (`IFileDialog`) remain to wire.
 - **Looping animations:** looping tracks for the shortcut-recorder pulse and
   the indeterminate model-loading bar. Timed state already runs on
   `Tx::wake_after`, re-checked every 250 ms while the window shows.

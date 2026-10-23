@@ -19,6 +19,7 @@ use super::models::{self, Target};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::application_catalog::InstalledApplication;
 use crate::desktop_i18n::{tr, tr_fill, tr_named};
+use crate::file_dialog::{Choice, Dialog, Filter, Pending, Target as DialogTarget};
 use crate::opencode_catalog::OpenCodeFeature;
 use crate::personal_commands::{HostState, StatusSnapshot, StatusTransformation};
 use crate::text_replacements::TextReplacement;
@@ -114,10 +115,9 @@ pub(super) struct ModesPane {
     application_highlight: Highlight,
     pub(super) application_error: Option<String>,
     applications: Applications,
-    /// The desktop's file chooser, while it is open.
-    chooser: Option<Receiver<ChosenApplication>>,
+    /// The native file dialog, while it is open.
+    chooser: Option<Pending>,
     drag: Option<TransformationDrag>,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(super) waker: Option<Waker>,
     /// Whether the listener can tell which app is frontmost (X11, not Wayland).
     focused_app_known: bool,
@@ -417,50 +417,63 @@ fn move_application_highlight(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
         .key(&event.key, &query, count)
 }
 
-/// Opens the desktop's file chooser for an application the catalog does
-/// not list: a `.desktop` entry or an executable.
-#[cfg(target_os = "linux")]
+/// Opens the native file dialog for an application the catalog does not
+/// list: a macOS bundle, a Windows executable, or a Linux `.desktop` entry
+/// or executable.
 fn choose_application(ui: &mut Ui) {
     if !ui.live() || ui.modes.chooser.is_some() {
         return;
     }
-    let (sender, receiver) = sync_channel(1);
     let waker = ui.modes.waker.clone();
-    let (title, accept) = (tr("Add Application").to_string(), tr("Add").to_string());
-    let filters = [
-        crate::linux_file_chooser::Filter {
-            label: tr("Applications").into(),
-            patterns: vec!["*.desktop"],
-        },
-        crate::linux_file_chooser::Filter {
-            label: tr("All files").into(),
-            patterns: vec!["*"],
-        },
-    ];
-    thread::spawn(move || {
-        let result = crate::linux_file_chooser::open_file(&title, &accept, &filters)
-            .and_then(|path| {
-                path.map(|path| crate::application_catalog::metadata(&path))
-                    .transpose()
-            })
-            .map_err(|error| format!("{error:#}"));
-        let _ = sender.send(result);
-        if let Some(waker) = waker {
+    ui.modes.chooser = Some(crate::file_dialog::open(application_dialog(), move || {
+        if let Some(waker) = &waker {
             waker();
         }
-    });
-    ui.modes.chooser = Some(receiver);
+    }));
 }
 
-/// Adds what the file chooser returned: the application joins
+fn application_dialog() -> Dialog {
+    let applications = |extensions| Filter {
+        label: tr("Applications").into(),
+        extensions,
+    };
+    let any_file = || Filter {
+        label: tr("All files").into(),
+        extensions: &[],
+    };
+    let (filters, directory) = if cfg!(target_os = "macos") {
+        (vec![applications(&["app"])], Some("/Applications".into()))
+    } else if cfg!(target_os = "windows") {
+        (vec![applications(&["exe"]), any_file()], None)
+    } else {
+        (vec![applications(&["desktop"]), any_file()], None)
+    };
+    Dialog {
+        title: tr("Add Application").into(),
+        accept: tr("Add").into(),
+        target: DialogTarget::File(filters),
+        directory,
+    }
+}
+
+/// Adds what the file dialog returned: the application joins
 /// the catalog and the selected mode.
 pub(super) fn poll_chooser(ui: &mut Ui) -> bool {
-    let Some(result) = ui.modes.chooser.as_ref().and_then(|r| r.try_recv().ok()) else {
+    let Some(choice) = ui.modes.chooser.as_ref().and_then(Pending::poll) else {
         return false;
     };
     ui.modes.chooser = None;
-    chosen_application(ui, result);
+    chosen_application(ui, application_from(choice));
     true
+}
+
+fn application_from(choice: Choice) -> ChosenApplication {
+    choice.and_then(|path| {
+        path.map(|path| {
+            crate::application_catalog::metadata(&path).map_err(|error| format!("{error:#}"))
+        })
+        .transpose()
+    })
 }
 
 pub(super) fn chosen_application(ui: &mut Ui, result: ChosenApplication) {
@@ -882,7 +895,7 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
             row()
                 .key("picker-actions")
                 .justify_between()
-                .children(choose_file_button(p))
+                .child(choose_file_button(p))
                 .child(spacer())
                 .child(button(
                     p,
@@ -897,22 +910,15 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         )
 }
 
-/// "Choose a file…": Linux asks the desktop's file chooser portal; Windows
-/// has no native dialog under Rune yet.
-fn choose_file_button(p: Paint) -> Option<El> {
-    #[cfg(target_os = "linux")]
-    return Some(button(
+/// "Choose a file…" opens the native file dialog.
+fn choose_file_button(p: Paint) -> El {
+    button(
         p,
         "choose-application-file",
         tr("Choose a file…"),
         ButtonKind::Secondary,
         |ui: &mut Ui, _| choose_application(ui),
-    ));
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = p;
-        None
-    }
+    )
 }
 
 /// An app's initial on a tinted square: Rune has no raster images yet, so
