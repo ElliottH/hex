@@ -876,6 +876,9 @@ seam once there are two real adapters or a current test requires substitution.
 
 `ROADMAP.md` is the authoritative work list. Keep these constraints visible:
 
+- Release freeze (Kit, 2026-10-22): publish no Hex release on any OS, stable or
+  staging-to-stable, until Kit lifts it after the Rune front end has been
+  tested thoroughly on real Macs and Windows PCs. Test builds are fine.
 - Validate public onboarding from a clean macOS account and signed Linux updates
   on the supported Arch/i3 host.
 - Validate native Wayland on a real compatible compositor, including physical
