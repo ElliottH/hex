@@ -1,0 +1,239 @@
+--- a/src/transcribe-tokenizer.cpp
++++ b/src/transcribe-tokenizer.cpp
+@@ -121,0 +122,3 @@
++    if ((model_ == "bpe" || model_ == "unigram") && scores_.size() == tokens_.size()) {
++        return true;
++    }
+@@ -470,0 +474,67 @@
++
++    // Spike: SentencePiece encoding for ASCII vocabulary phrases. The GGUF
++    // carries piece scores/ranks but not SentencePiece's NFKC normalizer.
++    // Reject non-ASCII rather than silently invent a normalization policy.
++    if (model_ == "bpe" || model_ == "unigram") {
++        if (scores_.size() != tokens_.size()) return TRANSCRIBE_ERR_GGUF;
++        std::string normalized;
++        bool boundary = true;
++        for (unsigned char c : text) {
++            if (c >= 128 || (c < 32 && c != '\t' && c != '\n' && c != '\r'))
++                return TRANSCRIBE_ERR_INVALID_ARG;
++            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
++                boundary = true;
++            } else {
++                if (boundary) normalized += k_sp_space;
++                normalized += static_cast<char>(c);
++                boundary = false;
++            }
++        }
++        const auto normal_id = [&](const std::string & piece) {
++            const int id = find(piece);
++            return id >= 0 && (token_type_.empty() || token_type_[id] == 1) ? id : -1;
++        };
++        if (model_ == "unigram") {
++            // Maximum-likelihood segmentation, not longest-prefix matching.
++            std::vector<float> best(normalized.size() + 1, -INFINITY);
++            std::vector<int> previous(normalized.size() + 1, -1), ids(normalized.size() + 1, -1);
++            best[0] = 0;
++            for (size_t i = 0; i < normalized.size(); ++i) {
++                if (!std::isfinite(best[i])) continue;
++                for (size_t id = 0; id < tokens_.size(); ++id) {
++                    const auto & piece = tokens_[id];
++                    if (piece.empty() || normal_id(piece) < 0 || normalized.compare(i, piece.size(), piece) != 0) continue;
++                    const size_t end = i + piece.size();
++                    const float score = best[i] + scores_[id];
++                    if (score > best[end]) { best[end] = score; previous[end] = static_cast<int>(i); ids[end] = static_cast<int>(id); }
++                }
++            }
++            if (!std::isfinite(best.back())) return TRANSCRIBE_ERR_INVALID_ARG;
++            for (int end = static_cast<int>(normalized.size()); end > 0; end = previous[end]) out_ids.push_back(ids[end]);
++            std::reverse(out_ids.begin(), out_ids.end());
++            return TRANSCRIBE_OK;
++        }
++        std::vector<std::string> symbols;
++        for (size_t i = 0; i < normalized.size();) {
++            const size_t length = normalized.compare(i, k_sp_space_len, k_sp_space) == 0 ? k_sp_space_len : 1;
++            symbols.push_back(normalized.substr(i, length));
++            i += length;
++        }
++        for (;;) {
++            size_t best = symbols.size();
++            float score = -INFINITY;
++            for (size_t i = 0; i + 1 < symbols.size(); ++i) {
++                const int id = normal_id(symbols[i] + symbols[i + 1]);
++                if (id >= 0 && scores_[id] > score) { best = i; score = scores_[id]; }
++            }
++            if (best == symbols.size()) break;
++            symbols[best] += symbols[best + 1];
++            symbols.erase(symbols.begin() + static_cast<std::ptrdiff_t>(best + 1));
++        }
++        for (const auto & symbol : symbols) {
++            const int id = normal_id(symbol);
++            if (id < 0) { out_ids.clear(); return TRANSCRIBE_ERR_INVALID_ARG; }
++            out_ids.push_back(id);
++        }
++        return TRANSCRIBE_OK;
++    }
+--- a/src/transcribe-tokenizer.h
++++ b/src/transcribe-tokenizer.h
+@@ -20,3 +20,3 @@
+-//   - encode(): UTF-8 text -> token ids ("gpt2" only; others return
+-//     NOT_IMPLEMENTED). Runs the pretokenizer, byte-level encodes each
+-//     pretoken, then greedily applies BPE merges in rank order.
++//   - encode(): GPT-2 pretokenization and ranked BPE; the local spike also
++//     supports scored SentencePiece BPE/unigram for ASCII phrases only.
++//     GGUF has no SentencePiece normalizer model; non-ASCII is rejected.
+@@ -174,3 +174,5 @@
+-    // model == "unigram" / "bpe":
+-    //   Currently returns TRANSCRIBE_ERR_NOT_IMPLEMENTED; no live
+-    //   consumer needs it.
++    // model == "unigram" / "bpe" (local research spike):
++    //   ASCII phrase encoding with a dummy word boundary and collapsed
++    //   whitespace. Uses Viterbi / score-ranked merging respectively.
++    //   Missing scores or non-ASCII input fail explicitly; no NFKC model
++    //   or byte fallback is inferred from the vocabulary alone.
+--- a/include/transcribe.h
++++ b/include/transcribe.h
+@@ -2268,2 +2268,2 @@
+- *   - Parakeet     (SentencePiece; currently returns INT_MIN)
+- *   - Cohere ASR   (SentencePiece; currently returns INT_MIN)
++ *   - Parakeet     (local spike: scored SentencePiece ASCII phrases only)
++ *   - Cohere ASR   (shared SentencePiece encoder; not evaluated by the spike)
+--- a/src/arch/parakeet/phrase-boost.h
++++ b/src/arch/parakeet/phrase-boost.h
+@@ -0,0 +1,105 @@
++// Local research spike only. Model-owned immutable trie; per-decode cursor.
++#pragma once
++#include "transcribe-tokenizer.h"
++#include <algorithm>
++#include <cmath>
++#include <cstdlib>
++#include <fstream>
++#include <map>
++#include <queue>
++#include <stdexcept>
++
++namespace transcribe::parakeet {
++struct PhraseBoost {
++    struct Node { std::map<int, int> edges; int failure = 0; };
++    std::vector<Node> nodes{1};
++    float bonus = 0, margin = 0;
++    size_t depth = 0;
++
++    void load(const Tokenizer & tokenizer) {
++        const char * path = std::getenv("HEX_BOOST_VOCABULARY");
++        if (!path) return;
++        const char * b = std::getenv("HEX_BOOST_BONUS");
++        const char * m = std::getenv("HEX_BOOST_MARGIN");
++        bonus = b ? std::stof(b) : 0;
++        margin = m ? std::stof(m) : 0;
++        if (!std::isfinite(bonus) || !std::isfinite(margin) || bonus < 0 || margin < 0 || bonus > 10 || margin > 10)
++            throw std::runtime_error("invalid phrase boost parameters");
++        std::ifstream input(path);
++        if (!input) throw std::runtime_error("cannot open boost vocabulary");
++        std::string term;
++        size_t count = 0;
++        while (std::getline(input, term)) {
++            if (term.empty()) continue;
++            if (++count > 64 || term.size() > 128) throw std::runtime_error("boost vocabulary too large");
++            std::vector<std::string> variants{term};
++            std::transform(term.begin(), term.end(), term.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
++            variants.push_back(term);
++            term[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(term[0])));
++            variants.push_back(term);
++            for (const auto & variant : variants) {
++                std::vector<int32_t> ids;
++                if (tokenizer.encode(variant, ids) != TRANSCRIBE_OK || ids.empty() || tokenizer.token(ids[0]).rfind("▁", 0) != 0)
++                    throw std::runtime_error("phrase has no word-boundary tokenization");
++                depth = std::max(depth, ids.size());
++                int node = 0;
++                for (int id : ids) {
++                    auto it = nodes[node].edges.find(id);
++                    if (it == nodes[node].edges.end()) {
++                        int next = static_cast<int>(nodes.size());
++                        nodes[node].edges[id] = next;
++                        nodes.push_back(Node{});
++                        node = next;
++                    } else node = it->second;
++                }
++            }
++        }
++        std::queue<int> queue;
++        for (auto [token, child] : nodes[0].edges) queue.push(child);
++        while (!queue.empty()) {
++            const int parent = queue.front(); queue.pop();
++            for (auto [token, child] : nodes[parent].edges) {
++                int f = nodes[parent].failure;
++                while (f && !nodes[f].edges.count(token)) f = nodes[f].failure;
++                auto it = nodes[f].edges.find(token);
++                nodes[child].failure = it == nodes[f].edges.end() ? 0 : it->second;
++                queue.push(child);
++            }
++        }
++    }
++
++    int advance(int node, int token) const {
++        while (node && !nodes[node].edges.count(token)) node = nodes[node].failure;
++        auto it = nodes[node].edges.find(token);
++        return it == nodes[node].edges.end() ? 0 : it->second;
++    }
++
++    int choose(const float * logits, int count, int blank, int & node) const {
++        int best = 0, second = -1;
++        for (int i = 1; i < count; ++i) {
++            if (logits[i] > logits[best]) { second = best; best = i; }
++            else if (second < 0 || logits[i] > logits[second]) second = i;
++        }
++        int chosen = best;
++        // Never turn blank into speech. Both top-two uncertainty and candidate
++        // acoustic distance must pass; confidence uses the ORIGINAL logits.
++        if (bonus > 0 && best != blank && second >= 0 && logits[best] - logits[second] <= margin) {
++            float score = logits[best];
++            int state = node;
++            do {
++                for (auto [token, child] : nodes[state].edges) {
++                    if (token >= count || token == blank) continue;
++                    if (logits[best] - logits[token] <= margin && logits[token] + bonus > score) {
++                        chosen = token;
++                        score = logits[token] + bonus;
++                    }
++                }
++                if (!state) break;
++                state = nodes[state].failure;
++            } while (true);
++        }
++        if (chosen != blank) node = advance(node, chosen);
++        return chosen;
++    }
++};
++}
+--- a/src/arch/parakeet/decoder.h
++++ b/src/arch/parakeet/decoder.h
+@@ -32,0 +33 @@
++#include "phrase-boost.h"
+@@ -163,0 +165 @@
++    PhraseBoost phrase_boost;
+--- a/src/arch/parakeet/decoder.cpp
++++ b/src/arch/parakeet/decoder.cpp
+@@ -616,0 +617,5 @@
++    try { out.phrase_boost.load(model.tok); }
++    catch (const std::exception & error) {
++        log_msg(TRANSCRIBE_LOG_LEVEL_ERROR, "phrase boost: %s", error.what());
++        return TRANSCRIBE_ERR_INVALID_ARG;
++    }
+@@ -1129 +1134,4 @@
+-        const int pred_token = argmax_range(token_logits, n_token_cls);
++        int phrase_node = 0;
++        const size_t phrase_start = out_tokens.size() > w.phrase_boost.depth ? out_tokens.size() - w.phrase_boost.depth : 0;
++        for (size_t i = phrase_start; i < out_tokens.size(); ++i) phrase_node = w.phrase_boost.advance(phrase_node, out_tokens[i].id);
++        const int pred_token = w.phrase_boost.bonus > 0 ? w.phrase_boost.choose(token_logits, n_token_cls, blank_id, phrase_node) : argmax_range(token_logits, n_token_cls);
+@@ -1334 +1342,4 @@
+-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
++        int phrase_node = 0;
++        const size_t phrase_start = out_tokens.size() > w.phrase_boost.depth ? out_tokens.size() - w.phrase_boost.depth : 0;
++        for (size_t i = phrase_start; i < out_tokens.size(); ++i) phrase_node = w.phrase_boost.advance(phrase_node, out_tokens[i].id);
++        const int pred_token = w.phrase_boost.bonus > 0 ? w.phrase_boost.choose(token_logits, n_token_cls, blank_id, phrase_node) : argmax_range(token_logits, n_token_cls);
+@@ -1512 +1523,4 @@
+-        const int     pred_token   = argmax_range(token_logits, n_token_cls);
++        int phrase_node = 0;
++        const size_t phrase_start = out_tokens.size() > w.phrase_boost.depth ? out_tokens.size() - w.phrase_boost.depth : 0;
++        for (size_t i = phrase_start; i < out_tokens.size(); ++i) phrase_node = w.phrase_boost.advance(phrase_node, out_tokens[i].id);
++        const int pred_token = w.phrase_boost.bonus > 0 ? w.phrase_boost.choose(token_logits, n_token_cls, blank_id, phrase_node) : argmax_range(token_logits, n_token_cls);

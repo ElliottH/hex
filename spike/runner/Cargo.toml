@@ -1,0 +1,15 @@
+[package]
+name = "parakeet-boost-eval"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+transcribe-cpp = "=0.2.4"
+hound = "3.5.1"
+serde_json = "1"
+
+[patch.crates-io]
+transcribe-cpp-sys = { path = "../../target/boost-engine" }
+
+[workspace]
