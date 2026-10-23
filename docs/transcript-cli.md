@@ -102,7 +102,7 @@ type Meeting = {
   application: string | null
   status: "starting" | "recording" | "transcribing" | "complete" | "interrupted" | "failed"
   in_progress: boolean
-  transcript_source: "final" | "rolling" | "draft" | "missing"
+  transcript_source: "final" | "rolling" | "missing" // older builds also reported "draft"
   warnings: string[]
 }
 type MeetingList = {

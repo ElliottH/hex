@@ -1109,11 +1109,6 @@ transcribe.cpp build stubbed out, last after GPUI's removal on 2026-10-22); it
 has never run on Windows, and no test covers it. It replaces the GPUI app
 earlier Windows releases shipped.
 
-`incremental_projection_matches_snapshot_after_updates_and_partial_writes` in
-[meeting_live.rs](../../src/meeting_live.rs) compares the incremental transcript
-reader with snapshot projection across updates, partial writes, and source
-ordering. This checks filesystem/projection behavior, not native meeting capture.
-
 `each_os_lists_only_the_panes_it_can_run` and
 `developer_panes_show_only_in_developer_builds` in
 [rune_ui/tests/panes.rs](../../src/rune_ui/tests/panes.rs) check pane

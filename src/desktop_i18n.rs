@@ -508,7 +508,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Recording failed.", ["Nagrywanie nie powiodło się.", "录音失败。", "録音に失敗しました。", "Aufnahme fehlgeschlagen.", "La grabación falló."]),
     ("Markdown not saved.", ["Nie zapisano pliku Markdown.", "未保存 Markdown。", "Markdown を保存できませんでした。", "Markdown nicht gespeichert.", "No se guardó el Markdown."]),
     ("Notes could not be written.", ["Nie udało się zapisać notatek.", "无法写入笔记。", "メモを書き込めませんでした。", "Notizen konnten nicht geschrieben werden.", "No se pudieron escribir las notas."]),
-    ("Live draft unavailable.", ["Bieżący szkic jest niedostępny.", "实时草稿不可用。", "ライブ下書きを利用できません。", "Live-Entwurf nicht verfügbar.", "El borrador en vivo no está disponible."]),
+    ("Live transcript unavailable.", ["Bieżąca transkrypcja jest niedostępna.", "实时转写不可用。", "ライブ文字起こしを利用できません。", "Live-Transkript nicht verfügbar.", "La transcripción en vivo no está disponible."]),
     ("Select a meeting.", ["Wybierz spotkanie.", "选择一个会议。", "会議を選択してください。", "Wähle eine Besprechung.", "Selecciona una reunión."]),
     ("Record a call to see its notes and transcript here.", ["Nagraj rozmowę, aby zobaczyć tu jej notatki i transkrypcję.", "录制通话后，可在此处查看其笔记和转写。", "通話を録音すると、ここにメモと文字起こしが表示されます。", "Nimm einen Anruf auf, um hier Notizen und Transkript zu sehen.", "Graba una llamada para ver aquí sus notas y transcripción."]),
     ("Copy summary", ["Kopiuj podsumowanie", "复制摘要", "要約をコピー", "Zusammenfassung kopieren", "Copiar resumen"]),

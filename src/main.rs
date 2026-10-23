@@ -623,13 +623,7 @@ fn main() -> Result<()> {
             command: MeetingCommand::Record { title },
         } => {
             app_settings::AppSettings::load()?;
-            meeting::record(
-                meeting::MeetingStart { title, app: None },
-                &SHUTDOWN,
-                &root,
-                None,
-            )
-            .map(|_| ())
+            meeting::record(meeting::MeetingStart { title, app: None }, &SHUTDOWN, None).map(|_| ())
         }
         #[cfg(debug_assertions)]
         Command::Meeting {

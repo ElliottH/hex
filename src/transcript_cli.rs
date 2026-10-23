@@ -286,7 +286,6 @@ fn meeting_row(meeting: &Meeting, now: u64) -> MeetingRow<'_> {
         transcript_source: match meeting.source {
             TranscriptSource::Final => "final",
             TranscriptSource::Rolling => "rolling",
-            TranscriptSource::Draft => "draft",
             TranscriptSource::Missing => "missing",
         },
         warnings: &meeting.warnings,

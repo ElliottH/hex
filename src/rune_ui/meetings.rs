@@ -719,7 +719,7 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
             .live_error
             .as_deref()
             .filter(|_| active)
-            .map(|error| ("live-error", tr("Live draft unavailable."), error)),
+            .map(|error| ("live-error", tr("Live transcript unavailable."), error)),
     ];
     let mut body = col().key("detail-body").gap(16.0).pt(16.0);
     for (key, title, error) in errors.into_iter().flatten() {

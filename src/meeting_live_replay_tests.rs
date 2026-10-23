@@ -243,7 +243,6 @@ fn meeting_live_replay() {
             file: "microphone.wav".into(),
             ..TrackManifest::default()
         },
-        live_dropped_packets: 0,
         live_transcription_error: None,
         error: None,
         app: None,
@@ -381,9 +380,7 @@ fn meeting_live_replay() {
             }
             if mid_copy.is_none() && elapsed >= mid {
                 let all = TranscriptReader::default().read(&id).unwrap_or_default();
-                let new = completed_transcript(&id, None)
-                    .map(|transcript| transcript.entries)
-                    .unwrap_or_default();
+                let new = TranscriptReader::default().read(&id).unwrap_or_default();
                 mid_copy = Some((elapsed, all, new));
             }
         }
@@ -411,6 +408,12 @@ fn meeting_live_replay() {
             file.write_all(b"\n").unwrap();
         }
     }
+    // Readers treat the transcript as published once both files exist.
+    fs::write(
+        directory.join("transcript.md"),
+        transcript_markdown(&final_entries),
+    )
+    .unwrap();
     let _ = consume_delta_for_id(&id, |text| {
         pasted.push_str(text);
         Ok(())
@@ -526,10 +529,9 @@ fn meeting_live_replay() {
     let _ = fs::remove_dir_all(&directory);
 }
 
-/// The recording pipeline after capture: writer, live draft, and rolling.
+/// The recording pipeline after capture: writer and rolling.
 struct Pipeline {
     writer: thread::JoinHandle<Result<CaptureStats>>,
-    live: thread::JoinHandle<Result<()>>,
     rolling: transcript::Rolling,
 }
 
@@ -539,32 +541,17 @@ impl Pipeline {
         receiver: Receiver<AudioPacket>,
         selection: &TranscriptionSelection,
     ) -> Self {
-        let root = PathBuf::from(env("HEX_MOONSHINE_ROOT"));
-        let (live_sender, live_receiver) = mpsc::sync_channel(live::QUEUE_CAPACITY);
-        let drops = Arc::new(AtomicU64::new(0));
-        let live = {
-            let directory = directory.to_path_buf();
-            let drops = drops.clone();
-            thread::spawn(move || live::transcribe(&root, &directory, live_receiver, &drops))
-        };
         let mut rolling = transcript::Rolling::start(directory.to_path_buf(), selection.clone());
         let feed = rolling.feed();
         let writer = {
             let directory = directory.to_path_buf();
-            thread::spawn(move || {
-                write_tracks(&directory, receiver, Some(live_sender), feed, &drops)
-            })
+            thread::spawn(move || write_tracks(&directory, receiver, feed))
         };
-        Self {
-            writer,
-            live,
-            rolling,
-        }
+        Self { writer, rolling }
     }
 
     fn finish(self) -> (CaptureStats, Option<transcript::RollingOutcome>) {
         let stats = self.writer.join().unwrap().unwrap();
-        self.live.join().unwrap().unwrap();
         (stats, self.rolling.finish())
     }
 }

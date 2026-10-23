@@ -235,7 +235,6 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
 
     // The controller idles without inspecting microphone activity until the
     // user opts in to meetings (always available in developer builds).
-    let project_root = listener.project_root.clone();
     let controller = thread::Builder::new()
         .name("hex-meetings".into())
         .spawn(move || {
@@ -244,7 +243,6 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
                 controller_events_sender.clone(),
                 controller_command_receiver,
                 meeting_request_receiver,
-                project_root,
             ) {
                 tracing::error!(%error, "meeting controller stopped");
                 let _ = controller_events_sender.send(ControllerEvent::Failed {

@@ -3,7 +3,7 @@
 //! runs the recorder, reports when the call app leaves, and starts notes. The
 //! menu bar and the meeting capsules show its events.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -94,7 +94,6 @@ pub(crate) fn controller_loop(
     events: SyncSender<ControllerEvent>,
     commands: Receiver<ControllerCommand>,
     meeting_requests: Receiver<MeetingRequest>,
-    project_root: PathBuf,
 ) -> Result<()> {
     let mut detector = MeetingDetector::default();
     let mut recording: Option<ActiveRecording> = None;
@@ -112,7 +111,7 @@ pub(crate) fn controller_loop(
                 MeetingRequest::Summarize(id) => ControllerCommand::Summarize(id),
             });
         for command in commands.try_iter().take(8).chain(requested_commands) {
-            handle_command(&mut recording, command, enabled, &project_root, &events);
+            handle_command(&mut recording, command, enabled, &events);
         }
 
         poll_recording(&mut recording, &events)?;
@@ -128,7 +127,7 @@ pub(crate) fn controller_loop(
                     let _ = events.send(ControllerEvent::Offer(candidate));
                 }
                 Ok(Some(Detection::Record(candidate))) => {
-                    start_recording(&mut recording, candidate, true, &project_root, &events);
+                    start_recording(&mut recording, candidate, true, &events);
                 }
                 Ok(None) => {}
             }
@@ -150,7 +149,6 @@ fn handle_command(
     recording: &mut Option<ActiveRecording>,
     command: ControllerCommand,
     enabled: bool,
-    project_root: &Path,
     events: &SyncSender<ControllerEvent>,
 ) {
     match command {
@@ -158,7 +156,7 @@ fn handle_command(
             tracing::warn!("ignored a meeting recording request while meetings are off");
         }
         ControllerCommand::Record(candidate) if recording.is_none() => {
-            start_recording(recording, candidate, false, project_root, events);
+            start_recording(recording, candidate, false, events);
         }
         ControllerCommand::Stop => {
             if let Some(active) = recording.as_ref()
@@ -179,7 +177,6 @@ fn start_recording(
     recording: &mut Option<ActiveRecording>,
     candidate: MeetingCandidate,
     automatic: bool,
-    project_root: &Path,
     events: &SyncSender<ControllerEvent>,
 ) {
     if automatic {
@@ -193,15 +190,7 @@ fn start_recording(
     let worker_stop = stop.clone();
     let (update_sender, updates) = mpsc::sync_channel(4);
     let start = candidate.recording_start();
-    let worker_project_root = project_root.to_path_buf();
-    let worker = thread::spawn(move || {
-        meeting::record(
-            start,
-            &worker_stop,
-            &worker_project_root,
-            Some(update_sender),
-        )
-    });
+    let worker = thread::spawn(move || meeting::record(start, &worker_stop, Some(update_sender)));
     let _ = events.send(ControllerEvent::Starting);
     *recording = Some(ActiveRecording {
         title: candidate.title,

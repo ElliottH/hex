@@ -1,9 +1,8 @@
-use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,9 +24,6 @@ pub use capture::{
 };
 #[path = "meeting_echo.rs"]
 mod echo;
-#[path = "meeting_live.rs"]
-mod live;
-pub use live::TranscriptReader;
 #[path = "meeting_notes.rs"]
 mod notes;
 #[path = "meeting_query.rs"]
@@ -37,6 +33,7 @@ mod transcript;
 pub use notes::{MeetingNotes, display_title, notes_in_progress, notes_wanted, spawn_summary};
 #[cfg(debug_assertions)]
 pub use notes::{summarize, summarize_file};
+pub use transcript::TranscriptReader;
 
 /// What the recorder knows about a meeting when it starts.
 #[derive(Clone, Debug, Default)]
@@ -129,8 +126,7 @@ pub struct MeetingManifest {
     pub duration_ms: Option<u64>,
     pub system: TrackManifest,
     pub microphone: TrackManifest,
-    #[serde(default)]
-    pub live_dropped_packets: u64,
+    /// Why the in-call transcript stopped, read from beside the manifest.
     #[serde(default)]
     pub live_transcription_error: Option<String>,
     pub error: Option<String>,
@@ -233,17 +229,6 @@ pub struct TranscriptEntry {
     pub text: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TranscriptPublication {
-    Live,
-    Final,
-}
-
-pub struct CompletedTranscript {
-    pub publication: TranscriptPublication,
-    pub entries: Vec<TranscriptEntry>,
-}
-
 pub fn coalesce_transcript(
     entries: impl IntoIterator<Item = TranscriptEntry>,
 ) -> Vec<TranscriptEntry> {
@@ -325,7 +310,6 @@ pub fn root() -> Result<PathBuf> {
 pub fn record(
     start: MeetingStart,
     shutdown: &AtomicBool,
-    project_root: &Path,
     updates: Option<SyncSender<RecordingUpdate>>,
 ) -> Result<MeetingManifest> {
     let (_, transcription_selection) = crate::app_settings::transcription_selection();
@@ -370,7 +354,6 @@ pub fn record(
             file: "microphone.wav".into(),
             ..TrackManifest::default()
         },
-        live_dropped_packets: 0,
         live_transcription_error: None,
         error: None,
         app: start.app,
@@ -388,45 +371,17 @@ pub fn record(
             return Err(eyre!("meeting recording stopped before capture started"));
         }
         let (sender, receiver) = mpsc::sync_channel::<AudioPacket>(128);
-        let (live_sender, live_receiver) = mpsc::sync_channel(live::QUEUE_CAPACITY);
         let system_drops = Arc::new(AtomicU64::new(0));
         let microphone_drops = Arc::new(AtomicU64::new(0));
-        let live_drops = Arc::new(AtomicU64::new(0));
-        let manifest_live_drops = live_drops.clone();
-        let live_worker_dir = meeting_dir.clone();
-        let live_worker_root = project_root.to_path_buf();
-        let live_worker_drops = live_drops.clone();
-        let live_worker = thread::spawn(move || {
-            let result = live::transcribe(
-                &live_worker_root,
-                &live_worker_dir,
-                live_receiver,
-                &live_worker_drops,
-            );
-            if let Err(error) = &result {
-                live::persist_error(&live_worker_dir, error);
-            }
-            result
-        });
         let mut rolling =
             transcript::Rolling::start(meeting_dir.clone(), transcription_selection.clone());
         let rolling_feed = rolling.feed();
         let writer_dir = meeting_dir.clone();
-        let writer = thread::spawn(move || {
-            write_tracks(
-                &writer_dir,
-                receiver,
-                Some(live_sender),
-                rolling_feed,
-                &live_drops,
-            )
-        });
+        let writer = thread::spawn(move || write_tracks(&writer_dir, receiver, rolling_feed));
         let cleanup_failed_setup =
-            |sender: SyncSender<AudioPacket>,
-             writer: thread::JoinHandle<Result<CaptureStats>>,
-             live_worker: thread::JoinHandle<Result<()>>| {
+            |sender: SyncSender<AudioPacket>, writer: thread::JoinHandle<Result<CaptureStats>>| {
                 drop(sender);
-                if let Err(cleanup_error) = join_capture_workers(writer, live_worker) {
+                if let Err(cleanup_error) = join_audio_writer(writer) {
                     tracing::error!(%cleanup_error, "could not finalize failed meeting setup");
                 }
             };
@@ -450,7 +405,7 @@ pub fn record(
         if let Err(error) = write_manifest(&meeting_dir, &manifest) {
             drop(system_capture);
             drop(microphone_capture);
-            cleanup_failed_setup(sender, writer, live_worker);
+            cleanup_failed_setup(sender, writer);
             return Err(error);
         }
         if let Some(updates) = &updates {
@@ -480,19 +435,11 @@ pub fn record(
 
         manifest.ended_at_ms = Some(now_ms());
         manifest.duration_ms = Some(started.elapsed().as_millis() as u64);
-        let mut stats = match join_audio_writer(writer) {
-            Ok(stats) => stats,
-            Err(error) => {
-                let _ = finish_live_worker(live_worker);
-                return Err(error);
-            }
-        };
+        let mut stats = join_audio_writer(writer)?;
         stats.system.dropped_packets = system_drops.load(Ordering::Relaxed);
         stats.microphone.dropped_packets = microphone_drops.load(Ordering::Relaxed);
         manifest.system = stats.system;
         manifest.microphone = stats.microphone;
-        manifest.live_dropped_packets = manifest_live_drops.load(Ordering::Relaxed);
-        manifest.live_transcription_error = finish_live_worker(live_worker);
         let capture_error =
             (!has_recorded_audio(&manifest)).then(|| "no meeting audio was captured".to_string());
         prepare_for_transcription(
@@ -546,34 +493,11 @@ fn record_provisional_title(
     }
 }
 
-fn join_capture_workers(
-    writer: thread::JoinHandle<Result<CaptureStats>>,
-    live_worker: thread::JoinHandle<Result<()>>,
-) -> Result<CaptureStats> {
-    let stats = join_audio_writer(writer);
-    let _ = finish_live_worker(live_worker);
-    stats
-}
-
 fn join_audio_writer(writer: thread::JoinHandle<Result<CaptureStats>>) -> Result<CaptureStats> {
     writer
         .join()
         .map_err(|_| eyre!("meeting audio writer panicked"))
         .and_then(|result| result)
-}
-
-fn finish_live_worker(live_worker: thread::JoinHandle<Result<()>>) -> Option<String> {
-    match live_worker.join() {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "live meeting transcription stopped");
-            Some(error.to_string())
-        }
-        Err(_) => {
-            tracing::warn!("live meeting transcription panicked");
-            Some("live meeting transcription panicked".into())
-        }
-    }
 }
 
 fn stamp_ended(manifest: &mut MeetingManifest, ended_at_ms: u64) {
@@ -753,9 +677,7 @@ fn decode_samples(
 fn write_tracks(
     directory: &Path,
     receiver: Receiver<AudioPacket>,
-    mut live_sender: Option<SyncSender<AudioPacket>>,
     mut rolling: Option<transcript::RollingFeed>,
-    live_drops: &AtomicU64,
 ) -> Result<CaptureStats> {
     let mut system = None;
     let mut microphone = None;
@@ -822,15 +744,6 @@ fn write_tracks(
         }
         if let Some(rolling) = &mut rolling {
             rolling.offer(&packet);
-        }
-        if let Some(sender) = &live_sender {
-            match sender.try_send(packet) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    live_drops.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(TrySendError::Disconnected(_)) => live_sender = None,
-            }
         }
     }
     if let Some(rolling) = &mut rolling {
@@ -929,7 +842,7 @@ pub fn list() -> Result<Vec<MeetingManifest>> {
             && let Ok(mut manifest) = serde_json::from_slice::<MeetingManifest>(&data)
         {
             manifest.live_transcription_error =
-                fs::read_to_string(directory.join(live::ERROR_FILE))
+                fs::read_to_string(directory.join(transcript::ERROR_FILE))
                     .ok()
                     .map(|error| error.trim().to_string());
             let process_is_active = meeting_is_active(&directory);
@@ -1206,43 +1119,14 @@ fn transcript_entries_in(directory: &Path) -> Result<Vec<TranscriptEntry>> {
     if final_transcript_exists(directory) {
         return read_ndjson(&final_path);
     }
-    let live_path = directory.join("transcript.live.ndjson");
-    if !live_path.exists() {
+    let rolling_path = directory.join(transcript::ROLLING_FILE);
+    if !rolling_path.exists() {
         return Ok(Vec::new());
     }
-    live::read_snapshot(&live_path)
-}
-
-pub fn completed_transcript(
-    id: &str,
-    publication: Option<TranscriptPublication>,
-) -> Result<CompletedTranscript> {
-    let directory = root()?.join(id);
-    recover_final_publication(&directory)?;
-    let final_path = directory.join("transcript.ndjson");
-    let live_path = directory.join("transcript.live.ndjson");
-    let publication = publication.unwrap_or_else(|| {
-        if final_transcript_exists(&directory) {
-            TranscriptPublication::Final
-        } else {
-            TranscriptPublication::Live
-        }
-    });
-    let entries = match publication {
-        TranscriptPublication::Final => read_ndjson(&final_path)?,
-        TranscriptPublication::Live if live_path.exists() => {
-            let mut entries = live::read_completed_snapshot(&live_path)?;
-            if final_transcript_exists(&directory) {
-                supplement_live_transcript(&mut entries, read_ndjson(&final_path)?);
-            }
-            entries
-        }
-        TranscriptPublication::Live => Vec::new(),
-    };
-    Ok(CompletedTranscript {
-        publication,
-        entries,
-    })
+    Ok(read_ndjson::<transcript::RollingLine>(&rolling_path)?
+        .into_iter()
+        .collect::<transcript::RollingView>()
+        .entries)
 }
 
 static MEETING_PASTE_CURSOR: OnceLock<Mutex<MeetingPasteCursor>> = OnceLock::new();
@@ -1251,35 +1135,42 @@ pub fn shared_paste_cursor() -> &'static Mutex<MeetingPasteCursor> {
     MEETING_PASTE_CURSOR.get_or_init(Default::default)
 }
 
+/// What "Copy new" and Option-Control-V already handed out: for each source,
+/// the end of the last entry copied. The in-call transcript can still change
+/// near its live edge, where echo is judged again as audio arrives, and the
+/// final transcript replaces it after Stop, so the cursor follows time rather
+/// than identical entries. An entry is new when most of it lies after what
+/// was copied from its source.
 #[derive(Clone, Debug, Default)]
 pub struct MeetingPasteCursor {
     meeting_id: Option<String>,
-    publication: Option<TranscriptPublication>,
-    seen: HashSet<TranscriptEntry>,
+    copied_through_ms: [Option<u64>; 2],
 }
 
 impl MeetingPasteCursor {
-    pub fn publication_for(&self, id: &str) -> Option<TranscriptPublication> {
-        (self.meeting_id.as_deref() == Some(id))
-            .then_some(self.publication)
-            .flatten()
+    fn unseen(&self, id: &str, entries: &[TranscriptEntry]) -> Vec<TranscriptEntry> {
+        let through = if self.meeting_id.as_deref() == Some(id) {
+            self.copied_through_ms
+        } else {
+            [None, None]
+        };
+        let mut unseen = entries
+            .iter()
+            .filter(|entry| {
+                through[cursor_slot(entry.source)]
+                    .is_none_or(|through| entry.start_ms + entry.end_ms > through * 2)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        unseen.sort_by_key(|entry| entry.start_ms);
+        unseen
     }
 
     #[cfg(test)]
     /// Number of coalesced speaker turns available since the last committed
     /// copy or paste for `id`.
     pub fn pending_turn_count(&self, id: &str, entries: &[TranscriptEntry]) -> usize {
-        let empty = HashSet::new();
-        let seen = if self.meeting_id.as_deref() == Some(id) {
-            &self.seen
-        } else {
-            &empty
-        };
-        let new_entries = entries
-            .iter()
-            .filter(|entry| !seen.contains(*entry))
-            .cloned();
-        coalesce_transcript(new_entries).len()
+        coalesce_transcript(self.unseen(id, entries)).len()
     }
 
     /// Formats unseen entries for `id`, runs `commit_output`, and advances the
@@ -1287,65 +1178,55 @@ impl MeetingPasteCursor {
     pub fn consume_entries(
         &mut self,
         id: &str,
-        publication: TranscriptPublication,
         entries: &[TranscriptEntry],
         commit_output: impl FnOnce(&str) -> Result<()>,
     ) -> Result<String> {
-        let same_meeting = self.meeting_id.as_deref() == Some(id);
-        let empty = HashSet::new();
-        let seen = if same_meeting { &self.seen } else { &empty };
-        let (text, pasted_entries) = prepare_meeting_delta(entries, seen)?;
+        let unseen = self.unseen(id, entries);
+        let text = format_meeting_delta(&unseen)?;
         commit_output(&text)?;
-        if !same_meeting {
-            self.seen.clear();
+        if self.meeting_id.as_deref() != Some(id) {
+            self.meeting_id = Some(id.to_string());
+            self.copied_through_ms = [None, None];
         }
-        self.meeting_id = Some(id.to_string());
-        self.publication = Some(publication);
-        self.seen.extend(pasted_entries);
+        for entry in unseen {
+            let through = &mut self.copied_through_ms[cursor_slot(entry.source)];
+            *through = Some(through.map_or(entry.end_ms, |through| through.max(entry.end_ms)));
+        }
         Ok(text)
     }
 }
 
-pub fn prepare_meeting_delta(
-    entries: &[TranscriptEntry],
-    seen: &HashSet<TranscriptEntry>,
-) -> Result<(String, Vec<TranscriptEntry>)> {
-    let new_entries = entries
-        .iter()
-        .filter(|entry| !seen.contains(*entry))
-        .cloned()
-        .collect::<Vec<_>>();
-    if new_entries.is_empty() {
-        return Err(eyre!("no new completed meeting transcript is available"));
+fn cursor_slot(source: MeetingSource) -> usize {
+    match source {
+        MeetingSource::System => 0,
+        MeetingSource::Microphone => 1,
     }
-    let text = coalesce_transcript(new_entries.iter().cloned())
+}
+
+/// Speaker turns of `entries`, which must be in time order.
+pub fn format_meeting_delta(entries: &[TranscriptEntry]) -> Result<String> {
+    if entries.is_empty() {
+        return Err(eyre!("no new meeting transcript is available"));
+    }
+    Ok(coalesce_transcript(entries.iter().cloned())
         .into_iter()
         .map(|entry| format!("{}: {}", entry.source.label(), entry.text))
         .collect::<Vec<_>>()
-        .join("\n\n");
-    Ok((text, new_entries))
+        .join("\n\n"))
 }
 
-/// Consumes new completed turns for `id` using the shared cursor, advancing
-/// only if `commit_output` succeeds.
+/// Consumes new turns for `id` using the shared cursor, advancing only if
+/// `commit_output` succeeds. While recording they come from the rolling
+/// transcript, afterwards from the final one.
 pub fn consume_delta_for_id(
     id: &str,
     commit_output: impl FnOnce(&str) -> Result<()>,
 ) -> Result<String> {
-    let publication = shared_paste_cursor()
+    let entries = TranscriptReader::default().read(id)?;
+    shared_paste_cursor()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .publication_for(id);
-    let transcript = completed_transcript(id, publication)?;
-    let mut cursor = shared_paste_cursor()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    cursor.consume_entries(
-        id,
-        transcript.publication,
-        &transcript.entries,
-        commit_output,
-    )
+        .consume_entries(id, &entries, commit_output)
 }
 
 /// Consumes new completed turns for the active or most recent meeting using
@@ -1404,24 +1285,6 @@ pub fn latest_transcript_markdown() -> Result<String> {
         }
     }
     Err(eyre!("no meeting transcript is available"))
-}
-
-fn supplement_live_transcript(
-    live_entries: &mut Vec<TranscriptEntry>,
-    final_entries: Vec<TranscriptEntry>,
-) {
-    let supplements = final_entries
-        .into_iter()
-        .filter(|final_entry| {
-            !live_entries.iter().any(|live_entry| {
-                live_entry.source == final_entry.source
-                    && live_entry.start_ms < final_entry.end_ms
-                    && final_entry.start_ms < live_entry.end_ms
-            })
-        })
-        .collect::<Vec<_>>();
-    live_entries.extend(supplements);
-    live_entries.sort_by_key(|entry| entry.start_ms);
 }
 
 fn read_ndjson<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Vec<T>> {

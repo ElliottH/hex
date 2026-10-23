@@ -268,12 +268,11 @@ substitute for source inspection or a second roadmap.
 - `meeting_capture`: independent self-healing microphone (cpal) and system
   audio (Core Audio process tap, ScreenCaptureKit fallback) sources; one
   failing never stops the other, and resumed audio is padded onto the timeline.
-- `meeting_transcript`: streaming 16 kHz resampling, pause-aware overlapping
-  chunks transcribed as background work on the dictation engine's loaded model
-  (a process without the engine, such as the CLI, loads its own), seam
-  deduplication, echo suppression, and Markdown rendering.
-- `meeting_live`: bounded dual-stream Moonshine draft transcription,
-  byte-offset transcript tailing, and the echo-filtered live view.
+- `meeting_transcript`: streaming 16 kHz resampling, short pause-aware
+  overlapping chunks transcribed as background work on the dictation engine's
+  loaded model (a process without the engine, such as the CLI, loads its own),
+  seam deduplication, echo suppression, the rolling in-call transcript and its
+  `TranscriptReader`, and Markdown rendering.
 - `meeting_echo`: 20 ms energy envelopes of both tracks and the signal-level
   bleed/local classification of microphone segments.
 - `meeting_notes`: a bounded provisional title while recording, then one
@@ -502,11 +501,18 @@ CoreAudio formats, AppleScript details, or event serialization.
   QoS, starts only while no dictation capture (from the shortcut press) or
   dictation inference is active, never interrupts a live stream, and is retried
   when a dictation request was sent first. A chunk already running cannot be
-  aborted on Metal; it finishes during the hold threshold and release tail. It uses whatever model
+  aborted on Metal; it finishes during the hold threshold and release tail.
+  Chunks are short (first pause after 6 s, hard cut at 10 s), so a running one
+  finishes well within the hold threshold. It uses whatever model
   dictation has loaded, so a model switch applies from the next chunk; Apple
   Speech and a process without the engine use their own transcriber. Its queue
-  (one-second audio blocks) and chunk backlog stay bounded; a source that falls
-  behind keeps what it transcribed and is rebuilt from its WAV after Stop.
+  (one-second audio blocks) and chunk backlog stay bounded; a source that
+  falls behind skips its oldest audio, keeps going, and is rebuilt from its
+  WAV after Stop. A capture gap restarts that source's chunks after the gap.
+- Meetings run no Moonshine. Every in-call view and copy (the Meetings pane,
+  Option-Control-V, provisional titles, `hex meetings`, and MCP) reads the
+  rolling Parakeet transcript, which publishes only entries no later chunk
+  can replace; after Stop they read the final transcript.
 - Meeting system audio uses a Core Audio process tap (System Audio Recording
   consent), never requiring a display; ScreenCaptureKit is only the fallback.
   Losing either source never stops the other or the meeting: it retries until
@@ -532,19 +538,20 @@ CoreAudio formats, AppleScript details, or event serialization.
 - Moonshine sessions run single-threaded (`MOONSHINE_ORT_SINGLE_THREAD`, set
   first thing in `main`); ONNX Runtime's default spinning pools cost several
   times the CPU of the decoding itself.
-- Live meeting drafts remain available if final transcription fails. Final
+- The rolling transcript remains available if final transcription fails. Final
   publication is atomic; adjacent same-source entries within three seconds form
   one displayed turn labeled `You` or `Them`. Speaker echo never shows as `You`:
-  the live view, rolling snapshot, live paste, and final transcript drop a
-  microphone utterance when delayed system audio explains its energy, or when
-  its words repeat overlapping remote speech unless the signal shows local
-  speech (double-talk). An undecided draft line waits while the remote side
-  speaks until it completes. Each finished
+  the rolling snapshot, live paste, and final transcript drop a microphone
+  utterance when delayed system audio explains its energy, or when its words
+  repeat overlapping remote speech unless the signal shows local speech
+  (double-talk). Each finished
   meeting is also written as Markdown to the configured folder (default
   `~/Documents/Hex Meetings`) without overwriting existing files; an export
   failure does not fail the meeting.
 - Meeting paste cursors advance only after successful insertion and reset when
-  HEX restarts.
+  HEX restarts. They track, per source, the end of the text already handed
+  out, so rewrites near the live edge and the switch to the final transcript
+  neither repeat nor drop turns.
 - Deleting a meeting moves its exported Markdown and then its recording folder
   to the Trash (never `rm`), after a two-step confirmation, and is refused while
   it records, transcribes, or writes notes. Renaming rewrites the manifest and
@@ -857,7 +864,8 @@ Tab to cycle, and `q`/Escape to quit.
 - `~/Library/Application Support/hex/logs/process.log`: Rust,
   CoreAudio, Moonshine, and context-adapter diagnostics.
 - `~/Library/Application Support/hex/meetings/`: manifests, separate
-  tracks, recoverable live drafts, and atomically published final transcripts.
+  tracks, the rolling in-call transcript, and atomically published final
+  transcripts.
 
 Older macOS builds used `voice-control`; the first launch of a newer build
 renames it to `hex` and leaves a `voice-control -> hex` symlink. If the rename

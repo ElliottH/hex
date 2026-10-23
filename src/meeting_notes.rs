@@ -15,8 +15,8 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    MeetingManifest, MeetingStatus, TranscriptEntry, TranscriptPublication, TranscriptReader,
-    coalesce_transcript, format_duration, read_manifest, root, sync_directory, write_manifest,
+    MeetingManifest, MeetingStatus, TranscriptEntry, TranscriptReader, coalesce_transcript,
+    format_duration, read_manifest, root, sync_directory, write_manifest,
 };
 use crate::apple_intelligence::{self, GeneratedNotes, GenerationError};
 use crate::events::now_ms;
@@ -727,7 +727,7 @@ fn summarize_claimed(id: &str, _claim: InProgress) -> Result<MeetingManifest> {
     if manifest.status != MeetingStatus::Complete {
         return Err(eyre!("only completed meetings can be summarized"));
     }
-    let entries = super::completed_transcript(id, Some(TranscriptPublication::Final))?.entries;
+    let entries = super::read_ndjson(&directory.join("transcript.ndjson"))?;
     let started = Instant::now();
     let never = AtomicBool::new(false);
     let result = summarize_entries(

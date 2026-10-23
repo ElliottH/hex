@@ -1196,7 +1196,6 @@ impl Parakeet {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::path::PathBuf;
 
     use hound::WavReader;
@@ -1204,7 +1203,7 @@ mod tests {
     use super::*;
 
     use crate::dictation::resample_for_parakeet;
-    use crate::meeting::{MeetingSource, TranscriptEntry, prepare_meeting_delta};
+    use crate::meeting::{MeetingSource, TranscriptEntry, format_meeting_delta};
 
     fn processing_job(target: TranscriptionTarget) -> ProcessorJob {
         ProcessorJob {
@@ -1369,7 +1368,7 @@ mod tests {
     }
 
     #[test]
-    fn meeting_delta_tracks_each_source_and_coalesces_turns() {
+    fn meeting_delta_coalesces_turns_in_time_order() {
         let entry = |source, start_ms, end_ms, text: &str| TranscriptEntry {
             source,
             start_ms,
@@ -1378,31 +1377,15 @@ mod tests {
         };
         let entries = [
             entry(MeetingSource::Microphone, 0, 1_000, "First."),
-            entry(MeetingSource::System, 500, 2_500, "Reply."),
-            entry(MeetingSource::Microphone, 1_100, 2_000, "Second."),
+            entry(MeetingSource::Microphone, 1_100, 1_400, "Still me."),
+            entry(MeetingSource::System, 1_500, 2_500, "Reply."),
+            entry(MeetingSource::Microphone, 2_600, 3_000, "Second."),
         ];
-
-        let mut seen = HashSet::new();
-        let (text, pasted) = prepare_meeting_delta(&entries, &seen).unwrap();
-        assert_eq!(text, "You: First.\n\nThem: Reply.\n\nYou: Second.");
-        seen.extend(pasted);
-        assert!(prepare_meeting_delta(&entries, &seen).is_err());
-
-        let appended = [
-            entries[0].clone(),
-            entries[1].clone(),
-            entry(MeetingSource::System, 900, 1_050, "Late completion."),
-            entries[2].clone(),
-            entry(MeetingSource::Microphone, 2_600, 3_000, "Third."),
-            entry(MeetingSource::System, 2_800, 3_200, "Follow-up."),
-        ];
-        let (text, pasted) = prepare_meeting_delta(&appended, &seen).unwrap();
         assert_eq!(
-            text,
-            "Them: Late completion.\n\nYou: Third.\n\nThem: Follow-up."
+            format_meeting_delta(&entries).unwrap(),
+            "You: First. Still me.\n\nThem: Reply.\n\nYou: Second."
         );
-        seen.extend(pasted);
-        assert!(prepare_meeting_delta(&appended, &seen).is_err());
+        assert!(format_meeting_delta(&[]).is_err());
     }
 
     #[test]

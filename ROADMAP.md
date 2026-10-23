@@ -251,8 +251,8 @@ the npm-package guidance above applies only to a developer-control wrapper.
 
 Give durable transcript entries stable identities so live-to-final reconciliation,
 incremental UI refresh, and meeting-delta paste can advance without rereading
-broad history. Keep `You` and `Them` source labels and the recoverable live
-draft when final transcription fails.
+broad history. Keep `You` and `Them` source labels and the recoverable rolling
+transcript when final transcription fails.
 
 Add end-to-end coverage for voice-triggered start/stop, shutdown during capture,
 forced final-transcription failure, and live provider detection. Evaluate

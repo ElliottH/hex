@@ -1,8 +1,8 @@
 //! Read-only queries over recorded meetings, for agents (`hex mcp`).
 //!
 //! Nothing here writes to the meetings folder. A meeting whose recorder holds
-//! `active.lock` is in progress: its rolling transcript and live draft are
-//! read and labeled. Otherwise only the published `transcript.ndjson` is
+//! `active.lock` is in progress: its rolling transcript is read and
+//! labeled. Otherwise only the published `transcript.ndjson` is
 //! trusted, and an unfinished draft is shown as interrupted, as the app does.
 //! Unreadable folders and lines are skipped and reported, never repaired.
 
@@ -18,7 +18,6 @@ use serde::de::DeserializeOwned;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
-use super::live::{Event, live_view};
 use super::transcript::{RollingLine, RollingView};
 use super::{
     MeetingManifest, MeetingSource, MeetingStatus, TranscriptEntry, coalesce_transcript,
@@ -37,10 +36,8 @@ const BM25_B: f32 = 0.75;
 pub enum TranscriptSource {
     /// The published final transcript.
     Final,
-    /// Rolling final-model chunks, then the live draft (in progress or interrupted).
+    /// The rolling in-call transcript (in progress or interrupted).
     Rolling,
-    /// Only the live Moonshine draft.
-    Draft,
     Missing,
 }
 
@@ -48,8 +45,7 @@ impl TranscriptSource {
     pub fn label(self) -> &'static str {
         match self {
             Self::Final => "final transcript",
-            Self::Rolling => "rolling transcript + live draft",
-            Self::Draft => "live draft",
+            Self::Rolling => "rolling transcript",
             Self::Missing => "no transcript",
         }
     }
@@ -178,13 +174,12 @@ struct Fingerprint {
     in_progress: bool,
 }
 
-const FINGERPRINT_FILES: [&str; 6] = [
+const FINGERPRINT_FILES: [&str; 5] = [
     "manifest.json",
-    super::live::ERROR_FILE,
+    super::transcript::ERROR_FILE,
     "transcript.ndjson",
     "transcript.md",
-    "transcript.rolling.ndjson",
-    "transcript.live.ndjson",
+    super::transcript::ROLLING_FILE,
 ];
 
 /// The meetings folder plus an in-memory cache keyed by file sizes and times.
@@ -543,9 +538,10 @@ fn load(directory: &Path, id: &str, in_progress: bool) -> Result<Meeting> {
     })?;
     let mut manifest: MeetingManifest = serde_json::from_slice(&data)
         .map_err(|error| eyre!("could not decode manifest.json: {error}"))?;
-    manifest.live_transcription_error = fs::read_to_string(directory.join(super::live::ERROR_FILE))
-        .ok()
-        .map(|error| error.trim().to_string());
+    manifest.live_transcription_error =
+        fs::read_to_string(directory.join(super::transcript::ERROR_FILE))
+            .ok()
+            .map(|error| error.trim().to_string());
     let final_path = directory.join("transcript.ndjson");
     // A recorder publishes the final NDJSON before the Markdown; without one,
     // the NDJSON alone is the finished publication.
@@ -572,18 +568,12 @@ fn load(directory: &Path, id: &str, in_progress: bool) -> Result<Meeting> {
         )
         .into_iter()
         .collect();
-        let mut latest = HashMap::new();
-        for event in read_lines::<Event>(&directory.join("transcript.live.ndjson"), &mut warnings) {
-            latest.insert((event.source, event.line_id), event);
-        }
-        let source = if !rolling.entries.is_empty() {
-            TranscriptSource::Rolling
-        } else if !latest.is_empty() {
-            TranscriptSource::Draft
-        } else {
+        let source = if rolling.entries.is_empty() {
             TranscriptSource::Missing
+        } else {
+            TranscriptSource::Rolling
         };
-        (source, live_view(&rolling, latest.values()))
+        (source, rolling.entries)
     };
     entries.retain(|entry| !entry.text.trim().is_empty());
     entries.sort_by_key(|entry| entry.start_ms);

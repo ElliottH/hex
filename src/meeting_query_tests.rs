@@ -70,13 +70,13 @@ fn hit_lines(output: &str) -> Vec<&str> {
 }
 
 #[test]
-fn lists_meetings_skipping_unreadable_folders_and_labeling_drafts() {
+fn lists_meetings_skipping_unreadable_folders_and_labeling_unfinished_ones() {
     let output = list(&library(), true);
     let lines = output.lines().collect::<Vec<_>>();
     assert!(lines[0].starts_with("3 of 3 meetings"), "{output}");
     // Newest first.
     assert!(lines[1].starts_with(&format!("- {STANDUP}")), "{output}");
-    assert!(lines[1].contains("interrupted · rolling transcript + live draft"));
+    assert!(lines[1].contains("interrupted · rolling transcript"));
     let weekly = lines.iter().find(|line| line.contains(WEEKLY)).unwrap();
     assert!(weekly.contains("\"Weekly sync\""));
     assert!(weekly.contains("· 00:40 · complete · final transcript"));
@@ -186,15 +186,13 @@ fn search_reports_context_and_labels_unfinished_meetings() {
         "{output}"
     );
     assert!(
-        output.contains("interrupted (rolling transcript + live draft)"),
+        output.contains("interrupted (rolling transcript)"),
         "{output}"
     );
     assert!(
-        output.contains("Draft text mentions **cron** again."),
+        output.contains("Rolling text mentions **cron** again."),
         "{output}"
     );
-    // The rolling chunk covers the draft's first line.
-    assert!(!output.contains("rolling text about background worker"));
 }
 
 #[test]
@@ -286,7 +284,7 @@ fn a_held_lock_marks_the_meeting_in_progress() {
     fs2::FileExt::lock_exclusive(&lock).unwrap();
     let output = list(&library, true);
     assert!(
-        output.contains("recording (in progress) · rolling transcript + live draft"),
+        output.contains("recording (in progress) · rolling transcript"),
         "{output}"
     );
     assert!(list(&library, false).starts_with("No meetings match"));
