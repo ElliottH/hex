@@ -2,7 +2,7 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>HEX Updates</title>
-    <link>https://downloads.hex.anoma.ly/</link>
+    <link>https://anoma.ly/hex/files/</link>
     <description>Signed automatic updates for HEX.</description>
     <language>en</language>
   </channel>

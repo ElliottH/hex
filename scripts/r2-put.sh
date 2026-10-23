@@ -1,6 +1,7 @@
 #!/bin/sh
-# Upload one object to the hex-releases R2 bucket through its S3 API, using
-# the bucket-scoped CI credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY).
+# Upload one object to a Hex files bucket (HEX_RELEASE_BUCKET:
+# hex-production-files or hex-dev-files) through its S3 API, using the
+# bucket-scoped CI credentials (R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY).
 # HEX_RELEASE_PREFIX (e.g. staging/<run>/) is prepended to every key.
 #
 #   r2-put.sh <key> <file> <content-type> <cache-control> [content-disposition]
@@ -13,7 +14,7 @@ set -eu
 : "${R2_ACCESS_KEY_ID:?Set R2_ACCESS_KEY_ID}"
 : "${R2_SECRET_ACCESS_KEY:?Set R2_SECRET_ACCESS_KEY}"
 account=${R2_ACCOUNT_ID:-15d29c8639fd3733b1b5486a2acfd968}
-bucket=${HEX_RELEASE_BUCKET:-hex-releases}
+bucket=${HEX_RELEASE_BUCKET:?Set HEX_RELEASE_BUCKET}
 key="${HEX_RELEASE_PREFIX:-}$1"
 test -f "$2"
 

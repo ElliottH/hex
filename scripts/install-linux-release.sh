@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
+base_url=${HEX_RELEASE_BASE_URL:-https://anoma.ly/hex/files}
 install_dir=${HEX_INSTALL_DIR:-"$HOME/.local/bin"}
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 config_home=${XDG_CONFIG_HOME:-$HOME/.config}

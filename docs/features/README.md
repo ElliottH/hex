@@ -41,14 +41,13 @@ leaves runtime settings, models, and retained data intact.
 
 ```ts
 Download Hex                              // setup.download-recovery
-├── hex.kitlangton.com names the visitor's platform  // setup.download-button
+├── anoma.ly/hex names the visitor's platform  // setup.download-button
 │   ├── Mac -> DMG | Intel Mac -> disabled, "needs Apple silicon"
 │   ├── Windows x64 / ARM64 (UA-CH) -> HEX-Setup-<version>-<arch>.exe + SmartScreen note
 │   ├── Linux -> copyable `curl … install-linux.sh | sh` + Arch/glibc requirement
 │   ├── Phone -> Send yourself the link
 │   └── Other platforms -> every build, Homebrew, the GitHub release
-├── hex.kitlangton.dev/* -> 301 same path on .com
-├── Website, README, installers, apps, feeds, appcast -> downloads.hex.anoma.ly -> R2 bytes
+├── Website, README, installers, apps, feeds, appcast -> anoma.ly/hex/files -> R2 bytes (Worker hex)
 ├── Releases up to 2.3.1, Homebrew -> downloads.hex.kitlangton.dev -> redirect to the same bytes
 ├── GitHub app-v<version> -> identical DMG, Setup.exe, and Linux bytes
 └── Older app cannot reach its update feed -> manually install the DMG

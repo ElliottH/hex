@@ -3,3 +3,4 @@ dist/
 *.tsbuildinfo
 .wrangler/
 dist-server/
+.cloudflare/

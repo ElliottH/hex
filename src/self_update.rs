@@ -15,9 +15,10 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use semver::Version;
 use serde::Deserialize;
 
-/// The release origin shared with Linux and macOS: Anomaly's `hex-releases`
-/// R2 bucket behind its custom domain. The previous origin redirects here.
-const RELEASE_BASE: &str = "https://downloads.hex.anoma.ly";
+/// The release origin shared with Linux and macOS: Anomaly's
+/// `hex-production-files` R2 bucket, served by the site's Worker. The
+/// previous origin redirects here.
+const RELEASE_BASE: &str = "https://anoma.ly/hex/files";
 pub const MAX_FEED_BYTES: u64 = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 

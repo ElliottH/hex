@@ -10,6 +10,7 @@
 #   HEX_RELEASE_COMMIT     the commit it was built from
 #   HEX_RELEASE_CHANNEL    stable, or staging for a dry run
 #   HEX_RELEASE_BASE_URL   the public origin objects are verified at
+#   HEX_RELEASE_BUCKET     hex-production-files (stable) or hex-dev-files (staging)
 #   HEX_RELEASE_PREFIX     their key prefix ('' for stable, staging/<run>/)
 #   HEX_RELEASE_SOURCE     a checkout of HEX_RELEASE_COMMIT (installers, notes)
 #   HEX_RELEASE_TAG        the GitHub release tag
@@ -36,11 +37,11 @@ base_url=${HEX_RELEASE_BASE_URL:?Set HEX_RELEASE_BASE_URL}
 source=${HEX_RELEASE_SOURCE:?Set HEX_RELEASE_SOURCE}
 tag=${HEX_RELEASE_TAG:?Set HEX_RELEASE_TAG}
 printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
-case "$channel:${HEX_RELEASE_PREFIX:-}" in
-  stable:) ;;
-  staging:staging/*/) ;;
+case "$channel:${HEX_RELEASE_BUCKET:-}:${HEX_RELEASE_PREFIX:-}" in
+  stable:hex-production-files:) ;;
+  staging:hex-dev-files:staging/*/) ;;
   *)
-    echo "Channel $channel does not match prefix '${HEX_RELEASE_PREFIX:-}'." >&2
+    echo "Channel $channel does not match bucket '${HEX_RELEASE_BUCKET:-}' and prefix '${HEX_RELEASE_PREFIX:-}'." >&2
     exit 1
     ;;
 esac

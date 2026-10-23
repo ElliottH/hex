@@ -3,9 +3,9 @@
 ## Public Paths
 
 ```ts
-hex.kitlangton.com                         // the one site: platform-aware download
-├── hex.kitlangton.dev/*                   // 301 to the same path on .com (site/worker.ts)
-├── downloads.hex.anoma.ly                 // Anomaly's hex-releases R2 bucket; compiled into apps and feeds
+anoma.ly/hex                               // the one site: platform-aware download (Worker hex)
+├── anoma.ly/hex/files/…                   // hex-production-files R2 bucket via the same Worker;
+│   │                                      // compiled into apps and feeds
 │   ├── releases/HEX-<version>-arm64.dmg
 │   ├── releases/HEX-<version>-arm64.zip    // signed Sparkle artifact
 │   ├── releases/HEX-latest-arm64.dmg      // mutable pointer; no-cache
@@ -14,23 +14,25 @@ hex.kitlangton.com                         // the one site: platform-aware downl
 │   ├── releases/HEX-<version>-<sha256>-<target>  // content-addressed feed artifacts
 │   ├── install-linux.sh, install-windows.ps1     // script installers
 │   ├── linux-update.json, windows-update.json, windows-aarch64-update.json
-│   ├── appcast.xml                       // mutable pointer; published last
-│   └── staging/<run-id>/…                // dry-run releases; nothing reads them
+│   └── appcast.xml                       // mutable pointer; published last
+├── dev.anoma.ly/hex, dev.anoma.ly/hex/files/…   // dev Worker and hex-dev-files;
+│                                                // staging/<run-id>/ holds dry-run releases
+├── hex.kitlangton.com, .dev                // Kit's old site; should redirect to anoma.ly/hex
 ├── downloads.hex.kitlangton.dev, .com     // Kit's old bucket; compiled into releases up to 2.3.1;
-│                                          // redirects to downloads.hex.anoma.ly (keep forever)
+│                                          // redirects to anoma.ly/hex/files (keep forever)
 └── github.com/anomalyco/hex/releases/tag/app-v<version>
     ├── HEX-<version>-arm64.dmg
     ├── HEX-Setup-<version>-x64.exe, HEX-Setup-<version>-arm64.exe
     └── HEX-<version>-x86_64-linux        // identical bytes to the feed artifact
 ```
 
-`docs/releasing.md` describes the workflow that publishes these, the
-credentials, and the transition from Kit's bucket. The new bucket was seeded
-with byte copies of everything the old one served. The download hostname has
-minimum TLS 1.2. A Configuration Rule in the anoma.ly zone disables **Browser
-Integrity Check** only for `http.host eq "downloads.hex.anoma.ly"`: the zone
-check returned HTTP 403 to Python's default user agent. Keep browser challenges
-off download and updater routes.
+`docs/releasing.md` describes the Worker config, the workflow that publishes
+these, the credentials, and the transition from Kit's bucket.
+`hex-production-files` was seeded with byte copies of everything the old bucket
+served. A Configuration Rule in the anoma.ly zone disables **Browser Integrity
+Check** for `/hex/files/` on anoma.ly and dev.anoma.ly: the zone check returned
+HTTP 403 to Python's default user agent. Keep browser challenges off download
+and updater routes.
 
 The release workflow uploads immutable downloads, mirrors them to the GitHub
 release (verified byte for byte), and only then moves the feeds, the latest DMG,
@@ -43,18 +45,13 @@ After each publication, bump `MAC_VERSION` or `DESKTOP_VERSION` in
 `anomalyco/homebrew-tap/Casks/hex.rb`. `bun run --cwd site check:downloads`
 must pass before deploying; then verify the live links.
 
-`hex.kitlangton.com` once served a separate Mac-only site
-(`/Users/kit/code/projects/hex-marketing-site`, Worker `hex-marketing-site`,
-deleted). Do not deploy that project again: it would take the domain back.
-Both hosts now belong to `hex-voice-site`, which serves the site on `.com` and
-301s every `hex.kitlangton.dev` path to it.
-
 ## Network Recovery
 
 App and model downloads have different hosts. Managed networks may need to allow:
 
-- `downloads.hex.anoma.ly` for app artifacts and feeds (`downloads.hex.kitlangton.dev`
-  too for releases up to 2.3.1, which reach it through a redirect).
+- `anoma.ly` (path `/hex/files/`) for app artifacts and feeds
+  (`downloads.hex.kitlangton.dev` too for releases up to 2.3.1, which reach it
+  through a redirect).
 - GitHub release downloads and their asset delivery host for the alternative DMG.
 - `huggingface.co` and its model download CDN for dictation-model setup.
 - `download.moonshine.ai` for optional Voice Commands.

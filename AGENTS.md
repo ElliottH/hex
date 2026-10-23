@@ -737,22 +737,23 @@ build requires Xcode 26 for Icon Composer compilation and a Developer ID signing
 identity. `scripts/release-app.sh` prepares a notarized and stapled DMG plus its
 signed Sparkle appcast; run `scripts/release-app.sh publish` only after validating
 the prepared artifact. Public app downloads and update feeds use
-`https://downloads.hex.anoma.ly`, Anomaly's `hex-releases` R2 bucket through a
-Custom Domain; [`docs/releasing.md`](docs/releasing.md) owns the release
-workflow, channels, secrets, and the transition from Kit's
+`https://anoma.ly/hex/files`, Anomaly's `hex-production-files` R2 bucket
+served by the site's Worker; [`docs/releasing.md`](docs/releasing.md) owns the
+Worker config, the release workflow, channels, secrets, and the transition from Kit's
 `downloads.hex.kitlangton.dev`/`.com`, which must keep redirecting to the new
 origin for installed clients. GitHub app releases use
 `app-v<VERSION>` tags with `--latest=false`, keeping them distinct from SDK
 releases. Never overwrite a published artifact with different bytes.
-`https://hex.kitlangton.com` (in-repo `site/`, Worker `hex-voice-site`) is the
-only Hex website; its Worker 301s `hex.kitlangton.dev` and every other host to
-the same path there. After publishing a version, bump `MAC_VERSION` or
-`DESKTOP_VERSION` in `site/src/release.ts`, the explicit GitHub mirror/version
-link in `README.md`, and (macOS) the Homebrew cask. `bun run --cwd site
-check:downloads` fails until every download link serves a file; the Site
-workflow runs it and deploys from `main` when the repository has a
-`CLOUDFLARE_API_TOKEN` secret, otherwise deploy from `site` on the Pro with
-`bun run build && bunx wrangler deploy`. Verify the live links afterwards.
+`https://anoma.ly/hex` (in-repo `site/`) is the only Hex website. One
+`site/cloudflare.config.ts` defines the production Worker `hex` (anoma.ly/hex,
+bucket `hex-production-files`) and the dev Worker `hex-dev` (dev.anoma.ly/hex,
+bucket `hex-dev-files`); `cf deploy --prebuilt --mode <mode>` picks one, and
+only CI deploys: a push to `main` touching `site/` deploys dev, a stable
+Release deploys production. No subdomains. After publishing a version, bump
+`MAC_VERSION` or `DESKTOP_VERSION` in `site/src/release.ts`, the explicit
+GitHub mirror/version link in `README.md`, and (macOS) the Homebrew cask.
+`bun run --cwd site check:downloads` fails until every download link serves a
+file; every deploy runs it. Verify the live links afterwards.
 The Rust app is named `Hex`, packaged as `Hex.app`,
 with bundle identifier `com.kitlangton.hex2` and executable `hex`. Kit has approved
 his personal Developer ID signing team `QC99C9JE59` for this app. Signing requires
@@ -848,7 +849,7 @@ Windows script from Git Bash once per architecture with `HEX_WINDOWS_ARCH=x86_64
 (the default; Vulkan SDK required) or `aarch64` (clang-cl and Ninja; best on an
 ARM64 host). The feeds are `linux-update.json`, `windows-update.json` for x64,
 and `windows-aarch64-update.json` for ARM64, all on the same key, bucket, and
-`downloads.hex.anoma.ly` origin. Signing refuses a key that does not match
+`https://anoma.ly/hex/files` origin. Signing refuses a key that does not match
 the public key compiled into HEX, and publishing refuses a non-monotonic stable
 release. Builds use `-DGGML_NATIVE=OFF` so the CPU kernels stay portable, and the
 static runtime in `.cargo/config.toml` keeps the Visual C++ Redistributable

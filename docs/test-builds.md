@@ -58,7 +58,7 @@ info**, then **Run anyway**.
    replace a newer one: uninstall that first from Apps & Features (settings are
    kept). Or skip the installer and run the bare `HEX-….exe` from any folder.
 3. The test build never self-updates. To return to the release, run the
-   release installer from <https://hex.kitlangton.com>.
+   release installer from <https://anoma.ly/hex>.
 
 ## Linux (x86_64 Arch, current glibc)
 

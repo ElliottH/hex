@@ -2,15 +2,16 @@ name: Release
 
 # Builds, signs, and publishes Hex for macOS, Windows, and Linux from one
 # exact commit. Feeds are signed in a job that never compiles code; the
-# publish job uploads to the hex-releases R2 bucket behind
-# https://downloads.hex.anoma.ly, mirrors the downloads to a GitHub release,
-# and updates the AUR package.
+# publish job uploads to the hex-production-files R2 bucket behind
+# https://anoma.ly/hex/files, mirrors the downloads to a GitHub release,
+# updates the AUR package, and deploys the production site.
 #
-# channel=staging (the default) is a dry run: everything lands under
-# staging/<run-id>/ in the bucket and in a draft GitHub release, and the AUR
-# package is built and tested but not pushed. Installed apps never read the
-# staging prefix unless HEX_RELEASE_BASE_URL points them at it.
-# channel=stable (or an app-v<version> tag) publishes the public release.
+# channel=staging (the default) is a dry run: everything lands in the dev
+# bucket under https://dev.anoma.ly/hex/files/staging/<run-id>/ and in a
+# draft GitHub release, and the AUR package is built and tested but not
+# pushed. Installed apps never read it unless HEX_RELEASE_BASE_URL points
+# them at it. channel=stable (or an app-v<version> tag) publishes the public
+# release.
 # See docs/releasing.md.
 on:
   workflow_dispatch:
@@ -42,6 +43,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       channel: ${{ steps.resolve.outputs.channel }}
       prefix: ${{ steps.resolve.outputs.prefix }}
+      bucket: ${{ steps.resolve.outputs.bucket }}
       base-url: ${{ steps.resolve.outputs.base-url }}
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
@@ -66,10 +68,9 @@ jobs:
             echo "::error::Tag $REF_NAME does not match version $version."
             exit 1
           fi
-          base=https://downloads.hex.anoma.ly
           case "$CHANNEL" in
-            stable) prefix= tag="app-v$version" ;;
-            staging) prefix="staging/$GITHUB_RUN_ID/" tag="staging-$GITHUB_RUN_ID" ;;
+            stable) base=https://anoma.ly/hex/files bucket=hex-production-files prefix= tag="app-v$version" ;;
+            staging) base=https://dev.anoma.ly/hex/files bucket=hex-dev-files prefix="staging/$GITHUB_RUN_ID/" tag="staging-$GITHUB_RUN_ID" ;;
             *) echo "::error::Unknown channel $CHANNEL."; exit 1 ;;
           esac
           {
@@ -77,6 +78,7 @@ jobs:
             echo "version=$version"
             echo "channel=$CHANNEL"
             echo "prefix=$prefix"
+            echo "bucket=$bucket"
             echo "base-url=$base${prefix:+/${prefix%/}}"
             echo "tag=$tag"
           } >> "$GITHUB_OUTPUT"
@@ -201,6 +203,7 @@ jobs:
       HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.channel }}
       HEX_RELEASE_BASE_URL: ${{ needs.resolve.outputs.base-url }}
       HEX_RELEASE_PREFIX: ${{ needs.resolve.outputs.prefix }}
+      HEX_RELEASE_BUCKET: ${{ needs.resolve.outputs.bucket }}
       HEX_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
       HEX_RELEASE_SOURCE: ${{ github.workspace }}/source
     steps:
@@ -265,3 +268,12 @@ jobs:
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: tools/scripts/release-aur.sh publish aur
+
+  site:
+    name: Deploy the production site
+    needs: [resolve, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel == 'stable' }}
+    uses: ./.github/workflows/site-deploy.yml
+    with:
+      mode: production
+    secrets: inherit

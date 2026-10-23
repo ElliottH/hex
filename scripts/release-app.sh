@@ -7,8 +7,8 @@ team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Develope
 mode=${1:-prepare}
 version=$(hex_version "$root")
 build_number=$(hex_build_number "$version")
-bucket=${HEX_RELEASE_BUCKET:-hex-releases}
-base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
+bucket=${HEX_RELEASE_BUCKET:-hex-production-files}
+base_url=${HEX_RELEASE_BASE_URL:-https://anoma.ly/hex/files}
 # The appcast this release extends; a staging prefix starts from the live one.
 appcast_url=${HEX_RELEASE_APPCAST_URL:-$base_url/appcast.xml}
 release_notes=${HEX_RELEASE_NOTES:-$root/docs/releases/$version.md}

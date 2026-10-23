@@ -95,8 +95,8 @@ test-builds.yml            // per-push ad-hoc Hex Test DMG (unsigned)
 
 ## Feed host
 
-Downloads move to `https://downloads.hex.anoma.ly` (Anomaly's `hex-releases`
-R2 bucket). The bucket is seeded with byte copies of Kit's, and
+Downloads move to `https://anoma.ly/hex/files` (Anomaly's
+`hex-production-files` R2 bucket). The bucket is seeded with byte copies of Kit's, and
 `downloads.hex.kitlangton.{dev,com}/*` redirects there; Sparkle follows the
 redirect, so installed apps with the old `SUFeedURL` read the new appcast and
 updates carry the new `SUFeedURL`. The bundle ID stays `com.kitlangton.hex2`.

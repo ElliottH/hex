@@ -46,7 +46,7 @@ export default function App() {
     <main className="page" ref={root} data-phase={shout.phase}>
       <canvas ref={canvas} className="stage" aria-hidden="true" />
       <header className="header">
-        <a className="wordmark" href="/" aria-label="Hex home" data-avoid>
+        <a className="wordmark" href={import.meta.env.BASE_URL} aria-label="Hex home" data-avoid>
           <HexMark />
           <span>HEX</span>
         </a>
@@ -61,7 +61,7 @@ export default function App() {
 
       <div className="show">
         <div className="show__head" ref={head}>
-          <img src="/shout-idle.webp" alt="" width="640" height="640" decoding="async" fetchPriority="high" />
+          <img src={`${import.meta.env.BASE_URL}shout-idle.webp`} alt="" width="640" height="640" decoding="async" fetchPriority="high" />
         </div>
         <OptionKey phase={shout.phase} onStart={shout.start} onIntent={shout.load} onPress={shout.pressKey} />
       </div>

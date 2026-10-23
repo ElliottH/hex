@@ -17,7 +17,7 @@ on:
         type: string
         required: true
       download-base:
-        description: Origin the release is served from, e.g. https://downloads.hex.anoma.ly or its staging/<run> prefix
+        description: Origin the release is served from, e.g. https://anoma.ly/hex/files or its staging/<run> prefix
         type: string
         required: true
       require-newer:
@@ -39,7 +39,7 @@ jobs:
       HEX_VERSION: ${{ inputs.version }}
       HEX_RELEASE_BASE_URL: ${{ inputs.download-base }}
       HEX_RELEASE_REQUIRE_NEWER: ${{ inputs.require-newer && '1' || '0' }}
-      LIVE_APPCAST: https://downloads.hex.anoma.ly/appcast.xml
+      LIVE_APPCAST: https://anoma.ly/hex/files/appcast.xml
     steps:
       - name: Require the signing secrets
         env:
