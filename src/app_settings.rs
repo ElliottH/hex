@@ -1569,6 +1569,23 @@ pub fn save_meeting_provider(choice: MeetingProviderChoice) {
     }
 }
 
+/// Saves the corner the recording capsule was dragged to.
+#[cfg(target_os = "macos")]
+pub fn save_meeting_indicator_corner(corner: MeetingIndicatorCorner) {
+    match AppSettings::load() {
+        Ok(mut settings) => {
+            if settings.meetings.recording_indicator_corner == corner {
+                return;
+            }
+            settings.meetings.recording_indicator_corner = corner;
+            if let Err(error) = settings.save() {
+                tracing::warn!(%error, "could not save the recording capsule's corner");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "could not load settings to save the capsule corner"),
+    }
+}
+
 pub fn meeting_output_folder() -> PathBuf {
     MEETING_OUTPUT_FOLDER
         .get_or_init(Default::default)

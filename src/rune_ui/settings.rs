@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use rune::{El, Key, KeyEvent, Tx, col, row, text};
 
 use super::controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section,
-    segmented, select, setting_row, status_dot, text_field, toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, pulsing_dot,
+    section, segmented, select, setting_row, status_dot, text_field, toggle_row,
 };
 use super::host;
 use super::lists::{Tone, tone_tag};
@@ -791,7 +791,7 @@ pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         } if active == target => frame
             .fill(c.danger.bg)
             .border(p.hair.max(0.5), c.danger.border)
-            .child(status_dot(p.danger()).ml(8.0))
+            .child(pulsing_dot(p.danger()).ml(8.0))
             .child(
                 text(message.unwrap_or(tr("Press shortcut")))
                     .key("prompt")

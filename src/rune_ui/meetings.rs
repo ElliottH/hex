@@ -12,7 +12,7 @@
 use rune::{El, TextEdit, Tx, col, el, row, text};
 use rune_kit::{IconButton, IconButtonVariant, Menu as KitMenu, MenuItem, Placement, TextInput};
 
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, status_dot};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot};
 use super::lists::{
     Tone, detail_header, detail_title, error_panel, group_label, list_row, message, placeholder,
     section_label, small_button, split, tone_tag,
@@ -446,7 +446,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
             .key("stop-meeting-control")
             .gap(8.0)
             .center_y()
-            .child(status_dot(p.danger()))
+            .child(pulsing_dot(p.danger()))
             .child(button(
                 p,
                 "stop-meeting",
@@ -769,7 +769,7 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
         .center_y()
         .child(section_label(p, "label", transcript_label));
     if recording {
-        label = label.child(status_dot(p.danger()));
+        label = label.child(pulsing_dot(p.danger()));
     }
     body = body
         .child(label)
@@ -908,7 +908,7 @@ fn transcript(p: Paint, meeting: &Meeting, stop_pending: bool) -> El {
                 .key("listening")
                 .gap(8.0)
                 .center_y()
-                .child(status_dot(p.danger()))
+                .child(pulsing_dot(p.danger()))
                 .child(
                     text(tr("Listening…"))
                         .key("label")

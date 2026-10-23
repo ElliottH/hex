@@ -142,9 +142,6 @@ Before cutting the first release with the Rune front end:
 - **Application icons in Modes:** Rune has no raster image element yet, so
   Modes shows monograms; restore the per-OS icon loaders from git history once
   Rune lands raster images.
-- **Looping animations:** looping tracks for the shortcut-recorder pulse and
-  the indeterminate model-loading bar. Timed state already runs on
-  `Tx::wake_after`, re-checked every 250 ms while the window shows.
 - **Rune rough edges still worked around in Hex:** `Pixels::set` doesn't wake
   its overlay (the Windows HUD sends an empty update), no rounded child clip
   (the picker hand-rounds its left column), no modifier-only key events (the
@@ -155,6 +152,4 @@ Before cutting the first release with the Rune front end:
   transcription picker scrim and arrow-key navigation in `rune-kit` selects and
   menus (model and application search popovers already support Up/Down/Enter
   via `controls::Highlight`).
-- **Meeting capsule extras (macOS):** hover expansion and corner dragging on
-  the floating recording capsule.
 - **Windows custom caption:** uses the native Win32 title bar for now.

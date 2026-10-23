@@ -5,7 +5,7 @@
 use rune::{El, col, el, row, text};
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, status_dot};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot};
 use crate::desktop_i18n::tr;
 
 const LIST_WIDTH: f32 = 320.0;
@@ -252,8 +252,7 @@ pub(super) enum PermissionControl {
 }
 
 /// The one control every permission uses, in the tour and in Settings:
-/// Allow, a dot while macOS is asked, then a green Allowed. The dot is
-/// steady until Rune has looping animation.
+/// Allow, a pulsing dot while macOS is asked, then a green Allowed.
 pub(super) fn permission_control(
     p: Paint,
     key: &str,
@@ -270,7 +269,7 @@ pub(super) fn permission_control(
             .key(format!("{key}-waiting"))
             .gap(12.0)
             .center_y()
-            .child(status_dot(p.accent()))
+            .child(pulsing_dot(p.accent()))
             .child(button(
                 p,
                 key,

@@ -8,8 +8,7 @@
 //! permissions, and this window cannot observe a practice dictation there,
 //! so their steps are Welcome, the speech model download, and Done.
 //!
-//! The welcome and done art and the listening dot are static until Rune
-//! has looping animation.
+//! The welcome and done art is static.
 
 use std::time::{Duration, Instant};
 
@@ -705,7 +704,7 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
         }
     };
     let line = if dot {
-        line.child(super::controls::status_dot(p.danger()))
+        line.child(super::controls::pulsing_dot(p.danger()))
     } else {
         line
     };

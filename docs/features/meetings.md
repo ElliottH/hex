@@ -151,7 +151,11 @@ Record (offer, menu bar "Record Meeting", Meetings pane, or voice command)
   -> Floating recording indicator (when Show recording indicator is on) // meetings.indicator
      ├── Rune interactive overlay: a non-activating panel that never becomes key
      ├── In the saved recording_indicator_corner
-     ├── Red dot · title · mm:ss
+     ├── Compact: pulsing red dot · title · mm:ss, plus "+N" when turns wait
+     ├── Hover -> widens toward the screen with the actions below; pointer
+     │   leaving -> eases back to compact (a held press keeps it open)
+     ├── Drag -> follows the pointer; release -> snaps to the corner nearest
+     │   its centre and saves recording_indicator_corner (window settings too)
      ├── Copy new (N) -> copies the in-call turns not yet copied or pasted
      │   ├── Shares Option-Control-V's cursor: either one advances both
      │   ├── N = speaker turns waiting; disabled at 0; "Copied" for 1.5 s
@@ -161,8 +165,7 @@ Record (offer, menu bar "Record Meeting", Meetings pane, or voice command)
      │   └── Both read the Parakeet in-call transcript (TranscriptReader) once a
      │       second on the ticker thread, never on the main thread
      ├── Open -> activates Hex, then opens the active meeting in the Meetings pane
-     ├── Stop -> Stop & Transcribe
-     └── Not built on Rune: dragging to a corner, hover expansion
+     └── Stop -> Stop & Transcribe
   -> Settings window may stay closed
 
 Detected app leaves the microphone for about 3 s     // meetings.call-ended
@@ -206,11 +209,15 @@ fed by the controller events the menu-bar pump receives
 ([macos_rune.rs](../../src/macos_rune.rs)). The offer (20 s), "left the
 call", ready (15 s, Copy / Reveal, notes refresh) and a recording capsule
 (title, elapsed time, Copy new, Copy all, Open, Stop, in the configured
-corner) are ported. Not ported yet: hover expansion and dragging the
-recording capsule. Copy new and Copy all are checked by
+corner, compact until hovered, dragged between corners) are ported. Copy new
+and Copy all are checked by
 `the_recording_capsule_copies_the_in_call_transcript` and rendered by
-`capsule_snapshots` (`recording-empty`, `-live`, `-copied`); they have not
-been clicked on a real Mac. A "Never offer" or "Always record" choice is saved and
+`capsule_snapshots` (`recording-empty`, `-live`, `-copied`, `-open`,
+`-left`); they have not been clicked on a real Mac. Hover and the corner snap
+are checked by `the_recording_capsule_rests_compact_and_opens_under_the_pointer`,
+`dragging_the_recording_capsule_moves_it_and_snaps_to_a_corner`, and
+`a_released_capsule_snaps_to_the_corner_nearest_its_centre`; neither has been
+tried with a real pointer. A "Never offer" or "Always record" choice is saved and
 also written into the window's live settings. On 2026-10-22 a signed build on a MacBook Pro
 showed the recording capsule (Open opened the meeting while it kept
 recording; Stop transcribed) and the ready capsule (Copy copied the

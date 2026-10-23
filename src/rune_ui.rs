@@ -219,6 +219,16 @@ pub(crate) fn meeting_provider_chosen(
     crate::app_settings::set_meeting_provider(&mut ui.settings.meetings, choice);
 }
 
+/// The corner the recording capsule was dragged to, kept in the window's live
+/// settings so its next save doesn't move it back.
+#[cfg(target_os = "macos")]
+pub(crate) fn meeting_corner_moved(
+    ui: &mut Ui,
+    corner: crate::app_settings::MeetingIndicatorCorner,
+) {
+    ui.settings.meetings.recording_indicator_corner = corner;
+}
+
 /// A meeting recording could not start or finish; the Meetings pane says why.
 #[cfg(target_os = "macos")]
 pub(crate) fn meeting_failed(ui: &mut Ui, error: String) {
@@ -815,7 +825,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .child(sidebar(ui, p))
         .child(panel);
     if let Some(modal) = picker::modal(ui, p) {
-        layer.push(modal);
+        layer.extend(modal);
     }
     if let Some(tour) = onboarding::overlay(ui, p) {
         layer.push(tour);

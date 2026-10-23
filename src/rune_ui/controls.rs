@@ -3,7 +3,7 @@
 //! select-style menus, buttons, keycaps, note, and text field. Colours,
 //! type, radii, elevation, and motion come from the kit's tokens.
 
-use rune::{Color, El, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune::{Color, El, LoopSpec, TextEdit, TextStyle, Tx, col, el, row, text};
 use rune_kit::{
     Button, ButtonSize, ButtonVariant, Kit, Menu, MenuItem, Placement, SegmentedControl, Select,
     SelectAppearance, Switch, TextInput,
@@ -294,6 +294,15 @@ pub(super) fn keycaps(p: Paint, key: &str, parts: &[String]) -> El {
 
 pub(super) fn status_dot(color: Color) -> El {
     el().key("dot").size(8.0, 8.0).radius(4.0).fill(color)
+}
+
+/// Breathes between full and this opacity every two seconds; full under
+/// Reduce Motion.
+const PULSE: LoopSpec = LoopSpec::opacity(2.0, 0.0, 1.0, 0.45);
+
+/// A dot for something live: recording, listening, or waiting on macOS.
+pub(super) fn pulsing_dot(color: Color) -> El {
+    status_dot(color).looping(PULSE)
 }
 
 /// A one-line note inside a card, between rows.

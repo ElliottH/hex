@@ -10,7 +10,8 @@ use rune::{El, LineCap, Shape, canvas, col, row, text};
 
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, Paint, button, card, segmented, setting_row, status_dot, toggle_row,
+    ButtonKind, DESCRIPTION, Paint, button, card, pulsing_dot, segmented, setting_row, status_dot,
+    toggle_row,
 };
 use super::lists::{Tone, slider, small_button, tone_tag};
 use super::platform::{DemoRequest, PlatformRequest};
@@ -423,7 +424,11 @@ fn try_it(ui: &Ui, p: Paint) -> El {
             .key("record")
             .gap(8.0)
             .center_y()
-            .child(status_dot(p.danger()))
+            .child(if demo.is_recording {
+                pulsing_dot(p.danger())
+            } else {
+                status_dot(p.danger())
+            })
             .child(if demo.is_recording {
                 button(
                     p,

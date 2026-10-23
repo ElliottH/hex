@@ -12,18 +12,23 @@
 //! transcript (Parakeet, `meeting::TranscriptReader`); "Copy new" shares
 //! Option-Control-V's cursor.
 //!
-//! Not yet built: hover expansion and dragging the recording capsule.
+//! The recording capsule rests as a compact pill in its corner and springs
+//! open to show its actions while the pointer is over it. Dragging it moves
+//! the window; on release it snaps to the nearest corner, which is saved.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rune::{Align, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, Tx, col, row, text};
-use rune_kit::{Button, ButtonSize, ButtonVariant};
+use rune::{
+    Align, Cursor, Cx, Drag, El, OverlayHandle, OverlaySpec, Phase, ScreenEdge, Spring, Tx, col,
+    row, text,
+};
+use rune_kit::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant};
 
-use super::controls::{Paint, status_dot};
-use crate::app_settings::{MeetingPolicy, MeetingProviderChoice};
+use super::controls::{Paint, pulsing_dot, status_dot};
+use crate::app_settings::{MeetingIndicatorCorner, MeetingPolicy, MeetingProviderChoice};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::meeting::{self, MeetingManifest, TranscriptEntry};
 use crate::meeting_detection::MeetingCandidate;
@@ -34,8 +39,14 @@ const MEETING_PANEL_WIDTH: f32 = 420.0;
 /// The offer's "…" choices need room for three buttons beside the name.
 const MEETING_MENU_WIDTH: f32 = 560.0;
 const MEETING_PANEL_HEIGHT: f32 = 64.0;
-/// The recording capsule.
+/// The recording capsule's window, as wide as the open pill.
 const RECORDING_PANEL_WIDTH: f32 = 640.0;
+/// The resting pill: the dot, the title and elapsed time, and a `+N` tag.
+const RECORDING_COMPACT_WIDTH: f32 = 244.0;
+/// Opening under the pointer, and closing after it leaves (GPUI's snap
+/// springs), with no overshoot.
+const RECORDING_OPEN: Spring = Spring::new(0.25, 0.0);
+const RECORDING_CLOSE: Spring = Spring::new(0.2, 0.0);
 /// "Copy new", "Copy new (12)", and "Copied" keep one width, so the other
 /// buttons don't shift as the count changes.
 const COPY_NEW_WIDTH: f32 = 112.0;
@@ -104,9 +115,18 @@ struct Capsule {
     hide: Option<Arc<dyn Fn() + Send + Sync>>,
     resize: Option<Arc<dyn Fn(f32) + Send + Sync>>,
     choose: Choose,
+    /// The recording capsule: the pointer is over the pill (or holding it).
+    hovered: bool,
+    /// Where the recording capsule rests.
+    corner: MeetingIndicatorCorner,
+    /// Moves the recording capsule's window by a drag's travel from `corner`.
+    shift: Option<Shift>,
+    save_corner: SaveCorner,
 }
 
 type Choose = Arc<dyn Fn(MeetingProviderChoice) + Send + Sync>;
+type Shift = Arc<dyn Fn(MeetingIndicatorCorner, f32, f32) + Send + Sync>;
+type SaveCorner = Arc<dyn Fn(MeetingIndicatorCorner) + Send + Sync>;
 
 impl Capsule {
     fn send(&self, command: ControllerCommand) -> bool {
@@ -143,6 +163,99 @@ impl Capsule {
             hide();
         }
     }
+
+    /// The recording pill follows the pointer and snaps to the nearest
+    /// corner on release.
+    fn drag(&mut self, drag: &Drag, tx: &mut Tx) {
+        let Some(shift) = self.shift.clone() else {
+            return;
+        };
+        match drag.phase {
+            Phase::Down => {}
+            Phase::Move => shift(self.corner, drag.dx, drag.dy),
+            Phase::Up => {
+                let corner = primary_screen_size().map_or(self.corner, |screen| {
+                    nearest_corner(self.corner, drag.dx, drag.dy, screen)
+                });
+                shift(corner, 0.0, 0.0);
+                if corner != self.corner {
+                    tracing::info!(?corner, "recording capsule moved");
+                    self.corner = corner;
+                    (self.save_corner)(corner);
+                    // The pill changes sides with the window; it must not
+                    // slide across it.
+                    tx.instant();
+                }
+            }
+        }
+    }
+}
+
+/// Where a corner's capsule window sits: its edge and margin, and its
+/// alignment and inset along that edge, after a drag of (dx, dy) points.
+fn corner_placement(
+    corner: MeetingIndicatorCorner,
+    dx: f32,
+    dy: f32,
+) -> (ScreenEdge, f32, Align, f32) {
+    let (edge, margin) = if corner.is_top() {
+        (ScreenEdge::Top, WINDOW_MARGIN + MENU_BAR + dy)
+    } else {
+        (ScreenEdge::Bottom, WINDOW_MARGIN + DOCK - dy)
+    };
+    let (align, inset) = if corner.is_right() {
+        (Align::End, WINDOW_MARGIN - dx)
+    } else {
+        (Align::Start, WINDOW_MARGIN + dx)
+    };
+    (edge, margin, align, inset)
+}
+
+/// The corner nearest the capsule window's centre after a drag of
+/// (dx, dy) points from `from`, on a screen of `screen` points.
+fn nearest_corner(
+    from: MeetingIndicatorCorner,
+    dx: f32,
+    dy: f32,
+    screen: (f32, f32),
+) -> MeetingIndicatorCorner {
+    let (w, h) = (RECORDING_PANEL_WIDTH, RECORDING_PANEL_HEIGHT);
+    let (_, margin, _, inset) = corner_placement(from, dx, dy);
+    let x = if from.is_right() {
+        screen.0 - inset - w / 2.0
+    } else {
+        inset + w / 2.0
+    };
+    let y = if from.is_top() {
+        margin + h / 2.0
+    } else {
+        screen.1 - margin - h / 2.0
+    };
+    match (y < screen.1 / 2.0, x >= screen.0 / 2.0) {
+        (true, true) => MeetingIndicatorCorner::TopRight,
+        (true, false) => MeetingIndicatorCorner::TopLeft,
+        (false, true) => MeetingIndicatorCorner::BottomRight,
+        (false, false) => MeetingIndicatorCorner::BottomLeft,
+    }
+}
+
+/// The primary screen in points, where Rune places the capsules.
+fn primary_screen_size() -> Option<(f32, f32)> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let screen = objc2_app_kit::NSScreen::screens(mtm).iter().next()?;
+    let size = screen.frame().size;
+    Some((size.width as f32, size.height as f32))
+}
+
+fn place_recording(
+    handle: &OverlayHandle<Capsule>,
+    corner: MeetingIndicatorCorner,
+    dx: f32,
+    dy: f32,
+) {
+    let (edge, margin, align, inset) = corner_placement(corner, dx, dy);
+    handle.place(edge, margin);
+    handle.set_align(align, inset);
 }
 
 /// The two capsules: the timed panel (offer, call ended, ready) and the
@@ -164,8 +277,10 @@ impl MeetingCapsules {
         app: &mut rune::App<S>,
         commands: SyncSender<ControllerCommand>,
         choose: impl Fn(MeetingProviderChoice) + Send + Sync + 'static,
+        save_corner: impl Fn(MeetingIndicatorCorner) + Send + Sync + 'static,
     ) -> Self {
         let choose: Choose = Arc::new(choose);
+        let save_corner: SaveCorner = Arc::new(save_corner);
         let overlay = |app: &mut rune::App<S>, name, size| {
             let handle = app.overlay(
                 OverlaySpec {
@@ -187,13 +302,20 @@ impl MeetingCapsules {
                     hide: None,
                     resize: None,
                     choose: choose.clone(),
+                    hovered: false,
+                    corner: MeetingIndicatorCorner::default(),
+                    shift: None,
+                    save_corner: save_corner.clone(),
                 },
             );
-            let (hide, resize) = (handle.clone(), handle.clone());
+            let (hide, resize, shift) = (handle.clone(), handle.clone(), handle.clone());
             handle.update(move |capsule, _| {
                 capsule.hide = Some(Arc::new(move || hide.hide()));
                 capsule.resize = Some(Arc::new(move |width| {
                     resize.resize((width, MEETING_PANEL_HEIGHT));
+                }));
+                capsule.shift = Some(Arc::new(move |corner, dx, dy| {
+                    place_recording(&shift, corner, dx, dy);
                 }));
             });
             handle
@@ -328,20 +450,7 @@ impl MeetingCapsules {
 
     fn show_recording(&self, id: String, title: String, automatic: bool) {
         let corner = crate::app_settings::meeting_indicator_corner();
-        let (edge, margin) = if corner.is_top() {
-            (ScreenEdge::Top, WINDOW_MARGIN + MENU_BAR)
-        } else {
-            (ScreenEdge::Bottom, WINDOW_MARGIN + DOCK)
-        };
-        self.recording.place(edge, margin);
-        self.recording.set_align(
-            if corner.is_right() {
-                Align::End
-            } else {
-                Align::Start
-            },
-            WINDOW_MARGIN,
-        );
+        place_recording(&self.recording, corner, 0.0, 0.0);
         let started = Instant::now();
         let ticker_id = id.clone();
         self.recording.update(move |capsule, tx| {
@@ -352,6 +461,8 @@ impl MeetingCapsules {
                 automatic,
             });
             capsule.live = Live::default();
+            capsule.hovered = false;
+            capsule.corner = corner;
             tx.instant();
         });
         self.recording.show();
@@ -422,7 +533,7 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
             automatic,
             ..
         } => {
-            return recording(p, title, *started, *automatic, &capsule.live);
+            return recording(p, capsule, title, *started, *automatic);
         }
         Kind::AutoStarted { title } => (
             p.danger(),
@@ -588,7 +699,8 @@ fn ready(
     (p.success(), title, subtitle, actions)
 }
 
-fn recording(p: Paint, title: &str, started: Instant, automatic: bool, live: &Live) -> El {
+fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automatic: bool) -> El {
+    let live = &capsule.live;
     let elapsed = meeting::format_duration(started.elapsed().as_millis() as u64);
     let subtitle = if automatic && started.elapsed() < AUTOMATIC_LABEL {
         tr_fill("Started automatically · {}", &elapsed)
@@ -652,12 +764,42 @@ fn recording(p: Paint, title: &str, started: Instant, automatic: bool, live: &Li
             c.send(ControllerCommand::Stop);
         }),
     ];
-    pill(p, p.danger(), title, &subtitle, actions)
+    let open = capsule.hovered;
+    let pending = (!open && live.pending > 0).then(|| {
+        Badge::new(format!("+{}", live.pending))
+            .variant(BadgeVariant::Accent)
+            .build(p.k)
+            .key("pending")
+    });
+    let pill = pill_body(p, pulsing_dot(p.danger()), title, &subtitle)
+        .pr(if pending.is_some() { 12.0 } else { 8.0 })
+        .children(pending)
+        .children(open.then(|| row().key("actions").gap(8.0).children(actions)))
+        .clip_rounded(999.0)
+        .cursor(Cursor::Grab)
+        .motion(if open {
+            RECORDING_OPEN
+        } else {
+            RECORDING_CLOSE
+        })
+        .on_hover_change(|c: &mut Capsule, inside, _| c.hovered = inside)
+        .on_drag(|c: &mut Capsule, drag, tx| c.drag(drag, tx));
+    let pill = if open {
+        pill.w_full()
+    } else {
+        pill.w(RECORDING_COMPACT_WIDTH - 8.0)
+    };
+    let capsule_row = row().key("capsule").w_full().h_full().px(4.0).py(4.0);
+    if capsule.corner.is_right() {
+        capsule_row.justify_end()
+    } else {
+        capsule_row.justify_start()
+    }
+    .child(pill)
 }
 
 /// The capsule's pill: status dot, two truncated lines, and its actions.
 fn pill(p: Paint, dot: rune::Color, title: &str, subtitle: &str, actions: Vec<El>) -> El {
-    let c = &p.k.c;
     row()
         .key("capsule")
         .w_full()
@@ -665,39 +807,45 @@ fn pill(p: Paint, dot: rune::Color, title: &str, subtitle: &str, actions: Vec<El
         .px(4.0)
         .py(4.0)
         .child(
-            row()
-                .key("pill")
+            pill_body(p, status_dot(dot), title, subtitle)
                 .w_full()
-                .h_full()
-                .gap(12.0)
-                .pl(16.0)
-                .pr(8.0)
-                .center_y()
-                .radius(999.0)
-                .fill(c.bg_base)
-                .border(p.hair, c.border_base)
-                .child(status_dot(dot))
-                .child(
-                    col()
-                        .key("lines")
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .child(
-                            text(title.to_owned())
-                                .key("title")
-                                .truncate()
-                                .font(p.k.ty.ui_medium)
-                                .color(p.text()),
-                        )
-                        .children((!subtitle.is_empty()).then(|| {
-                            text(subtitle.to_owned())
-                                .key("subtitle")
-                                .truncate()
-                                .font(p.k.ty.small)
-                                .color(p.faint())
-                        })),
-                )
                 .child(row().key("actions").gap(8.0).children(actions)),
+        )
+}
+
+/// The rounded pill with its dot and two truncated lines.
+fn pill_body(p: Paint, dot: El, title: &str, subtitle: &str) -> El {
+    let c = &p.k.c;
+    row()
+        .key("pill")
+        .h_full()
+        .gap(12.0)
+        .pl(16.0)
+        .pr(8.0)
+        .center_y()
+        .radius(999.0)
+        .fill(c.bg_base)
+        .border(p.hair, c.border_base)
+        .child(dot)
+        .child(
+            col()
+                .key("lines")
+                .grow(1.0)
+                .min_w(0.0)
+                .child(
+                    text(title.to_owned())
+                        .key("title")
+                        .truncate()
+                        .font(p.k.ty.ui_medium)
+                        .color(p.text()),
+                )
+                .children((!subtitle.is_empty()).then(|| {
+                    text(subtitle.to_owned())
+                        .key("subtitle")
+                        .truncate()
+                        .font(p.k.ty.small)
+                        .color(p.faint())
+                })),
         )
 }
 
@@ -759,6 +907,10 @@ mod tests {
             hide: None,
             resize: None,
             choose: Arc::new(move |choice| saved.lock().unwrap().push(choice)),
+            hovered: false,
+            corner: MeetingIndicatorCorner::TopRight,
+            shift: None,
+            save_corner: Arc::new(|_| {}),
         };
         let env = Env {
             system_dark: dark,
@@ -881,6 +1033,7 @@ mod tests {
     fn the_recording_capsule_copies_the_in_call_transcript() {
         let id = "capsule-copy-test";
         let (mut rt, _, _) = runtime(live_recording(id), false, true, RECORDING);
+        open_recording(&mut rt);
         // Nothing transcribed yet: both copies are unavailable.
         assert!(texts(&rt).contains(&"Copy new".to_string()));
         tap(&mut rt, "copy-new");
@@ -910,6 +1063,93 @@ mod tests {
             all.starts_with("**Them** · 00:00\nKickoff is at two thirty."),
             "{}",
             &*all
+        );
+    }
+
+    fn open_recording(rt: &mut Runtime<Capsule>) {
+        let (x, y) = rt.find("pill").unwrap();
+        rt.pointer_move(x, y);
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+    }
+
+    #[test]
+    fn the_recording_capsule_rests_compact_and_opens_under_the_pointer() {
+        let (mut rt, _, _) = runtime(live_recording("capsule-hover"), false, true, RECORDING);
+        rt.update(|capsule, _| capsule.live.pending = 2);
+        rt.settle_all();
+        rt.frame(0.0);
+        assert!(rt.find("copy-new").is_none());
+        assert!(texts(&rt).contains(&"+2".to_string()));
+        let (x, _) = rt.find("pill").unwrap();
+        assert!(
+            x > RECORDING_PANEL_WIDTH / 2.0,
+            "a right corner's pill rests on the right"
+        );
+
+        open_recording(&mut rt);
+        assert!(rt.state.hovered);
+        assert!(rt.find("copy-new").is_some());
+        assert!(!texts(&rt).contains(&"+2".to_string()));
+        // Moving onto a button inside the pill keeps it open.
+        let (x, y) = rt.find("stop").unwrap();
+        rt.pointer_move(x, y);
+        rt.frame(0.0);
+        assert!(rt.state.hovered);
+
+        rt.pointer_leave();
+        rt.frame(0.0);
+        assert!(!rt.state.hovered);
+    }
+
+    #[test]
+    fn dragging_the_recording_capsule_moves_it_and_snaps_to_a_corner() {
+        type Moves = Arc<Mutex<Vec<(MeetingIndicatorCorner, f32, f32)>>>;
+        let (mut rt, _, _) = runtime(live_recording("capsule-drag"), false, true, RECORDING);
+        let (moves, saved): (Moves, Arc<Mutex<Vec<MeetingIndicatorCorner>>>) = Default::default();
+        let (record, save) = (moves.clone(), saved.clone());
+        rt.update(move |capsule, _| {
+            capsule.shift = Some(Arc::new(move |corner, dx, dy| {
+                record.lock().unwrap().push((corner, dx, dy));
+            }));
+            capsule.save_corner = Arc::new(move |corner| save.lock().unwrap().push(corner));
+        });
+        rt.frame(0.0);
+        let (x, y) = rt.find("pill").unwrap();
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_move(x - 20.0, y + 30.0);
+        rt.frame(0.0);
+        assert_eq!(
+            moves.lock().unwrap().last(),
+            Some(&(MeetingIndicatorCorner::TopRight, -20.0, 30.0))
+        );
+        rt.pointer_up(x - 20.0, y + 30.0);
+        rt.frame(0.0);
+        // Off the main thread there is no screen to snap against, so it
+        // returns to its corner.
+        assert_eq!(
+            moves.lock().unwrap().last(),
+            Some(&(MeetingIndicatorCorner::TopRight, 0.0, 0.0))
+        );
+        assert!(saved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_released_capsule_snaps_to_the_corner_nearest_its_centre() {
+        use MeetingIndicatorCorner::*;
+        let screen = (1512.0, 982.0);
+        assert_eq!(nearest_corner(TopRight, -100.0, 40.0, screen), TopRight);
+        assert_eq!(nearest_corner(TopRight, -600.0, 0.0, screen), TopLeft);
+        assert_eq!(nearest_corner(TopRight, 0.0, 700.0, screen), BottomRight);
+        assert_eq!(nearest_corner(BottomLeft, 500.0, -600.0, screen), TopRight);
+        assert_eq!(nearest_corner(BottomLeft, 10.0, -10.0, screen), BottomLeft);
+        let (edge, margin, align, inset) = corner_placement(BottomLeft, 10.0, -10.0);
+        assert!(matches!((edge, align), (ScreenEdge::Bottom, Align::Start)));
+        assert_eq!(
+            (margin, inset),
+            (WINDOW_MARGIN + DOCK + 10.0, WINDOW_MARGIN + 10.0)
         );
     }
 
@@ -956,7 +1196,7 @@ mod tests {
                 PANEL,
             ),
         ];
-        type Setup = fn(&mut Live);
+        type Setup = fn(&mut Capsule);
         let nothing: Setup = |_| {};
         let states = states
             .into_iter()
@@ -974,26 +1214,45 @@ mod tests {
                     live_recording("snap"),
                     false,
                     RECORDING,
-                    |live: &mut Live| {
-                        live.entries = call();
-                        live.pending = 3;
+                    |capsule: &mut Capsule| {
+                        capsule.live.entries = call();
+                        capsule.live.pending = 3;
                     },
+                ),
+                (
+                    "recording-open",
+                    live_recording("snap"),
+                    false,
+                    RECORDING,
+                    |capsule: &mut Capsule| {
+                        capsule.live.entries = call();
+                        capsule.live.pending = 3;
+                        capsule.hovered = true;
+                    },
+                ),
+                (
+                    "recording-left",
+                    live_recording("snap"),
+                    false,
+                    RECORDING,
+                    |capsule: &mut Capsule| capsule.corner = MeetingIndicatorCorner::BottomLeft,
                 ),
                 (
                     "recording-copied",
                     live_recording("snap"),
                     false,
                     RECORDING,
-                    |live: &mut Live| {
-                        live.entries = call();
-                        live.copied = Some((LiveCopy::New, Instant::now()));
+                    |capsule: &mut Capsule| {
+                        capsule.live.entries = call();
+                        capsule.live.copied = Some((LiveCopy::New, Instant::now()));
+                        capsule.hovered = true;
                     },
                 ),
             ]);
         for (name, kind, more_open, size, setup) in states {
             for dark in [false, true] {
                 let (mut rt, _, _) = runtime(kind.clone(), more_open, dark, size);
-                rt.update(|capsule, _| setup(&mut capsule.live));
+                rt.update(move |capsule, _| setup(capsule));
                 rt.settle_all();
                 rt.frame(0.0);
                 let (w, h) = ((size.0 * 2.0) as u32, (size.1 * 2.0) as u32);
