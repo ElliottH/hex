@@ -5,6 +5,10 @@
 Commit and push straight to `main`, no PRs. Merge any open PR without asking.
 After pushing, update the installed copy. See `~/code/control/AGENTS.md`.
 
+`main` is canonical and contains the Rune front end on every OS; GPUI is
+removed. The `rune-ui` integration branch is merged and kept only for history:
+branch from and push to `main`.
+
 ## Purpose
 
 Build HEX as a local, observable macOS voice appliance with explicit Linux

@@ -230,7 +230,8 @@ TRANSCRIBE_DIR=/tmp/no-transcribe cargo xwin clippy --target x86_64-pc-windows-m
 For ARM64, add the `aarch64-pc-windows-msvc` target and set
 `XWIN_CROSS_COMPILER=clang`: ring's aarch64 build forces the GNU-style
 `clang` driver, which rejects the clang-cl `/imsvc` flags cargo-xwin passes
-by default.
+by default. Also set `CARGO_FEATURE_NO_NEON=1`: blake3 (through Rune) builds
+NEON C that the xwin sysroot's `arm64_neon.h` macros break under that driver.
 
 That checks every Rust path, including Rune, wgpu's DX12 and Vulkan
 backends, and the Windows modules; it compiles C build scripts (ring) for

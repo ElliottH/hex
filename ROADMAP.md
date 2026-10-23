@@ -21,11 +21,10 @@ macOS is the proposed first target, not a cross-platform availability promise.
 ## Validate The Rune Desktop App
 
 The window, menu-bar and tray hosts, HUDs, meeting capsules, and onboarding now
-run only on Rune (`rune-ui` branch; GPUI is gone). Linux has been run in a real
-session; macOS has been compiled, tested, and launched without being seen on
-screen; Windows has only been cross-compiled. Before a release from this
-branch, a person runs each OS through the checklist in
-[the Rune port plan](docs/plans/rune-ui.md#needs-a-person-to-look), including
+run only on Rune (GPUI is gone). Linux has been run in a real session; macOS
+has been compiled, tested, and launched without being seen on screen; Windows
+has only been cross-compiled. Before a release from `main`, a person runs each
+OS through the checklist in [the Rune port plan](docs/plans/rune-ui.md#needs-a-person-to-look), including
 the Windows x64 and ARM64 tray app, the macOS HUD and meeting capsules, and
 shortcut capture on every OS. Restore application icons in the Modes picker
 (removed with GPUI) on Rune's raster images, and add native file dialogs on

@@ -1,6 +1,6 @@
 # Port Hex's Desktop UI From GPUI To Rune
 
-**Status:** Done on `rune-ui`: Rune is Hex's only UI toolkit and GPUI is
+**Status:** Done and merged into `main`: Rune is Hex's only UI toolkit and GPUI is
 deleted. Every surface runs on Rune: the Linux single-process window and HUD,
 the Windows tray app and HUD, the macOS menu-bar app with its meeting capsules,
 every pane (Settings, Modes, Voice Action, History, Commands, Meetings, Fun,
@@ -117,7 +117,7 @@ without a GPU, render on lavapipe with
 
 ## Needs A Person To Look
 
-Before cutting a release from `rune-ui`:
+Before cutting the first release with the Rune front end:
 
 - **Linux:** pointer hover/press states and I-beam cursor over text fields;
   dragging a transformation with a real pointer; opening the FileChooser portal
