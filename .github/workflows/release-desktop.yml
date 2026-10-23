@@ -202,11 +202,11 @@ jobs:
         with:
           path: tools
           persist-credentials: false
+      # Credentials stay so a stable release can push its tag.
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           path: source
-          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           name: signed-release

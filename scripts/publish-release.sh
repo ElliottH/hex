@@ -140,13 +140,27 @@ fi
 # draft; app releases stay off "Latest" (see AGENTS.md).
 assets="$dist/HEX-Setup-$version-x64.exe $dist/HEX-Setup-$version-arm64.exe $temporary/HEX-$version-x86_64-linux"
 [ "$macos" = 0 ] || assets="$assets $dmg"
+# The Releases API needs the workflows permission, which GITHUB_TOKEN never
+# has, to create a tag at a commit whose workflows differ from main's tip, so
+# stable pushes its tag with git first; a staging draft creates no tag.
+if [ "$channel" = stable ]; then
+  # An annotated tag's peeled commit is listed last.
+  tagged=$(git -C "$source" ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | awk 'END { print $1 }')
+  if [ -z "$tagged" ]; then
+    git -C "$source" tag "$tag" "$commit"
+    git -C "$source" push origin "refs/tags/$tag"
+  elif [ "$tagged" != "$commit" ]; then
+    echo "Tag $tag already names $tagged, not $commit." >&2
+    exit 1
+  fi
+fi
 if ! gh release view "$tag" -R "$repo" --json name >/dev/null 2>&1; then
   if [ "$channel" = stable ]; then
-    gh release create "$tag" -R "$repo" --target "$commit" --title "Hex $version" \
+    gh release create "$tag" -R "$repo" --verify-tag --title "Hex $version" \
       --notes-file "$notes" --latest=false
   else
     printf 'Staging build of Hex %s from %s. Downloads: %s\n' "$version" "$commit" "$base_url" > "$temporary/notes.md"
-    gh release create "$tag" -R "$repo" --target "$commit" --title "Hex $version (staging)" \
+    gh release create "$tag" -R "$repo" --target main --title "Hex $version (staging)" \
       --notes-file "$temporary/notes.md" --draft --prerelease
   fi
 fi
