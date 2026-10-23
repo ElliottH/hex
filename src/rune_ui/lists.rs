@@ -54,7 +54,7 @@ pub(super) fn group_label(p: Paint, key: &str, label: &str, first: bool) -> El {
         .color(p.faint())
         .px(10.0)
         .pt(if first { 4.0 } else { 16.0 })
-        .pb(4.0)
+        .pb(6.0)
 }
 
 /// A selectable list row: title (with trailing pieces) over a meta line.

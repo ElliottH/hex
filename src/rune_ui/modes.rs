@@ -580,7 +580,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         .build(p.k)
         .key("add-mode");
     let c = &p.k.c;
-    let mut list = col().key("modes-list").gap(2.0);
+    let mut list = col().key("modes-list");
     list = list.child(mode_row(
         p,
         "mode-global",
@@ -823,7 +823,7 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         }
         Applications::Loaded(_) => None,
     };
-    let mut results = col().key("application-results").gap(1.0);
+    let mut results = col().key("application-results");
     for (index, application) in choices.into_iter().enumerate() {
         let name = application.name.clone();
         let location = application

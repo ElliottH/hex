@@ -473,7 +473,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
 
     let visible = pane.visible();
     let searching = !pane.search.text.trim().is_empty();
-    let mut list = col().key("meetings-list").gap(2.0);
+    let mut list = col().key("meetings-list");
     if let Some(error) = &pane.error {
         list = list.child(message(
             p,

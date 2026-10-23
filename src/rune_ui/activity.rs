@@ -161,7 +161,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
             ui.activity.reload();
         },
     ));
-    let mut list = col().key("activity-list").gap(2.0);
+    let mut list = col().key("activity-list");
     if let Some(error) = &pane.activity.error {
         list = list.child(message(
             p,

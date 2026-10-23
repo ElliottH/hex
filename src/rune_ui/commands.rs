@@ -203,7 +203,7 @@ pub(super) fn pane(ui: &Ui, p: Paint) -> (Vec<El>, El) {
             tasks.push(&command.task);
         }
     }
-    let mut list = col().key("commands-list").gap(2.0);
+    let mut list = col().key("commands-list");
     if visible.is_empty() {
         list = list.child(message(
             p,

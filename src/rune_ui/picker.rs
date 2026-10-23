@@ -122,7 +122,7 @@ fn delete(ui: &mut Ui, model: &'static ModelDefinition) {
 pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
     let language = ui.picker.language.clone()?;
     let c = &p.k.c;
-    let mut languages = col().key("languages").gap(1.0);
+    let mut languages = col().key("languages");
     for (index, (code, name)) in transcription_models::LANGUAGES.iter().enumerate() {
         let selected = *code == language;
         let code = code.to_string();

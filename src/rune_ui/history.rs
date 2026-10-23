@@ -223,7 +223,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
     let actions = vec![search, retention, clear_button];
 
     let c = &p.k.c;
-    let mut list = col().key("history-list").gap(2.0);
+    let mut list = col().key("history-list");
     let empty = if ui.settings.history_retention.is_off() {
         Some(tr("History is off. New dictations are not retained."))
     } else if pane.entries.is_empty() && pane.error.is_none() {

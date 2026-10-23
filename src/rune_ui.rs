@@ -842,7 +842,8 @@ fn title_bar(element: El) -> El {
 }
 
 fn sidebar(ui: &Ui, p: Paint) -> El {
-    let mut nav = col().key("nav").gap(1.0);
+    // Rows touch, so the pointer is always over one, as in a native source list.
+    let mut nav = col().key("nav");
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }

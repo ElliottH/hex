@@ -396,7 +396,7 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
         })
         .build(p.k)
         .key("model-search");
-    let mut list = col().key("model-results").w(280.0).gap(2.0).mt(8.0);
+    let mut list = col().key("model-results").w(280.0).mt(8.0);
     let Some(catalog) = ui.models.catalog() else {
         return col().key("model-picker-body").child(search);
     };
