@@ -406,13 +406,7 @@ fn add_application(ui: &mut Ui, name: String) {
 }
 
 /// Up and Down move the application search's highlight.
-pub(super) fn on_key(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
-    if ui.pane != super::Pane::Modes
-        || !ui.modes.application_picker_open
-        || !ui.modes.application_search.focused
-    {
-        return false;
-    }
+fn move_application_highlight(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
     let query = ui.modes.application_query();
     let count = ui
         .modes
@@ -782,6 +776,9 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         .leading_icon(p.k.glyph.search)
         .width(None)
         .on_edit(|ui: &mut Ui| &mut ui.modes.application_search)
+        .on_key(|ui: &mut Ui, event: &rune::KeyEvent, _: &mut Tx| {
+            move_application_highlight(ui, event)
+        })
         .on_submit(|ui: &mut Ui, _: &mut Tx| {
             let picked = {
                 let selected = &mode(&ui.settings, ui.modes.selected).applications;

@@ -224,11 +224,8 @@ fn open_model_picker(ui: &mut Ui) {
     ui.open = Some(Menu::Model);
 }
 
-/// Up and Down move the open model popover's highlight.
-pub(super) fn on_key(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
-    if ui.open != Some(Menu::Model) {
-        return false;
-    }
+/// Up and Down in the search field move the model popover's highlight.
+fn move_highlight(ui: &mut Ui, event: &rune::KeyEvent) -> bool {
     let query = ui.models.query();
     let count = ui
         .models
@@ -385,6 +382,7 @@ fn model_list(ui: &Ui, p: Paint, target: Target) -> El {
         .width(Some(280.0))
         .leading_icon(p.k.glyph.search)
         .on_edit(|ui: &mut Ui| &mut ui.models.search)
+        .on_key(|ui: &mut Ui, event: &rune::KeyEvent, _: &mut Tx| move_highlight(ui, event))
         .on_submit(move |ui: &mut Ui, _: &mut Tx| {
             let query = ui.models.query();
             let picked = ui.models.catalog().and_then(|catalog| {

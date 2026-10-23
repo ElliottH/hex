@@ -107,7 +107,10 @@ pub(crate) fn run_app(
 ) {
     use crate::linux_service::{Activation, Control};
     rune::set_app_id("hex");
-    let mut app = self::app(Some(host.clone())).args(Vec::new()).windowless();
+    let mut app = self::app(Some(host.clone()))
+        .args(Vec::new())
+        .windowless()
+        .window_options(fixed_window());
     crate::linux_rune_hud::install(&mut app);
     let handle = app.handle();
     host.set_window_visible({
@@ -228,10 +231,27 @@ pub(crate) fn render() {
     rune::run(spec());
 }
 
+/// The window's logical size, which every pane and the picker fit.
+const WINDOW_SIZE: (f32, f32) = (980.0, 760.0);
+
+/// Linux opens the window at one fixed size the user cannot change. Tiling
+/// compositors (sway, Hyprland, niri) and X11 window managers such as i3
+/// float a toplevel whose minimum and maximum size match, and Wayland has
+/// no other way to ask for floating.
+#[cfg(target_os = "linux")]
+fn fixed_window() -> rune::WindowOptions {
+    rune::WindowOptions {
+        min_size: Some(WINDOW_SIZE),
+        max_size: Some(WINDOW_SIZE),
+        resizable: false,
+        ..Default::default()
+    }
+}
+
 fn spec() -> AppSpec<Ui> {
     AppSpec {
         title: "Hex",
-        size: (980.0, 760.0),
+        size: WINDOW_SIZE,
         // Narrower windows crowd the sidebar and rows.
         min_size: Some((860.0, 560.0)),
         init: Ui::load,
@@ -663,7 +683,7 @@ impl Ui {
 /// Shortcut recording takes every key; otherwise Escape closes the picker
 /// or the open menu.
 fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
-    if settings::on_key(ui, event, tx) || models::on_key(ui, event) || modes::on_key(ui, event) {
+    if settings::on_key(ui, event, tx) {
         return true;
     }
     if event.key != rune::Key::Escape {
