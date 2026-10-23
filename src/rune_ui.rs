@@ -875,13 +875,23 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         .children(update)
         .children(host::QUIT_IN_WINDOW.then(|| quit_item(p)))
         .child(
-            text(tr_fill("Version {}", env!("CARGO_PKG_VERSION")))
+            text(version_label())
                 .key("version")
                 .font(p.k.ty.small)
                 .color(p.faint())
                 .pl(6.0)
                 .pt(8.0),
         )
+}
+
+/// Test builds also name their commit: main moves past a release without
+/// changing the version.
+fn version_label() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    match option_env!("HEX_COMMIT") {
+        Some(commit) => tr_fill("Version {}", &format!("{version} (test {commit})")),
+        None => tr_fill("Version {}", version),
+    }
 }
 
 fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
