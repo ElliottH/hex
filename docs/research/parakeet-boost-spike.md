@@ -8,6 +8,12 @@ both tested Parakeet configurations already recognize Hex in that clip. Keep
 Hex on its released upstream engine and retain this patch for research; carrying
 a production fork is not justified by these measurements.
 
+The upstream-model follow-up strengthens that recommendation. Qwen3-ASR 1.7B
+with a fixed name-only context prompt recovers substantially more real names
+than this boost. Its slower offline decoding and unaudited transcript
+differences do not justify changing the English default yet. Keep Unified
+for now and pursue upstream Qwen hints for name-sensitive transcription.
+
 ## Synthetic recall improves; the motivating real miss remains
 
 Measured on the M4 Pro mini with strict Metal, `transcribe-cpp` 0.2.4 and the
@@ -108,6 +114,87 @@ meeting remains exploratory: microphone recall stays 10/10 in both modes,
 while system recall stays 7/7 offline and rises 6/7 → 7/7 streaming. Microphone
 proxy errors are 6 → 7 / 266 words offline and 11 → 11 streaming; system errors
 stay 16/183 offline and 14/183 streaming. No rolling clip has excess vocabulary.
+
+## Qwen hints recover more names than the Parakeet patch
+
+On October 23, the same 168 frozen clips ran through unpatched
+`transcribe-cpp 0.4.1` on the M4 Pro Mac mini (64 GB), strict Metal, Q8_0
+artifacts. The five arms were Unified offline/streaming, Ultra offline, and
+Qwen3-ASR 1.7B offline with/without one context prompt. The prompt lists the
+same 17 terms, with no per-clip text or error aliases, and was fixed before
+inference. The runtime confirms Qwen supports context prompts and does not
+stream; Ultra also does not stream.
+
+### Final-reference meeting clips
+
+These are proxy WER figures, not human-audited error rates. Microphone and
+system audio remain separate. Denominators are 3,054 words / 74 term
+expectations on microphone and 2,150 words / 66 expectations on system audio.
+
+| Model / mode | Microphone proxy WER | Microphone recall | System proxy WER | System recall |
+| --- | ---: | ---: | ---: | ---: |
+| Unified offline | 5.174% | 59/74 | 5.442% | 60/66 |
+| Ultra offline | 12.344% | 62/74 | 10.558% | 54/66 |
+| Qwen without hints | 10.969% | 54/74 | 9.860% | 54/66 |
+| Qwen with hints | 11.329% | **70/74** | 9.721% | **63/66** |
+| Unified streaming | 6.745% | 62/74 | 6.372% | 61/66 |
+
+For the corrected Abattoir subset, Qwen hints reach **10/11 microphone clips
+and 3/4 system clips**. Without hints Qwen gets 1/11 and 0/4; Ultra gets 6/11
+and 1/4. The earlier Parakeet boost gets 1/11 and 0/4 offline, or 3/11 and 1/4
+streaming. On these fixed name expectations, Qwen hints beat the boost.
+This is one prompt, not a prompt search or proof that all vocabulary works.
+
+The 20 term-free dictations have proxy WER of 3.316% Unified offline,
+7.398% Ultra, 6.633% Qwen, 6.122% Qwen with hints, and 0.255% Unified
+streaming. Every arm has zero excess vocabulary there. All five recognize Hex
+in the live-Hanks diagnostic. The literal Avatar guard keeps Avatar in Unified
+offline, Ultra and prompted Qwen; unprompted Qwen and Unified streaming miss
+it. None inserts Abattoir into that guard.
+
+Do not interpret the WER table as proving Qwen or Ultra is twice as inaccurate.
+The automatic references favor Unified: all 168 Unified transcripts match
+the earlier 0.2.4 baseline byte-for-byte in each mode. Large Qwen differences
+include repetitions, fillers, compound-word spelling, number formatting and
+words at crop boundaries. Without auditing the audio, these may be reference
+errors, model errors, or both. Prompted Qwen's excess vocabulary counts are
+four microphone / three system occurrences; inspection includes plausible
+Scrawl, Dax, Hex and Abattoir reference mistakes. They are not seven verified
+false replacements. The 17 rolling-reference clips remain separate in the
+receipt and do not enter the table above.
+
+### Qwen trades name recall for a longer offline wait
+
+Observed warm per-clip session-plus-decoder time, median / p95 in milliseconds:
+
+| Offline arm | Dictations | Meeting microphone | Meeting system |
+| --- | ---: | ---: | ---: |
+| Unified | 133 / 289 | 281 / 549 | 215 / 516 |
+| Ultra | 115 / 284 | 286 / 644 | 223 / 525 |
+| Qwen without hints | 500 / 1,559 | 1,250 / 2,520 | 897 / 2,320 |
+| Qwen with hints | 532 / 1,656 | 1,240 / 2,682 | 951 / 2,308 |
+
+Prompted Qwen's median meeting compute time is about 4.4× Unified offline.
+Unified streaming's p95 finalize is 149 ms on dictations, 201 ms on microphone
+meeting clips and 188 ms on system clips. Finalize excludes computation done
+during streaming; it cannot be ranked against offline total time as though
+both measured the same interval. No native shortcut-to-paste latency was run.
+
+All three models stayed resident. Each clip rotated the arm order, shifted
+again on each pass; one full warmup preceded three measured passes. Each arm's
+transcripts were identical across measured passes. Timings include session
+creation, decoding and teardown, excluding file reads, minimum-length padding
+and model loading. Shared-worker contention still applies. All arms requested
+no timestamps and automatic language selection. The historical 0.2.4 boost's
+timings are not a controlled comparison with these measurements.
+
+The isolated runner built and passed strict release Clippy. All 2,520 measured
+clip outputs completed, with no warning, truncation or budget messages in the
+native log. The aggregate receipt is
+[`spike/model-results.json`](../../spike/model-results.json); pinned artifacts,
+prompt construction and reproduction are in
+[`spike/README.md`](../../spike/README.md#compare-upstream-english-models).
+No production model selection or engine dependency changed.
 
 ## Timing does not establish a latency pass
 

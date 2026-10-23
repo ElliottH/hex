@@ -1,0 +1,20 @@
+{
+  "unified": {
+    "repository": "handy-computer/parakeet-unified-en-0.6b-gguf",
+    "revision": "7e948f21b7bdbac698d3318db9d350f1096f3b6c",
+    "filename": "parakeet-unified-en-0.6b-Q8_0.gguf",
+    "sha256": "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795"
+  },
+  "ultra": {
+    "repository": "handy-computer/parakeet-ultra-gguf",
+    "revision": "a1539be1b849ea7463b88343e5277b373d0c4ea9",
+    "filename": "parakeet-ultra-Q8_0.gguf",
+    "sha256": "007a59761e9258779f189df396b50d12b83bb5b79e66df4b955c230d2f2a0a59"
+  },
+  "qwen": {
+    "repository": "handy-computer/Qwen3-ASR-1.7B-gguf",
+    "revision": "0e0a596e3959c3f3f2ab7d443a5b6f0f4a4bba6f",
+    "filename": "Qwen3-ASR-1.7B-Q8_0.gguf",
+    "sha256": "9a0d81792dfea2d5f278b8a63deb3ea6e02139ce42c2301f32ea19c4f77526b7"
+  }
+}

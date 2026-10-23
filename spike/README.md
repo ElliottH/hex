@@ -111,3 +111,51 @@ python3 spike/evaluate-real.py unused unused perf/real-voice-expansion --score-o
 
 `real-results.json` is the checked-in count-only receipt for this follow-up.
 Timing remains in the private summaries and does not establish a latency pass.
+
+## Compare upstream English models
+
+`model-runner` is a separate workspace pinned to unpatched `transcribe-cpp
+0.4.1`. It compares Unified offline/streaming, Parakeet Ultra offline, and
+Qwen3-ASR 1.7B offline with and without a context prompt. The phrase-boost
+runner and production dependency keep their original pins.
+
+```sh
+# On the admitted Mac worker containing the normalized private corpus:
+cargo build --release --locked -j 2 --manifest-path spike/model-runner/Cargo.toml
+cargo clippy --release --locked -j 2 --all-targets --all-features \
+  --manifest-path spike/model-runner/Cargo.toml -- -D warnings
+python3 spike/compare-models.py "$CARGO_TARGET_DIR/release/hex-model-compare" \
+  perf/real-voice-expansion
+# Recompute aggregates without models or inference:
+python3 spike/compare-models.py unused perf/real-voice-expansion --score-only
+```
+
+`comparison-models.json` pins Q8_0 artifact revisions and SHA-256 hashes. The
+script verifies the existing normalized WAVs and downloads models only on the
+worker. `--prepare-only` stops after checking artifacts and saving the plan.
+Qwen's prompt is exactly `Names and technical terms: ` followed by the frozen
+vocabulary, comma-separated, and a period. It contains no per-clip references,
+transcripts or correction aliases. The runner checks `Feature::ContextPrompt`.
+
+All three models remain resident on strict Metal, with one CPU thread and a
+fresh native session per clip. Each clip rotates the five arms' order, shifted
+again on each pass. One complete corpus pass warms every arm; three measured
+passes follow. Accuracy uses pass one; the summary also counts transcript
+changes in later passes. Timing includes session creation, decode and teardown,
+but excludes model loading, file reads and offline minimum-length padding.
+All arms request no timestamps and automatic language selection. Offline clips
+have Hex's 1.5-second minimum padding; streams receive the original 20 ms blocks
+as fast as computation permits. Streaming finalize time excludes earlier
+compute and is not comparable to offline total time as a speed ranking.
+
+This is a text-decoder comparison on preselected short crops. Multiple resident
+models and shared-worker load differ from native dictation, and automatic
+references can favor the engine that produced them. It cannot establish a
+general English-default winner, a guard-gate pass, or shortcut-to-paste latency.
+Old 0.2.4 boost results provide a historical accuracy comparison, not a controlled
+timing comparison with this 0.4.1 runner.
+
+Upstream sources: [prompting contract](https://github.com/handy-computer/transcribe.cpp/blob/v0.4.1/docs/prompting.md),
+[Qwen card](https://github.com/handy-computer/transcribe.cpp/blob/v0.4.1/docs/models/qwen3-asr-1.7b.md)
+(Apache-2.0), and [Moondream Parakeet Ultra card](https://github.com/handy-computer/transcribe.cpp/blob/v0.4.1/docs/models/parakeet-ultra.md)
+(CC-BY-4.0). Model files and private outputs are excluded from git.

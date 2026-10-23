@@ -1,0 +1,12 @@
+[package]
+name = "hex-model-compare"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+transcribe-cpp = "=0.4.1"
+hound = "3.5.1"
+serde_json = "1"
+
+[workspace]

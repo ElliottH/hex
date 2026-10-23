@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "engine": "transcribe-cpp 0.4.1 unpatched",
+  "worker": "Apple M4 Pro Mac mini, 64 GB, strict Metal",
+  "model_pins_file": "spike/comparison-models.json",
+  "model_pins_sha256": "31a4005354ce3ce7f2736f40d6a50a6bf5a17570fbd98f0387c8c3d7898d6ac9",
+  "manifest_sha256": "8290bf8bd6335cdfbb1f680f754bd45d35da7da2e1fffec473ae08b41016fa8d",
+  "raw_result_sha256": "978a3292c79b5348309352115c83fcee014a1ce6b52e399949ad87c3b0c84ebb",
+  "prompt_sha256": "8b88c5b821a6463388d3a8c0ef56e9ecd164f06d794442488c90af7472e09a20",
+  "prompt_terms": 17,
+  "warmup_passes": 1,
+  "measured_passes": 3,
+  "measured_clip_outputs": 2520,
+  "accuracy_pass": 1,
+  "changed_transcripts_after_first_pass": 0,
+  "unified_transcripts_identical_to_024_baseline": {"offline": 168, "stream": 168},
+  "reference_status": "Automatic transcript proxies with contextual Abattoir corrections; not human-audited WER.",
+  "recall_unit": "Distinct expected term per clip; corrected_abattoir cohorts count only Abattoir.",
+  "excess_status": "Occurrences beyond the proxy reference, not verified false replacements.",
+  "cohort_overlap": "Diagnostics are subsets of their matching base cohort; never sum them.",
+  "timing_status": "All measured passes, session creation through teardown. Shared worker and three resident models. Not native dictation latency. Streaming finalize excludes earlier compute.",
+  "columns": ["clips", "reference_words", "expected_terms", "recalled_terms", "word_errors", "false_replacements", "median_clip_ms", "p95_clip_ms", "p95_finish_ms"],
+  "results": {
+    "unified-offline": {
+      "dictation_microphone_history": [20, 392, 0, 0, 13, 0, 132.542, 289.011, null],
+      "meeting_microphone_final": [69, 3054, 74, 59, 158, 1, 281.499, 548.535, null],
+      "meeting_system_final": [62, 2150, 66, 60, 117, 1, 214.79, 516.306, null],
+      "meeting_microphone_rolling": [9, 266, 10, 10, 6, 0, 215.738, 498.351, null],
+      "meeting_system_rolling": [8, 183, 7, 7, 16, 0, 299.287, 607.359, null],
+      "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 0, 33, 0, 295.166, 548.535, null],
+      "corrected_abattoir_meeting_system_final": [4, 88, 4, 0, 4, 0, 114.591, 459.89, null],
+      "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0, 166.466, 175.66, null],
+      "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 1, 0, 48.62, 113.463, null]
+    },
+    "ultra-offline": {
+      "dictation_microphone_history": [20, 392, 0, 0, 29, 0, 115.332, 283.557, null],
+      "meeting_microphone_final": [69, 3054, 74, 62, 377, 4, 286.418, 643.623, null],
+      "meeting_system_final": [62, 2150, 66, 54, 227, 3, 223.162, 524.674, null],
+      "meeting_microphone_rolling": [9, 266, 10, 9, 20, 0, 232.178, 538.58, null],
+      "meeting_system_rolling": [8, 183, 7, 6, 25, 0, 319.859, 647.127, null],
+      "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 6, 68, 1, 286.715, 524.38, null],
+      "corrected_abattoir_meeting_system_final": [4, 88, 4, 1, 4, 0, 98.781, 393.947, null],
+      "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0, 150.728, 158.362, null],
+      "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 1, 0, 50.316, 111.418, null]
+    },
+    "qwen-offline": {
+      "dictation_microphone_history": [20, 392, 0, 0, 26, 0, 500.058, 1558.867, null],
+      "meeting_microphone_final": [69, 3054, 74, 54, 335, 2, 1249.73, 2519.901, null],
+      "meeting_system_final": [62, 2150, 66, 54, 212, 3, 897.347, 2319.863, null],
+      "meeting_microphone_rolling": [9, 266, 10, 10, 21, 0, 967.981, 2151.656, null],
+      "meeting_system_rolling": [8, 183, 7, 7, 24, 0, 888.436, 2361.482, null],
+      "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 1, 62, 0, 1423.557, 2912.88, null],
+      "corrected_abattoir_meeting_system_final": [4, 88, 4, 0, 4, 0, 481.076, 1583.809, null],
+      "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0, 517.488, 536.262, null],
+      "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 2, 0, 203.828, 327.912, null]
+    },
+    "qwen-hints-offline": {
+      "dictation_microphone_history": [20, 392, 0, 0, 24, 0, 532.495, 1656.276, null],
+      "meeting_microphone_final": [69, 3054, 74, 70, 346, 4, 1239.924, 2682.231, null],
+      "meeting_system_final": [62, 2150, 66, 63, 209, 3, 950.704, 2308.206, null],
+      "meeting_microphone_rolling": [9, 266, 10, 10, 18, 0, 950.397, 2364.401, null],
+      "meeting_system_rolling": [8, 183, 7, 7, 25, 0, 916.033, 1882.985, null],
+      "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 10, 50, 1, 1466.715, 3015.817, null],
+      "corrected_abattoir_meeting_system_final": [4, 88, 4, 3, 1, 0, 484.481, 1585.84, null],
+      "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0, 526.262, 568.523, null],
+      "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 1, 0, 201.131, 412.849, null]
+    },
+    "unified-stream": {
+      "dictation_microphone_history": [20, 392, 0, 0, 1, 0, 342.729, 1618.15, 148.77],
+      "meeting_microphone_final": [69, 3054, 74, 62, 206, 0, 1336.067, 2746.907, 200.979],
+      "meeting_system_final": [62, 2150, 66, 61, 137, 2, 1078.043, 2792.921, 188.333],
+      "meeting_microphone_rolling": [9, 266, 10, 10, 11, 0, 954.304, 2193.298, 170.394],
+      "meeting_system_rolling": [8, 183, 7, 6, 14, 0, 1437.085, 2689.298, 217.678],
+      "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 2, 49, 0, 1412.896, 3011.171, 199.125],
+      "corrected_abattoir_meeting_system_final": [4, 88, 4, 0, 4, 0, 365.064, 3211.406, 209.18],
+      "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0, 917.806, 926.138, 166.345],
+      "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 2, 0, 64.772, 119.434, 119.146]
+    }
+  }
+}
