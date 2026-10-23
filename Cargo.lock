@@ -1849,7 +1849,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.62.2",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -3522,7 +3522,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -4308,12 +4308,15 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=01fe4cc1346f34b4eb800627c2e23a710fbdd1c8#01fe4cc1346f34b4eb800627c2e23a710fbdd1c8"
+source = "git+https://github.com/anomalyco/rune.git?rev=b3c7bdbf3b35f5f432151d4a8989a46fa34d729f#b3c7bdbf3b35f5f432151d4a8989a46fa34d729f"
 dependencies = [
  "arboard",
  "blake3",
+ "block2 0.5.1",
  "bytemuck",
+ "half",
  "image",
+ "libloading 0.8.9",
  "objc2 0.5.3",
  "objc2 0.6.4",
  "objc2-app-kit 0.2.2",
@@ -4338,27 +4341,31 @@ dependencies = [
  "wgpu",
  "windows-sys 0.59.0",
  "winit",
+ "x11rb 0.13.2",
+ "xkbcommon",
+ "zeroize",
 ]
 
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=01fe4cc1346f34b4eb800627c2e23a710fbdd1c8#01fe4cc1346f34b4eb800627c2e23a710fbdd1c8"
+source = "git+https://github.com/anomalyco/rune.git?rev=b3c7bdbf3b35f5f432151d4a8989a46fa34d729f#b3c7bdbf3b35f5f432151d4a8989a46fa34d729f"
 dependencies = [
  "rune",
  "rune-motion",
  "serde_json",
+ "unicode-segmentation",
 ]
 
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune.git?rev=01fe4cc1346f34b4eb800627c2e23a710fbdd1c8#01fe4cc1346f34b4eb800627c2e23a710fbdd1c8"
+source = "git+https://github.com/anomalyco/rune.git?rev=b3c7bdbf3b35f5f432151d4a8989a46fa34d729f#b3c7bdbf3b35f5f432151d4a8989a46fa34d729f"
 
 [[package]]
 name = "rune-theme-opencode"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=01fe4cc1346f34b4eb800627c2e23a710fbdd1c8#01fe4cc1346f34b4eb800627c2e23a710fbdd1c8"
+source = "git+https://github.com/anomalyco/rune.git?rev=b3c7bdbf3b35f5f432151d4a8989a46fa34d729f#b3c7bdbf3b35f5f432151d4a8989a46fa34d729f"
 dependencies = [
  "rune",
  "rune-kit",
@@ -6894,6 +6901,17 @@ name = "xcursor"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "163b33ed8786455e2fa5d72f554057ce3f3182425434f756cd39c99839d88e23"
+
+[[package]]
+name = "xkbcommon"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7a974f48060a14e95705c01f24ad9c3345022f4d97441b8a36beb7ed5c4a02d"
+dependencies = [
+ "libc",
+ "memmap2",
+ "xkeysym",
+]
 
 [[package]]
 name = "xkbcommon-dl"
