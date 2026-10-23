@@ -2,7 +2,8 @@
 
 Record a call locally: HEX captures the other participants (system audio) and
 you (microphone) as separate tracks, transcribes them on this Mac, and saves a
-Markdown transcript with `You` and `Them` turns. Recording never starts or stops
+Markdown transcript with `You` and `Them` turns. Recording starts automatically
+only for calls from a website or app set to Always record, and never stops
 automatically. This map covers macOS; Linux has no meetings.
 
 Linked checks are locators unless an executed result is recorded below.
@@ -19,7 +20,10 @@ Settings > Meetings > Meetings (beta)               // meetings.opt-in; off by d
 │   │   └── Granted -> Allowed
 │   ├── Show recording indicator -> on by default; corner-snapping floating capsule
 │   ├── Transcript folder -> ~/Documents/Hex Meetings by default; Reveal / choose
-│   └── Summarize with Apple Intelligence -> on by default; one-line availability
+│   ├── Summarize with Apple Intelligence -> on by default; one-line availability
+│   └── Detected calls -> Ask / Always record / Never offer per provider // meetings.policy
+│       ├── Slack huddles, Zoom, Google Meet, Microsoft Teams, FaceTime (always listed)
+│       └── then each website or app chosen for from an offer's "…"
 └── Off -> Controller idles; no microphone-activity inspection, pane, or shortcut
 
 Debug builds -> Always available (DEVELOPER_FEATURES_ENABLED)
@@ -45,17 +49,31 @@ Zoom / Teams / Slack huddle / FaceTime / browser call uses the microphone
   -> 4 stable observations (about 2 s)              // meetings.detect
      └── Browser on a page that is not a known call site -> 40 (about 20 s),
          so voice notes and dictation fields are not offered
-  -> Site or app in Settings › Meetings › Never offer -> no offer
-  -> Capsule below the menu bar, focus-free          // meetings.offer
-     ├── Title: "Google Meet call detected", "Call on meet.jit.si",
-     │   "Call in Brave Browser" (site unknown), or the meeting's name
-     ├── Record -> Start recording
-     ├── Not now -> Close
-     ├── … -> "Never offer for <site or app>?" -> Never offer / Cancel
-     │   └── site from the Brave tab adapter, else the app; saved in
-     │       settings.json meetings.never_offer; Remove in Settings › Meetings
-     └── 20 s timeout -> Close                       // never records on timeout
-  -> Same call is snoozed by key and app until off the microphone for about 60 s
+  -> Provider = the website when known, else the app; the website's choice
+     when it has one, else the app's (a browser's choice covers its other
+     sites), else Ask
+     ├── Never offer -> nothing shown; an earlier offer stays snoozed
+     ├── Always record -> starts recording, no offer   // meetings.auto-record
+     │   └── recording capsule says "Started automatically" for 10 s; with the
+     │       indicator off, a "Recording automatically" capsule with Stop
+     └── Ask -> Capsule below the menu bar, focus-free  // meetings.offer
+         ├── Title: "Google Meet call detected", "Call on meet.jit.si",
+         │   "Call in Brave Browser" (site unknown), or the meeting's name
+         ├── Record -> Start recording
+         ├── Not now -> Close
+         ├── … -> "<provider>" · "Change anytime in Settings" (capsule widens)
+         │   ├── Never offer -> saved, close
+         │   ├── Always record -> saved, records this call too
+         │   │   └── not offered for a browser on an unknown page
+         │   └── Cancel
+         └── 20 s timeout -> Close                     // never records on timeout
+  -> Same call is snoozed by key and app until off the microphone for about 60 s,
+     offered or recorded; stopping an automatic recording does not restart it
+
+Choices persist as `meetings.providers` (`key`, `label`, `policy`:
+`ask` / `always_record` / `never_offer`) in `settings.json`. Missing means Ask.
+The older `meetings.never_offer` list reads as Never offer entries and is
+rewritten as `providers` on the next load.
 ```
 
 Chromium and Electron apps (Brave, Chrome, Edge, Slack, Teams) capture microphone
@@ -74,9 +92,22 @@ On 2026-10-21 Brave opened the microphone for 3-6 s at a time on
 problems.kitlangton.com (board voice notes) and each burst got a "Browser call
 call detected" offer; that is what the 20 s browser threshold prevents.
 Checks: `a_browser_voice_note_is_not_offered_but_a_sustained_browser_call_is`,
-`offer_titles_name_the_service_site_or_browser_without_repeating_call`, and
-`never_offer_silences_the_site_when_known_and_the_app_otherwise` in
-[meeting_detection.rs](../../src/meeting_detection.rs).
+`offer_titles_name_the_service_site_or_browser_without_repeating_call`,
+`choices_apply_to_the_site_when_known_and_the_app_otherwise`,
+`always_record_starts_after_the_same_stability_count_as_an_offer`, and
+`never_offer_and_snoozed_calls_never_start` in
+[meeting_detection.rs](../../src/meeting_detection.rs);
+`meeting_providers_ask_by_default_and_legacy_never_offer_entries_stay_never` in
+[app_settings.rs](../../src/app_settings.rs); the capsule checks in
+[meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs)
+(`always_record_saves_the_choice_and_records_this_call`,
+`never_offer_saves_the_choice_and_dismisses`,
+`a_browser_on_an_unknown_page_cannot_be_set_to_always_record`,
+`an_offer_names_the_call_without_asking_about_consent`,
+`an_automatic_recording_says_so_at_first`); and
+`meetings_settings_save_and_ask_for_system_audio` (Linux pane tests). The
+controller loop that turns `Detection::Record` into a recording has no
+automated test; it shares the manual Record path.
 
 Sources: [meeting_detection.rs](../../src/meeting_detection.rs),
 [microphone_activity.rs](../../src/microphone_activity.rs),
@@ -101,8 +132,9 @@ Brave WebRTC `getUserMedia({audio: true})` reproduction on Pro confirmed
 `NSRunningApplication == nil` before parent/bundle resolution and resolved to
 `com.brave.Browser` and `com.tinyspeck.slackmacgap` afterward.
 
-The capsules have no `--snap` scene; the GPUI capsule previews went with
-GPUI.
+The capsules have no `--snap` scene. `HEX_CAPSULE_SNAPS=<folder> cargo test
+--bin voice-control capsule_snapshots` renders the offer, its choices, and the
+automatic-recording states in light and dark on a Mac with a GPU.
 
 ### Record
 
@@ -166,13 +198,14 @@ fed by the controller events the menu-bar pump receives
 call", ready (15 s, Copy / Reveal, notes refresh) and a recording capsule
 (title, elapsed time, Open, Stop, in the configured corner) are ported.
 Not ported yet: Copy new / Copy all, hover expansion, and dragging the
-recording capsule. A "Never offer" choice is saved and also written into
-the window's live settings. On 2026-10-22 a signed build on a MacBook Pro
+recording capsule. A "Never offer" or "Always record" choice is saved and
+also written into the window's live settings. On 2026-10-22 a signed build on a MacBook Pro
 showed the recording capsule (Open opened the meeting while it kept
 recording; Stop transcribed) and the ready capsule (Copy copied the
 Markdown). Before that day's fix the recording capsule never appeared: it
 closed and reopened in one overlay batch, and the hide ran last. The offer,
-"left the call" and "Never offer" capsules remain unseen on screen.
+"left the call", "…" choices, and automatic-recording capsules remain unseen
+on screen.
 
 ### Transcribe
 

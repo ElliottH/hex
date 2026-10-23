@@ -342,9 +342,9 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         crate::rune_ui::meeting_capsules::MeetingCapsules::install(
             &mut app,
             controller_commands,
-            move |entry| {
-                crate::app_settings::save_never_offer_meeting(entry.clone());
-                window.update(move |ui, _| crate::rune_ui::never_offer(ui, entry));
+            move |choice| {
+                crate::app_settings::save_meeting_provider(choice.clone());
+                window.update(move |ui, _| crate::rune_ui::meeting_provider_chosen(ui, choice));
             },
         )
     };

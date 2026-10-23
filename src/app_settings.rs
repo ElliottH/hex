@@ -22,7 +22,7 @@ static MEETING_NOTES_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEETING_INDICATOR_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEETING_INDICATOR_CORNER: AtomicU8 = AtomicU8::new(0);
 static MEETING_OUTPUT_FOLDER: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
-static MEETING_NEVER_OFFER: OnceLock<RwLock<Vec<String>>> = OnceLock::new();
+static MEETING_PROVIDERS: OnceLock<RwLock<Vec<MeetingProviderChoice>>> = OnceLock::new();
 static MICROPHONE_POLICY: AtomicU8 = AtomicU8::new(0);
 static CUSTOM_TRANSFORMATIONS_ENABLED: AtomicBool = AtomicBool::new(false);
 static INDICATOR_POSITION: AtomicU8 = AtomicU8::new(0);
@@ -624,16 +624,50 @@ pub struct MeetingSettings {
     pub show_recording_indicator: bool,
     /// Screen corner the floating recording indicator snaps to after dragging.
     pub recording_indicator_corner: MeetingIndicatorCorner,
-    /// Websites and apps Hex never offers to record.
-    pub never_offer: Vec<NeverOfferMeeting>,
+    /// What to do when a call from each website or app is detected. Older
+    /// files only had a `never_offer` list, whose entries carry no `policy`
+    /// and so read as Never offer.
+    #[serde(alias = "never_offer")]
+    pub providers: Vec<MeetingProviderChoice>,
 }
 
-/// A website host or an app's canonical bundle ID that never gets a
-/// recording offer, with the name shown in Settings.
+/// The call services Settings always lists, by provider key (the app's
+/// canonical bundle ID, or the website host for browser services) and
+/// English name.
+pub const KNOWN_MEETING_PROVIDERS: [(&str, &str); 5] = [
+    ("com.tinyspeck.slackmacgap", "Slack huddles"),
+    ("us.zoom.xos", "Zoom"),
+    ("meet.google.com", "Google Meet"),
+    ("com.microsoft.teams2", "Microsoft Teams"),
+    ("com.apple.FaceTime", "FaceTime"),
+];
+
+/// What Hex does when it detects a call from a provider.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingPolicy {
+    /// Offer to record.
+    #[default]
+    Ask,
+    /// Start recording without an offer.
+    AlwaysRecord,
+    /// Neither offer nor record.
+    NeverOffer,
+}
+
+/// A website host or an app's canonical bundle ID, the name shown in
+/// Settings, and the user's choice for its calls. Unlisted providers Ask.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct NeverOfferMeeting {
+pub struct MeetingProviderChoice {
     pub key: String,
     pub label: String,
+    /// Always written; missing only in a legacy `never_offer` entry.
+    #[serde(default = "legacy_never_offer")]
+    pub policy: MeetingPolicy,
+}
+
+fn legacy_never_offer() -> MeetingPolicy {
+    MeetingPolicy::NeverOffer
 }
 
 impl Default for MeetingSettings {
@@ -644,7 +678,7 @@ impl Default for MeetingSettings {
             summarize_with_apple_intelligence: true,
             show_recording_indicator: true,
             recording_indicator_corner: MeetingIndicatorCorner::TopRight,
-            never_offer: Vec::new(),
+            providers: Vec::new(),
         }
     }
 }
@@ -1167,15 +1201,10 @@ impl AppSettings {
             .write()
             .unwrap_or_else(|error| error.into_inner()) =
             Some(self.meetings.resolved_output_folder());
-        *MEETING_NEVER_OFFER
+        *MEETING_PROVIDERS
             .get_or_init(Default::default)
             .write()
-            .unwrap_or_else(|error| error.into_inner()) = self
-            .meetings
-            .never_offer
-            .iter()
-            .map(|entry| entry.key.clone())
-            .collect();
+            .unwrap_or_else(|error| error.into_inner()) = self.meetings.providers.clone();
         *HOTKEYS
             .get_or_init(Default::default)
             .write()
@@ -1490,42 +1519,49 @@ pub fn meeting_indicator_corner() -> MeetingIndicatorCorner {
     MeetingIndicatorCorner::decode(MEETING_INDICATOR_CORNER.load(Ordering::Acquire))
 }
 
-/// Keys of the websites and apps that never get a recording offer.
+/// The user's choices for detected calls, by website or app.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn meeting_never_offer_keys() -> Vec<String> {
-    MEETING_NEVER_OFFER
+pub fn meeting_provider_choices() -> Vec<MeetingProviderChoice> {
+    MEETING_PROVIDERS
         .get_or_init(Default::default)
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
 }
 
-/// Adds `entry` once; returns whether the settings changed.
+/// Sets one provider's policy; returns whether the settings changed.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn insert_never_offer(meetings: &mut MeetingSettings, entry: NeverOfferMeeting) -> bool {
-    if meetings
-        .never_offer
-        .iter()
-        .any(|known| known.key == entry.key)
+pub fn set_meeting_provider(meetings: &mut MeetingSettings, choice: MeetingProviderChoice) -> bool {
+    match meetings
+        .providers
+        .iter_mut()
+        .find(|known| known.key == choice.key)
     {
-        return false;
+        Some(known) if known.policy == choice.policy => false,
+        Some(known) => {
+            known.policy = choice.policy;
+            true
+        }
+        None => {
+            meetings.providers.push(choice);
+            true
+        }
     }
-    meetings.never_offer.push(entry);
-    true
 }
 
-/// Saves a "Never offer" choice made while the Settings window is closed.
+/// Saves a choice made from a meeting capsule while the Settings window is
+/// closed.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn save_never_offer_meeting(entry: NeverOfferMeeting) {
+pub fn save_meeting_provider(choice: MeetingProviderChoice) {
     match AppSettings::load() {
         Ok(mut settings) => {
-            if insert_never_offer(&mut settings.meetings, entry)
+            if set_meeting_provider(&mut settings.meetings, choice)
                 && let Err(error) = settings.save()
             {
-                tracing::warn!(%error, "could not save never-offer meeting choice");
+                tracing::warn!(%error, "could not save a meeting provider choice");
             }
         }
-        Err(error) => tracing::warn!(%error, "could not load settings to save never-offer choice"),
+        Err(error) => tracing::warn!(%error, "could not load settings to save a meeting choice"),
     }
 }
 
@@ -1710,6 +1746,52 @@ mod tests {
                 .ends_with("Hex Meetings")
         );
         assert!(settings.text_replacements.is_empty());
+    }
+
+    #[test]
+    fn meeting_providers_ask_by_default_and_legacy_never_offer_entries_stay_never() {
+        let fresh: AppSettings = serde_json::from_str(r#"{"meetings":{"enabled":true}}"#).unwrap();
+        assert!(fresh.meetings.providers.is_empty());
+
+        let legacy: AppSettings = serde_json::from_str(
+            r#"{"meetings":{"never_offer":[{"key":"problems.kitlangton.com","label":"problems.kitlangton.com"}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            legacy.meetings.providers,
+            vec![MeetingProviderChoice {
+                key: "problems.kitlangton.com".into(),
+                label: "problems.kitlangton.com".into(),
+                policy: MeetingPolicy::NeverOffer,
+            }]
+        );
+
+        let mut meetings = legacy.meetings.clone();
+        assert!(set_meeting_provider(
+            &mut meetings,
+            MeetingProviderChoice {
+                key: "com.tinyspeck.slackmacgap".into(),
+                label: "Slack huddles".into(),
+                policy: MeetingPolicy::AlwaysRecord,
+            }
+        ));
+        let written = serde_json::to_value(&meetings).unwrap();
+        assert!(written.get("never_offer").is_none());
+        assert_eq!(written["providers"][0]["policy"], "never_offer");
+        assert_eq!(written["providers"][1]["policy"], "always_record");
+        let reread: MeetingSettings = serde_json::from_value(written).unwrap();
+        assert_eq!(reread, meetings);
+        // Choosing Ask again keeps the row, so Settings still lists the site.
+        let mut asked = reread.clone();
+        assert!(set_meeting_provider(
+            &mut asked,
+            MeetingProviderChoice {
+                policy: MeetingPolicy::Ask,
+                ..reread.providers[0].clone()
+            }
+        ));
+        assert_eq!(asked.providers.len(), 2);
+        assert_eq!(asked.providers[0].policy, MeetingPolicy::Ask);
     }
 
     #[test]

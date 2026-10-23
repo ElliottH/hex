@@ -15,7 +15,7 @@ use color_eyre::eyre::{Result, eyre};
 use crate::context::ContextSnapshot;
 use crate::meeting::{self, MeetingRequest};
 use crate::meeting_detection::{
-    CallPresence, MeetingCandidate, MeetingDetector, candidate_from_microphone,
+    CallPresence, Detection, MeetingCandidate, MeetingDetector, candidate_from_microphone,
 };
 use crate::microphone_activity::active_microphone_applications;
 
@@ -30,13 +30,25 @@ pub(crate) enum ControllerCommand {
 pub(crate) enum ControllerEvent {
     Offer(MeetingCandidate),
     Starting,
-    RecordingStarted { id: String, title: String },
-    Retitled { title: String },
+    /// `automatic` when the provider is set to Always record.
+    RecordingStarted {
+        id: String,
+        title: String,
+        automatic: bool,
+    },
+    Retitled {
+        title: String,
+    },
     OpenMeeting(String),
     Transcribing,
-    CallEnded { app: String },
+    CallEnded {
+        app: String,
+    },
     Finished(Box<meeting::MeetingManifest>),
-    Failed { title: String, error: String },
+    Failed {
+        title: String,
+        error: String,
+    },
     NotesStarted,
     NotesFinished(Box<meeting::MeetingManifest>),
 }
@@ -45,6 +57,7 @@ struct ActiveRecording {
     title: String,
     application: Option<String>,
     app_label: String,
+    automatic: bool,
     presence: CallPresence,
     stop: Arc<AtomicBool>,
     updates: Receiver<meeting::RecordingUpdate>,
@@ -104,12 +117,21 @@ pub(crate) fn controller_loop(
 
         poll_recording(&mut recording, &events)?;
 
-        if recording.is_none()
-            && enabled
-            && !detect_meeting(&mut detector, &mut observed_microphone_apps, &events)
-        {
-            thread::sleep(Duration::from_secs(2));
-            continue;
+        if recording.is_none() && enabled {
+            let choices = crate::app_settings::meeting_provider_choices();
+            match detect_meeting(&mut detector, &mut observed_microphone_apps, &choices) {
+                Err(()) => {
+                    thread::sleep(Duration::from_secs(2));
+                    continue;
+                }
+                Ok(Some(Detection::Offer(candidate))) => {
+                    let _ = events.send(ControllerEvent::Offer(candidate));
+                }
+                Ok(Some(Detection::Record(candidate))) => {
+                    start_recording(&mut recording, candidate, true, &project_root, &events);
+                }
+                Ok(None) => {}
+            }
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -136,30 +158,7 @@ fn handle_command(
             tracing::warn!("ignored a meeting recording request while meetings are off");
         }
         ControllerCommand::Record(candidate) if recording.is_none() => {
-            let stop = Arc::new(AtomicBool::new(false));
-            let worker_stop = stop.clone();
-            let (update_sender, updates) = mpsc::sync_channel(4);
-            let start = candidate.recording_start();
-            let worker_project_root = project_root.to_path_buf();
-            let worker = thread::spawn(move || {
-                meeting::record(
-                    start,
-                    &worker_stop,
-                    &worker_project_root,
-                    Some(update_sender),
-                )
-            });
-            let _ = events.send(ControllerEvent::Starting);
-            *recording = Some(ActiveRecording {
-                title: candidate.title,
-                application: candidate.application,
-                app_label: candidate.source.label().into(),
-                presence: CallPresence::default(),
-                stop,
-                updates,
-                reported_started: false,
-                worker,
-            });
+            start_recording(recording, candidate, false, project_root, events);
         }
         ControllerCommand::Stop => {
             if let Some(active) = recording.as_ref()
@@ -176,6 +175,47 @@ fn handle_command(
     }
 }
 
+fn start_recording(
+    recording: &mut Option<ActiveRecording>,
+    candidate: MeetingCandidate,
+    automatic: bool,
+    project_root: &Path,
+    events: &SyncSender<ControllerEvent>,
+) {
+    if automatic {
+        tracing::info!(
+            source = candidate.source.label(),
+            title = candidate.title,
+            "meeting recording started automatically"
+        );
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker_stop = stop.clone();
+    let (update_sender, updates) = mpsc::sync_channel(4);
+    let start = candidate.recording_start();
+    let worker_project_root = project_root.to_path_buf();
+    let worker = thread::spawn(move || {
+        meeting::record(
+            start,
+            &worker_stop,
+            &worker_project_root,
+            Some(update_sender),
+        )
+    });
+    let _ = events.send(ControllerEvent::Starting);
+    *recording = Some(ActiveRecording {
+        title: candidate.title,
+        application: candidate.application,
+        app_label: candidate.source.label().into(),
+        automatic,
+        presence: CallPresence::default(),
+        stop,
+        updates,
+        reported_started: false,
+        worker,
+    });
+}
+
 fn poll_recording(
     recording: &mut Option<ActiveRecording>,
     events: &SyncSender<ControllerEvent>,
@@ -187,7 +227,11 @@ fn poll_recording(
                     active.reported_started = true;
                     active.title = title.clone();
                     if !active.stop.load(Ordering::Relaxed) {
-                        let _ = events.send(ControllerEvent::RecordingStarted { id, title });
+                        let _ = events.send(ControllerEvent::RecordingStarted {
+                            id,
+                            title,
+                            automatic: active.automatic,
+                        });
                     }
                 }
                 meeting::RecordingUpdate::Retitled { title } => {
@@ -254,16 +298,17 @@ fn poll_recording(
     Ok(())
 }
 
+/// One detection pass; `Err` when microphone activity could not be read.
 fn detect_meeting(
     detector: &mut MeetingDetector,
     observed_microphone_apps: &mut Vec<(i32, String)>,
-    events: &SyncSender<ControllerEvent>,
-) -> bool {
+    choices: &[crate::app_settings::MeetingProviderChoice],
+) -> Result<Option<Detection>, ()> {
     let microphone_apps = match active_microphone_applications() {
         Ok(applications) => applications,
         Err(error) => {
             tracing::warn!(%error, "could not inspect microphone activity");
-            return false;
+            return Err(());
         }
     };
     let observed = microphone_apps
@@ -297,19 +342,17 @@ fn detect_meeting(
         Some(bundle_id) => ContextSnapshot::capture_for_meeting(bundle_id).unwrap_or_default(),
         None => ContextSnapshot::default(),
     };
-    let silenced = crate::app_settings::meeting_never_offer_keys();
-    let candidate = application
-        .and_then(|application| candidate_from_microphone(&application, &context))
-        .filter(|candidate| !candidate.is_silenced(&silenced));
-    if let Some(candidate) = detector.observe(candidate) {
+    let candidate =
+        application.and_then(|application| candidate_from_microphone(&application, &context));
+    let detection = detector.detect(candidate, choices);
+    if let Some(Detection::Offer(candidate)) = &detection {
         tracing::info!(
             source = candidate.source.label(),
             title = candidate.title,
             "meeting recording offer triggered"
         );
-        let _ = events.send(ControllerEvent::Offer(candidate));
     }
-    true
+    Ok(detection)
 }
 
 /// Writes notes on a background thread; the UI refreshes from the manifest

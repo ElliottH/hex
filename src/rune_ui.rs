@@ -209,11 +209,14 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
     }
 }
 
-/// A capsule's "Never offer" choice, kept in the window's live settings so its
-/// next save doesn't drop it.
+/// A capsule's "Never offer" or "Always record" choice, kept in the window's
+/// live settings so its next save doesn't drop it.
 #[cfg(target_os = "macos")]
-pub(crate) fn never_offer(ui: &mut Ui, entry: crate::app_settings::NeverOfferMeeting) {
-    crate::app_settings::insert_never_offer(&mut ui.settings.meetings, entry);
+pub(crate) fn meeting_provider_chosen(
+    ui: &mut Ui,
+    choice: crate::app_settings::MeetingProviderChoice,
+) {
+    crate::app_settings::set_meeting_provider(&mut ui.settings.meetings, choice);
 }
 
 /// A meeting recording could not start or finish; the Meetings pane says why.
@@ -1255,10 +1258,18 @@ fn mac_fixture() -> Ui {
     ui.settings.dictation_hotkey = AppSettings::default().dictation_hotkey;
     ui.settings.paste_with_shift = false;
     ui.settings.meetings.enabled = true;
-    ui.settings.meetings.never_offer = vec![crate::app_settings::NeverOfferMeeting {
-        key: "meet.google.com".into(),
-        label: "meet.google.com".into(),
-    }];
+    ui.settings.meetings.providers = vec![
+        crate::app_settings::MeetingProviderChoice {
+            key: "com.tinyspeck.slackmacgap".into(),
+            label: "Slack huddles".into(),
+            policy: crate::app_settings::MeetingPolicy::AlwaysRecord,
+        },
+        crate::app_settings::MeetingProviderChoice {
+            key: "problems.kitlangton.com".into(),
+            label: "problems.kitlangton.com".into(),
+            policy: crate::app_settings::MeetingPolicy::NeverOffer,
+        },
+    ];
     ui.settings.experimental.hex_microphone = true;
     ui.meetings = meetings::MeetingsPane::fixture();
     ui

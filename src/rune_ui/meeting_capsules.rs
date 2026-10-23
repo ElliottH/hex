@@ -20,7 +20,7 @@ use rune::{Align, Cx, El, OverlayHandle, OverlaySpec, ScreenEdge, Tx, col, row, 
 use rune_kit::{Button, ButtonSize, ButtonVariant};
 
 use super::controls::{Paint, status_dot};
-use crate::app_settings::NeverOfferMeeting;
+use crate::app_settings::{MeetingPolicy, MeetingProviderChoice};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::meeting::{self, MeetingManifest};
 use crate::meeting_detection::MeetingCandidate;
@@ -28,12 +28,16 @@ use crate::meeting_watcher::{ControllerCommand, ControllerEvent};
 
 /// The offer, call ended, and ready capsules.
 const MEETING_PANEL_WIDTH: f32 = 420.0;
+/// The offer's "…" choices need room for three buttons beside the name.
+const MEETING_MENU_WIDTH: f32 = 560.0;
 const MEETING_PANEL_HEIGHT: f32 = 64.0;
 /// The recording capsule.
 const RECORDING_PANEL_WIDTH: f32 = 548.0;
 const RECORDING_PANEL_HEIGHT: f32 = 48.0;
 const OFFER_TIMEOUT: Duration = Duration::from_secs(20);
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long an automatic recording says so before showing its elapsed time.
+const AUTOMATIC_LABEL: Duration = Duration::from_secs(10);
 const WINDOW_MARGIN: f32 = 12.0;
 /// Below the menu bar.
 const MENU_BAR: f32 = 28.0;
@@ -47,28 +51,59 @@ enum Kind {
         app: String,
     },
     Ready(Box<MeetingManifest>),
+    /// An automatic recording while the recording indicator is off.
+    AutoStarted {
+        title: String,
+    },
     Recording {
         id: String,
         title: String,
         started: Instant,
+        automatic: bool,
     },
 }
 
 struct Capsule {
     kind: Option<Kind>,
-    /// The offer shows its "Never offer" confirmation in place of its actions.
+    /// The offer shows its Never offer / Always record choices in place of
+    /// its actions.
     more_open: bool,
     copied: bool,
     commands: SyncSender<ControllerCommand>,
     hide: Option<Arc<dyn Fn() + Send + Sync>>,
-    never_offer: NeverOffer,
+    resize: Option<Arc<dyn Fn(f32) + Send + Sync>>,
+    choose: Choose,
 }
 
-type NeverOffer = Arc<dyn Fn(NeverOfferMeeting) + Send + Sync>;
+type Choose = Arc<dyn Fn(MeetingProviderChoice) + Send + Sync>;
 
 impl Capsule {
     fn send(&self, command: ControllerCommand) -> bool {
         self.commands.try_send(command).is_ok()
+    }
+
+    fn set_more_open(&mut self, open: bool) {
+        self.more_open = open;
+        if let Some(resize) = &self.resize {
+            resize(if open {
+                MEETING_MENU_WIDTH
+            } else {
+                MEETING_PANEL_WIDTH
+            });
+        }
+    }
+
+    /// Saves the offered provider's choice; returns whether there was one.
+    fn choose(&self, policy: MeetingPolicy) -> bool {
+        let Some(Kind::Offer(candidate)) = &self.kind else {
+            return false;
+        };
+        let Some(provider) = candidate.provider() else {
+            return false;
+        };
+        tracing::info!(key = %provider.key, ?policy, "meeting provider choice made from an offer");
+        (self.choose)(provider.choose(policy));
+        true
     }
 
     fn close(&mut self) {
@@ -92,14 +127,14 @@ pub(crate) struct MeetingCapsules {
 }
 
 impl MeetingCapsules {
-    /// `never_offer` records a "Never offer" choice (the window keeps the
-    /// settings it saves).
+    /// `choose` saves a "Never offer" or "Always record" choice (the window
+    /// keeps the settings it saves).
     pub(crate) fn install<S: 'static>(
         app: &mut rune::App<S>,
         commands: SyncSender<ControllerCommand>,
-        never_offer: impl Fn(NeverOfferMeeting) + Send + Sync + 'static,
+        choose: impl Fn(MeetingProviderChoice) + Send + Sync + 'static,
     ) -> Self {
-        let never_offer: NeverOffer = Arc::new(never_offer);
+        let choose: Choose = Arc::new(choose);
         let overlay = |app: &mut rune::App<S>, name, size| {
             let handle = app.overlay(
                 OverlaySpec {
@@ -118,12 +153,16 @@ impl MeetingCapsules {
                     copied: false,
                     commands: commands.clone(),
                     hide: None,
-                    never_offer: never_offer.clone(),
+                    resize: None,
+                    choose: choose.clone(),
                 },
             );
-            let hide = handle.clone();
+            let (hide, resize) = (handle.clone(), handle.clone());
             handle.update(move |capsule, _| {
                 capsule.hide = Some(Arc::new(move || hide.hide()));
+                capsule.resize = Some(Arc::new(move |width| {
+                    resize.resize((width, MEETING_PANEL_HEIGHT));
+                }));
             });
             handle
         };
@@ -161,10 +200,22 @@ impl MeetingCapsules {
                 self.close_panel();
                 self.close_recording();
             }
-            ControllerEvent::RecordingStarted { id, title } => {
+            ControllerEvent::RecordingStarted {
+                id,
+                title,
+                automatic,
+            } => {
                 self.close_recording();
                 if crate::app_settings::meeting_indicator_enabled() {
-                    self.show_recording(id.clone(), title.clone());
+                    self.show_recording(id.clone(), title.clone(), *automatic);
+                } else if *automatic {
+                    // Nothing else on screen would say a recording began.
+                    self.show_panel(
+                        Kind::AutoStarted {
+                            title: title.clone(),
+                        },
+                        Some(AUTOMATIC_LABEL),
+                    );
                 }
             }
             ControllerEvent::Retitled { title } => {
@@ -200,6 +251,8 @@ impl MeetingCapsules {
 
     fn show_panel(&self, kind: Kind, timeout: Option<Duration>) {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.panel
+            .resize((MEETING_PANEL_WIDTH, MEETING_PANEL_HEIGHT));
         self.panel.update(move |capsule, tx| {
             capsule.kind = Some(kind);
             capsule.more_open = false;
@@ -241,7 +294,7 @@ impl MeetingCapsules {
         self.panel.hide();
     }
 
-    fn show_recording(&self, id: String, title: String) {
+    fn show_recording(&self, id: String, title: String, automatic: bool) {
         let corner = crate::app_settings::meeting_indicator_corner();
         let (edge, margin) = if corner.is_top() {
             (ScreenEdge::Top, WINDOW_MARGIN + MENU_BAR)
@@ -260,7 +313,12 @@ impl MeetingCapsules {
         let started = Instant::now();
         let ticker_id = id.clone();
         self.recording.update(move |capsule, tx| {
-            capsule.kind = Some(Kind::Recording { id, title, started });
+            capsule.kind = Some(Kind::Recording {
+                id,
+                title,
+                started,
+                automatic,
+            });
             tx.instant();
         });
         self.recording.show();
@@ -307,39 +365,30 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
         return row().key("empty");
     };
     let (dot, title, subtitle, actions) = match kind {
-        Kind::Recording { title, started, .. } => {
-            return recording(p, title, *started);
+        Kind::Recording {
+            title,
+            started,
+            automatic,
+            ..
+        } => {
+            return recording(p, title, *started, *automatic);
         }
-        Kind::Offer(candidate) if capsule.more_open => {
-            let label = candidate
-                .never_offer_target()
-                .map_or_else(String::new, |target| target.label);
-            (
-                p.muted(),
-                tr_fill("Never offer for {}?", &label),
-                tr("You can undo this in Settings › Meetings.").to_owned(),
-                vec![
-                    button(p, "never-offer-cancel", tr("Cancel"), false, |c| {
-                        c.more_open = false;
-                    }),
-                    button(p, "never-offer", tr("Never offer"), true, |c| {
-                        if let Some(Kind::Offer(candidate)) = &c.kind
-                            && let Some(target) = candidate.never_offer_target()
-                        {
-                            tracing::info!(key = %target.key, "meeting offers silenced");
-                            (c.never_offer)(target);
-                        }
-                        c.send(ControllerCommand::Dismiss);
-                        c.close();
-                    }),
-                ],
-            )
-        }
+        Kind::AutoStarted { title } => (
+            p.danger(),
+            tr("Recording automatically").to_owned(),
+            title.clone(),
+            vec![button(p, "stop", tr("Stop"), true, |c| {
+                if c.send(ControllerCommand::Stop) {
+                    c.close();
+                }
+            })],
+        ),
+        Kind::Offer(candidate) if capsule.more_open => offer_choices(p, candidate),
         Kind::Offer(candidate) => {
             let mut actions = Vec::new();
-            if candidate.never_offer_target().is_some() {
+            if candidate.provider().is_some() {
                 actions.push(button(p, "offer-more", "…", false, |c| {
-                    c.more_open = true;
+                    c.set_more_open(true);
                 }));
             }
             actions.push(button(p, "not-now", tr("Not now"), false, |c| {
@@ -366,12 +415,7 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
                     c.close();
                 }
             }));
-            (
-                p.muted(),
-                candidate.offer_title(),
-                tr("Record locally? Tell participants.").to_owned(),
-                actions,
-            )
+            (p.muted(), candidate.offer_title(), String::new(), actions)
         }
         Kind::CallEnded { app } => (
             p.danger(),
@@ -391,6 +435,46 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
         Kind::Ready(manifest) => ready(p, manifest, capsule.copied),
     };
     pill(p, dot, &title, &subtitle, actions)
+}
+
+/// The offer's "…": never offer this provider again, or always record it
+/// (which records this call too).
+fn offer_choices(p: Paint, candidate: &MeetingCandidate) -> (rune::Color, String, String, Vec<El>) {
+    let label = candidate
+        .provider()
+        .map_or_else(String::new, |provider| provider.label);
+    let mut actions = vec![
+        button(p, "offer-cancel", tr("Cancel"), false, |c| {
+            c.set_more_open(false);
+        }),
+        button(p, "never-offer", tr("Never offer"), false, |c| {
+            c.choose(MeetingPolicy::NeverOffer);
+            c.send(ControllerCommand::Dismiss);
+            c.close();
+        }),
+    ];
+    if candidate.can_always_record() {
+        actions.push(button(p, "always-record", tr("Always record"), true, |c| {
+            let Some(Kind::Offer(candidate)) = &c.kind else {
+                return;
+            };
+            let command = if candidate.key == "preview" {
+                ControllerCommand::Dismiss
+            } else {
+                ControllerCommand::Record(candidate.clone())
+            };
+            c.choose(MeetingPolicy::AlwaysRecord);
+            if c.send(command) {
+                c.close();
+            }
+        }));
+    }
+    (
+        p.muted(),
+        label,
+        tr("Change anytime in Settings").to_owned(),
+        actions,
+    )
 }
 
 fn ready(
@@ -453,8 +537,13 @@ fn ready(
     (p.success(), title, subtitle, actions)
 }
 
-fn recording(p: Paint, title: &str, started: Instant) -> El {
+fn recording(p: Paint, title: &str, started: Instant, automatic: bool) -> El {
     let elapsed = meeting::format_duration(started.elapsed().as_millis() as u64);
+    let subtitle = if automatic && started.elapsed() < AUTOMATIC_LABEL {
+        tr_fill("Started automatically · {}", &elapsed)
+    } else {
+        elapsed
+    };
     let actions = vec![
         button(p, "open", tr("Open"), false, |c| {
             if let Some(Kind::Recording { id, .. }) = &c.kind {
@@ -465,7 +554,7 @@ fn recording(p: Paint, title: &str, started: Instant) -> El {
             c.send(ControllerCommand::Stop);
         }),
     ];
-    pill(p, p.danger(), title, &elapsed, actions)
+    pill(p, p.danger(), title, &subtitle, actions)
 }
 
 /// The capsule's pill: status dot, two truncated lines, and its actions.
@@ -502,14 +591,228 @@ fn pill(p: Paint, dot: rune::Color, title: &str, subtitle: &str, actions: Vec<El
                                 .font(p.k.ty.ui_medium)
                                 .color(p.text()),
                         )
-                        .child(
+                        .children((!subtitle.is_empty()).then(|| {
                             text(subtitle.to_owned())
                                 .key("subtitle")
                                 .truncate()
                                 .font(p.k.ty.small)
-                                .color(p.faint()),
-                        ),
+                                .color(p.faint())
+                        })),
                 )
                 .child(row().key("actions").gap(8.0).children(actions)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::{self, Receiver};
+
+    use rune::text::TextSystem;
+    use rune::{Env, Runtime};
+
+    use super::*;
+    use crate::meeting_detection::MeetingSource;
+
+    type Chosen = Arc<Mutex<Vec<MeetingProviderChoice>>>;
+
+    const PANEL: (f32, f32) = (MEETING_PANEL_WIDTH, MEETING_PANEL_HEIGHT);
+    const MENU: (f32, f32) = (MEETING_MENU_WIDTH, MEETING_PANEL_HEIGHT);
+    const RECORDING: (f32, f32) = (RECORDING_PANEL_WIDTH, RECORDING_PANEL_HEIGHT);
+
+    fn slack_huddle() -> MeetingCandidate {
+        MeetingCandidate {
+            key: "meeting-slack".into(),
+            title: "Slack huddle".into(),
+            source: MeetingSource::SlackHuddle,
+            application: Some("com.tinyspeck.slackmacgap".into()),
+            named: false,
+            site: None,
+            application_name: Some("Slack".into()),
+        }
+    }
+
+    fn bare_browser() -> MeetingCandidate {
+        MeetingCandidate {
+            key: "meeting-brave".into(),
+            title: "Browser call".into(),
+            source: MeetingSource::BrowserCall,
+            application: Some("com.brave.Browser".into()),
+            named: false,
+            site: None,
+            application_name: Some("Brave Browser".into()),
+        }
+    }
+
+    fn runtime(
+        kind: Kind,
+        more_open: bool,
+        dark: bool,
+        size: (f32, f32),
+    ) -> (Runtime<Capsule>, Receiver<ControllerCommand>, Chosen) {
+        let (commands, received) = mpsc::sync_channel(4);
+        let chosen = Chosen::default();
+        let saved = chosen.clone();
+        let capsule = Capsule {
+            kind: Some(kind),
+            more_open,
+            copied: false,
+            commands,
+            hide: None,
+            resize: None,
+            choose: Arc::new(move |choice| saved.lock().unwrap().push(choice)),
+        };
+        let env = Env {
+            system_dark: dark,
+            scale: 2.0,
+        };
+        let text = TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
+        let mut rt = Runtime::with_text(capsule, view, size, env, text);
+        rt.frame(0.0);
+        (rt, received, chosen)
+    }
+
+    fn tap(rt: &mut Runtime<Capsule>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("no element {key}"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+    }
+
+    fn texts(rt: &Runtime<Capsule>) -> Vec<String> {
+        rt.elements().into_iter().filter_map(|e| e.text).collect()
+    }
+
+    #[test]
+    fn an_offer_names_the_call_without_asking_about_consent() {
+        let (rt, _, _) = runtime(Kind::Offer(slack_huddle()), false, true, PANEL);
+        assert_eq!(texts(&rt)[0], "Slack huddle detected");
+        assert!(rt.find("subtitle").is_none());
+        assert!(rt.find("offer-more").is_some());
+    }
+
+    #[test]
+    fn always_record_saves_the_choice_and_records_this_call() {
+        let (mut rt, _, _) = runtime(Kind::Offer(slack_huddle()), false, true, PANEL);
+        tap(&mut rt, "offer-more");
+        assert!(rt.state.more_open);
+        // The overlay widens for the choices; render them at that width.
+        let (mut rt, commands, chosen) = runtime(Kind::Offer(slack_huddle()), true, true, MENU);
+        assert_eq!(texts(&rt)[0], "Slack huddles");
+        tap(&mut rt, "always-record");
+        let chosen = chosen.lock().unwrap();
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].key, "com.tinyspeck.slackmacgap");
+        assert_eq!(chosen[0].policy, MeetingPolicy::AlwaysRecord);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::Record(candidate)) if candidate.key == "meeting-slack"
+        ));
+        assert!(rt.state.kind.is_none());
+    }
+
+    #[test]
+    fn never_offer_saves_the_choice_and_dismisses() {
+        let (mut rt, commands, chosen) = runtime(Kind::Offer(slack_huddle()), true, true, MENU);
+        tap(&mut rt, "never-offer");
+        assert_eq!(chosen.lock().unwrap()[0].policy, MeetingPolicy::NeverOffer);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::Dismiss)
+        ));
+    }
+
+    #[test]
+    fn a_browser_on_an_unknown_page_cannot_be_set_to_always_record() {
+        let (rt, _, _) = runtime(Kind::Offer(bare_browser()), true, true, MENU);
+        assert!(rt.find("never-offer").is_some());
+        assert!(rt.find("always-record").is_none());
+    }
+
+    #[test]
+    fn an_automatic_recording_says_so_at_first() {
+        let recording = |started| Kind::Recording {
+            id: "m".into(),
+            title: "Slack Huddle call — 2:30 PM".into(),
+            started,
+            automatic: true,
+        };
+        let (rt, _, _) = runtime(recording(Instant::now()), false, true, RECORDING);
+        assert!(
+            texts(&rt)
+                .iter()
+                .any(|text| text.starts_with("Started automatically · "))
+        );
+        let earlier = Instant::now() - AUTOMATIC_LABEL - Duration::from_secs(1);
+        let (rt, _, _) = runtime(recording(earlier), false, true, RECORDING);
+        assert!(!texts(&rt).iter().any(|text| text.contains("automatically")));
+    }
+
+    /// No `--snap` scene draws an overlay, so this renders the capsules to
+    /// PNGs in `HEX_CAPSULE_SNAPS` for review; without it, or a GPU, it skips.
+    #[test]
+    fn capsule_snapshots() {
+        use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+        let Some(folder) = std::env::var_os("HEX_CAPSULE_SNAPS") else {
+            return;
+        };
+        let Ok(gpu) = Gpu::try_new(Gpu::instance(), None) else {
+            eprintln!("skipping capsule snapshots: no GPU adapter");
+            return;
+        };
+        let folder = std::path::PathBuf::from(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut google_meet = slack_huddle();
+        google_meet.source = MeetingSource::GoogleMeet;
+        google_meet.site = Some("meet.google.com".into());
+        google_meet.title = "Design sync".into();
+        google_meet.named = true;
+        let states = [
+            ("offer", Kind::Offer(slack_huddle()), false, PANEL),
+            ("offer-choices", Kind::Offer(slack_huddle()), true, MENU),
+            ("offer-choices-site", Kind::Offer(google_meet), true, MENU),
+            (
+                "recording-automatic",
+                Kind::Recording {
+                    id: "m".into(),
+                    title: "Slack Huddle call — 2:30 PM".into(),
+                    started: Instant::now() - Duration::from_secs(4),
+                    automatic: true,
+                },
+                false,
+                RECORDING,
+            ),
+            (
+                "auto-started",
+                Kind::AutoStarted {
+                    title: "Slack Huddle call — 2:30 PM".into(),
+                },
+                false,
+                PANEL,
+            ),
+        ];
+        for (name, kind, more_open, size) in states {
+            for dark in [false, true] {
+                let (mut rt, _, _) = runtime(kind.clone(), more_open, dark, size);
+                rt.frame(0.0);
+                let (w, h) = ((size.0 * 2.0) as u32, (size.1 * 2.0) as u32);
+                let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+                let target = Offscreen::new(&gpu.device, w, h);
+                renderer.prepare(
+                    &gpu.device,
+                    &gpu.queue,
+                    &mut rt.text.atlas,
+                    &rt.instances,
+                    (w, h),
+                );
+                let mut encoder = gpu.device.create_command_encoder(&Default::default());
+                renderer.draw(&mut encoder, &target.view, rt.clear_color());
+                target.copy(&mut encoder);
+                gpu.queue.submit([encoder.finish()]);
+                let pixels = target.read(&gpu.device);
+                let theme = if dark { "dark" } else { "light" };
+                let path = folder.join(format!("capsule-{name}-{theme}.png"));
+                rune::render::write_png(&path, w, h, &pixels).unwrap();
+            }
+        }
+    }
 }

@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::app_settings::{KNOWN_MEETING_PROVIDERS, MeetingPolicy, MeetingProviderChoice};
 use crate::context::ContextSnapshot;
 use crate::microphone_activity::ActiveMicrophoneApplication;
 
@@ -35,6 +36,39 @@ pub struct MeetingCandidate {
     /// Display name of the application using the microphone.
     #[serde(default)]
     pub application_name: Option<String>,
+}
+
+fn known_provider_label(key: &str) -> Option<&'static str> {
+    KNOWN_MEETING_PROVIDERS
+        .iter()
+        .find(|(known, _)| *known == key)
+        .map(|(_, label)| *label)
+}
+
+/// A website or app whose calls share one Ask / Always record / Never offer
+/// choice.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MeetingProvider {
+    pub key: String,
+    pub label: String,
+}
+
+impl MeetingProvider {
+    pub fn choose(self, policy: MeetingPolicy) -> MeetingProviderChoice {
+        MeetingProviderChoice {
+            key: self.key,
+            label: self.label,
+            policy,
+        }
+    }
+}
+
+/// What a stable detected call leads to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Detection {
+    Offer(MeetingCandidate),
+    /// The provider is set to Always record.
+    Record(MeetingCandidate),
 }
 
 impl MeetingCandidate {
@@ -84,30 +118,39 @@ impl MeetingCandidate {
         }
     }
 
-    /// What "Never offer" silences: the website when known, else the app.
-    pub fn never_offer_target(&self) -> Option<crate::app_settings::NeverOfferMeeting> {
-        if let Some(site) = &self.site {
-            return Some(crate::app_settings::NeverOfferMeeting {
-                key: site.clone(),
-                label: site.clone(),
-            });
-        }
-        let application = self.application.clone()?;
-        Some(crate::app_settings::NeverOfferMeeting {
-            label: self
-                .application_name
-                .clone()
-                .unwrap_or_else(|| application.clone()),
-            key: application,
-        })
+    /// Whose call this is, for the user's Ask / Always record / Never offer
+    /// choice: the website when known, else the app. Known services use the
+    /// name Settings lists them under.
+    pub fn provider(&self) -> Option<MeetingProvider> {
+        let key = self.site.clone().or_else(|| self.application.clone())?;
+        let label = known_provider_label(&key)
+            .map(str::to_string)
+            .or_else(|| self.site.clone())
+            .or_else(|| self.application_name.clone())
+            .unwrap_or_else(|| key.clone());
+        Some(MeetingProvider { key, label })
     }
 
-    /// Whether the user asked never to be offered this site or app.
-    pub fn is_silenced(&self, keys: &[String]) -> bool {
-        keys.iter().any(|key| {
-            self.site.as_deref() == Some(key.as_str())
-                || self.application.as_deref() == Some(key.as_str())
-        })
+    /// Whether one click may set this provider to Always record: not for a
+    /// browser whose page is unknown, which would record every page.
+    pub fn can_always_record(&self) -> bool {
+        self.provider().is_some()
+            && !(self.source == MeetingSource::BrowserCall && self.site.is_none())
+    }
+
+    /// The user's choice for this call: the website's when it has one, else
+    /// the app's (a browser's choice covers its other sites), else Ask.
+    pub fn policy(&self, choices: &[MeetingProviderChoice]) -> MeetingPolicy {
+        let chosen = |key: Option<&str>| {
+            let key = key?;
+            choices
+                .iter()
+                .find(|choice| choice.key == key)
+                .map(|choice| choice.policy)
+        };
+        chosen(self.site.as_deref())
+            .or_else(|| chosen(self.application.as_deref()))
+            .unwrap_or_default()
     }
 
     fn required_observations(&self) -> u8 {
@@ -182,7 +225,32 @@ impl MeetingDetector {
         self.offered_application.as_deref() == Some(canonical_bundle_id)
     }
 
-    pub fn observe(&mut self, candidate: Option<MeetingCandidate>) -> Option<MeetingCandidate> {
+    /// One observation under the user's choices. A Never offer call shows
+    /// nothing but still counts as present; Always record ones pass the same
+    /// count and snooze as an offer, so a stopped or dismissed call never
+    /// starts again until its app leaves the microphone.
+    pub fn detect(
+        &mut self,
+        candidate: Option<MeetingCandidate>,
+        choices: &[MeetingProviderChoice],
+    ) -> Option<Detection> {
+        if candidate
+            .as_ref()
+            .is_some_and(|candidate| candidate.policy(choices) == MeetingPolicy::NeverOffer)
+        {
+            // Still on the microphone: an earlier offer stays snoozed.
+            self.pending = None;
+            self.absent_observations = 0;
+            return None;
+        }
+        let candidate = self.observe(candidate)?;
+        Some(match candidate.policy(choices) {
+            MeetingPolicy::AlwaysRecord => Detection::Record(candidate),
+            _ => Detection::Offer(candidate),
+        })
+    }
+
+    fn observe(&mut self, candidate: Option<MeetingCandidate>) -> Option<MeetingCandidate> {
         let Some(candidate) = candidate else {
             self.pending = None;
             self.absent_observations = self.absent_observations.saturating_add(1);
@@ -666,27 +734,192 @@ mod tests {
         );
     }
 
+    fn choice(key: &str, policy: MeetingPolicy) -> MeetingProviderChoice {
+        MeetingProviderChoice {
+            key: key.into(),
+            label: key.into(),
+            policy,
+        }
+    }
+
     #[test]
-    fn never_offer_silences_the_site_when_known_and_the_app_otherwise() {
+    fn choices_apply_to_the_site_when_known_and_the_app_otherwise() {
         let problems = context(
             "Brave Browser",
             Some("https://problems.kitlangton.com/"),
             "Problems",
         );
         let site = candidate_from_microphone(&brave(), &problems).unwrap();
-        let target = site.never_offer_target().unwrap();
-        assert_eq!(target.key, "problems.kitlangton.com");
-        assert!(site.is_silenced(&[target.key]));
+        let provider = site.provider().unwrap();
+        assert_eq!(provider.key, "problems.kitlangton.com");
+        assert_eq!(
+            site.policy(&[provider.choose(MeetingPolicy::NeverOffer)]),
+            MeetingPolicy::NeverOffer
+        );
+        assert!(site.can_always_record());
 
         let unknown = candidate_from_microphone(&brave(), &ContextSnapshot::default()).unwrap();
-        let app = unknown.never_offer_target().unwrap();
+        let app = unknown.provider().unwrap();
         assert_eq!(
             (app.key.as_str(), app.label.as_str()),
             ("com.brave.Browser", "Brave Browser")
         );
-        assert!(!unknown.is_silenced(&["problems.kitlangton.com".into()]));
-        // An app-level entry silences every site in that browser.
-        assert!(site.is_silenced(&["com.brave.Browser".into()]));
+        assert!(!unknown.can_always_record());
+        let never_site = [choice("problems.kitlangton.com", MeetingPolicy::NeverOffer)];
+        assert_eq!(unknown.policy(&never_site), MeetingPolicy::Ask);
+        // A browser's choice covers its sites unless the site has its own.
+        let never_brave = choice("com.brave.Browser", MeetingPolicy::NeverOffer);
+        assert_eq!(
+            site.policy(std::slice::from_ref(&never_brave)),
+            MeetingPolicy::NeverOffer
+        );
+        assert_eq!(
+            site.policy(&[
+                never_brave.clone(),
+                choice("problems.kitlangton.com", MeetingPolicy::AlwaysRecord)
+            ]),
+            MeetingPolicy::AlwaysRecord
+        );
+        // A site set back to Ask asks, whatever its browser's choice.
+        assert_eq!(
+            site.policy(&[
+                never_brave,
+                choice("problems.kitlangton.com", MeetingPolicy::Ask)
+            ]),
+            MeetingPolicy::Ask
+        );
+
+        // Known services carry the name Settings lists them under.
+        let meet = candidate_from_microphone(
+            &brave(),
+            &context(
+                "Brave Browser",
+                Some("https://meet.google.com/abc-defg-hij"),
+                "Design sync - Google Meet",
+            ),
+        )
+        .unwrap();
+        let provider = meet.provider().unwrap();
+        assert_eq!(
+            (provider.key.as_str(), provider.label.as_str()),
+            ("meet.google.com", "Google Meet")
+        );
+        let slack = slack_huddle();
+        assert_eq!(slack.provider().unwrap().label, "Slack huddles");
+        assert!(slack.can_always_record());
+    }
+
+    fn slack_huddle() -> MeetingCandidate {
+        let helper = ActiveMicrophoneApplication {
+            pid: 31807,
+            bundle_id: "com.tinyspeck.slackmacgap.helper".into(),
+            name: "Slack Helper".into(),
+        };
+        candidate_from_microphone(&helper, &ContextSnapshot::default()).unwrap()
+    }
+
+    #[test]
+    fn always_record_starts_after_the_same_stability_count_as_an_offer() {
+        let slack = slack_huddle();
+        let always = [choice(
+            "com.tinyspeck.slackmacgap",
+            MeetingPolicy::AlwaysRecord,
+        )];
+        let mut detector = MeetingDetector::default();
+        for _ in 0..STABLE_OBSERVATIONS - 1 {
+            assert_eq!(detector.detect(Some(slack.clone()), &always), None);
+        }
+        assert_eq!(
+            detector.detect(Some(slack.clone()), &always),
+            Some(Detection::Record(slack.clone()))
+        );
+        // Stopped mid-call: the call stays snoozed while it uses the microphone.
+        for _ in 0..20 {
+            assert_eq!(detector.detect(Some(slack.clone()), &always), None);
+        }
+
+        // Browser pages still need about 20 s on the microphone.
+        let problems = candidate_from_microphone(
+            &brave(),
+            &context(
+                "Brave Browser",
+                Some("https://problems.kitlangton.com/"),
+                "Problems",
+            ),
+        )
+        .unwrap();
+        let always = [choice(
+            "problems.kitlangton.com",
+            MeetingPolicy::AlwaysRecord,
+        )];
+        let mut detector = MeetingDetector::default();
+        for _ in 0..12 {
+            assert_eq!(detector.detect(Some(problems.clone()), &always), None);
+        }
+        assert_eq!(detector.detect(None, &always), None);
+        for _ in 0..BROWSER_STABLE_OBSERVATIONS - 1 {
+            assert_eq!(detector.detect(Some(problems.clone()), &always), None);
+        }
+        assert_eq!(
+            detector.detect(Some(problems.clone()), &always),
+            Some(Detection::Record(problems))
+        );
+    }
+
+    #[test]
+    fn never_offer_and_snoozed_calls_never_start() {
+        let slack = slack_huddle();
+        let never = [choice(
+            "com.tinyspeck.slackmacgap",
+            MeetingPolicy::NeverOffer,
+        )];
+        let mut detector = MeetingDetector::default();
+        for _ in 0..STABLE_OBSERVATIONS * 4 {
+            assert_eq!(detector.detect(Some(slack.clone()), &never), None);
+        }
+
+        // Offered and dismissed, then switched to Always record mid-call.
+        let mut detector = MeetingDetector::default();
+        for _ in 0..STABLE_OBSERVATIONS - 1 {
+            assert_eq!(detector.detect(Some(slack.clone()), &[]), None);
+        }
+        assert_eq!(
+            detector.detect(Some(slack.clone()), &[]),
+            Some(Detection::Offer(slack.clone()))
+        );
+        let always = [choice(
+            "com.tinyspeck.slackmacgap",
+            MeetingPolicy::AlwaysRecord,
+        )];
+        for _ in 0..40 {
+            assert_eq!(detector.detect(None, &always), None);
+        }
+        for _ in 0..STABLE_OBSERVATIONS * 4 {
+            assert_eq!(detector.detect(Some(slack.clone()), &always), None);
+        }
+        // Never offer, then Always record, while the call stays on the
+        // microphone well past the snooze reset: still nothing.
+        let never = [choice(
+            "com.tinyspeck.slackmacgap",
+            MeetingPolicy::NeverOffer,
+        )];
+        for _ in 0..ABSENT_OBSERVATIONS_TO_RESET as usize * 2 {
+            assert_eq!(detector.detect(Some(slack.clone()), &never), None);
+        }
+        for _ in 0..STABLE_OBSERVATIONS * 4 {
+            assert_eq!(detector.detect(Some(slack.clone()), &always), None);
+        }
+        // The next call, after a minute off the microphone, records.
+        for _ in 0..ABSENT_OBSERVATIONS_TO_RESET {
+            assert_eq!(detector.detect(None, &always), None);
+        }
+        for _ in 0..STABLE_OBSERVATIONS - 1 {
+            assert_eq!(detector.detect(Some(slack.clone()), &always), None);
+        }
+        assert_eq!(
+            detector.detect(Some(slack.clone()), &always),
+            Some(Detection::Record(slack))
+        );
     }
 
     #[test]

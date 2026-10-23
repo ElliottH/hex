@@ -188,7 +188,7 @@ pub(super) fn segmented(
     key: &str,
     labels: &[&str],
     selected: usize,
-    pick: fn(&mut Ui, usize),
+    pick: impl Fn(&mut Ui, usize) + Clone + 'static,
 ) -> El {
     SegmentedControl::new(labels, Some(selected))
         .fit()

@@ -55,7 +55,7 @@ fn settings_rows_follow_each_os() {
         "dock-icon",
         "meetings-enabled",
         "meeting-system-audio",
-        "never-offer",
+        "detected-calls",
         "hex-mic-driver",
         "check-for-updates",
     ] {
@@ -123,8 +123,28 @@ fn meetings_settings_save_and_ask_for_system_audio() {
     refresh(&mut rt);
     tap(&mut rt, "meeting-system-audio-allow");
     assert_eq!(asked(&rt), [PlatformRequest::SystemAudio]);
-    tap(&mut rt, "never-offer0/remove");
-    assert!(rt.state.settings.meetings.never_offer.is_empty());
+    use crate::app_settings::MeetingPolicy;
+    let policy = |rt: &Runtime<Ui>, key: &str| {
+        rt.state
+            .settings
+            .meetings
+            .providers
+            .iter()
+            .find(|choice| choice.key == key)
+            .map(|choice| choice.policy)
+    };
+    // Known services first (Zoom is second), then the sites and apps chosen for.
+    tap(&mut rt, "call1/policy/segment1");
+    assert_eq!(
+        policy(&rt, "us.zoom.xos"),
+        Some(MeetingPolicy::AlwaysRecord)
+    );
+    tap(&mut rt, "call5/policy/segment0");
+    assert_eq!(
+        policy(&rt, "problems.kitlangton.com"),
+        Some(MeetingPolicy::Ask)
+    );
+    assert!(rt.find("call5").is_some());
     tap(&mut rt, "meetings-enabled");
     assert!(!rt.state.settings.meetings.enabled);
     assert!(rt.find("meeting-folder").is_none());

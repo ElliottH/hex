@@ -5,7 +5,7 @@
 //! model notice. Their state is [`PlatformState`](super::platform::PlatformState)
 //! data and their actions are [`PlatformRequest`]s.
 
-use rune::{El, col, row, text};
+use rune::{El, row, text};
 use rune_kit::Switch;
 
 use super::ShortcutTarget;
@@ -13,9 +13,12 @@ use super::Ui;
 use super::controls::{
     ButtonKind, DESCRIPTION, Paint, button, note, section, segmented, setting_row, toggle_row,
 };
-use super::lists::{PermissionControl, Tone, permission_control, small_button, tone_tag};
+use super::lists::{PermissionControl, Tone, permission_control, tone_tag};
 use super::platform::{MeetingRequest, NotesAvailability, PlatformRequest};
-use crate::app_settings::{AppSettings, HotkeyBinding, ModifierSide};
+use crate::app_settings::{
+    AppSettings, HotkeyBinding, KNOWN_MEETING_PROVIDERS, MeetingPolicy, MeetingProviderChoice,
+    ModifierSide,
+};
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::hex_microphone::DriverActionState;
 use crate::login_item::LoginItemStatus;
@@ -144,11 +147,12 @@ fn folder_label(ui: &Ui) -> String {
         .unwrap_or_else(|| folder.display().to_string())
 }
 
-/// Meetings (beta): the opt-in, then its permission, indicator, folder,
-/// never-offer list, and Apple Intelligence notes.
-pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Option<El> {
+/// Meetings (beta): the opt-in, then its permission, indicator, folder, and
+/// Apple Intelligence notes; once on, a second card with each detected call
+/// provider's Ask / Always record / Never offer choice.
+pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Vec<El> {
     if !ui.platform.caps.meetings {
-        return None;
+        return Vec::new();
     }
     let meetings = &ui.settings.meetings;
     let mut rows = vec![toggle_row(
@@ -231,49 +235,6 @@ pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Option<El> {
                     |ui: &mut Ui, _| ui.ask(PlatformRequest::Meeting(MeetingRequest::ChooseFolder)),
                 )),
         ));
-        if !meetings.never_offer.is_empty() {
-            let entries = col().key("never-offer-list").gap(4.0).children(
-                meetings
-                    .never_offer
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| {
-                        let key = entry.key.clone();
-                        row()
-                            .key(format!("never-offer{index}"))
-                            .gap(8.0)
-                            .center_y()
-                            .justify_end()
-                            .child(
-                                text(entry.label.clone())
-                                    .key("label")
-                                    .font(DESCRIPTION)
-                                    .color(p.muted()),
-                            )
-                            .child(small_button(
-                                p,
-                                "remove",
-                                tr("Remove"),
-                                move |ui: &mut Ui, _| {
-                                    let key = key.clone();
-                                    ui.update(|settings| {
-                                        settings
-                                            .meetings
-                                            .never_offer
-                                            .retain(|entry| entry.key != key)
-                                    });
-                                },
-                            ))
-                    }),
-            );
-            rows.push(setting_row(
-                p,
-                "never-offer",
-                tr("Never offer"),
-                Some(tr("No recording offers for these sites and apps")),
-                entries,
-            ));
-        }
         rows.push(toggle_row(
             p,
             "meeting-notes",
@@ -289,8 +250,80 @@ pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Option<El> {
             rows.push(note("meeting-folder-error", error, p.danger()));
         }
     }
-    Some(section(p, "meetings", tr("Meetings"), rows))
+    let mut sections = vec![section(p, "meetings", tr("Meetings"), rows)];
+    if meetings.enabled {
+        sections.push(detected_calls_section(ui, p));
+    }
+    sections
 }
+
+/// The known services, then every other website or app the user chose for,
+/// each with Ask / Always record / Never offer.
+fn detected_calls_section(ui: &Ui, p: Paint) -> El {
+    let choices = &ui.settings.meetings.providers;
+    let known = KNOWN_MEETING_PROVIDERS
+        .iter()
+        .map(|(key, label)| (key.to_string(), label.to_string(), tr(label).to_owned()));
+    let others = choices
+        .iter()
+        .filter(|choice| {
+            !KNOWN_MEETING_PROVIDERS
+                .iter()
+                .any(|(key, _)| *key == choice.key)
+        })
+        .map(|choice| {
+            (
+                choice.key.clone(),
+                choice.label.clone(),
+                choice.label.clone(),
+            )
+        });
+    let labels = [tr("Ask"), tr("Always record"), tr("Never offer")];
+    let rows = known
+        .chain(others)
+        .enumerate()
+        .map(|(index, (key, label, shown))| {
+            let policy = choices
+                .iter()
+                .find(|choice| choice.key == key)
+                .map_or(MeetingPolicy::Ask, |choice| choice.policy);
+            let selected = POLICIES.iter().position(|known| *known == policy);
+            setting_row(
+                p,
+                &format!("call{index}"),
+                &shown,
+                None,
+                segmented(
+                    p,
+                    "policy",
+                    &labels,
+                    selected.unwrap_or(0),
+                    move |ui, index| {
+                        let choice = MeetingProviderChoice {
+                            key: key.clone(),
+                            label: label.clone(),
+                            policy: POLICIES[index],
+                        };
+                        ui.update(|settings| {
+                            crate::app_settings::set_meeting_provider(
+                                &mut settings.meetings,
+                                choice,
+                            );
+                        });
+                    },
+                ),
+            )
+        })
+        .collect();
+    section(p, "detected-calls", tr("Detected calls"), rows)
+}
+
+/// In the order of the Detected calls segments.
+const POLICIES: [MeetingPolicy; 3] = [
+    MeetingPolicy::Ask,
+    MeetingPolicy::AlwaysRecord,
+    MeetingPolicy::NeverOffer,
+];
 
 /// Launch at login, driven by the OS's login item: macOS's `SMAppService`
 /// (which may need approval) or Windows's `Run` key.
