@@ -562,6 +562,8 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Updated from your source checkout", ["Aktualizowany z Twojej kopii źródeł", "通过你的源代码检出更新", "ソースのチェックアウトから更新します", "Wird aus deinem Quellcode-Checkout aktualisiert", "Se actualiza desde tu copia del código fuente"]),
     ("Quit Hex", ["Zakończ Hex", "退出 Hex", "Hex を終了", "Hex beenden", "Salir de Hex"]),
     ("Hex Dictation", ["Dyktowanie Hex", "Hex 听写", "Hex 音声入力", "Hex-Diktat", "Dictado de Hex"]),
+    ("Hex Dictation: update available", ["Dyktowanie Hex: dostępna aktualizacja", "Hex 听写：有可用更新", "Hex 音声入力: アップデートがあります", "Hex-Diktat: Update verfügbar", "Dictado de Hex: actualización disponible"]),
+    ("Download update", ["Pobierz aktualizację", "下载更新", "アップデートをダウンロード", "Update herunterladen", "Descargar actualización"]),
     ("Enabled", ["Włączony", "已启用", "有効", "Aktiviert", "Activado"]),
     ("Sleeping", ["Uśpiony", "休眠中", "スリープ中", "Schläft", "En reposo"]),
     ("Enabling…", ["Włączanie…", "正在启用…", "有効化中…", "Wird aktiviert…", "Activando…"]),

@@ -198,6 +198,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
         })
         .map_err(|_| eyre!("the Hex runtime already started"))?;
     let quit = window.clone();
+    let tray = window.clone();
     let runtime = std::thread::Builder::new()
         .name("hex-runtime".into())
         .spawn(move || {
@@ -210,6 +211,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
                 &shared,
                 shutdown,
                 hud,
+                &tray,
             );
             quit.quit();
         })?;
@@ -240,7 +242,9 @@ fn run_runtime(
     shared: &Shared,
     shutdown: &AtomicBool,
     hud: crate::windows_rune_hud::HudHandle,
+    tray: &rune::AppHandle<Ui>,
 ) {
+    let mut tray_update = None;
     let indicator = hud.start(settings.indicator_position);
     let mut host =
         WindowsDesktopHost::new(event_path, settings, settings_error, history, indicator);
@@ -264,7 +268,7 @@ fn run_runtime(
             let mut current = lock(&shared.published);
             let changed = current.as_deref() != Some(&published);
             if changed {
-                *current = Some(published);
+                *current = Some(published.clone());
             }
             changed
         };
@@ -272,6 +276,11 @@ fn run_runtime(
             for wake in lock(&shared.wakers).iter() {
                 wake();
             }
+        }
+        if tray_update != Some(published.update_status) {
+            tray_update = Some(published.update_status);
+            let status = published.update_status;
+            tray.update(move |_, _| show_update_in_tray(status));
         }
     }
     host.stop();
@@ -281,7 +290,50 @@ fn run_runtime(
 // Main thread: the tray and the window icon
 
 thread_local! {
-    static TRAY: std::cell::RefCell<Option<TrayIcon>> = const { std::cell::RefCell::new(None) };
+    static TRAY: std::cell::RefCell<Option<Tray>> = const { std::cell::RefCell::new(None) };
+}
+
+struct Tray {
+    icon: TrayIcon,
+    menu: Menu,
+    /// Shown below Show Hex while an update is available or ready.
+    update: MenuItem,
+    update_shown: bool,
+}
+
+/// Offers the update the window's sidebar offers: Restart to update once
+/// a managed install has staged it, or Download update for an install
+/// that cannot apply it itself.
+fn show_update_in_tray(status: DesktopUpdateStatus) {
+    TRAY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(tray) = slot.as_mut() else { return };
+        let label = match status {
+            DesktopUpdateStatus::ReadyToRestart => Some(tr("Restart to update")),
+            DesktopUpdateStatus::Available => Some(tr("Download update")),
+            _ => None,
+        };
+        if let Some(label) = label {
+            tray.update.set_text(label);
+        }
+        let shown = match (label.is_some(), tray.update_shown) {
+            (true, false) => tray.menu.insert(&tray.update, 1).map(|()| true),
+            (false, true) => tray.menu.remove(&tray.update).map(|()| false),
+            (shown, _) => Ok(shown),
+        };
+        match shown {
+            Ok(shown) => tray.update_shown = shown,
+            Err(error) => tracing::warn!(%error, "could not update the tray menu"),
+        }
+        let tooltip = if label.is_some() {
+            tr("Hex Dictation: update available")
+        } else {
+            tr("Hex Dictation")
+        };
+        if let Err(error) = tray.icon.set_tooltip(Some(tooltip)) {
+            tracing::warn!(%error, "could not update the tray tooltip");
+        }
+    });
 }
 
 /// Gives the window the executable's embedded icon (resource 1, see
@@ -311,9 +363,10 @@ fn apply_window_icon(hwnd: HWND) {
     }
 }
 
-fn create_tray(window: rune::AppHandle<Ui>) -> Result<TrayIcon> {
+fn create_tray(window: rune::AppHandle<Ui>) -> Result<Tray> {
     let menu = Menu::new();
     menu.append(&MenuItem::with_id("show", tr("Show Hex"), true, None))?;
+    let update = MenuItem::with_id("update", tr("Restart to update"), true, None);
     menu.append(&MenuItem::with_id(
         "toggle",
         tr("Enable / Disable Hex"),
@@ -324,6 +377,15 @@ fn create_tray(window: rune::AppHandle<Ui>) -> Result<TrayIcon> {
     let menu_window = window.clone();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| match event.id.as_ref() {
         "show" => menu_window.open(),
+        "update" => {
+            let Some(runtime) = runtime() else { return };
+            let action = match runtime.published().map(|published| published.update_status) {
+                Some(DesktopUpdateStatus::ReadyToRestart) => DesktopAction::RestartIntoUpdate,
+                Some(DesktopUpdateStatus::Available) => DesktopAction::OpenUpdate,
+                _ => return,
+            };
+            let _ = runtime.send(Request::Desktop(action));
+        }
         "toggle" => {
             if let Some(runtime) = runtime() {
                 let _ = runtime.send(Request::ToggleListening);
@@ -344,16 +406,22 @@ fn create_tray(window: rune::AppHandle<Ui>) -> Result<TrayIcon> {
             window.open();
         }
     }));
-    Ok(TrayIconBuilder::new()
+    let icon = TrayIconBuilder::new()
         .with_tooltip(tr("Hex Dictation"))
         .with_icon(tray_icon::Icon::from_rgba(
             include_bytes!("../resources/windows/tray-32.rgba").to_vec(),
             TRAY_ICON_SIZE,
             TRAY_ICON_SIZE,
         )?)
-        .with_menu(Box::new(menu))
+        .with_menu(Box::new(menu.clone()))
         // Left click shows the window (handled above); only right click
         // opens the menu.
         .with_menu_on_left_click(false)
-        .build()?)
+        .build()?;
+    Ok(Tray {
+        icon,
+        menu,
+        update,
+        update_shown: false,
+    })
 }

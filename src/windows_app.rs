@@ -576,6 +576,7 @@ impl WindowsDesktopHost {
                 preparing: preparation.model,
             },
             update_status: match self.updater.state() {
+                UpdateCheck::Disabled => DesktopUpdateStatus::Unavailable,
                 UpdateCheck::Checking => DesktopUpdateStatus::Checking,
                 UpdateCheck::Current => DesktopUpdateStatus::Current,
                 UpdateCheck::Failed => DesktopUpdateStatus::Failed,

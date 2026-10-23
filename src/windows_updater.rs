@@ -3,7 +3,9 @@
 //! ed25519-signed feed contract as Linux: verified download, staged
 //! activation into a new version directory, a pointer-file switch, and a
 //! restart. A source build only checks the public GitHub releases feed
-//! and links to the release page.
+//! and links to the release page. CI test builds (`HEX_TEST_BUILD=1`)
+//! never check, so neither the signed feed nor a release prompt can
+//! replace the build under test.
 
 use std::fs::{self, OpenOptions};
 use std::os::windows::process::CommandExt;
@@ -48,10 +50,16 @@ const FEED: &str = "windows-aarch64-update.json";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UpdateCheck {
+    /// A test build, which never updates.
+    Disabled,
     Checking,
     Current,
-    Available { url: String },
-    ReadyToRestart { executable: PathBuf },
+    Available {
+        url: String,
+    },
+    ReadyToRestart {
+        executable: PathBuf,
+    },
     Failed,
 }
 
@@ -64,9 +72,21 @@ pub struct WindowsUpdater {
 
 impl WindowsUpdater {
     pub fn start() -> Self {
-        let state = Arc::new(Mutex::new(UpdateCheck::Checking));
+        let test_build = option_env!("HEX_TEST_BUILD") == Some("1");
+        let state = Arc::new(Mutex::new(if test_build {
+            UpdateCheck::Disabled
+        } else {
+            UpdateCheck::Checking
+        }));
         let stop = Arc::new(AtomicBool::new(false));
         let check_now = Arc::new(AtomicBool::new(false));
+        if test_build {
+            return Self {
+                state,
+                stop,
+                check_now,
+            };
+        }
         let worker_state = state.clone();
         let worker_stop = stop.clone();
         let worker_check_now = check_now.clone();
@@ -109,7 +129,10 @@ impl WindowsUpdater {
     /// staged update stays ready; only a restart consumes it.
     pub fn request_check(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if matches!(&*state, UpdateCheck::ReadyToRestart { .. }) {
+        if matches!(
+            &*state,
+            UpdateCheck::Disabled | UpdateCheck::ReadyToRestart { .. }
+        ) {
             return;
         }
         *state = UpdateCheck::Checking;
@@ -135,12 +158,8 @@ impl WindowsUpdater {
 /// ownership checks: default profile ACLs deny other users write access,
 /// while a redirected or machine-wide tree offers no such guarantee, so
 /// those installs keep the release-page link behavior, like source
-/// builds and unpacked zips. CI test builds (`HEX_TEST_BUILD=1`) never
-/// self-update, so the signed feed cannot replace the build under test.
+/// builds and unpacked zips.
 fn managed_install() -> bool {
-    if option_env!("HEX_TEST_BUILD") == Some("1") {
-        return false;
-    }
     let Ok(executable) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
         return false;
     };
