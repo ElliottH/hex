@@ -114,11 +114,6 @@ impl InputEvent {
     }
 }
 
-pub fn physical_modifier_flags() -> u64 {
-    // SAFETY: HID state is a process-independent CoreGraphics query.
-    unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) }
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct ObservedInputEvent {
     sequence: u64,
@@ -281,6 +276,72 @@ struct EventTapContext {
     next_sequence: AtomicU64,
 }
 
+struct AttachedTap {
+    tap: *mut c_void,
+    source: *mut c_void,
+    run_loop: *mut c_void,
+}
+
+impl AttachedTap {
+    /// # Safety
+    /// `context` and `run_loop` must outlive the returned `AttachedTap`.
+    unsafe fn create(
+        location: u32,
+        options: u32,
+        mask: u64,
+        callback: EventTapCallback,
+        context: *mut EventTapContext,
+        run_loop: *mut c_void,
+        slot: &AtomicPtr<c_void>,
+    ) -> Result<Self, &'static str> {
+        let tap = unsafe {
+            CGEventTapCreate(
+                location,
+                HEAD_INSERT_EVENT_TAP,
+                options,
+                mask,
+                callback,
+                context.cast(),
+            )
+        };
+        if tap.is_null() {
+            return Err("could not create event tap");
+        }
+        let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
+        if source.is_null() {
+            unsafe { CFRelease(tap.cast_const()) };
+            return Err("could not create input run-loop sources");
+        }
+        slot.store(tap, Ordering::Release);
+        unsafe {
+            CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+        }
+        Ok(Self {
+            tap,
+            source,
+            run_loop,
+        })
+    }
+}
+
+impl Drop for AttachedTap {
+    fn drop(&mut self) {
+        unsafe {
+            CGEventTapEnable(self.tap, false);
+            CFRunLoopRemoveSource(self.run_loop, self.source, kCFRunLoopCommonModes);
+            CFRelease(self.source.cast_const());
+            CFRelease(self.tap.cast_const());
+        }
+    }
+}
+
+const KEY_MASK: u64 = (1_u64 << EVENT_KEY_DOWN) | (1_u64 << EVENT_KEY_UP);
+const OBSERVATION_MASK: u64 = (1_u64 << EVENT_LEFT_MOUSE_DOWN)
+    | (1_u64 << EVENT_RIGHT_MOUSE_DOWN)
+    | (1_u64 << EVENT_FLAGS_CHANGED)
+    | (1_u64 << EVENT_OTHER_MOUSE_DOWN);
+
 fn run_event_tap(
     sender: Sender<ObservedInputEvent>,
     activity: InputActivity,
@@ -289,7 +350,7 @@ fn run_event_tap(
     run_loop: Arc<AtomicPtr<c_void>>,
     ready: SyncSender<Result<()>>,
 ) {
-    let context = Box::into_raw(Box::new(EventTapContext {
+    let mut context = Box::new(EventTapContext {
         sender,
         activity,
         escape_cancels,
@@ -299,170 +360,76 @@ fn run_event_tap(
         shortcut_suppression: Mutex::new(ShortcutSuppression::default()),
         pending,
         next_sequence: AtomicU64::new(0),
-    }));
-    let key_mask = [EVENT_KEY_DOWN, EVENT_KEY_UP]
-        .into_iter()
-        .fold(0, |mask, event| mask | 1_u64 << event);
-    let observation_mask = [
-        EVENT_LEFT_MOUSE_DOWN,
-        EVENT_RIGHT_MOUSE_DOWN,
-        EVENT_FLAGS_CHANGED,
-        EVENT_OTHER_MOUSE_DOWN,
-    ]
-    .into_iter()
-    .fold(0, |mask, event| mask | 1_u64 << event);
-    // SAFETY: The callback context remains allocated until this run loop stops.
-    let key_tap = unsafe {
-        CGEventTapCreate(
+    });
+    let context_ptr = &raw mut *context;
+    // SAFETY: This is the dedicated event-tap thread's current run loop, and
+    // `context` outlives all `AttachedTap`s created below.
+    let current_run_loop = unsafe { CFRunLoopGetCurrent() };
+    let _key_tap = match unsafe {
+        AttachedTap::create(
             ANNOTATED_SESSION_EVENT_TAP,
-            HEAD_INSERT_EVENT_TAP,
             DEFAULT_EVENT_TAP,
-            key_mask,
+            KEY_MASK,
             event_callback,
-            context.cast(),
+            context_ptr,
+            current_run_loop,
+            &context.key_tap,
         )
+    } {
+        Ok(tap) => tap,
+        Err(_) => {
+            let _ = ready.send(Err(eyre!(
+                "could not create keyboard event tap; grant Input Monitoring and Accessibility permissions"
+            )));
+            return;
+        }
     };
-    if key_tap.is_null() {
-        // SAFETY: No callback can run because tap creation failed.
-        unsafe { drop(Box::from_raw(context)) };
-        let _ = ready.send(Err(eyre!(
-            "could not create keyboard event tap; grant Input Monitoring and Accessibility permissions"
-        )));
-        return;
-    }
     // A modifying tap disrupts Finder's Option-driven alternate menu items even when it returns
     // flagsChanged events unchanged. Observe modifiers and mouse clicks with a passive tap.
-    let observation_tap = unsafe {
-        CGEventTapCreate(
+    let _observation_tap = match unsafe {
+        AttachedTap::create(
             ANNOTATED_SESSION_EVENT_TAP,
-            HEAD_INSERT_EVENT_TAP,
             LISTEN_ONLY_EVENT_TAP,
-            observation_mask,
+            OBSERVATION_MASK,
             event_callback,
-            context.cast(),
+            context_ptr,
+            current_run_loop,
+            &context.observation_tap,
         )
+    } {
+        Ok(tap) => tap,
+        Err(message) => {
+            let _ = ready.send(Err(eyre!(message)));
+            return;
+        }
     };
-    if observation_tap.is_null() {
-        // SAFETY: The observation tap was not created, so no callback can use the context.
-        unsafe {
-            CGEventTapEnable(key_tap, false);
-            CFRelease(key_tap.cast_const());
-            drop(Box::from_raw(context));
-        }
-        let _ = ready.send(Err(eyre!("could not create input observation event tap")));
-        return;
-    }
-    // SAFETY: `context` remains owned by this event-tap thread.
-    unsafe {
-        (*context).key_tap.store(key_tap, Ordering::Release);
-        (*context)
-            .observation_tap
-            .store(observation_tap, Ordering::Release);
-    }
-    // SAFETY: Both taps are valid CFMachPorts returned above.
-    let key_source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), key_tap, 0) };
-    let observation_source =
-        unsafe { CFMachPortCreateRunLoopSource(ptr::null(), observation_tap, 0) };
-    if key_source.is_null() || observation_source.is_null() {
-        // SAFETY: Neither source has been attached to the run loop yet.
-        unsafe {
-            if !key_source.is_null() {
-                CFRelease(key_source.cast_const());
-            }
-            if !observation_source.is_null() {
-                CFRelease(observation_source.cast_const());
-            }
-            CGEventTapEnable(key_tap, false);
-            CGEventTapEnable(observation_tap, false);
-            CFRelease(key_tap.cast_const());
-            CFRelease(observation_tap.cast_const());
-            drop(Box::from_raw(context));
-        }
-        let _ = ready.send(Err(eyre!("could not create input run-loop sources")));
-        return;
-    }
-    // SAFETY: This is the dedicated event-tap thread's current run loop.
-    let current_run_loop = unsafe { CFRunLoopGetCurrent() };
-    run_loop.store(current_run_loop, Ordering::Release);
-    // SAFETY: All values belong to this thread and remain alive while the run loop runs.
-    unsafe {
-        CFRunLoopAddSource(current_run_loop, key_source, kCFRunLoopCommonModes);
-        CFRunLoopAddSource(current_run_loop, observation_source, kCFRunLoopCommonModes);
-        CGEventTapEnable(key_tap, true);
-        CGEventTapEnable(observation_tap, true);
-    }
-    // SAFETY: `context` stays allocated until after this tap is released below.
-    let physical = unsafe { attach_physical_tap(context, current_run_loop) };
-    let _ = ready.send(Ok(()));
-    // SAFETY: This dedicated thread exists solely to dispatch the event tap.
-    unsafe { CFRunLoopRun() };
-    // SAFETY: Disable the tap before releasing its callback context.
-    unsafe {
-        CGEventTapEnable(key_tap, false);
-        CGEventTapEnable(observation_tap, false);
-        CFRunLoopRemoveSource(current_run_loop, key_source, kCFRunLoopCommonModes);
-        CFRunLoopRemoveSource(current_run_loop, observation_source, kCFRunLoopCommonModes);
-        if let Some((tap, source)) = physical {
-            CGEventTapEnable(tap, false);
-            CFRunLoopRemoveSource(current_run_loop, source, kCFRunLoopCommonModes);
-        }
-    }
-    run_loop.store(ptr::null_mut(), Ordering::Release);
-    // SAFETY: The source is detached and the tap is disabled, so no callback can use context.
-    unsafe {
-        CFRelease(key_source.cast_const());
-        CFRelease(observation_source.cast_const());
-        CFRelease(key_tap.cast_const());
-        CFRelease(observation_tap.cast_const());
-        if let Some((tap, source)) = physical {
-            CFRelease(source.cast_const());
-            CFRelease(tap.cast_const());
-        }
-        drop(Box::from_raw(context));
-    }
-}
-
-/// Listens for key presses at the HID level, where shortcuts that other apps
-/// register globally are still visible. Without it those chords are invisible
-/// to the session taps; dictation still works.
-///
-/// # Safety
-///
-/// `context` must stay allocated until the returned tap is disabled and released.
-unsafe fn attach_physical_tap(
-    context: *mut EventTapContext,
-    run_loop: *mut c_void,
-) -> Option<(*mut c_void, *mut c_void)> {
-    // SAFETY: The callback only reads the context, which the caller keeps alive.
-    let tap = unsafe {
-        CGEventTapCreate(
+    // Listens for key presses at the HID level, where shortcuts that other apps
+    // register globally are still visible. Without it those chords are invisible
+    // to the session taps; dictation still works.
+    let _physical_tap = match unsafe {
+        AttachedTap::create(
             HID_EVENT_TAP,
-            HEAD_INSERT_EVENT_TAP,
             LISTEN_ONLY_EVENT_TAP,
             1_u64 << EVENT_KEY_DOWN,
             physical_event_callback,
-            context.cast(),
+            context_ptr,
+            current_run_loop,
+            &context.physical_tap,
         )
+    } {
+        Ok(tap) => Some(tap),
+        Err(_) => {
+            tracing::warn!(
+                "could not observe HID key presses; global-shortcut chords cannot cancel"
+            );
+            None
+        }
     };
-    if tap.is_null() {
-        tracing::warn!("could not observe HID key presses; global-shortcut chords cannot cancel");
-        return None;
-    }
-    // SAFETY: `tap` is a valid CFMachPort returned above.
-    let source = unsafe { CFMachPortCreateRunLoopSource(ptr::null(), tap, 0) };
-    if source.is_null() {
-        // SAFETY: The tap was never enabled or attached.
-        unsafe { CFRelease(tap.cast_const()) };
-        tracing::warn!("could not attach HID key observation");
-        return None;
-    }
-    // SAFETY: The caller owns the context and this thread's run loop.
-    unsafe {
-        (*context).physical_tap.store(tap, Ordering::Release);
-        CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
-        CGEventTapEnable(tap, true);
-    }
-    Some((tap, source))
+    run_loop.store(current_run_loop, Ordering::Release);
+    let _ = ready.send(Ok(()));
+    // SAFETY: This dedicated thread exists solely to dispatch the event tap.
+    unsafe { CFRunLoopRun() };
+    run_loop.store(ptr::null_mut(), Ordering::Release);
 }
 
 unsafe extern "C" fn physical_event_callback(

@@ -661,7 +661,7 @@ pub(crate) fn completion_recorded_at(directory: &Path) -> bool {
 pub(crate) fn record_pending_at(directory: &Path) -> color_eyre::Result<()> {
     fs::create_dir_all(directory)?;
     write_owner_only_marker(&directory.join("onboarding-pending"), false)?;
-    sync_directory(directory)?;
+    crate::transcription_models::sync_directory(directory)?;
     Ok(())
 }
 
@@ -671,17 +671,7 @@ pub(crate) fn record_completion_at(directory: &Path) -> color_eyre::Result<()> {
     let temporary = directory.join(".onboarding-complete.tmp");
     write_owner_only_marker(&temporary, true)?;
     fs::rename(temporary, destination)?;
-    sync_directory(directory)?;
-    Ok(())
-}
-
-/// Windows cannot open a directory as a file; its renames are durable once
-/// the call returns.
-fn sync_directory(directory: &Path) -> color_eyre::Result<()> {
-    #[cfg(unix)]
-    fs::File::open(directory)?.sync_all()?;
-    #[cfg(not(unix))]
-    let _ = directory;
+    crate::transcription_models::sync_directory(directory)?;
     Ok(())
 }
 
@@ -742,11 +732,6 @@ pub fn request_microphone() {
             completionHandler: &*handler
         ];
     }
-}
-
-/// The system's Reduce Motion setting (or `HEX_REDUCE_MOTION` override).
-pub fn reduce_motion() -> bool {
-    crate::motion::reduced_motion()
 }
 
 /// Reopens the installed app once this process exits. Returns false outside

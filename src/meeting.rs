@@ -929,7 +929,7 @@ pub fn list() -> Result<Vec<MeetingManifest>> {
             && let Ok(mut manifest) = serde_json::from_slice::<MeetingManifest>(&data)
         {
             manifest.live_transcription_error =
-                fs::read_to_string(directory.join("transcript.live.error.txt"))
+                fs::read_to_string(directory.join(live::ERROR_FILE))
                     .ok()
                     .map(|error| error.trim().to_string());
             let process_is_active = meeting_is_active(&directory);
@@ -1050,30 +1050,6 @@ pub fn transcript_markdown(entries: &[TranscriptEntry]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-/// Lowercased title, app, notes, and final transcript, for search.
-pub fn search_text(manifest: &MeetingManifest) -> String {
-    let mut text = format!(
-        "{} {} {}",
-        display_title(manifest),
-        manifest.title,
-        manifest.app.as_deref().unwrap_or_default()
-    );
-    if let Some(notes) = &manifest.notes {
-        text.push(' ');
-        text.push_str(&notes_markdown(notes));
-    }
-    if manifest.status == MeetingStatus::Complete
-        && let Ok(directory) = root().map(|root| root.join(&manifest.id))
-        && let Ok(entries) = read_ndjson::<TranscriptEntry>(&directory.join("transcript.ndjson"))
-    {
-        for entry in entries {
-            text.push(' ');
-            text.push_str(&entry.text);
-        }
-    }
-    text.to_lowercase()
 }
 
 /// Moves a finished meeting to the Trash: its exported Markdown first, then
@@ -1289,6 +1265,7 @@ impl MeetingPasteCursor {
             .flatten()
     }
 
+    #[cfg(test)]
     /// Number of coalesced speaker turns available since the last committed
     /// copy or paste for `id`.
     pub fn pending_turn_count(&self, id: &str, entries: &[TranscriptEntry]) -> usize {
@@ -1380,34 +1357,6 @@ pub fn consume_active_or_latest_delta(
     let selected =
         active_or_latest(&meetings).ok_or_else(|| eyre!("no meeting transcript is available"))?;
     consume_delta_for_id(&selected.id, commit_output)
-}
-
-/// Returns how many coalesced turns are ready for `"Copy new"` / `Option-Control-V`
-/// on `id` without advancing the shared cursor.
-pub fn pending_delta_turns_for_id(id: &str) -> Result<usize> {
-    let publication = shared_paste_cursor()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .publication_for(id);
-    let transcript = completed_transcript(id, publication)?;
-    let cursor = shared_paste_cursor()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    Ok(cursor.pending_turn_count(id, &transcript.entries))
-}
-
-/// Returns coalesced live `You` / `Them` turns with echo suppression for `id`.
-pub fn live_transcript_turns(
-    id: &str,
-    reader: &mut TranscriptReader,
-) -> Result<Vec<TranscriptEntry>> {
-    let mut entries = reader.read(id)?;
-    if entries.is_empty()
-        && let Ok(completed) = completed_transcript(id, None)
-    {
-        entries = completed.entries;
-    }
-    Ok(coalesce_transcript(entries))
 }
 
 /// Returns the Markdown transcript for `manifest`, preferring its exported

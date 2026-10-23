@@ -14,9 +14,8 @@ were run for this rewrite.
 
 Settings shortcut capture persists the candidate before showing Saved. If the
 write fails, capture remains active with an error; retry or cancel it explicitly.
-`failed_shortcut_save_stays_in_capture_and_preserves_pending_edits` in
-[app_window.rs](../../src/app_window.rs) checks this with injected persistence
-failure, not a physical shortcut or installed-app disk failure.
+The GPUI regression that injected this failure went with GPUI; no Rune test
+injects a failed shortcut save yet.
 
 **Shortcut:** Option by default, after macOS permissions and the selected local
 model are ready. Commands and OpenCode are not required. Settings > Dictation
@@ -136,7 +135,8 @@ LOCKED -> Speak hands-free -> Fresh shortcut press -> Finish
 
 Checks in [suppression.rs](../../src/suppression.rs):
 `callback_double_tap_locks_for_modifier_and_key_bindings`,
-`a_slow_second_release_does_not_lock`,
+`callback_hold_and_double_tap_boundaries_are_milliseconds`,
+`second_tap_finishes_as_press_and_hold_when_double_tap_cannot_lock`,
 `double_tap_only_waits_for_two_complete_key_chord_taps`,
 `locked_dictation_finishes_after_a_missing_key_release`.
 These cover gesture decisions, not hardware keyboard-layout or remapping equivalence.
@@ -221,9 +221,9 @@ owner's `Finish` ends the recording environment through
 `end_recording_environment_then` and plays the tone from the environment worker
 once a muted output is restored (at once with paused media), then drains the
 tail; `finish_dictation` plays the tone itself only for tail-free finishes. This
-macOS change has **not been compiled or run**: hailmary was unreachable on
-2026-10-22, so the tone timing and the unmute-then-tone order are unverified on
-a Mac. Linux and Windows play the stop tone at the release too. On Linux this used
+macOS change compiles and passes Clippy on hailmary (2026-10-22); physical tone
+timing and the unmute-then-tone order on a Mac audio device remain unverified.
+Linux and Windows play the stop tone at the release too. On Linux this used
 to follow the tail too: on 2026-10-22, an isolated service on apollo (ALSA
 Loopback microphone and speaker, `hex dictation stop`) measured the stop tone
 requested 203 ms after the release was handled before the fix and within the same
@@ -599,11 +599,11 @@ Linux now uses the same recording sounds with its own persisted Sound volume
 control; see [Linux feedback](README.md#other-platforms-and-consumers) for its
 entry points, timing, defaults, and verification limits.
 
-Check: [capture-preview.sh](../../scripts/capture-preview.sh), `dictation-hud`
-preview. It repeats the recording/processing sequence until the preview exits,
-so fullscreen and Space transitions can be checked without a ten-second deadline.
-This renders a real window with deterministic state; it does not prove that
-actual capture caused that state.
+Check: in a debug app, `hex dev hud recording|transcribing|processing|reset`
+or the HUD Lab pane drives the real HUD with deterministic state, so
+fullscreen and Space transitions can be checked. (The `dictation-hud` preview
+that looped the sequence went with GPUI.) This does not prove that actual
+capture caused that state.
 
 The macOS HUD is a click-through, nonactivating `NSPanel` with
 `CanJoinAllSpaces`, `CanJoinAllApplications`, and `FullScreenAuxiliary` collection

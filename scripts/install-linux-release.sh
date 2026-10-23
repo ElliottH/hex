@@ -217,9 +217,7 @@ explain_unrunnable() {
     for library in $(ldd "$artifact_path" 2>/dev/null | awk '/not found/ { print $1 }'); do
       case "$library" in
         libasound.*) package=alsa-lib ;;
-        libgtk-layer-shell.*) package=gtk-layer-shell ;;
-        libgtk-3.* | libgdk-3.*) package=gtk3 ;;
-        libappindicator3.* | libayatana-appindicator3.*) package=libappindicator-gtk3 ;;
+        libglib-2.0.* | libgio-2.0.* | libgobject-2.0.*) package=glib2 ;;
         libopenblas.* | libblas.*) package=openblas ;;
         libvulkan.*) package=vulkan-icd-loader ;;
         libxkbcommon-x11.*) package=libxkbcommon-x11 ;;
@@ -333,19 +331,24 @@ umask 077
 cat > "$application_staged" <<EOF
 [Desktop Entry]
 Type=Application
-Name=HEX
+Name=Hex
 Comment=Local voice dictation
-Exec="$binary" app
+Exec="$binary"
 Icon=audio-input-microphone
 Terminal=false
 Categories=Utility;Accessibility;
 StartupNotify=true
+Actions=quit;
 X-HEX-Managed=true
+
+[Desktop Action quit]
+Name=Quit Hex
+Exec="$binary" quit
 EOF
 cat > "$autostart_staged" <<EOF
 [Desktop Entry]
 Type=Application
-Name=HEX
+Name=Hex
 Comment=Local voice dictation
 Exec="$binary" start
 Icon=audio-input-microphone
@@ -368,7 +371,8 @@ StartLimitIntervalSec=60
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart="$unit_binary" service
 Environment="HEX_APPLICATION_SUPPORT_DIR=$unit_support"
 EnvironmentFile=-$unit_support/session.env
@@ -389,6 +393,12 @@ install -m755 "$artifact_path" "$version_staged"
 sync -f "$version_staged"
 mv -Tf "$version_staged" "$version_dir/hex"
 version_staged=
+# A build from a checkout updates from that checkout, never from the feed.
+if [ "${HEX_INSTALL_SOURCE:-}" = 1 ]; then
+  : > "$version_dir/source-build"
+else
+  rm -f "$version_dir/source-build"
+fi
 sync -f "$version_dir"
 rm -f "$current_staged" "$binary_staged"
 ln -s "versions/$version" "$current_staged"
@@ -417,6 +427,6 @@ fi
 
 printf 'Installed HEX %s to %s\n' "$version" "$binary"
 printf 'Install a model: %s model install\n' "$binary"
-printf 'Launch HEX: %s app\n' "$binary"
-printf 'Background service: %s start (stop with %s stop)\n' "$binary" "$binary"
+printf 'Launch HEX: %s\n' "$binary"
+printf 'Start in the background: %s start (quit with %s quit)\n' "$binary" "$binary"
 printf 'Uninstall: sh install-linux.sh uninstall\n'

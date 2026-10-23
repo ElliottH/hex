@@ -13,7 +13,7 @@ on:
       - "assets/**"
       - ".github/workflows/check-macos.yml"
   push:
-    branches: [main]
+    branches: [main, rune-ui]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"

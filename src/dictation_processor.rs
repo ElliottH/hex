@@ -36,32 +36,6 @@ const GENERATE_ENDPOINTS: [&str; 2] = ["/api/experimental/generate", "/api/gener
 
 pub use crate::app_settings::DictationPostProcessing as PostProcessingSettings;
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-impl PostProcessingSettings {
-    /// Applies an edited deadline; text that is not a number keeps the last
-    /// value, and zero clamps to one second.
-    pub fn update_deadline_from_text(&mut self, text: &str) -> bool {
-        let Ok(seconds) = text.trim().parse::<u64>() else {
-            return false;
-        };
-        let seconds = seconds.max(1);
-        if self.deadline_seconds == seconds {
-            return false;
-        }
-        self.deadline_seconds = seconds;
-        true
-    }
-
-    /// A variant needs a concrete model, so choosing one while the profile
-    /// follows the default pins the current default model.
-    pub fn set_variant(&mut self, variant: Option<String>, default_model: Option<&str>) {
-        if variant.is_some() && self.model.is_none() {
-            self.model = default_model.map(str::to_owned);
-        }
-        self.variant = variant;
-    }
-}
-
 #[derive(Clone)]
 pub struct Profile {
     name: String,
@@ -123,9 +97,22 @@ impl Profile {
         self
     }
 
+    pub(crate) fn from_mode(mode: &crate::app_settings::DictationMode) -> Self {
+        let name = if mode.name.trim().is_empty() {
+            "Untitled mode"
+        } else {
+            &mode.name
+        };
+        Self::configured(
+            name,
+            ReplacementSet::new(&mode.replacements),
+            mode.transformations.clone(),
+            &mode.post_processing,
+        )
+    }
+
     /// Builds a runtime profile from persisted settings. A malformed model key
     /// falls back to the default model rather than disabling the mode.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn configured(
         name: impl Into<String>,
         replacements: ReplacementSet,
@@ -460,16 +447,6 @@ impl ModelChoice {
 }
 
 impl ModelCatalog {
-    /// Variants for the explicit selection, or for the default model when the
-    /// profile leaves the model unset.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub fn variants_for(&self, selected_key: Option<&str>) -> &[String] {
-        selected_key
-            .or(self.default_key.as_deref())
-            .and_then(|key| self.models.iter().find(|choice| choice.key == key))
-            .map_or(&[], |choice| choice.variants.as_slice())
-    }
-
     pub fn recommended_variant_for(&self, key: &str) -> Option<&str> {
         let choice = self.models.iter().find(|choice| choice.key == key)?;
         recommended_variant_for_choice(choice)
@@ -707,6 +684,18 @@ fn is_executable(path: &std::path::Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
+fn decode_api_response<T: for<'de> Deserialize<'de>>(path: &str, body: &[u8]) -> Result<T> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .wrap_err_with(|| format!("OpenCode {path} returned invalid JSON"))?;
+    if let Some(message) = value.get("message").and_then(|message| message.as_str())
+        && value.get("_tag").is_some()
+    {
+        return Err(eyre!("OpenCode {path} failed: {message}"));
+    }
+    serde_json::from_value(value)
+        .wrap_err_with(|| format!("OpenCode {path} returned an invalid response"))
+}
+
 #[cfg(not(target_os = "windows"))]
 fn opencode_api<T: for<'de> Deserialize<'de>>(
     endpoint: &str,
@@ -724,15 +713,7 @@ fn opencode_api<T: for<'de> Deserialize<'de>>(
         Duration::from_secs(10),
         &AtomicBool::new(false),
     )?;
-    let value: serde_json::Value = serde_json::from_slice(&response.body)
-        .wrap_err_with(|| format!("OpenCode {path} returned invalid JSON"))?;
-    if let Some(message) = value.get("message").and_then(|message| message.as_str())
-        && value.get("_tag").is_some()
-    {
-        return Err(eyre!("OpenCode {path} failed: {message}"));
-    }
-    serde_json::from_value(value)
-        .wrap_err_with(|| format!("OpenCode {path} returned an invalid response"))
+    decode_api_response(path, &response.body)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -893,49 +874,72 @@ fn generate_cancellable(
     let started = Instant::now();
     let (endpoint, password) =
         discover_opencode_service(deadline.saturating_sub(started.elapsed()), cancelled)?;
+    generate_with_candidates(
+        prompt,
+        model,
+        || ranked_candidates_for_endpoint(&endpoint, &password),
+        started,
+        deadline,
+        cancelled,
+        |data, remaining, cancelled| {
+            post_generation(&endpoint, &password, data, remaining, cancelled)
+        },
+    )
+}
+
+fn generate_with_candidates(
+    prompt: &str,
+    model: Option<&Model>,
+    candidates: impl FnOnce() -> Vec<Model>,
+    started: Instant,
+    deadline: Duration,
+    cancelled: &AtomicBool,
+    post: impl FnMut(&str, Duration, &AtomicBool) -> Result<Response>,
+) -> Result<String> {
     if model.is_none() {
-        let candidates = ranked_candidates_for_endpoint(&endpoint, &password);
+        let candidates = candidates();
         if !candidates.is_empty() {
             return generate_with_ranked_candidates(
                 prompt,
                 &candidates,
-                &endpoint,
-                &password,
                 started,
                 deadline,
                 cancelled,
+                post,
             );
         }
     }
-    generate_single_model(
-        prompt, model, &endpoint, &password, started, deadline, cancelled,
-    )
+    generate_single_model(prompt, model, started, deadline, cancelled, post)
 }
 
-#[cfg(not(target_os = "windows"))]
+fn remaining_generation_deadline(started: Instant, deadline: Duration) -> Result<Duration> {
+    let remaining = deadline.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        Err(eyre!(
+            "opencode2 generation exceeded {} seconds",
+            deadline.as_secs()
+        ))
+    } else {
+        Ok(remaining)
+    }
+}
+
 fn generate_with_ranked_candidates(
     prompt: &str,
     candidates: &[Model],
-    endpoint: &str,
-    password: &str,
     started: Instant,
     deadline: Duration,
     cancelled: &AtomicBool,
+    mut post: impl FnMut(&str, Duration, &AtomicBool) -> Result<Response>,
 ) -> Result<String> {
     let mut last_error = None;
     for (index, candidate) in candidates.iter().enumerate() {
-        let remaining = deadline.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return Err(eyre!(
-                "opencode2 generation exceeded {} seconds",
-                deadline.as_secs()
-            ));
-        }
+        let remaining = remaining_generation_deadline(started, deadline)?;
         let data = serde_json::to_string(&Request {
             prompt,
             model: Some(candidate),
         })?;
-        match post_generation(endpoint, password, &data, remaining, cancelled)? {
+        match post(&data, remaining, cancelled)? {
             Response::Success { data } => return Ok(data.text),
             Response::Error { message } => {
                 if index + 1 < candidates.len() {
@@ -953,28 +957,19 @@ fn generate_with_ranked_candidates(
     Err(last_error.unwrap_or_else(|| eyre!("no OpenCode models available")))
 }
 
-#[cfg(not(target_os = "windows"))]
 fn generate_single_model(
     prompt: &str,
     model: Option<&Model>,
-    endpoint: &str,
-    password: &str,
     started: Instant,
     deadline: Duration,
     cancelled: &AtomicBool,
+    mut post: impl FnMut(&str, Duration, &AtomicBool) -> Result<Response>,
 ) -> Result<String> {
     let request = Request { prompt, model };
     let data = serde_json::to_string(&request)?;
     for attempt in 0..2 {
-        let remaining = deadline.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            return Err(eyre!(
-                "opencode2 generation exceeded {} seconds",
-                deadline.as_secs()
-            ));
-        }
-        let response = post_generation(endpoint, password, &data, remaining, cancelled)?;
-        match response {
+        let remaining = remaining_generation_deadline(started, deadline)?;
+        match post(&data, remaining, cancelled)? {
             Response::Success { data } => return Ok(data.text),
             Response::Error { message } if attempt == 0 && retryable_generation_error(&message) => {
                 tracing::warn!(%message, "OpenCode model unavailable during startup; retrying");
@@ -1568,9 +1563,8 @@ mod cli {
 
     use super::{
         CommandOutput, DefaultModelResponse, GENERATE_ENDPOINTS, Model, ModelCatalog,
-        ModelsResponse, Request, Response, absolute_path, build_model_catalog,
-        encode_uri_component, endpoint_is_missing, read_output, retryable_generation_error,
-        wait_for_generation_retry,
+        ModelsResponse, Response, absolute_path, build_model_catalog, decode_api_response,
+        encode_uri_component, endpoint_is_missing, generate_with_candidates, read_output,
     };
 
     /// Binary names the CLI ships under, newest first; any `opencode2` beats
@@ -1615,80 +1609,15 @@ mod cli {
         deadline: Duration,
         cancelled: &AtomicBool,
     ) -> Result<String> {
-        let started = Instant::now();
-        if model.is_none() {
-            let candidates = ranked_candidates();
-            if !candidates.is_empty() {
-                return generate_with_ranked_candidates(
-                    prompt,
-                    &candidates,
-                    started,
-                    deadline,
-                    cancelled,
-                );
-            }
-        }
-        let data = serde_json::to_string(&Request { prompt, model })?;
-        for attempt in 0..2 {
-            let remaining = remaining(started, deadline)?;
-            match post_generation(&data, remaining, cancelled)? {
-                Response::Success { data } => return Ok(data.text),
-                Response::Error { message }
-                    if attempt == 0 && retryable_generation_error(&message) =>
-                {
-                    tracing::warn!(%message, "OpenCode model unavailable during startup; retrying");
-                    wait_for_generation_retry(started, deadline, cancelled)?;
-                }
-                Response::Error { message } => {
-                    return Err(eyre!("OpenCode generation failed: {message}"));
-                }
-            }
-        }
-        unreachable!("generation loop returns on its second attempt")
-    }
-
-    fn generate_with_ranked_candidates(
-        prompt: &str,
-        candidates: &[Model],
-        started: Instant,
-        deadline: Duration,
-        cancelled: &AtomicBool,
-    ) -> Result<String> {
-        let mut last_error = None;
-        for (index, candidate) in candidates.iter().enumerate() {
-            let remaining = remaining(started, deadline)?;
-            let data = serde_json::to_string(&Request {
-                prompt,
-                model: Some(candidate),
-            })?;
-            match post_generation(&data, remaining, cancelled)? {
-                Response::Success { data } => return Ok(data.text),
-                Response::Error { message } => {
-                    if index + 1 < candidates.len() {
-                        tracing::warn!(
-                            provider = %candidate.provider,
-                            model = %candidate.id,
-                            %message,
-                            "ranked OpenCode model failed; trying next available candidate"
-                        );
-                    }
-                    last_error = Some(eyre!("OpenCode generation failed: {message}"));
-                }
-            }
-        }
-        Err(last_error.unwrap_or_else(|| eyre!("no OpenCode models available")))
-    }
-
-    fn remaining(started: Instant, deadline: Duration) -> Result<Duration> {
-        let remaining = deadline.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            Err(eyre!(
-                "opencode2 generation exceeded {} seconds",
-                deadline.as_secs()
-            ))
-        } else {
-            Ok(remaining)
-        }
+        generate_with_candidates(
+            prompt,
+            model,
+            ranked_candidates,
+            Instant::now(),
+            deadline,
+            cancelled,
+            post_generation,
+        )
     }
 
     /// Posts to the newest generation route, falling back to the older name
@@ -1737,15 +1666,7 @@ mod cli {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        let value: serde_json::Value = serde_json::from_slice(&output.stdout)
-            .wrap_err_with(|| format!("OpenCode {path} returned invalid JSON"))?;
-        if let Some(message) = value.get("message").and_then(|message| message.as_str())
-            && value.get("_tag").is_some()
-        {
-            return Err(eyre!("OpenCode {path} failed: {message}"));
-        }
-        serde_json::from_value(value)
-            .wrap_err_with(|| format!("OpenCode {path} returned an invalid response"))
+        decode_api_response(path, &output.stdout)
     }
 
     fn opencode_command() -> Result<Command> {
@@ -3220,11 +3141,12 @@ mod tests {
         let output = generate_with_ranked_candidates(
             "Make this concise.",
             &candidates,
-            &endpoint,
-            "fixture-password",
             Instant::now(),
             Duration::from_secs(5),
             &AtomicBool::new(false),
+            |data, remaining, cancelled| {
+                post_generation(&endpoint, "fixture-password", data, remaining, cancelled)
+            },
         )
         .unwrap();
         assert_eq!(output, "resolved from second ranked model");

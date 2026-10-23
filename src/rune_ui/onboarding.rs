@@ -1,0 +1,867 @@
+//! The first-run tour, driven by `onboarding::Flow`.
+//!
+//! What it shows follows [`Capabilities`](super::platform::Capabilities):
+//! macOS asks for every privacy permission on one screen (with the System
+//! Settings guide and a relaunch when macOS applies a grant only after a
+//! restart) and ends with a practice dictation into the window's own field,
+//! while the speech model downloads behind them. Linux and Windows have no
+//! permissions, and this window cannot observe a practice dictation there,
+//! so their steps are Welcome, the speech model download, and Done.
+//!
+//! The welcome and done art and the listening dot are static until Rune
+//! has looping animation.
+
+use std::time::{Duration, Instant};
+
+use rune::{El, TextEdit, col, el, row, text};
+use rune_kit::{Progress, TextInput};
+
+use super::Request;
+use super::Ui;
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, keycaps, setting_row};
+use super::lists::{PermissionControl, allowed, permission_control};
+use super::platform::{Os, PlatformRequest, PlatformState};
+use crate::app_settings::AppSettings;
+use crate::desktop_i18n::{tr, tr_fill};
+use crate::dictation::ShortcutMode;
+use crate::onboarding::{
+    Effect, Flow, Input, ItemStatus, ModelProgress, Observation, PermissionState, Practice, Row,
+    SetupItem, Step, View,
+};
+
+const WIDTH: f32 = 520.0;
+const ART_HEIGHT: f32 = 140.0;
+/// How long the ready check shows before setup moves on.
+const ADVANCE_BEAT: Duration = Duration::from_millis(700);
+
+pub(super) struct Tour {
+    pub(super) flow: Flow,
+    advance_at: Option<Instant>,
+    completed: bool,
+    /// The practice dictation pastes here.
+    practice: TextEdit,
+}
+
+impl Tour {
+    fn new(flow: Flow, completed: bool) -> Self {
+        Self {
+            flow,
+            advance_at: None,
+            completed,
+            practice: TextEdit::default(),
+        }
+    }
+
+    /// The tour when this run still needs it.
+    pub(super) fn start(settings: &AppSettings, platform: &PlatformState) -> Option<Tour> {
+        let installed = super::picker::Picker::default().selected_installed(settings);
+        let status = platform.setup_status(installed);
+        let completed = crate::onboarding::completion_recorded();
+        let resume = crate::onboarding::take_resume();
+        (resume.is_some() || (!completed && !status.ready())).then(|| {
+            Tour::new(
+                Flow::new(
+                    resume.unwrap_or(Step::Welcome),
+                    status,
+                    platform.caps.permissions,
+                    platform.caps.practice_dictation,
+                ),
+                completed,
+            )
+        })
+    }
+}
+
+fn progress(ui: &Ui) -> (bool, ModelProgress) {
+    let installed = ui.picker.selected_installed(&ui.settings);
+    let selected = crate::transcription_models::validate(&ui.settings.transcription).ok();
+    let transcription = ui.view.as_ref().map(|view| &view.transcription);
+    let downloading = selected.and_then(|model| {
+        (transcription.and_then(|t| t.preparing) == Some(model.id)).then(|| {
+            model.download_bytes().map_or(0.0, |bytes| {
+                (transcription.map_or(0, |t| t.downloaded_bytes) as f32 / bytes as f32)
+                    .clamp(0.0, 1.0)
+            })
+        })
+    });
+    (
+        installed,
+        ModelProgress {
+            installed,
+            downloading,
+            failed: downloading.is_none() && transcription.is_some_and(|t| t.error.is_some()),
+        },
+    )
+}
+
+/// Feeds the flow fresh permission and model state; true when the tour
+/// changed.
+pub(super) fn poll(ui: &mut Ui) -> bool {
+    let (installed, model) = progress(ui);
+    let status = ui.platform.setup_status(installed);
+    let live = ui.live();
+    let Some(tour) = &mut ui.tour else {
+        return false;
+    };
+    let before = tour.flow.view();
+    let mut effect = tour.flow.on(Input::Status(status, model));
+    if tour
+        .advance_at
+        .is_some_and(|at| at.elapsed() >= ADVANCE_BEAT)
+    {
+        tour.advance_at = None;
+        if tour.flow.step() == Step::Setup {
+            effect = tour.flow.on(Input::Continue);
+        }
+    }
+    if status.ready() && !tour.completed {
+        tour.completed = true;
+        if live && let Err(error) = crate::onboarding::record_completion() {
+            tracing::warn!(%error, "could not record onboarding completion");
+        }
+    }
+    let practicing = tour.flow.step() == Step::TryIt;
+    apply(ui, effect);
+    let heard = ui.host.tour_inputs(practicing);
+    let changed = !heard.is_empty();
+    for heard in heard {
+        input(ui, heard);
+    }
+    let after = ui.tour.as_ref().map(|tour| tour.flow.view());
+    changed || after.as_ref() != Some(&before)
+}
+
+pub(super) fn input(ui: &mut Ui, input: Input) {
+    let Some(tour) = &mut ui.tour else {
+        return;
+    };
+    let effect = tour.flow.on(input);
+    apply(ui, effect);
+}
+
+fn apply(ui: &mut Ui, effect: Effect) {
+    match effect {
+        Effect::DownloadModel => {
+            if crate::transcription_models::validate(&ui.settings.transcription).is_ok() {
+                let selection = ui.settings.transcription.clone();
+                ui.send(Request::ChooseModel {
+                    model: selection.model,
+                    language: selection.language,
+                });
+            }
+        }
+        Effect::AdvanceSoon => {
+            if let Some(tour) = &mut ui.tour {
+                tour.advance_at = Some(Instant::now());
+            }
+        }
+        Effect::RequestMicrophone => ui.ask(PlatformRequest::Permission(
+            crate::onboarding::PermissionAction::RequestMicrophone,
+        )),
+        Effect::ShowGuide(kind) => ui.ask(PlatformRequest::Permission(
+            crate::onboarding::PermissionAction::ShowGuide(kind),
+        )),
+        Effect::Relaunch => ui.ask(PlatformRequest::Relaunch),
+        Effect::Finish => ui.tour = None,
+        Effect::None => {}
+    }
+}
+
+/// The tour over the whole window, while it shows.
+pub(super) fn overlay(ui: &Ui, p: Paint) -> Option<El> {
+    let tour = ui.tour.as_ref()?;
+    let view = tour.flow.view();
+    let page = match view.step {
+        Step::Welcome => welcome(ui, p),
+        Step::Setup => setup(ui, p, &view),
+        Step::TryIt => try_it(ui, p, tour, &view),
+        Step::Done => done(ui, p),
+    };
+    let primary = match view.step {
+        Step::Welcome => Some((tr("Get started"), true)),
+        Step::Setup => Some((tr("Continue"), view.ready)),
+        Step::TryIt if view.practice == Practice::Landed => Some((tr("Continue"), true)),
+        Step::TryIt => None,
+        Step::Done => Some((tr("Start using Hex"), true)),
+    };
+    // Until setup is ready the next setup row carries the accent, so
+    // Continue waits disabled.
+    let primary = match primary {
+        Some((label, true)) => button(
+            p,
+            "tour-continue",
+            label,
+            ButtonKind::Primary,
+            |ui: &mut Ui, _| input(ui, Input::Continue),
+        ),
+        Some((label, false)) => rune_kit::Button::new(label)
+            .disabled(true)
+            .build(p.k)
+            .key("tour-continue"),
+        None => button(
+            p,
+            "tour-skip",
+            tr("Skip"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| input(ui, Input::Skip),
+        ),
+    };
+    let back = view.can_go_back.then(|| {
+        button(
+            p,
+            "tour-back",
+            tr("Back"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| input(ui, Input::Back),
+        )
+    });
+    let download = view.show_download.then(|| download(p, view.model));
+    let footer = row()
+        .key("tour-footer")
+        .w(WIDTH)
+        .h(32.0)
+        .center_y()
+        .child(row().key("start").grow(1.0).w(0.0).children(back))
+        .children(step_dots(p, &view))
+        .child(
+            row()
+                .key("end")
+                .grow(1.0)
+                .w(0.0)
+                .justify_end()
+                .children(download),
+        );
+    Some(
+        col()
+            .key("tour")
+            .role("dialog")
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .fill(p.k.c.bg_deep)
+            .on_press(|_: &mut Ui| {})
+            .child(
+                col()
+                    .key("tour-page")
+                    .grow(1.0)
+                    .shrink()
+                    .center()
+                    .child(col().key("tour-column").w(WIDTH).gap(24.0).child(page)),
+            )
+            .child(
+                col()
+                    .key("tour-bottom")
+                    .pb(32.0)
+                    .gap(20.0)
+                    .center()
+                    .child(primary)
+                    .child(footer),
+            ),
+    )
+}
+
+fn step_dots(p: Paint, view: &View) -> Option<El> {
+    if view.step == Step::Done || view.count < 2 {
+        return None;
+    }
+    let mut dots = row().key("step-dots").gap(6.0).center_y();
+    for index in 0..view.count {
+        let current = index == view.index;
+        dots = dots.child(
+            el().key(format!("dot{index}"))
+                .size(if current { 16.0 } else { 6.0 }, 6.0)
+                .radius(3.0)
+                .fill(if current { p.text() } else { p.k.c.border_base }),
+        );
+    }
+    Some(dots)
+}
+
+/// The model's progress beside the step dots, while it downloads behind
+/// the other steps.
+fn download(p: Paint, status: ItemStatus) -> El {
+    let label = |copy: &str| text(copy).key("label").font(p.k.ty.small).color(p.muted());
+    match status {
+        ItemStatus::Ready => allowed(p, "tour-download", tr("Speech model ready")),
+        ItemStatus::Failed => row()
+            .key("tour-download")
+            .gap(8.0)
+            .center_y()
+            .child(label(tr("Download stopped")))
+            .child(button(
+                p,
+                "tour-download-retry",
+                tr("Retry"),
+                ButtonKind::Secondary,
+                |ui: &mut Ui, _| input(ui, Input::Grant(SetupItem::Model)),
+            )),
+        ItemStatus::Downloading(fraction) => row()
+            .key("tour-download")
+            .gap(8.0)
+            .center_y()
+            .child(label(tr("Speech model")))
+            .child(
+                Progress::new(Some(fraction))
+                    .show_value()
+                    .build(p.k)
+                    .key("progress")
+                    .w(120.0),
+            ),
+        _ => el().key("tour-download"),
+    }
+}
+
+fn title(p: Paint, title: &str, body: Option<&str>) -> El {
+    col()
+        .key("title-block")
+        .gap(8.0)
+        .center()
+        .child(
+            text(title)
+                .key("title")
+                .font(p.k.ty.body_medium.lh(28.0))
+                .color(p.text()),
+        )
+        .children(body.map(|body| {
+            text(body)
+                .key("body")
+                .font(p.k.ty.ui)
+                .color(p.muted())
+                .align(rune::Align::Center)
+                .wrap()
+                .w(400.0)
+        }))
+}
+
+/// The shortcut as large keycaps inside a ring of sound.
+fn hero(p: Paint, parts: &[String]) -> El {
+    let c = &p.k.c;
+    let caps = row()
+        .key("hero-keys")
+        .gap(6.0)
+        .children(parts.iter().enumerate().map(|(index, part)| {
+            row()
+                .key(format!("cap{index}"))
+                .min_w(56.0)
+                .h(56.0)
+                .px(14.0)
+                .center()
+                .radius(p.k.radius.lg)
+                .fill(c.layer_03)
+                .border(p.hair.max(0.5), c.border_base)
+                .child(
+                    text(part.clone())
+                        .key("label")
+                        .font(p.k.ty.body_medium)
+                        .color(c.text_base),
+                )
+        }));
+    row().key("art").h(ART_HEIGHT).w_full().center().child(
+        row()
+            .key("ring")
+            .padding(18.0)
+            .radius(64.0)
+            .border(1.0, c.info.border)
+            .child(caps),
+    )
+}
+
+fn welcome(ui: &Ui, p: Paint) -> El {
+    col()
+        .key("welcome")
+        .gap(24.0)
+        .child(hero(p, &ui.settings.dictation_hotkey.keycaps()))
+        .child(title(
+            p,
+            tr("Welcome to Hex"),
+            Some(if ui.platform.caps.os == Os::Macos {
+                tr("Hold a key, say what you mean, and Hex types it wherever your cursor is. Your voice is transcribed on this Mac.")
+            } else {
+                tr("Hold a key, say what you mean, and Hex types it wherever your cursor is. Your voice is transcribed on this computer.")
+            }),
+        ))
+}
+
+fn setup(ui: &Ui, p: Paint, view: &View) -> El {
+    let permissions = ui.platform.caps.permissions;
+    let rows = view.rows.iter().map(|row| setup_row(ui, p, *row)).collect();
+    let mut page = col()
+        .key("setup")
+        .gap(24.0)
+        .child(if permissions {
+            title(p, tr("Let Hex hear you and type for you"), None)
+        } else {
+            title(
+                p,
+                tr("Download a speech model"),
+                Some(tr(
+                    "Hex transcribes on this computer, so it needs a local model first.",
+                )),
+            )
+        })
+        .child(card(p, "setup-card", rows));
+    if ui.platform.relaunch_failed {
+        page = page.child(card(
+            p,
+            "relaunch-notice",
+            vec![super::controls::note(
+                "copy",
+                tr(
+                    "Quit and reopen Hex to finish setup. macOS applies some permissions only after a restart.",
+                ),
+                p.muted(),
+            )],
+        ));
+    }
+    page
+}
+
+fn setup_row(ui: &Ui, p: Paint, row: Row) -> El {
+    let waiting = row.status == ItemStatus::Waiting;
+    let model = crate::transcription_models::validate(&ui.settings.transcription).ok();
+    let (key, title, description): (&str, &str, String) = match row.item {
+        SetupItem::Microphone => (
+            "setup-microphone",
+            tr("Microphone"),
+            match row.status {
+                ItemStatus::Denied => {
+                    tr("Turned off earlier. Switch Hex on in System Settings.").into()
+                }
+                ItemStatus::Waiting
+                    if ui.platform.permissions.microphone == PermissionState::NeedsSettings =>
+                {
+                    tr("Switch Hex on in the list").into()
+                }
+                _ => tr("Hears you only while you hold the shortcut").into(),
+            },
+        ),
+        SetupItem::InputMonitoring => (
+            "setup-input-monitoring",
+            tr("Input Monitoring"),
+            if waiting {
+                tr("Drag Hex into the list, or switch it on if it is there").into()
+            } else {
+                tr("Notices the shortcut in every app").into()
+            },
+        ),
+        SetupItem::Accessibility => (
+            "setup-accessibility",
+            super::platform_settings::accessibility_name(ui.platform.accessibility_renamed),
+            if waiting {
+                tr("Drag Hex into the list, or switch it on if it is there").into()
+            } else {
+                tr("Pastes your words into the app you are using").into()
+            },
+        ),
+        SetupItem::Model => (
+            "setup-model",
+            tr("Speech model"),
+            match (row.status, model) {
+                (ItemStatus::Failed, _) => {
+                    tr("The download stopped. Check your connection and try again.").into()
+                }
+                (_, Some(model)) => format!("{} · {}", model.name, model.size_label()),
+                (_, None) => tr("Runs entirely on this computer").into(),
+            },
+        ),
+    };
+    let kind = if row.next {
+        ButtonKind::Primary
+    } else {
+        ButtonKind::Secondary
+    };
+    let item = row.item;
+    let grant = move |ui: &mut Ui| input(ui, Input::Grant(item));
+    let control = if item == SetupItem::Model {
+        match row.status {
+            ItemStatus::Ready => allowed(p, "ready", tr("Ready")),
+            ItemStatus::Downloading(fraction) => Progress::new(Some(fraction))
+                .show_value()
+                .build(p.k)
+                .key("download")
+                .w(160.0),
+            ItemStatus::Failed => {
+                button(p, "setup-grant", tr("Retry"), kind, move |ui, _| grant(ui))
+            }
+            _ => button(p, "setup-grant", tr("Download"), kind, move |ui, _| {
+                grant(ui)
+            }),
+        }
+    } else {
+        permission_control(
+            p,
+            "setup-grant",
+            match row.status {
+                ItemStatus::Ready => PermissionControl::Allowed,
+                ItemStatus::Waiting => PermissionControl::Waiting,
+                _ => PermissionControl::Allow,
+            },
+            kind,
+            grant,
+        )
+    };
+    setting_row(p, key, title, Some(&description), control)
+}
+
+fn holds(ui: &Ui) -> bool {
+    ui.settings.shortcut_mode == ShortcutMode::Hold
+}
+
+fn try_it(ui: &Ui, p: Paint, tour: &Tour, view: &View) -> El {
+    let shortcut = ui.settings.dictation_hotkey.keycaps().join("");
+    let field = TextInput::new(&tour.practice)
+        .placeholder(tr("Your words will appear here"))
+        .width(Some(WIDTH))
+        .large()
+        .on_edit(|ui: &mut Ui| {
+            &mut ui
+                .tour
+                .as_mut()
+                .expect("the practice field shows with the tour")
+                .practice
+        })
+        .build(p.k)
+        .key("practice-field");
+    let body = if holds(ui) {
+        tr_fill("Hold {}, say a sentence, then let go.", &shortcut)
+    } else {
+        tr_fill("Press {}, say a sentence, then press it again.", &shortcut)
+    };
+    col()
+        .key("try-it")
+        .gap(24.0)
+        .child(title(p, tr("Give it a try"), Some(&body)))
+        .child(
+            col()
+                .key("practice")
+                .gap(12.0)
+                .child(field)
+                .child(practice_hint(ui, p, view, &shortcut)),
+        )
+}
+
+fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
+    let hint = |copy: &str, color| {
+        text(copy)
+            .key("hint")
+            .font(DESCRIPTION)
+            .color(color)
+            .wrap()
+            .grow(1.0)
+            .shrink()
+    };
+    let line = row().key("practice-hint").gap(8.0).center_y();
+    if view.reopen {
+        return line
+            .child(hint(
+                tr("Hex needs to reopen before it can hear the shortcut."),
+                p.muted(),
+            ))
+            .child(button(
+                p,
+                "tour-reopen",
+                tr("Reopen Hex"),
+                ButtonKind::Secondary,
+                |ui: &mut Ui, _| input(ui, Input::Reopen),
+            ));
+    }
+    if !view.dictation_ready {
+        return line.child(hint(
+            tr("Hex starts listening once the speech model has downloaded."),
+            p.faint(),
+        ));
+    }
+    let (dot, copy, color) = match view.practice {
+        Practice::Waiting => {
+            return line
+                .child(keycaps(p, "keys", &ui.settings.dictation_hotkey.keycaps()))
+                .child(hint(
+                    if holds(ui) {
+                        tr("Hold to talk")
+                    } else {
+                        tr("Press to talk")
+                    },
+                    p.faint(),
+                ));
+        }
+        Practice::Listening => (
+            true,
+            if holds(ui) {
+                tr_fill("Listening… let go of {} when you are done.", shortcut)
+            } else {
+                tr_fill("Listening… press {} again when you are done.", shortcut)
+            },
+            p.muted(),
+        ),
+        Practice::Transcribing => (false, tr("Transcribing…").into(), p.faint()),
+        Practice::TooShort => (
+            false,
+            if holds(ui) {
+                tr_fill(
+                    "That was a quick tap. Keep holding {} while you speak.",
+                    shortcut,
+                )
+            } else {
+                tr("That was too short to hear. Speak a full sentence before you finish.").into()
+            },
+            p.muted(),
+        ),
+        Practice::NothingHeard => (
+            false,
+            tr("Hex did not catch any words. Speak a little closer, or pick another microphone in Settings.").into(),
+            p.muted(),
+        ),
+        Practice::Failed => (
+            false,
+            tr("Something went wrong while transcribing. Try once more.").into(),
+            p.danger(),
+        ),
+        Practice::Landed => {
+            return line.child(allowed(
+                p,
+                "landed",
+                tr("That's it. Hex pastes wherever your cursor is, in any app."),
+            ));
+        }
+    };
+    let line = if dot {
+        line.child(super::controls::status_dot(p.danger()))
+    } else {
+        line
+    };
+    line.child(hint(&copy, color))
+}
+
+fn done(ui: &Ui, p: Paint) -> El {
+    let shortcut = ui.settings.dictation_hotkey.keycaps().join("+");
+    let mut tips = Vec::new();
+    if let Some(binding) = &ui.settings.paste_last_hotkey {
+        tips.push(setting_row(
+            p,
+            "tip-paste-last",
+            tr("Paste your last dictation"),
+            Some(tr("Missed the text field? Paste it again anywhere.")),
+            keycaps(p, "keys", &binding.keycaps()),
+        ));
+    }
+    tips.push(setting_row(
+        p,
+        "tip-voice-action",
+        tr("Voice Action"),
+        Some(tr(
+            "Ask OpenCode to write or rewrite. Turn it on in Voice Action.",
+        )),
+        keycaps(p, "keys", &ui.settings.edit_hotkey.keycaps()),
+    ));
+    tips.push(setting_row(
+        p,
+        "tip-modes",
+        tr("Modes"),
+        Some(tr("Fix names, tone, and formatting per app.")),
+        el().key("none"),
+    ));
+    let send_off = match ui.platform.caps.os {
+        Os::Macos => tr_fill(
+            "Hex waits in the menu bar. Use {} in any app to dictate.",
+            &shortcut,
+        ),
+        Os::Windows => tr_fill(
+            "Hex waits in the system tray. Use {} in any app to dictate.",
+            &shortcut,
+        ),
+        Os::Linux => tr_fill(
+            "Hex keeps running after you close this window. Use {} in any app to dictate.",
+            &shortcut,
+        ),
+    };
+    let c = &p.k.c;
+    let art = row().key("art").h(ART_HEIGHT).w_full().center().child(
+        row()
+            .key("badge")
+            .size(72.0, 72.0)
+            .radius(36.0)
+            .center()
+            .fill(c.success.bg)
+            .child(
+                rune::icon(p.k.glyph.check_small, 40.0)
+                    .key("check")
+                    .color(p.success()),
+            ),
+    );
+    col()
+        .key("done")
+        .gap(24.0)
+        .children((ui.platform.caps.os == Os::Macos).then_some(art))
+        .child(title(p, tr("You're all set"), Some(&send_off)))
+        .child(
+            col()
+                .key("more")
+                .gap(8.0)
+                .child(
+                    text(tr("When you want more"))
+                        .key("label")
+                        .font(DESCRIPTION)
+                        .color(p.muted())
+                        .ml(12.0),
+                )
+                .child(card(p, "tips-card", tips)),
+        )
+}
+
+/// A first run at `step`, with the selected model not yet installed.
+pub(super) fn fixture(ui: &mut Ui, step: Step, downloading: bool) {
+    ui.picker.installed = Some(Vec::new());
+    let status = ui.platform.setup_status(false);
+    let mut flow = Flow::new(
+        Step::Welcome,
+        status,
+        ui.platform.caps.permissions,
+        ui.platform.caps.practice_dictation,
+    );
+    if step != Step::Welcome {
+        flow.on(Input::Continue);
+    }
+    ui.tour = Some(Tour::new(flow, false));
+    if downloading {
+        input(ui, Input::Grant(SetupItem::Model));
+        set_downloaded(ui, 62);
+        poll(ui);
+    }
+}
+
+fn set_downloaded(ui: &mut Ui, percent: u64) {
+    if let Some(view) = &mut ui.view {
+        let model = ui.settings.transcription.model;
+        let bytes = crate::transcription_models::definition(model)
+            .download_bytes()
+            .unwrap_or(0);
+        view.transcription.preparing = Some(model);
+        view.transcription.downloaded_bytes = bytes * percent / 100;
+    }
+}
+
+/// The macOS tour's states, walked as a person would so the page dots and
+/// the download match what they see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MacStep {
+    Welcome,
+    Setup,
+    SetupProgress,
+    SetupDenied,
+    SetupDownloadFailed,
+    TryIt,
+    TryItListening,
+    TryItLanded,
+    TryItReopen,
+    Done,
+}
+
+/// Walks a fresh macOS first run to `state`. `ui.platform` must carry
+/// macOS capabilities.
+pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
+    use PermissionState::{NeedsRequest, NeedsSettings, Ready};
+    let fresh = crate::onboarding::SetupStatus {
+        microphone: NeedsRequest,
+        input_monitoring: NeedsSettings,
+        accessibility: NeedsSettings,
+        transcription_model: false,
+    };
+    let installed = matches!(
+        state,
+        MacStep::TryIt
+            | MacStep::TryItListening
+            | MacStep::TryItLanded
+            | MacStep::TryItReopen
+            | MacStep::Done
+    );
+    let permissions = match state {
+        MacStep::Welcome | MacStep::Setup | MacStep::SetupDownloadFailed => fresh,
+        MacStep::SetupProgress => crate::onboarding::SetupStatus {
+            microphone: Ready,
+            input_monitoring: Ready,
+            ..fresh
+        },
+        MacStep::SetupDenied => crate::onboarding::SetupStatus {
+            microphone: NeedsSettings,
+            ..fresh
+        },
+        _ => crate::onboarding::SetupStatus {
+            microphone: Ready,
+            input_monitoring: Ready,
+            accessibility: Ready,
+            transcription_model: true,
+        },
+    };
+    ui.platform.permissions = fresh;
+    ui.picker.installed = Some(Vec::new());
+    ui.tour = Some(Tour::new(
+        Flow::new(Step::Welcome, fresh, true, true),
+        false,
+    ));
+    // The tour starts the download as soon as it sees no model.
+    poll(ui);
+    if state != MacStep::Welcome {
+        input(ui, Input::Continue);
+    }
+    if state == MacStep::SetupProgress {
+        for item in [
+            SetupItem::Microphone,
+            SetupItem::InputMonitoring,
+            SetupItem::Accessibility,
+        ] {
+            input(ui, Input::Grant(item));
+        }
+    }
+    ui.platform.permissions = permissions;
+    match state {
+        MacStep::SetupDownloadFailed => {
+            if let Some(view) = &mut ui.view {
+                view.transcription.preparing = None;
+                view.transcription.error = Some("The connection was reset.".into());
+            }
+        }
+        _ if installed => {
+            ui.picker.installed = Some(vec![ui.settings.transcription.model]);
+            if let Some(view) = &mut ui.view {
+                view.transcription.preparing = None;
+            }
+        }
+        MacStep::Welcome => set_downloaded(ui, 8),
+        _ => set_downloaded(ui, 31),
+    }
+    poll(ui);
+    if installed {
+        input(ui, Input::Continue);
+    }
+    if let Some(tour) = &mut ui.tour {
+        tour.advance_at = None;
+    }
+    let observations: &[Observation] = match state {
+        MacStep::TryItListening => &[Observation::Started],
+        MacStep::TryItLanded => &[
+            Observation::Started,
+            Observation::Transcribing,
+            Observation::Pasted,
+        ],
+        _ => &[],
+    };
+    for observation in observations {
+        input(ui, Input::Dictation(*observation));
+    }
+    if state == MacStep::TryItLanded
+        && let Some(tour) = &mut ui.tour
+    {
+        tour.practice = TextEdit::new("Let's move the standup to ten thirty tomorrow.");
+    }
+    if state == MacStep::TryItReopen {
+        input(
+            ui,
+            Input::ListenerFailed {
+                relaunch_allowed: false,
+            },
+        );
+    }
+    if state == MacStep::Done {
+        input(ui, Input::Skip);
+    }
+}

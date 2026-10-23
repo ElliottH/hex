@@ -20,7 +20,7 @@ hex listen -> Use saved command opt-in               // never beside another lis
 ```
 
 The catalog and config controls remain reachable while Commands is off. Sources:
-`render_commands` in [app_window.rs](../../src/app_window.rs), CLI routes in
+[rune_ui/commands.rs](../../src/rune_ui/commands.rs), CLI routes in
 [main.rs](../../src/main.rs), and workspace paths in
 [app_paths.rs](../../src/app_paths.rs). Debug-only `hex dev commands on|off`
 changes the running app's opt-in; it is not a release CLI route.
@@ -41,10 +41,10 @@ Hotkey dictation -> Remains available during preparation and failure
 ```
 
 Sources: `load_command_recognizer` and live policy handling in
-[recognition.rs](../../src/recognition.rs); `render_model_notice` in
-[app_window.rs](../../src/app_window.rs). Checks:
+[recognition.rs](../../src/recognition.rs); the command model notice in
+[rune_ui/platform_settings.rs](../../src/rune_ui/platform_settings.rs). Checks:
 `command_preparation_does_not_block_the_listener_or_propagate_failure`,
-`command_model_failure_has_recovery_without_blocking_dictation`, and
+`a_failed_command_model_offers_retry_and_turning_commands_off`, and
 `missing_fields_receive_defaults` /
 `microphone_policy_requires_explicit_combined_transitions` in
 [app_settings.rs](../../src/app_settings.rs).

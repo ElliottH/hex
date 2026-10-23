@@ -3,7 +3,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
 
 use crate::transcription_models::{ModelRuntime, TranscriptionModelId, TranscriptionSelection};
 
@@ -16,20 +15,16 @@ type Prepare = dyn Fn(&TranscriptionSelection, bool, &AtomicBool, &AtomicU64) ->
 #[derive(Clone)]
 pub struct TranscriptionPreparation(Rc<RefCell<State>>);
 
-impl gpui::Global for TranscriptionPreparation {}
-
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PreparationStatus {
     pub model: Option<TranscriptionModelId>,
     pub downloaded_bytes: u64,
-    pub started: Option<Instant>,
     pub error: Option<String>,
 }
 
 struct Request {
     selection: TranscriptionSelection,
     installed_only: bool,
-    started: Instant,
 }
 
 struct Task {
@@ -69,7 +64,6 @@ impl TranscriptionPreparation {
         state.pending = Some(Request {
             selection,
             installed_only,
-            started: Instant::now(),
         });
         state.start_pending();
     }
@@ -109,7 +103,6 @@ impl TranscriptionPreparation {
         });
         PreparationStatus {
             model: request.map(|request| request.selection.model),
-            started: request.map(|request| request.started),
             downloaded_bytes: if state.pending.is_none() && request.is_some() {
                 state
                     .active
@@ -210,7 +203,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn selection(model: TranscriptionModelId) -> TranscriptionSelection {
         TranscriptionSelection {
@@ -319,7 +312,10 @@ mod tests {
             completion(&preparation).unwrap_err(),
             "Model preparation worker failed."
         );
+        preparation.set_error(Some("save failed".into()));
+        assert_eq!(preparation.status().error.as_deref(), Some("save failed"));
         preparation.start(selection(TranscriptionModelId::WhisperLargeV3Turbo), true);
+        assert!(preparation.status().error.is_none());
         assert_eq!(
             completion(&preparation).unwrap().model,
             TranscriptionModelId::WhisperLargeV3Turbo

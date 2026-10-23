@@ -1,14 +1,12 @@
-use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use color_eyre::Result;
 use color_eyre::eyre::{WrapErr, bail};
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use windows_sys::Win32::System::Console::FreeConsole;
 
 use crate::audio::{AudioInput, AudioInputEvent};
@@ -35,6 +33,9 @@ enum Command {
         /// Start the resident listener without showing the Settings window.
         #[arg(long)]
         hidden: bool,
+        /// Arguments for a headless render, such as `--snap out.png --scene modes`.
+        #[arg(last = true)]
+        rune_args: Vec<String>,
     },
     /// Listen globally: hold the configured shortcut to dictate and release to paste.
     Listen {
@@ -135,28 +136,25 @@ impl SelectionArgs {
 pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
     color_eyre::install()?;
     // Parse first so `--version` and `--help` exit without creating app data.
-    let command = Cli::parse()
-        .command
-        .unwrap_or(Command::App { hidden: false });
-    let log_dir = crate::app_paths::logs_dir()?;
-    fs::create_dir_all(&log_dir)?;
-    let process_log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join("process.log"))?;
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("voice_control=info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr.and(Mutex::new(process_log)))
-        .init();
-    ctrlc::set_handler(|| shutdown.store(true, Ordering::Relaxed))?;
+    let command = Cli::parse().command.unwrap_or(Command::App {
+        hidden: false,
+        rune_args: Vec::new(),
+    });
+    let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
     let event_path = log_dir.join("live.ndjson");
     match command {
-        Command::App { hidden } => {
+        Command::App { hidden, rune_args } => {
+            // A headless render (`--snap`) draws fixtures without starting
+            // the runtime and prints to the terminal that ran it.
+            if !rune_args.is_empty() {
+                crate::rune_ui::app(Default::default())
+                    .args(rune_args)
+                    .run();
+                return Ok(());
+            }
             detach_from_console();
-            crate::windows_app::open(event_path, shutdown, hidden)
+            crate::windows_rune::open(event_path, shutdown, hidden)
         }
         Command::Listen { device, selection } => {
             shutdown.store(false, Ordering::Relaxed);
@@ -178,7 +176,14 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
                         )
                     })
                     .flatten();
-            crate::windows_dictation::run(&event_path, &selection.resolve()?, config, shutdown)
+            // Settings a foreground listener loaded stay as they are.
+            crate::windows_dictation::run(
+                &event_path,
+                &selection.resolve()?,
+                config,
+                std::sync::mpsc::channel().1,
+                shutdown,
+            )
         }
         Command::Capture {
             device,

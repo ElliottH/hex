@@ -1,0 +1,1141 @@
+//! The Settings pane: listener status, the desktop's shortcuts, dictation,
+//! behavior, and application rows, and recording shortcuts through the host.
+
+use std::time::{Duration, Instant};
+
+use rune::{El, Key, KeyEvent, Tx, col, row, text};
+
+use super::controls::{
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, section,
+    segmented, select, setting_row, status_dot, text_field, toggle_row,
+};
+use super::host;
+use super::lists::{Tone, tone_tag};
+use super::{Menu, Request, Service, ShortcutTarget, Ui};
+use crate::app_settings::{
+    AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
+    RecordingAudioBehavior,
+};
+use crate::desktop_host::{
+    DesktopAction, DesktopGrantedShortcut, DesktopShortcut, DesktopShortcuts, DesktopUpdateStatus,
+};
+use crate::desktop_i18n::{tr, tr_fill};
+use crate::dictation::ShortcutMode;
+use crate::transcription_models::{self, ModelPreparationStage};
+
+const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
+    ("Off", 0.0),
+    ("25%", 0.25),
+    ("50%", 0.5),
+    ("75%", 0.75),
+    ("100%", 1.0),
+];
+/// How long a newly saved shortcut shows "Saved".
+const SAVED_FOR: Duration = Duration::from_millis(700);
+/// How long to wait for the service to start a requested shortcut edit.
+const EDIT_START_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Capture {
+    Idle,
+    /// Waiting for the chord; `message` explains a rejected one.
+    Listening {
+        target: ShortcutTarget,
+        message: Option<&'static str>,
+    },
+    /// Sent to the service, which validates, registers, and saves it.
+    Saving {
+        target: ShortcutTarget,
+        since: Instant,
+        seen_edit: bool,
+    },
+    Saved {
+        target: ShortcutTarget,
+        at: Instant,
+    },
+}
+
+/// A chord the host recorded outside the window's key events (Windows
+/// polls the keyboard, since modifier-only chords never reach the window).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub(super) enum Chord {
+    Captured(Result<HotkeyBinding, &'static str>),
+    Cancelled,
+}
+
+/// Follows the host's side of a shortcut edit.
+pub(super) fn advance_capture(ui: &mut Ui) -> bool {
+    let chord = match &mut ui.service {
+        Service::Live(backend) => backend.take_chord(),
+        _ => None,
+    };
+    if let (Some(chord), Capture::Listening { target, .. }) = (chord, ui.capture) {
+        match chord {
+            Chord::Captured(binding) => record(ui, target, binding),
+            Chord::Cancelled => cancel_capture(ui),
+        }
+        return true;
+    }
+    let editing = ui.view.as_ref().is_some_and(|view| view.editing);
+    match ui.capture {
+        Capture::Saving {
+            target,
+            since,
+            seen_edit,
+        } => {
+            let finished = if seen_edit {
+                !editing
+            } else if editing {
+                ui.capture = Capture::Saving {
+                    target,
+                    since,
+                    seen_edit: true,
+                };
+                return false;
+            } else {
+                since.elapsed() >= EDIT_START_TIMEOUT
+            };
+            if finished {
+                ui.capture = Capture::Saved {
+                    target,
+                    at: Instant::now(),
+                };
+            }
+            finished
+        }
+        Capture::Saved { at, .. } if at.elapsed() >= SAVED_FOR => {
+            ui.capture = Capture::Idle;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Records a shortcut while capture listens; otherwise leaves keys alone.
+/// Where the host records chords itself, the window only takes Escape and
+/// keeps every other key out of the page.
+pub(super) fn on_key(ui: &mut Ui, event: &KeyEvent, _: &mut Tx) -> bool {
+    let Capture::Listening { target, .. } = ui.capture else {
+        return false;
+    };
+    if event.key == Key::Escape {
+        cancel_capture(ui);
+        return true;
+    }
+    if host::RECORDS_KEY_EVENTS {
+        record(ui, target, recorded_binding(event));
+    }
+    true
+}
+
+/// Saves a recorded chord, or keeps listening with why it was rejected.
+fn record(ui: &mut Ui, target: ShortcutTarget, binding: Result<HotkeyBinding, &'static str>) {
+    let message = match binding.and_then(|binding| {
+        validate(&ui.settings, target, &binding)?;
+        Ok(binding)
+    }) {
+        Ok(binding) if host::HOST_SAVES_SHORTCUTS => {
+            ui.send(Request::SetShortcut {
+                target,
+                shortcut: desktop_shortcut(&binding),
+            });
+            if matches!(ui.service, Service::Fixture(_)) {
+                set_binding(&mut ui.settings, target, binding);
+            }
+            ui.capture = Capture::Saving {
+                target,
+                since: Instant::now(),
+                seen_edit: false,
+            };
+            return;
+        }
+        Ok(binding) => {
+            // The window saves the binding; the host restarts its listener
+            // with it.
+            cancel_capture(ui);
+            if ui.update(|settings| set_binding(settings, target, binding)) {
+                ui.capture = Capture::Saved {
+                    target,
+                    at: Instant::now(),
+                };
+            }
+            return;
+        }
+        Err(message) => message,
+    };
+    ui.capture = Capture::Listening {
+        target,
+        message: Some(message),
+    };
+}
+
+fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
+    if let Capture::Listening { target: active, .. } = ui.capture {
+        cancel_capture(ui);
+        if active == target {
+            return;
+        }
+    }
+    ui.send(Request::CaptureShortcutFor(target));
+    ui.capture = Capture::Listening {
+        target,
+        message: None,
+    };
+}
+
+pub(super) fn cancel_capture(ui: &mut Ui) {
+    if matches!(ui.capture, Capture::Listening { .. }) {
+        ui.send(Request::CancelShortcut);
+    }
+    ui.capture = Capture::Idle;
+}
+
+/// The chord a key press records, in the key names Linux registers.
+pub(super) fn recorded_binding(event: &KeyEvent) -> Result<HotkeyBinding, &'static str> {
+    let name = match &event.key {
+        Key::Text(text) if text == " " => "space".to_string(),
+        Key::Text(text) if text.chars().count() == 1 => text.to_lowercase(),
+        Key::Command(letter) => letter.to_string(),
+        Key::Function(number) => format!("f{number}"),
+        Key::Enter => "enter".into(),
+        Key::Tab => "tab".into(),
+        Key::Backspace => "backspace".into(),
+        Key::Delete => "delete".into(),
+        Key::Left => "left".into(),
+        Key::Right => "right".into(),
+        Key::Up => "up".into(),
+        Key::Down => "down".into(),
+        Key::Home => "home".into(),
+        Key::End => "end".into(),
+        _ => return Err(tr("Unsupported key")),
+    };
+    let held = |down: bool| down.then_some(ModifierSide::Either);
+    let modifiers = HotkeyModifiers {
+        control: held(event.mods.ctrl),
+        option: held(event.mods.alt),
+        shift: held(event.mods.shift),
+        command: held(event.mods.logo),
+        function: false,
+    };
+    if modifiers.is_empty() && !matches!(event.key, Key::Function(_)) {
+        return Err(tr("Add a modifier"));
+    }
+    Ok(HotkeyBinding {
+        modifiers,
+        key: Some(HotkeyKey::named(&name)),
+    })
+}
+
+pub(super) fn validate(
+    settings: &AppSettings,
+    target: ShortcutTarget,
+    binding: &HotkeyBinding,
+) -> Result<(), &'static str> {
+    host::validate_hotkey(target, binding)?;
+    if conflicts(settings, target, binding) {
+        return Err(tr("Already in use"));
+    }
+    Ok(())
+}
+
+/// Whether `binding` overlaps a shortcut `target` must not share: the other
+/// active shortcuts and, where meetings exist (macOS), meeting paste.
+pub(super) fn conflicts(
+    settings: &AppSettings,
+    target: ShortcutTarget,
+    binding: &HotkeyBinding,
+) -> bool {
+    let mut others = Vec::new();
+    if target != ShortcutTarget::Dictation {
+        others.push(settings.dictation_hotkey.clone());
+    }
+    if target != ShortcutTarget::VoiceAction && settings.voice_action.enabled {
+        others.push(settings.edit_hotkey.clone());
+    }
+    if target != ShortcutTarget::PasteLast
+        && let Some(paste) = &settings.paste_last_hotkey
+    {
+        others.push(paste.clone());
+    }
+    if cfg!(target_os = "macos") && settings.meetings.available() {
+        others.push(HotkeyBinding::paste_meeting_default());
+    }
+    crate::app_settings::hotkey_conflicts(binding, others)
+}
+
+pub(super) fn desktop_shortcut(binding: &HotkeyBinding) -> DesktopShortcut {
+    let modifiers = binding.modifiers;
+    DesktopShortcut {
+        alt: modifiers.option.is_some(),
+        control: modifiers.control.is_some(),
+        function: false,
+        key: binding
+            .key
+            .as_ref()
+            .map(HotkeyKey::name)
+            .unwrap_or_default(),
+        platform: modifiers.command.is_some(),
+        shift: modifiers.shift.is_some(),
+    }
+}
+
+pub(super) fn binding(settings: &AppSettings, target: ShortcutTarget) -> Option<&HotkeyBinding> {
+    match target {
+        ShortcutTarget::Dictation => Some(&settings.dictation_hotkey),
+        ShortcutTarget::PasteLast => settings.paste_last_hotkey.as_ref(),
+        ShortcutTarget::VoiceAction => Some(&settings.edit_hotkey),
+    }
+}
+
+pub(super) fn set_binding(
+    settings: &mut AppSettings,
+    target: ShortcutTarget,
+    binding: HotkeyBinding,
+) {
+    match target {
+        ShortcutTarget::Dictation => settings.dictation_hotkey = binding,
+        ShortcutTarget::PasteLast => settings.paste_last_hotkey = Some(binding),
+        ShortcutTarget::VoiceAction => settings.edit_hotkey = binding,
+    }
+}
+
+fn sound_volume_index(settings: &AppSettings) -> usize {
+    if !settings.sound_effects {
+        return 0;
+    }
+    SOUND_VOLUME_STEPS[1..]
+        .iter()
+        .enumerate()
+        .min_by(|(_, (_, left)), (_, (_, right))| {
+            (settings.sound_effect_volume - left)
+                .abs()
+                .total_cmp(&(settings.sound_effect_volume - right).abs())
+        })
+        .map_or(0, |(index, _)| index + 1)
+}
+
+fn toggle_menu(ui: &mut Ui, menu: Menu) {
+    ui.open = (ui.open != Some(menu)).then_some(menu);
+    if ui.open == Some(Menu::Microphone) && !matches!(ui.service, Service::Fixture(_)) {
+        ui.microphones = crate::audio::input_device_names().map_err(|error| error.to_string());
+    }
+}
+
+pub(super) fn error_notes(p: Paint, error: &str) -> [El; 2] {
+    [
+        note(
+            "error-title",
+            tr("Hex could not apply this change."),
+            p.danger(),
+        ),
+        note("error", error, p.muted()),
+    ]
+}
+
+/// Whether Hex listens, how to dictate, and the one way to change it.
+/// The Settings pane's scrolling body.
+pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    use super::platform_settings as os;
+    let caps = ui.platform.caps;
+    let mut content = col().key("content").px(24.0).pt(4.0).gap(24.0);
+    content = content
+        .children(os::permissions_section(ui, p))
+        .children(os::command_model_notice(ui, p))
+        .children(os::error_section(ui, p));
+    if caps.listener_control {
+        content = content.child(listener_card(ui, p));
+    }
+    content = content
+        .child(if ui.records_shortcuts() {
+            shortcuts_section(ui, p)
+        } else {
+            desktop_commands(ui, p)
+        })
+        .child(dictation_section(ui, p, layer))
+        .child(behavior_section(ui, p))
+        .children(os::meetings_section(ui, p))
+        .child(application_section(ui, p, layer))
+        .children(os::hex_microphone_section(ui, p));
+    super::scroll_body("scroll", content)
+}
+
+fn listener_card(ui: &Ui, p: Paint) -> El {
+    let running = ui.running();
+    let status = match &ui.view {
+        Some(view) => tr(&view.listener.status).to_string(),
+        None if matches!(ui.service, Service::Fixture(_)) || ui.connection_error.is_some() => {
+            tr("Service disconnected").to_string()
+        }
+        None => tr("Connecting…").to_string(),
+    };
+    let shortcut = ui.settings.dictation_hotkey.keycaps().join("+");
+    let hint = match (running, ui.settings.shortcut_mode) {
+        _ if !ui.records_shortcuts() => {
+            tr("Ready anywhere · Use your desktop's shortcuts to dictate").to_string()
+        }
+        (true, ShortcutMode::Toggle) => tr_fill(
+            "Ready anywhere · Press {} to start and stop dictating",
+            &shortcut,
+        ),
+        (true, ShortcutMode::Hold) => tr_fill("Ready anywhere · Hold {} to dictate", &shortcut),
+        (false, _) => tr_fill("Enable Hex to dictate into any app with {}", &shortcut),
+    };
+    let failure = ui
+        .view
+        .as_ref()
+        .and_then(|view| view.listener.warning.clone())
+        .map(|failure| tr_fill("Last dictation failed: {}", &failure));
+    let error = ui
+        .error
+        .clone()
+        .or_else(|| ui.connection_error.clone())
+        .or_else(|| {
+            ui.view
+                .as_ref()
+                .and_then(|view| view.operation_error.clone())
+        });
+    let action = if running {
+        button(
+            p,
+            "toggle-listening",
+            tr("Disable"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::StopListening)),
+        )
+    } else {
+        button(
+            p,
+            "toggle-listening",
+            tr("Enable"),
+            ButtonKind::Primary,
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::StartListening)),
+        )
+    };
+    let summary = row()
+        .key("listener")
+        .min_h(64.0)
+        .px(12.0)
+        .py(8.0)
+        .gap(12.0)
+        .center_y()
+        .child(status_dot(if running { p.success() } else { p.muted() }))
+        .child(
+            col()
+                .key("copy")
+                .grow(1.0)
+                .shrink()
+                .gap(2.0)
+                .child(
+                    text(status)
+                        .key("status")
+                        .font(p.k.ty.ui_medium)
+                        .color(p.text()),
+                )
+                .child(
+                    text(hint)
+                        .key("hint")
+                        .font(DESCRIPTION)
+                        .color(p.muted())
+                        .wrap(),
+                )
+                .children(failure.map(|failure| {
+                    text(failure)
+                        .key("failure")
+                        .font(DESCRIPTION)
+                        .color(p.danger())
+                        .wrap()
+                })),
+        )
+        .child(action);
+    let mut rows = vec![summary];
+    if let Some(error) = error {
+        rows.extend(error_notes(p, &error));
+    }
+    section(p, "listening", tr("Status"), rows)
+}
+
+/// Every shortcut Hex records, each with its recorder. Under a shortcuts
+/// portal each row also says what the desktop granted, since the desktop
+/// decides which trigger Hex actually gets.
+fn shortcuts_section(ui: &Ui, p: Paint) -> El {
+    let granted = match ui.shortcuts() {
+        Some(DesktopShortcuts::Portal(granted)) => Some(granted.as_slice()),
+        _ => None,
+    };
+    let mut targets = vec![ShortcutTarget::Dictation, ShortcutTarget::PasteLast];
+    if ui.settings.voice_action.enabled {
+        targets.push(ShortcutTarget::VoiceAction);
+    }
+    let mut rows: Vec<El> = targets
+        .into_iter()
+        .map(|target| shortcut_row(ui, p, target, granted))
+        .collect();
+    if granted.is_some_and(|granted| granted.iter().any(|shortcut| shortcut.trigger.is_none())) {
+        rows.push(note(
+            "refused",
+            tr("Your desktop kept a shortcut for itself. Record another one, or free it in your desktop's keyboard settings (on niri, remove its bind from config.kdl)."),
+            p.danger(),
+        ));
+    }
+    section(p, "shortcuts", tr("Shortcuts"), rows)
+}
+
+/// One recordable shortcut: what it does, or what the desktop granted for
+/// it, beside its recorder.
+fn shortcut_row(
+    ui: &Ui,
+    p: Paint,
+    target: ShortcutTarget,
+    granted: Option<&[DesktopGrantedShortcut]>,
+) -> El {
+    let (key, title, purpose, portal_name) = match target {
+        ShortcutTarget::Dictation => (
+            "dictation-shortcut",
+            tr("Dictation"),
+            tr("Click to record a new shortcut"),
+            "Dictation",
+        ),
+        ShortcutTarget::PasteLast => (
+            "paste-last",
+            tr("Paste last dictation"),
+            tr("Re-paste the most recent dictation"),
+            "Paste last dictation",
+        ),
+        ShortcutTarget::VoiceAction => (
+            "voice-action-shortcut",
+            tr("Voice Action"),
+            tr("Hold to speak; selected text is included automatically"),
+            "Voice Action",
+        ),
+    };
+    let grant =
+        granted.and_then(|granted| granted.iter().find(|shortcut| shortcut.name == portal_name));
+    let description = match grant {
+        Some(DesktopGrantedShortcut {
+            trigger: Some(trigger),
+            ..
+        }) => (tr_fill("Your desktop granted {}", trigger), p.muted()),
+        Some(DesktopGrantedShortcut { trigger: None, .. }) => (
+            tr("Your desktop did not grant this shortcut").to_string(),
+            p.danger(),
+        ),
+        None => (purpose.to_string(), p.muted()),
+    };
+    let mut control = row()
+        .key(format!("{key}-control"))
+        .gap(8.0)
+        .center_y()
+        .children(super::platform_settings::side_selector(ui, p, target))
+        .child(hotkey_control(ui, p, target));
+    if target == ShortcutTarget::PasteLast && ui.settings.paste_last_hotkey.is_some() {
+        control = control.child(button(
+            p,
+            "clear-paste-last",
+            tr("Clear"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| {
+                ui.update(|settings| settings.paste_last_hotkey = None);
+            },
+        ));
+    }
+    described_row(p, key, title, Some(description), control)
+}
+
+/// Without a shortcuts portal the desktop's keybindings own every shortcut:
+/// the commands to bind there.
+fn desktop_commands(ui: &Ui, p: Paint) -> El {
+    let mut rows = vec![
+        note(
+            "no-portal",
+            tr(
+                "Your desktop has no shortcuts portal. Bind these commands in its keyboard settings.",
+            ),
+            p.muted(),
+        ),
+        command_row(
+            p,
+            "hold",
+            tr("Hold to dictate"),
+            tr("Bind start to the key press and stop to its release"),
+            &["hex dictation start", "hex dictation stop"],
+        ),
+        command_row(
+            p,
+            "toggle",
+            tr("Toggle dictation"),
+            tr("Press to start dictating, press again to transcribe"),
+            &["hex dictation toggle"],
+        ),
+        command_row(
+            p,
+            "cancel",
+            tr("Cancel dictation"),
+            tr("Discard the current recording"),
+            &["hex dictation cancel"],
+        ),
+        command_row(
+            p,
+            "paste-last",
+            tr("Paste last dictation"),
+            tr("Re-paste the most recent dictation"),
+            &["hex paste-last"],
+        ),
+    ];
+    if ui.settings.voice_action.enabled {
+        rows.push(command_row(
+            p,
+            "voice-action",
+            tr("Voice Action"),
+            tr("Hold to speak; selected text is included automatically"),
+            &["hex voice-action start", "hex voice-action stop"],
+        ));
+    }
+    section(p, "desktop-shortcuts", tr("Desktop shortcuts"), rows)
+}
+
+fn command_row(p: Paint, key: &str, title: &str, description: &str, commands: &[&str]) -> El {
+    let lines = col()
+        .key("commands")
+        .gap(2.0)
+        .children(commands.iter().enumerate().map(|(index, command)| {
+            text(*command)
+                .key(format!("command{index}"))
+                .font(p.k.ty.mono)
+                .color(p.muted())
+                .align(rune::Align::End)
+        }));
+    setting_row(p, key, title, Some(description), lines)
+}
+
+fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    let selection = &ui.settings.transcription;
+    let model = transcription_models::definition(selection.model);
+    let label = format!(
+        "{} · {}",
+        transcription_models::language_name(&selection.language),
+        model.name
+    );
+    let language = selection.language.clone();
+    let rows_start = described_row(
+        p,
+        "transcription",
+        tr("Local transcription"),
+        Some(transcription_status(ui, p)),
+        select(
+            p,
+            "transcription-control",
+            &label,
+            false,
+            Vec::new(),
+            move |ui: &mut Ui| super::picker::open(ui, language.clone()),
+            layer,
+        ),
+    );
+    let mut rows = vec![rows_start];
+    let microphone = ui
+        .settings
+        .microphone
+        .clone()
+        .unwrap_or_else(|| tr("Automatic").into());
+    let mut devices = vec![Choice {
+        label: tr("Automatic").into(),
+        selected: ui.settings.microphone.is_none(),
+        choose: Box::new(|ui: &mut Ui| {
+            ui.open = None;
+            ui.update(|settings| settings.microphone = None);
+        }),
+    }];
+    if let Ok(names) = &ui.microphones {
+        devices.extend(names.iter().map(|device| {
+            let name = device.clone();
+            Choice {
+                label: device.clone(),
+                selected: ui.settings.microphone.as_deref() == Some(device),
+                choose: Box::new(move |ui: &mut Ui| {
+                    ui.open = None;
+                    let name = name.clone();
+                    ui.update(|settings| settings.microphone = Some(name));
+                }),
+            }
+        }));
+    }
+    rows.push(setting_row(
+        p,
+        "microphone",
+        tr("Microphone"),
+        Some(tr("Input device for dictation and commands")),
+        select(
+            p,
+            "microphone-control",
+            &microphone,
+            ui.open == Some(Menu::Microphone),
+            devices,
+            |ui: &mut Ui| toggle_menu(ui, Menu::Microphone),
+            layer,
+        ),
+    ));
+    if let (Some(Menu::Microphone), Err(error)) = (ui.open, &ui.microphones) {
+        rows.push(note("devices-error", error, p.danger()));
+    }
+    if model.supports_recognition_hints {
+        rows.push(setting_row(
+            p,
+            "hints",
+            tr("Recognition hints"),
+            Some(tr("Names and terms to prime the speech model")),
+            text_field(
+                p,
+                "hints-field",
+                &ui.hints,
+                tr("Names and terms Whisper should expect, e.g. OpenCode, Effect…"),
+                |ui: &mut Ui| &mut ui.hints,
+                |ui: &mut Ui, _| {
+                    let hints = ui.hints.text.clone();
+                    ui.update(|settings| settings.transcription.recognition_hints = hints);
+                },
+            ),
+        ));
+    }
+    let toggle_mode = ui.settings.shortcut_mode == ShortcutMode::Toggle;
+    rows.push(setting_row(
+        p,
+        "shortcut-mode",
+        tr("Shortcut mode"),
+        Some(if toggle_mode {
+            tr("Press to start dictating, press again to transcribe")
+        } else {
+            tr("Hold to dictate, release to transcribe")
+        }),
+        segmented(
+            p,
+            "shortcut-mode-control",
+            &[tr("Hold"), tr("Toggle")],
+            usize::from(toggle_mode),
+            |ui, index| {
+                let mode = if index == 1 {
+                    ShortcutMode::Toggle
+                } else {
+                    ShortcutMode::Hold
+                };
+                if ui.settings.shortcut_mode != mode {
+                    ui.update(|settings| settings.shortcut_mode = mode);
+                }
+            },
+        ),
+    ));
+    section(p, "dictation", tr("Dictation"), rows)
+}
+
+/// The transcription row's description: preparation progress or its error.
+fn transcription_status(ui: &Ui, p: Paint) -> (String, rune::Color) {
+    let fallback = (
+        tr("Language and on-device speech model").to_string(),
+        p.muted(),
+    );
+    let Some(view) = &ui.view else {
+        return fallback;
+    };
+    let transcription = &view.transcription;
+    if let Some(error) = &transcription.error {
+        return (error.clone(), p.danger());
+    }
+    let Some(model) = transcription.preparing else {
+        return fallback;
+    };
+    let name = transcription_models::definition(model).name;
+    let stage = match transcription.preparation_stage {
+        Some(ModelPreparationStage::Verifying) => tr("Verifying model").to_string(),
+        Some(ModelPreparationStage::Loading) => tr("Loading model").to_string(),
+        _ => format!(
+            "{} {:.0} MB",
+            tr("Downloading"),
+            transcription.downloaded_bytes as f64 / 1_000_000.0
+        ),
+    };
+    (format!("{name} · {stage}"), p.accent())
+}
+
+pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
+    let binding = binding(&ui.settings, target);
+    let caps = binding.map_or_else(|| vec![tr("Off").to_string()], HotkeyBinding::keycaps);
+    let key = match target {
+        ShortcutTarget::Dictation => "dictation-hotkey",
+        ShortcutTarget::PasteLast => "paste-last-hotkey",
+        ShortcutTarget::VoiceAction => "voice-action-hotkey",
+    };
+    let c = &p.k.c;
+    let label_style = p.k.ty.ui_medium.lh(16.0);
+    let mut frame = row()
+        .key(key)
+        .role("button")
+        .h(28.0)
+        .pl(4.0)
+        .pr(11.0)
+        .gap(8.0)
+        .center_y()
+        .radius(p.k.radius.md)
+        .motion(p.k.motion.control)
+        .on_press(move |ui: &mut Ui| begin_capture(ui, target));
+    let listening =
+        matches!(ui.capture, Capture::Listening { target: active, .. } if active == target);
+    if !listening {
+        frame = frame.fill(c.bg_button_neutral);
+        for shadow in &p.k.elevation.button_neutral {
+            frame = frame.box_shadow(*shadow);
+        }
+    }
+    match ui.capture {
+        Capture::Listening {
+            target: active,
+            message,
+        } if active == target => frame
+            .fill(c.danger.bg)
+            .border(p.hair.max(0.5), c.danger.border)
+            .child(status_dot(p.danger()).ml(8.0))
+            .child(
+                text(message.unwrap_or(tr("Press shortcut")))
+                    .key("prompt")
+                    .font(label_style)
+                    .color(p.text()),
+            )
+            .child(
+                text(tr("Esc to cancel"))
+                    .key("cancel")
+                    .font(DESCRIPTION)
+                    .color(p.muted()),
+            ),
+        Capture::Saving { target: active, .. } if active == target => {
+            frame.child(keycaps(p, "keys", &caps)).child(
+                text(tr("Saving…"))
+                    .key("label")
+                    .font(label_style)
+                    .color(p.muted()),
+            )
+        }
+        Capture::Saved { target: active, .. } if active == target => frame
+            .child(keycaps(p, "keys", &caps))
+            .child(tone_tag(p, "saved", tr("Saved"), Tone::Success)),
+        _ => frame
+            .hover(c.hover)
+            .press(c.pressed)
+            .child(keycaps(p, "keys", &caps))
+            .child(
+                text(tr("Change shortcut"))
+                    .key("label")
+                    .font(label_style)
+                    .color(p.text()),
+            ),
+    }
+}
+
+fn behavior_section(ui: &Ui, p: Paint) -> El {
+    let settings = &ui.settings;
+    let audio_labels: Vec<&str> = RecordingAudioBehavior::ALL
+        .iter()
+        .map(|behavior| tr(behavior.label()))
+        .collect();
+    let audio_index = RecordingAudioBehavior::ALL
+        .iter()
+        .position(|behavior| *behavior == settings.recording_audio_behavior)
+        .unwrap_or(2);
+    let mut rows = vec![
+        setting_row(
+            p,
+            "while-dictating",
+            tr("While dictating"),
+            Some(tr("Mute or pause other audio during dictation")),
+            segmented(
+                p,
+                "while-dictating-control",
+                &audio_labels,
+                audio_index,
+                |ui, index| {
+                    let behavior = RecordingAudioBehavior::ALL[index];
+                    if ui.settings.recording_audio_behavior != behavior {
+                        ui.update(|settings| settings.recording_audio_behavior = behavior);
+                    }
+                },
+            ),
+        ),
+        setting_row(
+            p,
+            "microphone-mode",
+            tr("Microphone mode"),
+            Some(if settings.release_microphone_while_idle {
+                tr("Opens only while holding the shortcut. Disables pre-roll and commands.")
+            } else {
+                tr("Keeps the microphone open for instant start and pre-roll")
+            }),
+            segmented(
+                p,
+                "microphone-mode-control",
+                &[tr("Keep ready (fast)"), tr("Release when idle")],
+                usize::from(settings.release_microphone_while_idle),
+                |ui, index| {
+                    let release = index == 1;
+                    if release && !ui.settings.release_microphone_while_idle {
+                        ui.confirm_release = true;
+                        return;
+                    }
+                    ui.confirm_release = false;
+                    if ui.settings.release_microphone_while_idle != release {
+                        let mut candidate = ui.drafted();
+                        match candidate.set_release_microphone_while_idle(release) {
+                            Ok(()) => {
+                                ui.commit(candidate);
+                            }
+                            Err(error) => ui.error = Some(format!("{error:#}")),
+                        }
+                    }
+                },
+            ),
+        ),
+    ];
+    if ui.confirm_release {
+        rows.push(release_confirmation(ui, p));
+    }
+    let toggle_mode = settings.shortcut_mode == ShortcutMode::Toggle;
+    if !toggle_mode {
+        rows.push(toggle_row(
+            p,
+            "double-tap",
+            tr("Double-tap to lock"),
+            tr("Double-tap the shortcut for hands-free dictation"),
+            settings.double_tap_lock,
+            |ui: &mut Ui| {
+                let enabled = !ui.settings.double_tap_lock;
+                ui.update(|settings| {
+                    settings.double_tap_lock = enabled;
+                    if !enabled {
+                        settings.double_tap_only = false;
+                    }
+                });
+            },
+        ));
+        if settings.double_tap_lock && settings.dictation_hotkey.key.is_some() {
+            rows.push(toggle_row(
+                p,
+                "double-tap-only",
+                tr("Double-tap only"),
+                tr("Wait for two complete shortcut taps before recording"),
+                settings.double_tap_only,
+                |ui: &mut Ui| {
+                    let enabled = !ui.settings.double_tap_only;
+                    ui.update(|settings| settings.double_tap_only = enabled);
+                },
+            ));
+        }
+    }
+    let indicator_index = match settings.indicator_position {
+        IndicatorPosition::Top => 0,
+        IndicatorPosition::Bottom => 1,
+        IndicatorPosition::Hidden => 2,
+    };
+    rows.push(setting_row(
+        p,
+        "indicator",
+        tr("Recording indicator"),
+        Some(tr(
+            "Show the dictation pill at the top or bottom of the screen",
+        )),
+        segmented(
+            p,
+            "indicator-control",
+            &[tr("Top"), tr("Bottom"), tr("Off")],
+            indicator_index,
+            |ui, index| {
+                let position = [
+                    IndicatorPosition::Top,
+                    IndicatorPosition::Bottom,
+                    IndicatorPosition::Hidden,
+                ][index];
+                if ui.settings.indicator_position != position {
+                    ui.update(|settings| settings.indicator_position = position);
+                }
+            },
+        ),
+    ));
+    if ui.platform.caps.terminal_paste {
+        rows.push(toggle_row(
+            p,
+            "terminal-paste",
+            tr("Terminal paste"),
+            tr("Paste with Ctrl+Shift+V so terminals accept it"),
+            settings.paste_with_shift,
+            |ui: &mut Ui| {
+                let enabled = !ui.settings.paste_with_shift;
+                ui.update(|settings| settings.paste_with_shift = enabled);
+            },
+        ));
+    }
+    section(p, "behavior", tr("Behavior"), rows)
+}
+
+fn release_confirmation(ui: &Ui, p: Paint) -> El {
+    let description = if ui.settings.commands_enabled {
+        tr("Opens the microphone on shortcut press without pre-roll and turns Commands off.")
+    } else {
+        tr("Opens the microphone on shortcut press without pre-roll. Commands remain off.")
+    };
+    setting_row(
+        p,
+        "confirm-release",
+        tr("Release the microphone when idle?"),
+        Some(description),
+        row()
+            .key("actions")
+            .gap(8.0)
+            .child(button(
+                p,
+                "cancel-release",
+                tr("Cancel"),
+                ButtonKind::Secondary,
+                |ui: &mut Ui, _| {
+                    ui.confirm_release = false;
+                },
+            ))
+            .child(button(
+                p,
+                "confirm-release",
+                tr("Release microphone"),
+                ButtonKind::Primary,
+                |ui: &mut Ui, _| {
+                    if ui.update(AppSettings::disable_commands_and_release_microphone) {
+                        ui.confirm_release = false;
+                    }
+                },
+            )),
+    )
+    .fill(p.k.c.hover)
+}
+
+fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    let settings = &ui.settings;
+    let mut rows = super::platform_settings::launch_at_login_rows(ui, p);
+    if ui.platform.caps.listener_control {
+        rows.push(toggle_row(
+            p,
+            "enable-on-launch",
+            tr("Enable on launch"),
+            tr("Turn Hex on in every app whenever it opens"),
+            settings.enable_on_launch,
+            |ui: &mut Ui| {
+                let enabled = !ui.settings.enable_on_launch;
+                ui.update(|settings| settings.enable_on_launch = enabled);
+            },
+        ));
+    }
+    rows.extend(super::platform_settings::dock_icon_row(ui, p));
+    let language = tr(crate::desktop_i18n::choice_name(
+        settings.ui_language.as_deref(),
+    ));
+    let languages = crate::desktop_i18n::LANGUAGE_CHOICES
+        .iter()
+        .map(|(code, name)| {
+            let code = code.map(str::to_string);
+            let selected = settings.ui_language == code;
+            Choice {
+                label: tr(name).to_string(),
+                selected,
+                choose: Box::new(move |ui: &mut Ui| {
+                    ui.open = None;
+                    let code = code.clone();
+                    if ui.update(|settings| settings.ui_language = code.clone()) {
+                        crate::desktop_i18n::apply(code.as_deref());
+                    }
+                }),
+            }
+        })
+        .collect();
+    rows.push(setting_row(
+        p,
+        "interface-language",
+        tr("Interface language"),
+        Some(tr("Language of the Hex interface")),
+        select(
+            p,
+            "interface-language-control",
+            language,
+            ui.open == Some(Menu::Language),
+            languages,
+            |ui: &mut Ui| toggle_menu(ui, Menu::Language),
+            layer,
+        ),
+    ));
+    let volume_labels: Vec<&str> = SOUND_VOLUME_STEPS
+        .iter()
+        .map(|(label, _)| tr(label))
+        .collect();
+    rows.push(setting_row(
+        p,
+        "sound-volume",
+        tr("Sound volume"),
+        Some(tr("Recording, cancellation, and error tones")),
+        segmented(
+            p,
+            "sound-volume-control",
+            &volume_labels,
+            sound_volume_index(settings),
+            |ui, index| {
+                let volume = SOUND_VOLUME_STEPS[index].1;
+                let saved = ui.update(|settings| {
+                    settings.sound_effects = volume > 0.0;
+                    if volume > 0.0 {
+                        settings.sound_effect_volume = volume;
+                    }
+                });
+                if saved && volume > 0.0 && ui.live() {
+                    crate::feedback::play(crate::feedback::Tone::DictationStart);
+                }
+            },
+        ),
+    ));
+    if let Some(control) = software_update(ui, p) {
+        rows.push(setting_row(
+            p,
+            "software-updates",
+            tr("Software updates"),
+            Some(tr("Checks for new Hex releases in the background")),
+            control,
+        ));
+    }
+    section(p, "application", tr("Application"), rows)
+}
+
+fn software_update(ui: &Ui, p: Paint) -> Option<El> {
+    let status = |label: &str| {
+        text(label)
+            .key("update-status")
+            .font(DESCRIPTION)
+            .color(p.muted())
+    };
+    let manual = ui.platform.caps.manual_update_check;
+    Some(match ui.view.as_ref()?.update_status {
+        DesktopUpdateStatus::Unavailable => return None,
+        DesktopUpdateStatus::Checking => status(tr("Checking")),
+        DesktopUpdateStatus::Current | DesktopUpdateStatus::Failed if manual => button(
+            p,
+            "check-for-updates",
+            tr("Check now"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::CheckForUpdates)),
+        ),
+        DesktopUpdateStatus::Current => status(tr("Up to date")),
+        DesktopUpdateStatus::Failed => status(tr("Check failed; retrying later")),
+        DesktopUpdateStatus::SourceBuild => status(tr("Updated from your source checkout")),
+        DesktopUpdateStatus::Available => button(
+            p,
+            "open-update",
+            tr("Update"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::OpenUpdate)),
+        ),
+        DesktopUpdateStatus::ReadyToRestart => button(
+            p,
+            "restart-update",
+            tr("Restart to update"),
+            ButtonKind::Secondary,
+            |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::RestartIntoUpdate)),
+        ),
+    })
+}

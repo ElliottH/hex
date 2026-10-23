@@ -340,7 +340,7 @@ pub fn opencode_workspace() -> Result<PathBuf> {
     Ok(support_dir()?.join("opencode"))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub fn local_api_discovery_file() -> Result<PathBuf> {
     Ok(support_dir()?.join("local-api.json"))
 }
@@ -426,7 +426,7 @@ pub fn personal_commands_sdk() -> Result<PathBuf> {
         fs::create_dir_all(parent)?;
         let temporary = destination.with_extension(format!("{}.partial", std::process::id()));
         fs::write(&temporary, bytes)?;
-        crate::transcription_models::atomic_replace(&temporary, &destination)?;
+        fs::rename(&temporary, &destination)?;
     }
     Ok(root)
 }

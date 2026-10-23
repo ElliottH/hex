@@ -178,8 +178,9 @@ struct Fingerprint {
     in_progress: bool,
 }
 
-const FINGERPRINT_FILES: [&str; 5] = [
+const FINGERPRINT_FILES: [&str; 6] = [
     "manifest.json",
+    super::live::ERROR_FILE,
     "transcript.ndjson",
     "transcript.md",
     "transcript.rolling.ndjson",
@@ -543,8 +544,11 @@ fn load(directory: &Path, id: &str, in_progress: bool) -> Result<Meeting> {
         std::io::ErrorKind::NotFound => eyre!("no manifest.json"),
         _ => eyre!("could not read manifest.json: {error}"),
     })?;
-    let manifest: MeetingManifest = serde_json::from_slice(&data)
+    let mut manifest: MeetingManifest = serde_json::from_slice(&data)
         .map_err(|error| eyre!("could not decode manifest.json: {error}"))?;
+    manifest.live_transcription_error = fs::read_to_string(directory.join(super::live::ERROR_FILE))
+        .ok()
+        .map(|error| error.trim().to_string());
     let final_path = directory.join("transcript.ndjson");
     // A recorder publishes the final NDJSON before the Markdown; without one,
     // the NDJSON alone is the finished publication.

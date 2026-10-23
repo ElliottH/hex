@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use color_eyre::eyre::{Result, eyre};
+use color_eyre::eyre::{Result, WrapErr, eyre};
 
 use crate::transcription_models::{
     AUTO_LANGUAGE, ModelDefinition, ModelRuntime, TranscriptionSelection,
@@ -206,6 +206,33 @@ impl OfflineGgufSession {
                 Err(run_error) => Err(run_error),
             },
         }
+    }
+
+    pub(crate) fn transcribe_chunked(
+        &mut self,
+        samples: &[f32],
+        options: &transcribe_cpp::RunOptions,
+        max_audio_samples: Option<usize>,
+    ) -> Result<String> {
+        let Some(max_samples) =
+            max_audio_samples.filter(|&max_samples| samples.len() > max_samples)
+        else {
+            return self
+                .run(samples, options)
+                .map(|transcript| transcript.text)
+                .wrap_err("transcription failed");
+        };
+        let mut output = Vec::new();
+        for samples in samples.chunks(max_samples) {
+            let mut chunk = samples.to_vec();
+            crate::dictation::pad_for_parakeet(&mut chunk);
+            let transcript = self.run(&chunk, options).wrap_err("transcription failed")?;
+            let text = transcript.text.trim();
+            if !text.is_empty() {
+                output.push(text.to_string());
+            }
+        }
+        Ok(output.join(" "))
     }
 }
 

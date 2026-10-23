@@ -3,6 +3,9 @@ use crate::transcription_models::{
     ModelPreparationStage, TranscriptionModelId, TranscriptionSelection,
 };
 
+/// The Linux service's snapshot; Windows and macOS publish their own
+/// in-process.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DesktopSnapshot {
     pub(crate) activity: DesktopActivity,
@@ -58,7 +61,13 @@ pub(crate) enum DesktopUpdateStatus {
     Checking,
     Current,
     Failed,
+    /// A newer release exists that this install cannot apply itself (a
+    /// Windows source build); the window links to its download.
+    Available,
     ReadyToRestart,
+    /// Installed from a source checkout, which updates it; the release feed
+    /// never replaces it.
+    SourceBuild,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -73,7 +82,11 @@ pub(crate) struct DesktopShortcut {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DesktopAction {
+    /// Checks the update feed now (Windows' "Check now").
+    CheckForUpdates,
     ClearError,
+    /// Opens the release an unmanaged install cannot apply itself.
+    OpenUpdate,
     RestartIntoUpdate,
     SetDictationShortcut(DesktopShortcut),
     StartListening,
