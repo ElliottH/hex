@@ -91,19 +91,36 @@ impl Offset {
             Self::Text(text) => text,
         }
     }
+
+    /// One bound given under either of its two names.
+    fn either(
+        (name, value): (&str, Option<Self>),
+        (alias, other): (&str, Option<Self>),
+    ) -> Result<Option<String>> {
+        match (value, other) {
+            (Some(_), Some(_)) => Err(eyre!("Give either {name} or {alias}, not both.")),
+            (value, other) => Ok(value.or(other).map(Self::text)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetTranscriptArgs {
     /// The meeting id from list_meetings or search_transcripts.
     pub meeting_id: String,
-    /// Start offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds (alias `from`).
+    /// Start offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds.
     /// Entries overlapping start–end are returned whole.
-    #[serde(default, alias = "from")]
+    #[serde(default)]
     pub start: Option<Offset>,
-    /// End offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds (alias `to`).
-    #[serde(default, alias = "to")]
+    /// End offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds.
+    #[serde(default)]
     pub end: Option<Offset>,
+    /// Same as `start`; give one or the other.
+    #[serde(default)]
+    pub from: Option<Offset>,
+    /// Same as `end`; give one or the other.
+    #[serde(default)]
+    pub to: Option<Offset>,
     /// `you`, `them`, or `all` (default).
     #[serde(default)]
     pub speaker: Option<String>,
@@ -200,9 +217,9 @@ and fuzzy for speech-recognition errors (Dax/DAX/Dacks).",
 
     #[tool(
         description = "Read a meeting transcript as merged You/Them turns with mm:ss offsets and \
-local clock times. Optionally limit to a time range (start/end, or from/to, as mm:ss, h:mm:ss, \
-or seconds; entries overlapping it are included, and an inverted range or one starting after the \
-meeting is an error) or one speaker. Long results stop at max_chars and return next_cursor to \
+local clock times. Optionally limit to a time range (start/end, or the same as from/to, as mm:ss, \
+h:mm:ss, or seconds; entries overlapping it are included, and a start not before the end or after \
+the meeting's end is an error) or one speaker. Long results stop at max_chars and return next_cursor to \
 continue.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -210,17 +227,21 @@ continue.",
         &self,
         Parameters(args): Parameters<GetTranscriptArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        reply(self.library.transcript(
-            &TranscriptQuery {
-                meeting_id: args.meeting_id,
-                start: args.start.map(Offset::text),
-                end: args.end.map(Offset::text),
-                speaker: args.speaker,
-                max_chars: args.max_chars.unwrap_or(20_000) as usize,
-                cursor: args.cursor,
-            },
-            now_ms(),
-        ))
+        let start = Offset::either(("start", args.start), ("from", args.from));
+        let end = Offset::either(("end", args.end), ("to", args.to));
+        reply(start.and_then(|start| {
+            self.library.transcript(
+                &TranscriptQuery {
+                    meeting_id: args.meeting_id,
+                    start,
+                    end: end?,
+                    speaker: args.speaker,
+                    max_chars: args.max_chars.unwrap_or(20_000) as usize,
+                    cursor: args.cursor,
+                },
+                now_ms(),
+            )
+        }))
     }
 
     #[tool(

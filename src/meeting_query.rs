@@ -930,7 +930,8 @@ impl ParsedQuery {
 enum MatchKind {
     Exact,
     Prefix,
-    Edit,
+    /// A spelling variant this many edits away.
+    Edit(usize),
     Sound,
 }
 
@@ -939,7 +940,7 @@ impl MatchKind {
         match self {
             Self::Exact => 1.0,
             Self::Prefix => 0.5,
-            Self::Edit => 0.35,
+            Self::Edit(_) => 0.35,
             Self::Sound => 0.2,
         }
     }
@@ -961,9 +962,10 @@ const COMMON_MIN_PASSAGES: f32 = 5.0;
 fn admits(kind: MatchKind, exact_passages: u32, passages: u32, common: f32) -> bool {
     match kind {
         MatchKind::Exact | MatchKind::Prefix => true,
-        MatchKind::Edit | MatchKind::Sound => {
+        MatchKind::Edit(_) | MatchKind::Sound => {
             exact_passages < RARE_EXACT_PASSAGES
-                && (passages as f32 <= common || (kind == MatchKind::Edit && exact_passages == 0))
+                && (passages as f32 <= common
+                    || (kind == MatchKind::Edit(1) && exact_passages == 0))
         }
     }
 }
@@ -989,10 +991,11 @@ fn expand<'a>(
                     && length - candidate_length <= 3)
             {
                 Some(MatchKind::Prefix)
-            } else if length >= 4
-                && edit_distance(term, candidate, if length >= 8 { 2 } else { 1 }).is_some()
+            } else if let Some(distance) = (length >= 4)
+                .then(|| edit_distance(term, candidate, if length >= 8 { 2 } else { 1 }))
+                .flatten()
             {
-                Some(MatchKind::Edit)
+                Some(MatchKind::Edit(distance))
             } else if (3..=5).contains(&length)
                 && (3..=6).contains(&candidate_length)
                 && length.abs_diff(candidate_length) <= 2
@@ -1008,6 +1011,7 @@ fn expand<'a>(
             expansions.push((candidate.clone(), kind));
         }
     }
+    expansions.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     expansions
 }
 
@@ -1028,10 +1032,11 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
         .iter()
         .map(|(meeting, index)| &meeting.passages[*index])
         .collect::<Vec<_>>();
-    let mut scored = score(&passages, query, fuzzy);
+    let documents = (0..passages.len()).collect::<Vec<_>>();
+    let mut scored = score(&passages, &documents, query, fuzzy);
     scored.sort_by(|left, right| {
-        let (left_meeting, left_passage) = owners[left.document];
-        let (right_meeting, right_passage) = owners[right.document];
+        let (left_meeting, left_passage) = owners[left.passage];
+        let (right_meeting, right_passage) = owners[right.passage];
         relevance(left, right)
             .then_with(|| right_meeting.start_ms().cmp(&left_meeting.start_ms()))
             .then_with(|| left_passage.cmp(&right_passage))
@@ -1039,7 +1044,7 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
     scored
         .into_iter()
         .map(|scored| {
-            let (meeting, passage) = owners[scored.document];
+            let (meeting, passage) = owners[scored.passage];
             Hit {
                 meeting: meeting.clone(),
                 passage,
@@ -1052,7 +1057,7 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
 }
 
 struct Scored {
-    document: usize,
+    passage: usize,
     score: f32,
     /// Every query term matched an exact stem.
     exact: bool,
@@ -1069,22 +1074,51 @@ fn relevance(left: &Scored, right: &Scored) -> std::cmp::Ordering {
         .then_with(|| right.score.total_cmp(&left.score))
 }
 
+/// Which of two matches in a passage stands for a query term: the exact stem
+/// whenever present, then the higher score, the more trusted kind, and the
+/// alphabetically first stem, so equal matches resolve the same way every run.
+fn stands_for_term(
+    (score, stem, kind): (f32, &str, MatchKind),
+    (other_score, other_stem, other_kind): (f32, &str, MatchKind),
+) -> std::cmp::Ordering {
+    (kind == MatchKind::Exact)
+        .cmp(&(other_kind == MatchKind::Exact))
+        .then(score.total_cmp(&other_score))
+        .then(kind.weight().total_cmp(&other_kind.weight()))
+        .then(other_stem.cmp(stem))
+}
+
 /// BM25 over `passages` as one corpus, with stemmed, optionally fuzzy terms.
-/// Unsorted; passages that match nothing are omitted.
-fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored> {
-    let mut document_frequency: HashMap<&String, u32> = HashMap::new();
+/// `owners[i]` is passage `i`'s document: alternative texts of one document
+/// (contiguous, such as a raw and a corrected transcript) count once in
+/// document frequencies. Unsorted; passages that match nothing are omitted.
+fn score(passages: &[&Passage], owners: &[usize], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored> {
+    debug_assert_eq!(passages.len(), owners.len());
+    // Per stem: documents containing it, and the last document counted.
+    let mut counted: HashMap<&String, (u32, usize)> = HashMap::new();
     let mut total_length = 0_usize;
-    for passage in passages {
+    let mut documents = 0_u32;
+    for (index, (passage, owner)) in passages.iter().zip(owners).enumerate() {
         total_length += passage.tokens.len();
+        if index == 0 || owners[index - 1] != *owner {
+            documents += 1;
+        }
         for stem in passage.frequencies.keys() {
-            *document_frequency.entry(stem).or_insert(0) += 1;
+            let (count, last) = counted.entry(stem).or_insert((0, usize::MAX));
+            if *last != *owner {
+                *count += 1;
+                *last = *owner;
+            }
         }
     }
-    let documents = passages.len() as u32;
-    if documents == 0 {
+    if passages.is_empty() {
         return Vec::new();
     }
-    let average_length = total_length as f32 / documents as f32;
+    let document_frequency = counted
+        .into_iter()
+        .map(|(stem, (count, _))| (stem, count))
+        .collect::<HashMap<_, _>>();
+    let average_length = total_length as f32 / passages.len() as f32;
     let idf = |stem: &str| {
         let frequency = document_frequency
             .get(&stem.to_string())
@@ -1110,7 +1144,7 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
         })
         .collect::<Vec<_>>();
     let mut hits = Vec::new();
-    for (document, passage) in passages.iter().enumerate() {
+    for (index, passage) in passages.iter().enumerate() {
         let length_norm =
             1.0 - BM25_B + BM25_B * passage.tokens.len() as f32 / average_length.max(1.0);
         let saturate = |frequency: u32| {
@@ -1146,13 +1180,9 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
             for (stem, kind, weight) in candidates {
                 if let Some(frequency) = passage.frequencies.get(stem) {
                     matched_stems.insert(stem);
-                    let score = weight * saturate(*frequency);
-                    // The exact stem, when present, always stands for the term.
-                    let better = |(best, _, best_kind): (f32, &str, MatchKind)| {
-                        (*kind == MatchKind::Exact, score) > (best_kind == MatchKind::Exact, best)
-                    };
-                    if best.is_none_or(better) {
-                        best = Some((score, stem, *kind));
+                    let candidate = (weight * saturate(*frequency), stem.as_str(), *kind);
+                    if best.is_none_or(|best| stands_for_term(candidate, best).is_gt()) {
+                        best = Some(candidate);
                     }
                 }
             }
@@ -1198,7 +1228,7 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
         matched_positions.sort_unstable();
         matched_positions.dedup();
         hits.push(Scored {
-            document,
+            passage: index,
             score: term_score * coverage + phrase_score + adjacency,
             exact: exact_terms.iter().all(|exact| *exact),
             matched: matched_positions,
@@ -1208,35 +1238,44 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
     hits
 }
 
-/// One ranked match from [`search_texts`].
+/// One ranked document from [`search_texts`], through its best text.
 #[derive(Debug)]
 pub struct TextHit {
+    /// The document's index.
     pub index: usize,
     pub score: f32,
-    /// A window of the text around the matches, which are wrapped in `**`.
+    /// A window of the best text around the matches, which are wrapped in `**`.
     pub snippet: String,
 }
 
-/// Rank plain texts, one document each, with the meeting search's stemmed,
-/// fuzzy BM25 and quoted-phrase rules. Best first; ties keep input order.
-pub fn search_texts(texts: &[&str], query: &str) -> Result<Vec<TextHit>> {
+/// Rank documents of plain text with the meeting search's stemmed, fuzzy BM25
+/// and quoted-phrase rules. A document's texts are alternatives, such as a raw
+/// and a corrected transcript: they count as one document for term statistics,
+/// and the best of them is its hit. Best first; ties keep input order.
+pub fn search_texts(documents: &[Vec<&str>], query: &str) -> Result<Vec<TextHit>> {
     let parsed = ParsedQuery::parse(query);
     if parsed.is_empty() {
         return Err(eyre!("The search query has no words."));
     }
-    let passages = texts
-        .iter()
-        .map(|text| Passage::new(PassageKind::Notes, 0, (*text).to_owned()))
-        .collect::<Vec<_>>();
-    let documents = passages.iter().collect::<Vec<_>>();
-    let mut scored = score(&documents, &parsed, true);
-    scored.sort_by(|left, right| relevance(left, right).then(left.document.cmp(&right.document)));
+    let mut owners = Vec::new();
+    let mut passages = Vec::new();
+    for (document, texts) in documents.iter().enumerate() {
+        for text in texts {
+            owners.push(document);
+            passages.push(Passage::new(PassageKind::Notes, 0, (*text).to_owned()));
+        }
+    }
+    let texts = passages.iter().collect::<Vec<_>>();
+    let mut scored = score(&texts, &owners, &parsed, true);
+    scored.sort_by(|left, right| relevance(left, right).then(left.passage.cmp(&right.passage)));
+    let mut seen = HashSet::new();
     Ok(scored
         .into_iter()
+        .filter(|scored| seen.insert(owners[scored.passage]))
         .map(|scored| TextHit {
-            index: scored.document,
+            index: owners[scored.passage],
             score: scored.score,
-            snippet: snippet(&passages[scored.document], &scored.matched),
+            snippet: snippet(&passages[scored.passage], &scored.matched),
         })
         .collect())
 }
@@ -1887,7 +1926,8 @@ impl OffsetRange {
             from_ms: offset(from)?,
             to_ms: offset(to)?,
         };
-        if let (Some(from), Some(to)) = (range.from_ms, range.to_ms)
+        let from = range.from_ms.unwrap_or_default();
+        if let Some(to) = range.to_ms
             && from >= to
         {
             return Err(eyre!(
@@ -1943,39 +1983,62 @@ impl OffsetRange {
 }
 
 /// `mm:ss`, `h:mm:ss`, plain seconds (`90`, `90.5`), or `90s`/`12m`/`1h`.
+/// Fields before the seconds are whole numbers, and seconds stay below 60, as
+/// do `h:mm:ss` minutes; `mm:ss` minutes may pass 59 (`113:03`).
 pub fn parse_offset(input: &str) -> Result<u64> {
     let text = input.trim().to_ascii_lowercase();
     let invalid = || eyre!("Could not read the offset {input:?}; use mm:ss, h:mm:ss, or seconds.");
-    if text.contains(':') {
-        let parts = text
-            .split(':')
-            .map(|part| part.parse::<f64>().map_err(|_| invalid()))
-            .collect::<Result<Vec<_>>>()?;
-        let seconds = match parts.as_slice() {
-            [minutes, seconds] => minutes * 60.0 + seconds,
-            [hours, minutes, seconds] => hours * 3_600.0 + minutes * 60.0 + seconds,
-            _ => return Err(invalid()),
-        };
-        return if seconds >= 0.0 {
-            Ok((seconds * 1_000.0) as u64)
+    let number = |part: &str| {
+        let part = part.trim();
+        let value = part.parse::<f64>().map_err(|_| invalid())?;
+        if part.starts_with(['-', '+']) || !value.is_finite() || value < 0.0 {
+            return Err(invalid());
+        }
+        Ok(value)
+    };
+    let whole = |value: f64, limit: Option<f64>| {
+        if value.fract() == 0.0 && limit.is_none_or(|limit| value < limit) {
+            Ok(value)
         } else {
             Err(invalid())
-        };
-    }
-    let (number, scale) = if let Some(number) = text.strip_suffix('h') {
-        (number, 3_600.0)
-    } else if let Some(number) = text.strip_suffix('m') {
-        (number, 60.0)
-    } else if let Some(number) = text.strip_suffix('s') {
-        (number, 1.0)
-    } else {
-        (text.as_str(), 1.0)
+        }
     };
-    let value: f64 = number.trim().parse().map_err(|_| invalid())?;
-    if value < 0.0 || !value.is_finite() {
+    let seconds = if text.contains(':') {
+        let parts = text.split(':').map(number).collect::<Result<Vec<_>>>()?;
+        let seconds = |value: f64| {
+            if value < 60.0 {
+                Ok(value)
+            } else {
+                Err(invalid())
+            }
+        };
+        match parts.as_slice() {
+            [minutes, rest] => whole(*minutes, None)? * 60.0 + seconds(*rest)?,
+            [hours, minutes, rest] => {
+                whole(*hours, None)? * 3_600.0
+                    + whole(*minutes, Some(60.0))? * 60.0
+                    + seconds(*rest)?
+            }
+            _ => return Err(invalid()),
+        }
+    } else {
+        let (value, scale) = if let Some(value) = text.strip_suffix('h') {
+            (value, 3_600.0)
+        } else if let Some(value) = text.strip_suffix('m') {
+            (value, 60.0)
+        } else if let Some(value) = text.strip_suffix('s') {
+            (value, 1.0)
+        } else {
+            (text.as_str(), 1.0)
+        };
+        number(value)? * scale
+    };
+    let milliseconds = (seconds * 1_000.0).round();
+    // `u64::MAX as f64` rounds up to 2^64, the first value that does not fit.
+    if !milliseconds.is_finite() || milliseconds >= u64::MAX as f64 {
         return Err(invalid());
     }
-    Ok((value * scale * 1_000.0) as u64)
+    Ok(milliseconds as u64)
 }
 
 #[cfg(test)]

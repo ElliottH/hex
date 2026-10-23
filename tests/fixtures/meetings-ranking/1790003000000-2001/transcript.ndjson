@@ -19,4 +19,4 @@
 {"source": "system", "start_ms": 180000, "end_ms": 184000, "text": "Bob made a list of reviewers, I believe he shared it."}
 {"source": "microphone", "start_ms": 190000, "end_ms": 194000, "text": "Also someone made a mess of the staging deploy yesterday."}
 {"source": "system", "start_ms": 200000, "end_ms": 204000, "text": "That was me, I made a typo in the config."}
-{"source": "microphone", "start_ms": 210000, "end_ms": 214000, "text": "No worries. Let's wrap up and write the notes."}
+{"source": "microphone", "start_ms": 210000, "end_ms": 214000, "text": "No worries. Separately, someone asked whether the old blob left over from the prototype can be deleted, and I said yes once the migration finishes next week. Let's wrap up and write the notes."}

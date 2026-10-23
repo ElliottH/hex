@@ -185,26 +185,25 @@ fn history_output<'a>(
 }
 
 /// Rank newest-first entries by their final text and, when it differs, their
-/// raw transcript, keeping each entry's better match. Ties stay newest first.
+/// raw transcript, as one document per entry with the better text's match.
+/// Ties stay newest first.
 fn rank_history<'a>(
     entries: &[&'a HistoryEntry],
     query: &str,
 ) -> Result<Vec<(&'a HistoryEntry, TextHit)>> {
-    let mut owners = Vec::new();
-    let mut texts = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
-        owners.push(index);
-        texts.push(entry.final_text.as_str());
-        if !entry.raw_text.is_empty() && entry.raw_text != entry.final_text {
-            owners.push(index);
-            texts.push(entry.raw_text.as_str());
-        }
-    }
-    let mut seen = std::collections::HashSet::new();
-    Ok(search_texts(&texts, query)?
+    let documents = entries
+        .iter()
+        .map(|entry| {
+            let mut texts = vec![entry.final_text.as_str()];
+            if !entry.raw_text.is_empty() && entry.raw_text != entry.final_text {
+                texts.push(entry.raw_text.as_str());
+            }
+            texts
+        })
+        .collect::<Vec<_>>();
+    Ok(search_texts(&documents, query)?
         .into_iter()
-        .filter(|hit| seen.insert(owners[hit.index]))
-        .map(|hit| (entries[owners[hit.index]], hit))
+        .map(|hit| (entries[hit.index], hit))
         .collect())
 }
 

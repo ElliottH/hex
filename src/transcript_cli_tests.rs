@@ -146,6 +146,36 @@ fn history_search_ranks_fuzzy_stemmed_matches_within_retention() {
 }
 
 #[test]
+fn history_search_counts_raw_and_final_text_as_one_document() {
+    let template = entries()[2].clone();
+    let entry = |id: u64, final_text: &str, raw_text: &str| HistoryEntry {
+        id,
+        timestamp_ms: NOW - id * 1_000,
+        final_text: final_text.into(),
+        raw_text: raw_text.into(),
+        ..template.clone()
+    };
+    // Two entries say `dax`, each in both texts: still fewer than three
+    // documents, so the sound-alike `Dacks` is found.
+    let entries = [
+        entry(1, "Ask Dax about the release.", "ask dax about the release"),
+        entry(2, "Dax shipped the fix.", "dax shipped the fix"),
+        entry(3, "Dacks reviewed it.", "Dacks reviewed it."),
+    ];
+    let output = history_output(
+        &entries,
+        &args(&["--search", "Dax"]),
+        HistoryRetention::Week,
+        NOW,
+    )
+    .unwrap();
+    let mut ids = output.entries.iter().map(|e| e.id).collect::<Vec<_>>();
+    assert_eq!(ids.pop(), Some(3), "the fuzzy match ranks last");
+    ids.sort_unstable();
+    assert_eq!(ids, [1, 2]);
+}
+
+#[test]
 fn history_json_contract_snapshot() {
     let entries = entries();
     let output = history_output(
@@ -342,6 +372,20 @@ fn meeting_show_ranges_filter_json_entries_and_markdown() {
 
     assert!(OffsetRange::parse(Some("0:14"), Some("0:06")).is_err());
     assert!(OffsetRange::parse(Some("0:06"), Some("0:06")).is_err());
+    let cli =
+        crate::Cli::try_parse_from(["hex", "meetings", "show", "latest", "--to", "0"]).unwrap();
+    let Some(crate::Command::Meetings {
+        command: MeetingsCommand::Show { from, to, .. },
+    }) = cli.command
+    else {
+        panic!("expected meetings show");
+    };
+    assert_eq!(
+        OffsetRange::parse(from.as_deref(), to.as_deref())
+            .unwrap_err()
+            .to_string(),
+        "The range start 00:00 must be earlier than its end 00:00."
+    );
     let cli = crate::Cli::try_parse_from([
         "hex", "meetings", "show", "latest", "--from", "1:53:03", "--to", "120:43", "--json",
     ])

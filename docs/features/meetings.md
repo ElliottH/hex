@@ -709,8 +709,9 @@ hex mcp [--meetings-dir <path>]                     // meetings.mcp; release bui
     │       mm:ss @ ISO time, snippet with **matches**, before/after lines
     ├── get_transcript(meeting_id, start?, end?, speaker?, max_chars?, cursor?)
     │   ├── merged You/Them turns "[mm:ss · HH:MM:SS] Them: …" + next_cursor
-    │   └── start/end (aliases from/to): entries overlapping the range; an
-    │       inverted range or one starting after the meeting is an error
+    │   └── start/end, or the same as from/to (own schema fields; not both):
+    │       entries overlapping the range; a start not before the end (an
+    │       omitted start is 0) or past the meeting's end is an error
     └── get_meeting_notes(meeting_id)
         └── stored title + two-sentence summary + "read the transcript for
             details, decisions, and action items", or an explicit
@@ -746,11 +747,14 @@ coverage weighted the same way, and adjacent-term bonuses. Passages matching
 every term exactly rank above all others. Edit and Soundex fallbacks apply only
 to a term with fewer than three exact passages, and skip words in more than
 0.5% of the passages searched (at least five) unless the term has no exact hit
-and the word is one edit away. This keeps `made`, `blog`, `Bob`, and `believe`
-out of a `media`/`blob` search once those words appear exactly, while a typo of
-a rare word still finds it. `"Quoted words"` are required exact (stemmed)
-phrases; `fuzzy: false` keeps only exact stems. `hex history --search` shares
-this ranker.
+and the word is exactly one edit away. This keeps `made`, `blog`, `Bob`, and
+`believe` out of a `media`/`blob` search once those words appear exactly in
+three passages, while a typo of a rare word still finds it. A term's match in a
+passage is its exact stem when present, then the best score, kind, and
+alphabetically first stem, so ties are deterministic. `"Quoted words"` are
+required exact (stemmed) phrases; `fuzzy: false` keeps only exact stems.
+`hex history --search` shares this ranker, counting an entry's raw and final
+text as one document.
 
 Semantic search is not shipped. On-device candidates are Apple NaturalLanguage
 `NLContextualEmbedding` (asset download, macOS 14+) or the older static
@@ -766,15 +770,18 @@ fixtures in `tests/fixtures/meetings` and `tests/fixtures/meetings-ranking`):
 `meeting::query::tests::*` (listing and skipped folders, filters, misspelling
 tolerance and ranking, stemming, accents, required phrases, context, drafts,
 cursor paging, notes, held lock, `queries_never_write_to_the_meetings_folder`,
-time parsing, offset ranges on final, rolling, and in-progress transcripts,
+time and strict offset parsing, offset ranges on final, rolling, and
+in-progress transcripts (including the "so far" error),
 `exact_stems_outrank_loose_matches_to_common_words`,
 `passages_matching_every_term_exactly_rank_first`,
+`an_all_exact_passage_outranks_a_higher_scoring_partial_one`,
+`a_term_found_in_fewer_passages_still_reaches_its_neighbours`,
 `a_misspelled_rare_word_still_finds_its_passage`, and
 `spelling_fallbacks_need_rare_terms_and_uncommon_candidates`) and
 `tests/meetings_mcp.rs` (initialize with protocol 2025-06-18, tools/list with
-schemas and read-only annotations, tools/call including `from`/`to` ranges and
-their errors, resources/read, stdout carries only JSON-RPC, no Application
-Support state created).
+schemas (including `from`/`to`) and read-only annotations, tools/call including
+`from`/`to` ranges beside null `start`/`end` and their errors, resources/read,
+stdout carries only JSON-RPC, no Application Support state created).
 
 Observed (2026-10-23, Mac Studio, debug build, live meetings folder, read-only):
 `hex meetings search "images database blob storage media"` dropped from 315 to

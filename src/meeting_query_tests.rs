@@ -149,7 +149,8 @@ fn search_ranks_names_and_tolerates_recognition_misspellings() {
 
 /// A storage discussion at 02:00–02:40 amid chatter full of `made`, `blog`,
 /// `Bob`, and `believe`, which are one edit or a Soundex code away from
-/// `media` and `blob`.
+/// `media` and `blob`. `blob` is said in three passages (the third at 03:30),
+/// so it is no longer rare.
 fn ranked(query: &str) -> String {
     Library::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings-ranking"))
         .search(
@@ -191,8 +192,60 @@ fn exact_stems_outrank_loose_matches_to_common_words() {
     );
     // `made` is said throughout, so it never stands in for `media`.
     assert!(!output.contains("mad~media"), "{output}");
-    // Rare `blob` may still reach `blog` and `Bob`, but only below every real hit.
-    assert!(hits.iter().skip(5).all(|hit| hit.contains('~')), "{output}");
+    // `blob` is spelled that way in three passages, so it no longer reaches
+    // `blog`, `Bob`, or `believe`.
+    assert!(!output.contains("~blob"), "{output}");
+    let blob = ranked("blob");
+    let blobs = hit_lines(&blob);
+    assert_eq!(
+        blobs.iter().map(|hit| offset(hit)).collect::<Vec<_>>(),
+        ["02:00", "02:10", "03:30"],
+        "{blob}"
+    );
+    assert!(
+        blobs.iter().all(|hit| hit.ends_with("matched blob")),
+        "{blob}"
+    );
+}
+
+#[test]
+fn a_term_found_in_fewer_passages_still_reaches_its_neighbours() {
+    // The fixture's `blob` story with only two exact passages.
+    let texts = [
+        "keep the images in blob storage",
+        "the blob store sits behind a CDN",
+        "I wrote a blog post",
+        "the onboarding video is done",
+    ];
+    let documents = texts.map(|text| vec![text]);
+    let matched = |documents: &[Vec<&str>]| {
+        search_texts(documents, "blob")
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.index)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(matched(&documents), [0, 1, 2]);
+    let mut common = documents.to_vec();
+    common.push(vec!["one more blob"]);
+    assert_eq!(matched(&common), [4, 0, 1]);
+}
+
+#[test]
+fn an_all_exact_passage_outranks_a_higher_scoring_partial_one() {
+    // `storage` is rare and `blob` common, so a short passage repeating
+    // `storage` alone outscores a long one that has both words.
+    let mut texts = vec![
+        "blob first, then a long tangent about the quarter, the hiring plan, the offsite, the \
+         budget review, and the roadmap before we finally got back to storage",
+        "storage storage storage storage",
+    ];
+    texts.extend(["the blob again"; 8]);
+    let documents = texts.iter().map(|text| vec![*text]).collect::<Vec<_>>();
+    let hits = search_texts(&documents, "blob storage").unwrap();
+    assert_eq!(hits[0].index, 0);
+    let partial = hits.iter().find(|hit| hit.index == 1).unwrap();
+    assert!(partial.score > hits[0].score, "{hits:?}");
 }
 
 #[test]
@@ -225,15 +278,17 @@ fn a_misspelled_rare_word_still_finds_its_passage() {
 #[test]
 fn spelling_fallbacks_need_rare_terms_and_uncommon_candidates() {
     let common = 5.0;
-    assert!(admits(MatchKind::Edit, 2, 4, common));
+    assert!(admits(MatchKind::Edit(1), 2, 4, common));
+    assert!(admits(MatchKind::Edit(2), 2, 4, common));
     // The term is spelled this way often enough; neighbours are other words.
-    assert!(!admits(MatchKind::Edit, RARE_EXACT_PASSAGES, 1, common));
+    assert!(!admits(MatchKind::Edit(1), RARE_EXACT_PASSAGES, 1, common));
     assert!(!admits(MatchKind::Sound, RARE_EXACT_PASSAGES, 1, common));
     // `made` for `media`.
     assert!(!admits(MatchKind::Sound, 1, 9, common));
-    assert!(!admits(MatchKind::Edit, 1, 9, common));
-    // A plain typo of a common word still reaches it by one edit.
-    assert!(admits(MatchKind::Edit, 0, 9, common));
+    assert!(!admits(MatchKind::Edit(1), 1, 9, common));
+    // A plain typo of a common word still reaches it, but only by one edit.
+    assert!(admits(MatchKind::Edit(1), 0, 9, common));
+    assert!(!admits(MatchKind::Edit(2), 0, 9, common));
     assert!(!admits(MatchKind::Sound, 0, 9, common));
     assert!(admits(MatchKind::Prefix, 50, 50, common));
 }
@@ -457,6 +512,21 @@ fn a_held_lock_marks_the_meeting_in_progress() {
         rolling.contains("Rolling text mentions cron again."),
         "{rolling}"
     );
+    let late = library
+        .markdown(
+            STANDUP,
+            OffsetRange::parse(Some("30:00:00"), None).unwrap(),
+            NOW,
+        )
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        late,
+        format!(
+            "The range starts at 1800:00, after the meeting's end at {} so far.",
+            format_duration(NOW - 1_790_001_000_000)
+        )
+    );
 
     fs2::FileExt::unlock(&lock).unwrap();
     assert!(list(&library, true).contains("interrupted"));
@@ -542,7 +612,15 @@ fn parses_times_offsets_and_words() {
     assert_eq!(parse_offset("1:02:03").unwrap(), 3_723_000);
     assert_eq!(parse_offset("90").unwrap(), 90_000);
     assert_eq!(parse_offset("1.5m").unwrap(), 90_000);
-    assert!(parse_offset("soon").is_err());
+    assert_eq!(parse_offset("1.14").unwrap(), 1_140);
+    assert_eq!(parse_offset("113:03").unwrap(), 6_783_000);
+    assert_eq!(parse_offset("0:59.5").unwrap(), 59_500);
+    for invalid in [
+        "soon", "1:-30", "-1:30", "-5", "0:99", "1:99:00", "0:inf", "inf", "NaN", "1.5:00",
+        "1:2.5:00", "0:60", "1:60:00", ":30", "1:2:3:4", "1e300h",
+    ] {
+        assert!(parse_offset(invalid).is_err(), "{invalid}");
+    }
 
     for (word, expected) in [
         ("scheduled", "schedul"),

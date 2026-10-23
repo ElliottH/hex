@@ -59,14 +59,18 @@ offsets. No notes or transcripts are generated.
 
 `--from` and `--to` limit `show` to part of the meeting, with either output.
 They take offsets into the meeting as `mm:ss` (minutes may exceed 59, as in
-`113:03`), `h:mm:ss`, or seconds (`90`, `90s`, `1.5m`); either may be omitted.
-Every entry overlapping the range is included whole, so the first and last
-entries may start before `--from` or end after `--to`. Markdown adds a
-`- Range:` line; JSON adds `range`. A `--from` at or after `--to`, or at or
-after the meeting's end, is an error. A recording in progress runs until now,
-so a range past its rolling transcript so far is empty rather than an error.
-The MCP `get_transcript` tool takes the same range as `start`/`end` or
-`from`/`to`.
+`113:03`), `h:mm:ss`, or seconds (`90`, `1.14`, `90s`, `1.5m`), rounded to the
+millisecond; either may be omitted. Minutes and hours are whole numbers,
+seconds stay below 60, and so do `h:mm:ss` minutes; negative, infinite, or
+overflowing offsets are rejected. Every entry overlapping the range is included
+whole, so the first and last entries may start before `--from` or end after
+`--to`. Markdown adds a `- Range:` line; JSON adds `range`. A `--from` at or
+after `--to` (an omitted `--from` is 0, so `--to 0` fails), or at or after the
+meeting's end, is an error. A recording in progress runs until now, so a range
+past its rolling transcript so far is empty rather than an error, and one past
+now fails with "so far". The MCP `get_transcript` tool takes the same range as
+`start`/`end` or, as separate schema fields, `from`/`to`; giving both names for
+one bound is an error.
 
 `meetings search QUERY` uses the MCP query's stemmed, fuzzy BM25 ranking over
 transcripts and stored notes. Quoted phrases constrain the search. `--since`,
@@ -80,9 +84,14 @@ sound-alike 0.2, also for the share of terms a passage covers. Spelling
 fallbacks (edits and sound-alikes) are tried only for a term found exactly in
 fewer than three passages, and never reach a word in more than 0.5% of the
 passages searched (and at least five), except that a term with no exact match
-still reaches a common word one edit away. So `blob` does not pull in `blog`,
-`Bob`, or `believe` once the transcripts say `blob`, and `media` does not pull
-in a word as common as `made`. `hex history --search` uses the same ranking.
+still reaches a common word one edit away (never two). So `blob` does not pull
+in `blog`, `Bob`, or `believe` once three passages say `blob`, and `media` does
+not pull in a word as common as `made`. When several words in a passage could
+stand for one term, the exact stem wins, then the higher score, the more
+trusted match, and the alphabetically first word, so results never vary between
+runs. `hex history --search` uses the same ranking, with an entry's raw and
+final text counted as one document (so a word in both counts once) and its
+better text as the hit.
 
 Debug builds retain `meeting record`, `watch`, `probe`, `transcribe`, and other
 developer commands. Their `meeting list/show` commands use the read-only query

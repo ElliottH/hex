@@ -90,6 +90,16 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
         .find(|tool| tool["name"] == "search_transcripts")
         .unwrap();
     assert_eq!(search["inputSchema"]["required"], json!(["query"]));
+    let transcript = tools
+        .iter()
+        .find(|tool| tool["name"] == "get_transcript")
+        .unwrap();
+    for bound in ["start", "end", "from", "to"] {
+        assert!(
+            transcript["inputSchema"]["properties"][bound].is_object(),
+            "{transcript}"
+        );
+    }
 
     send(
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
@@ -115,7 +125,10 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
     send(
         json!({"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": {
             "name": "get_transcript",
-            "arguments": {"meeting_id": "1790000000000-1001", "from": "0:20", "to": 30}
+            "arguments": {
+                "meeting_id": "1790000000000-1001", "start": null, "end": null,
+                "from": "0:20", "to": 30
+            }
         }}),
     );
     let result = receive(41);
@@ -123,14 +136,26 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
     assert!(text.contains("Showing 00:16–00:31"), "{text}");
     assert!(!text.contains("write the spec"), "{text}");
 
-    for (id, arguments) in [
+    for (id, arguments, error) in [
         (
             42,
             json!({"meeting_id": "1790000000000-1001", "from": "0:30", "to": "0:20"}),
+            "The range start 00:30 must be earlier than its end 00:20.",
         ),
         (
             43,
             json!({"meeting_id": "1790000000000-1001", "start": "5:00"}),
+            "The range starts at 05:00, after the meeting's end at 00:40.",
+        ),
+        (
+            44,
+            json!({"meeting_id": "1790000000000-1001", "to": 0}),
+            "The range start 00:00 must be earlier than its end 00:00.",
+        ),
+        (
+            45,
+            json!({"meeting_id": "1790000000000-1001", "start": "0:10", "from": "0:20"}),
+            "Give either start or from, not both.",
         ),
     ] {
         send(
@@ -141,7 +166,7 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
         let result = receive(id);
         assert_eq!(result["result"]["isError"], true, "{result}");
         let text = result["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with("The range start"), "{text}");
+        assert_eq!(text, error);
     }
 
     send(
