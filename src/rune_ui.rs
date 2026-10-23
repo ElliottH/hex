@@ -719,6 +719,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
 
 fn setup(ui: &mut Ui, waker: Waker) {
     ui.modes.waker = Some(waker.clone());
+    ui.modes.icon_cache = Some(rune::ImageCache::new(waker.clone()));
     if let Service::Pending(connect) = &mut ui.service {
         let connect = std::mem::take(connect);
         #[cfg(target_os = "macos")]
@@ -742,6 +743,17 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     let mut changed = ui.save_drafts(now);
     changed |= ui.models.poll(ui.live());
     changed |= ui.history.poll(ui.pane == Pane::History);
+    // Mode rows show their applications' icons, which the catalog locates.
+    if ui.pane == Pane::Modes
+        && ui
+            .settings
+            .dictation_processing
+            .modes
+            .iter()
+            .any(|mode| !mode.applications.is_empty())
+    {
+        ui.modes.ensure_applications();
+    }
     changed |= ui.modes.poll(ui.live());
     changed |= modes::poll_chooser(ui);
     changed |= ui.host.poll(&mut ui.platform);

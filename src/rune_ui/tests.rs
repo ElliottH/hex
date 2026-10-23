@@ -663,6 +663,7 @@ fn render(scene: &str, dark: bool, size: (f32, f32)) -> Option<(u32, u32, Vec<u8
         &rt.instances,
         (width, height),
     );
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     renderer.draw(&mut encoder, &target.view, rt.clear_color());
     target.copy(&mut encoder);

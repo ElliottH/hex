@@ -4,7 +4,9 @@
 //! typing pauses; every other edit saves at once and asks the service to
 //! reload.
 
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -38,6 +40,12 @@ static GRIP: rune::Icon = rune::Icon {
 };
 /// A transformation row's height; dragging moves one place per row.
 const TRANSFORMATION_ROW: f32 = 36.0;
+/// Application icons draw at 24 points in the picker and 16 beside names,
+/// from one raster per application.
+const ICON_SIZE: f32 = 24.0;
+/// Past this many icons (each about 12 KB with its mips), the held ones are
+/// dropped and those still shown load again.
+const MAX_ICONS: usize = 256;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Selection {
@@ -119,6 +127,12 @@ pub(super) struct ModesPane {
     chooser: Option<Pending>,
     drag: Option<TransformationDrag>,
     pub(super) waker: Option<Waker>,
+    /// Rasterizes application icons off the UI thread; made in `setup`.
+    pub(super) icon_cache: Option<rune::ImageCache>,
+    /// Icons by catalog path, requested as the view first shows them. The
+    /// cache shares only handles kept alive here.
+    icons: RefCell<HashMap<PathBuf, rune::Image>>,
+    icons_ready: usize,
     /// Whether the listener can tell which app is frontmost (X11, not Wayland).
     focused_app_known: bool,
     status: StatusSnapshot,
@@ -146,6 +160,9 @@ impl ModesPane {
             chooser: None,
             drag: None,
             waker: None,
+            icon_cache: None,
+            icons: RefCell::default(),
+            icons_ready: 0,
             focused_app_known: true,
             status,
             status_read: None,
@@ -249,6 +266,16 @@ impl ModesPane {
             self.applications = Applications::Loaded(applications);
             changed = true;
         }
+        let ready = self
+            .icons
+            .get_mut()
+            .values()
+            .filter(|icon| icon.is_ready())
+            .count();
+        if ready != self.icons_ready {
+            self.icons_ready = ready;
+            changed = true;
+        }
         if let Some(receiver) = &self.workspace_receiver
             && let Ok(result) = receiver.try_recv()
         {
@@ -272,7 +299,31 @@ impl ModesPane {
         changed
     }
 
-    fn ensure_applications(&mut self) {
+    /// The decoded icon for a catalog path, requesting it when first shown.
+    /// None while it loads, when it has none, or without a cache.
+    fn icon(&self, path: &Path) -> Option<rune::Pixels> {
+        let mut icons = self.icons.borrow_mut();
+        if !icons.contains_key(path) {
+            let cache = self.icon_cache.as_ref()?;
+            if icons.len() >= MAX_ICONS {
+                icons.clear();
+            }
+            icons.insert(path.to_path_buf(), cache.app_icon(path, ICON_SIZE));
+        }
+        let icon = &icons[path];
+        (icon.is_ready() && icon.error().is_none()).then(|| icon.pixels().clone())
+    }
+
+    /// The icon for an application a mode names, once the catalog lists it.
+    fn named_icon(&self, name: &str) -> Option<rune::Pixels> {
+        let Applications::Loaded(applications) = &self.applications else {
+            return None;
+        };
+        let application = applications.iter().find(|a| a.name == name)?;
+        self.icon(&application.path)
+    }
+
+    pub(super) fn ensure_applications(&mut self) {
         if matches!(self.applications, Applications::NotLoaded) {
             let (sender, receiver) = sync_channel(1);
             thread::spawn(move || {
@@ -585,6 +636,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         p,
         "mode-global",
         tr("Global"),
+        Vec::new(),
         tr("Fallback for everything"),
         ui.modes.selected == Selection::Default,
         Selection::Default,
@@ -595,10 +647,20 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         } else {
             mode.applications.join(", ")
         };
+        // The first few applications' icons trail the name.
+        let icons = mode
+            .applications
+            .iter()
+            .filter_map(|name| ui.modes.named_icon(name))
+            .take(3)
+            .enumerate()
+            .map(|(index, icon)| application_icon(format!("icon{index}"), &icon, 16.0))
+            .collect();
         list = list.child(mode_row(
             p,
             &format!("mode{index}"),
             &mode.name,
+            icons,
             &summary,
             ui.modes.selected == Selection::Custom(index),
             Selection::Custom(index),
@@ -630,11 +692,12 @@ fn mode_row(
     p: Paint,
     key: &str,
     name: &str,
+    icons: Vec<El>,
     summary: &str,
     selected: bool,
     selection: Selection,
 ) -> El {
-    list_row(p, key, name, Vec::new(), summary, selected, move |ui| {
+    list_row(p, key, name, icons, summary, selected, move |ui| {
         select_mode(ui, selection)
     })
 }
@@ -720,15 +783,17 @@ fn basics(ui: &Ui, p: Paint, selection: Selection, current: &DictationMode) -> E
         .max_w(FIELD_WIDTH);
     for (index, name) in current.applications.iter().enumerate() {
         let remove = name.clone();
+        let icon = ui.modes.named_icon(name);
         chips = chips.child(
             row()
                 .key(format!("application{index}"))
                 .h(24.0)
-                .pl(8.0)
-                .gap(2.0)
+                .pl(if icon.is_some() { 4.0 } else { 8.0 })
+                .gap(if icon.is_some() { 4.0 } else { 2.0 })
                 .center_y()
                 .radius(p.k.radius.sm)
                 .fill(p.k.c.layer_02)
+                .children(icon.map(|icon| application_icon("icon", &icon, 16.0)))
                 .child(
                     text(name.clone())
                         .key("name")
@@ -849,7 +914,10 @@ fn application_picker(ui: &Ui, p: Paint, current: &DictationMode) -> El {
                 .hover(c.hover)
                 .press(c.pressed)
                 .on_press(move |ui: &mut Ui| add_application(ui, name.clone()))
-                .child(monogram(p, &application.name))
+                .child(match ui.modes.icon(&application.path) {
+                    Some(icon) => application_icon("icon", &icon, ICON_SIZE),
+                    None => monogram(p, &application.name),
+                })
                 .child(
                     col()
                         .key("copy")
@@ -921,8 +989,14 @@ fn choose_file_button(p: Paint) -> El {
     )
 }
 
-/// An app's initial on a tinted square: Rune has no raster images yet, so
-/// the catalog's icons are not drawn.
+fn application_icon(key: impl Into<String>, icon: &rune::Pixels, size: f32) -> El {
+    el().key(key)
+        .size(size, size)
+        .pixels_fit(icon, rune::SurfaceFit::Fit)
+}
+
+/// An app's initial on a tinted square, while its icon loads or when it has
+/// none.
 fn monogram(p: Paint, name: &str) -> El {
     let letter = name
         .chars()
@@ -1335,7 +1409,50 @@ pub(super) fn fixture(ui: &mut Ui) {
         ),
         app("Zed", "/usr/share/applications/dev.zed.Zed.desktop"),
     ]);
+    // Stand-in icons, so renders never depend on the host's installed apps.
+    // Zed has none and keeps its monogram.
+    let cache = ui
+        .modes
+        .icon_cache
+        .get_or_insert_with(|| rune::ImageCache::new(std::sync::Arc::new(|| {})));
+    let icons = [
+        ("firefox", [255, 113, 57]),
+        ("slack", [74, 21, 75]),
+        ("code", [0, 122, 204]),
+        ("org.wezfurlong.wezterm", [52, 58, 64]),
+    ]
+    .map(|(id, rgb)| {
+        let icon = cache.rgba(FIXTURE_ICON, FIXTURE_ICON, fixture_icon(rgb));
+        let _ = icon.wait();
+        (
+            PathBuf::from(format!("/usr/share/applications/{id}.desktop")),
+            icon,
+        )
+    });
+    ui.modes.icons.get_mut().extend(icons);
     ui.modes.select_in(&ui.settings, Selection::Custom(0));
+}
+
+const FIXTURE_ICON: u32 = 48;
+
+/// A rounded square in `rgb` with a lighter disc, as straight-alpha RGBA.
+fn fixture_icon(rgb: [u8; 3]) -> Vec<u8> {
+    let centre = FIXTURE_ICON as f32 / 2.0;
+    let (half, corner) = (centre - 2.0, 10.0);
+    let mut pixels = Vec::with_capacity((FIXTURE_ICON * FIXTURE_ICON * 4) as usize);
+    for y in 0..FIXTURE_ICON {
+        for x in 0..FIXTURE_ICON {
+            let (dx, dy) = (x as f32 + 0.5 - centre, y as f32 + 0.5 - centre);
+            let (qx, qy) = (dx.abs() - half + corner, dy.abs() - half + corner);
+            let outside = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - corner;
+            let alpha = (0.5 - outside).clamp(0.0, 1.0);
+            let disc = (0.5 - (dx.hypot(dy) - 9.0)).clamp(0.0, 1.0) * 0.55;
+            let [r, g, b] =
+                rgb.map(|v| (f32::from(v) + (255.0 - f32::from(v)) * disc).round() as u8);
+            pixels.extend_from_slice(&[r, g, b, (alpha * 255.0).round() as u8]);
+        }
+    }
+    pixels
 }
 
 #[cfg(test)]
