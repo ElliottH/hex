@@ -320,6 +320,11 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     let mut app = crate::rune_ui::app(Default::default())
         .args(Vec::new())
         .accessory();
+    // The first-run tour opens centred at one size; a tiling window manager
+    // would otherwise stretch it to half the screen.
+    if !onboarding_completed {
+        app = app.window_options(crate::rune_ui::fixed_window());
+    }
     let window = app.handle();
     let _ = WINDOW.set(window.clone());
     // The status item is created inside the loop; Hex can't run without a

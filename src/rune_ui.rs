@@ -237,12 +237,12 @@ pub(crate) fn render() {
 /// The window's logical size, which every pane and the picker fit.
 const WINDOW_SIZE: (f32, f32) = (980.0, 760.0);
 
-/// Linux opens the window at one fixed size the user cannot change. Tiling
-/// compositors (sway, Hyprland, niri) and X11 window managers such as i3
-/// float a toplevel whose minimum and maximum size match, and Wayland has
-/// no other way to ask for floating.
-#[cfg(target_os = "linux")]
-fn fixed_window() -> rune::WindowOptions {
+/// One fixed size the user cannot change. Tiling window managers float such
+/// a window instead of tiling it: sway, Hyprland, niri, and i3 on Linux
+/// (Wayland has no other way to ask for floating), and AeroSpace, yabai, and
+/// Spaceman on macOS, where the first-run tour opens centred this way.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn fixed_window() -> rune::WindowOptions {
     rune::WindowOptions {
         min_size: Some(WINDOW_SIZE),
         max_size: Some(WINDOW_SIZE),
@@ -1228,6 +1228,9 @@ const SCENES: &[Scene] = &[
     }),
     ("mac-onboarding-denied", |ui| {
         mac_tour(ui, onboarding::MacStep::SetupDenied)
+    }),
+    ("mac-onboarding-restart", |ui| {
+        mac_tour(ui, onboarding::MacStep::SetupRestart)
     }),
     ("mac-onboarding-download-failed", |ui| {
         mac_tour(ui, onboarding::MacStep::SetupDownloadFailed)

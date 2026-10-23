@@ -22,7 +22,7 @@ use crate::app_settings::{
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::hex_microphone::DriverActionState;
 use crate::login_item::LoginItemStatus;
-use crate::onboarding::{PermissionKind, PermissionWarning};
+use crate::onboarding::{PermissionAction, PermissionKind, PermissionWarning};
 use crate::voice_filter::VoiceFilterMode;
 
 /// A permission's row key, its name as System Settings lists it, and what
@@ -78,6 +78,23 @@ pub(super) fn permissions_section(ui: &Ui, p: Paint) -> Option<El> {
         .map(|warning: PermissionWarning| {
             let (key, name, description) =
                 permission_copy(warning.kind, ui.platform.accessibility_renamed);
+            if warning.action == PermissionAction::Restart {
+                return setting_row(
+                    p,
+                    key,
+                    name,
+                    Some(tr("Turns on when Hex restarts")),
+                    button(
+                        p,
+                        &format!("{key}-restart"),
+                        tr("Restart Hex"),
+                        ButtonKind::Secondary,
+                        |ui: &mut Ui, _| {
+                            ui.ask(PlatformRequest::Permission(PermissionAction::Restart))
+                        },
+                    ),
+                );
+            }
             let control = permission_control(
                 p,
                 &format!("{key}-allow"),

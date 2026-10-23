@@ -402,6 +402,14 @@ fn a_listener_that_will_not_start_relaunches_once_then_asks_to_reopen() {
 }
 
 #[test]
+fn a_grant_waiting_for_a_restart_makes_setup_restart_hex() {
+    let mut rt = runtime("mac-onboarding-restart", true, PANE_SIZE);
+    assert_eq!(rt.state.tour.as_ref().unwrap().flow.step(), Step::Setup);
+    tap(&mut rt, "tour-continue");
+    assert_eq!(asked(&rt), [PlatformRequest::Relaunch]);
+}
+
+#[test]
 fn a_refused_microphone_points_to_system_settings() {
     let mut rt = runtime("mac-onboarding-denied", true, PANE_SIZE);
     let shown = texts(&rt);

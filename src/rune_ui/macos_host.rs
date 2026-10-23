@@ -500,6 +500,12 @@ impl NativeHost for MacHost {
             PlatformRequest::Permission(PermissionAction::ShowGuide(kind)) => {
                 crate::permission_guide::show(kind);
             }
+            PlatformRequest::Permission(PermissionAction::Restart) => {
+                if !crate::onboarding::spawn_relaunch() {
+                    return Err("could not restart Hex".into());
+                }
+                crate::macos_rune::quit();
+            }
             PlatformRequest::SystemAudio => {
                 // macOS prompts once; after that the switch is in System
                 // Settings, with the guide beside it.

@@ -115,13 +115,18 @@ Launch Hex, setup incomplete              // setup.tour; full-window, own column
 │   │            Parakeet v3, Japanese -> Qwen3-ASR); no picker in the tour
 │   ├── Progress sits beside the step dots on every step; failure -> Retry
 │   └── Change or delete the model later in Settings      // setup.delete-model
+├── macOS: opens centred at one fixed size, so tiling managers float it
+├── Quit part-way -> next launch resumes at the saved step  // setup.resume
 ├── Welcome -> Get started                // looping keycap + listening rings
 ├── Setup: one screen, every permission   // setup.checklist; skipped when granted
 │   ├── Every row -> Allow; asked -> pulse + Allow; granted -> Allowed  // setup.permission-control
 │   ├── Microphone -> macOS prompt; refused -> Privacy pane + "switch Hex on" guide
 │   ├── Input Monitoring / Accessibility -> Privacy pane + drag guide
+│   │   ├── The app tile lifts out of the row and flies, blurred, into the guide
 │   │   └── macOS 27 names the list "Device Control and Data Access"; row and guide follow
 │   ├── Rows re-read every 400 ms and flip to a check as macOS grants
+│   ├── On in System Settings, unusable until relaunch -> "Turns on when Hex restarts"
+│   │   └── Every permission on -> primary "Restart Hex" -> relaunch at setup  // setup.restart
 │   ├── The first unfinished row carries the screen's one accent
 │   └── Last grant -> 0.7 s beat -> Give it a try (Continue also works)
 ├── Give it a try                         // setup.practice; macOS only
@@ -145,6 +150,7 @@ Settings > Local transcription
 
 Permissions revoked later
   -> Settings > Permissions needed: the same rows and Allow control as the tour
+     └── On, waiting for a relaunch -> "Restart Hex"
 ```
 
 Apple silicon, macOS 15+. Choices come from the compiled model/language catalog;
@@ -214,12 +220,16 @@ Unit tests (`onboarding::tests`) cover step order, the download starting on the
 welcome screen and retrying from any step, permissions-only setup with the
 model waiting for practice, the auto-advance beat, live row flips, a refused
 microphone, platforms without permissions or practice, practice hints, resume,
-and the relaunch guard and resume marker. Rune tests drive the tour
+the relaunch guard and resume marker, grants waiting for a restart
+(`a_grant_the_process_cannot_use_yet_waits_for_a_restart`,
+`setup_offers_a_restart_once_every_permission_is_on`), and the saved step
+(`the_tour_step_is_saved_for_the_next_launch`). Rune tests drive the tour
 (`the_mac_tour_asks_each_permission_then_practices`,
 `a_listener_that_will_not_start_relaunches_once_then_asks_to_reopen`,
 `a_refused_microphone_points_to_system_settings`,
+`a_grant_waiting_for_a_restart_makes_setup_restart_hex`,
 `onboarding_downloads_the_model_through_the_service`), and every macOS step
-is a scene (`mac-onboarding`, `-setup`, `-progress`, `-denied`,
+is a scene (`mac-onboarding`, `-setup`, `-progress`, `-denied`, `-restart`,
 `-download-failed`, `-try`, `-listening`, `-landed`, `-reopen`, `-done`).
 The default model comes from `desktop_i18n::preferred_language` (macOS:
 `NSLocale.preferredLanguages`) through `recommended_selection`; existing
