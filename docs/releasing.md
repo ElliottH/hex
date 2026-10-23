@@ -60,8 +60,8 @@ picks one:
 
 ```ts
 cloudflare.config.ts (cf deploy --prebuilt --mode <mode>, from CI only)
-├─ production: Worker hex      routes anoma.ly/hex, anoma.ly/hex/*      bucket hex-production-files
-└─ dev:        Worker hex-dev  routes dev.anoma.ly/hex, dev.anoma.ly/hex/*  bucket hex-dev-files
+├─ production: Worker hex-production-site  routes anoma.ly/hex, anoma.ly/hex/*          bucket hex-production-files
+└─ dev:        Worker hex-dev-site         routes dev.anoma.ly/hex, dev.anoma.ly/hex/*  bucket hex-dev-files
 
 https://anoma.ly/hex/            the site (site/, built with base /hex/)
 https://anoma.ly/hex/files/      the bucket, served by the same Worker (worker.ts)

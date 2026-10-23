@@ -3,7 +3,7 @@
 ## Public Paths
 
 ```ts
-anoma.ly/hex                               // the one site: platform-aware download (Worker hex)
+anoma.ly/hex                               // the one site: platform-aware download (Worker hex-production-site)
 ├── anoma.ly/hex/files/…                   // hex-production-files R2 bucket via the same Worker;
 │   │                                      // compiled into apps and feeds
 │   ├── releases/HEX-<version>-arm64.dmg

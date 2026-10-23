@@ -10,7 +10,7 @@ export default defineConfig(({ mode }) => {
   const host = hostForMode(mode)
   return {
     worker: {
-      name: dev ? "hex-dev" : "hex",
+      name: dev ? "hex-dev-site" : "hex-production-site",
       compatibilityDate: "2026-10-13",
       entrypoint: "./worker.ts",
       assets: { runWorkerFirst: true },

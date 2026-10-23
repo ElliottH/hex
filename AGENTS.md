@@ -745,8 +745,8 @@ origin for installed clients. GitHub app releases use
 `app-v<VERSION>` tags with `--latest=false`, keeping them distinct from SDK
 releases. Never overwrite a published artifact with different bytes.
 `https://anoma.ly/hex` (in-repo `site/`) is the only Hex website. One
-`site/cloudflare.config.ts` defines the production Worker `hex` (anoma.ly/hex,
-bucket `hex-production-files`) and the dev Worker `hex-dev` (dev.anoma.ly/hex,
+`site/cloudflare.config.ts` defines the production Worker `hex-production-site` (anoma.ly/hex,
+bucket `hex-production-files`) and the dev Worker `hex-dev-site` (dev.anoma.ly/hex,
 bucket `hex-dev-files`); `cf deploy --prebuilt --mode <mode>` picks one, and
 only CI deploys: a push to `main` touching `site/` deploys dev, a stable
 Release deploys production. No subdomains. After publishing a version, bump
