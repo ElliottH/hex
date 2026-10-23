@@ -85,8 +85,10 @@ a push to `main` that touches `site/` deploys dev; a stable Release deploys
 production after publishing, and Site can be dispatched with `mode:
 production` from `main`. `bun run check:downloads` runs after each deploy.
 
-Not expressible in the config, so set once by hand on the anomaly account: the
-`expire-staging` lifecycle rule on `hex-dev-files`, and an anoma.ly
+Set once by hand on the anomaly account, because the config only binds them:
+the two buckets (`cf deploy` provisions only unnamed bindings; a missing named
+bucket fails the deploy), the `expire-staging` lifecycle rule on
+`hex-dev-files`, and an anoma.ly
 `http_config_settings` rule that turns off Browser Integrity Check for
 `/hex/files/` on both hosts (it returned 403 to Python's default user agent).
 
