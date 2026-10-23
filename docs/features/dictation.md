@@ -21,6 +21,10 @@ injects a failed shortcut save yet.
 model are ready. Commands and OpenCode are not required. Settings > Dictation
 shortcut accepts modifier-only, modifier-plus-key, standalone Fn/Globe, and
 standalone function-key bindings. Capturing a replacement suspends global matching.
+On macOS and Windows the recorder shows the modifiers held so far (`⌥ ⌘ …`);
+a key records them at once, and releasing them all records the most held.
+Checks: `a_recorder_shows_the_modifiers_held_so_far` in `rune_ui/tests.rs` and
+the `ChordCapture` tests in `rune_ui/macos_host.rs` (no native end-to-end run).
 
 **CLI:** `hex listen` uses saved settings; `--device` is authoritative. This is
 the CLI listener, not Settings. Do not run it beside an existing listener.

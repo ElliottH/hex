@@ -1074,6 +1074,7 @@ const SCENES: &[Scene] = &[
         ui.capture = Capture::Listening {
             target: ShortcutTarget::Dictation,
             message: None,
+            held: Default::default(),
         };
     }),
     ("chinese", |ui| {
@@ -1157,6 +1158,19 @@ const SCENES: &[Scene] = &[
     }),
     // macOS and Windows surfaces, from preview data (see `platform`).
     ("mac-settings", |ui| *ui = mac_fixture()),
+    ("mac-settings-recording", |ui| {
+        *ui = mac_fixture();
+        let held = crate::app_settings::HotkeyModifiers {
+            option: Some(crate::app_settings::ModifierSide::Either),
+            command: Some(crate::app_settings::ModifierSide::Either),
+            ..Default::default()
+        };
+        ui.capture = Capture::Listening {
+            target: ShortcutTarget::Dictation,
+            message: None,
+            held,
+        };
+    }),
     ("mac-settings-permissions", |ui| {
         *ui = mac_fixture();
         use crate::onboarding::PermissionState;

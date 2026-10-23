@@ -38,10 +38,12 @@ const EDIT_START_TIMEOUT: Duration = Duration::from_secs(3);
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Capture {
     Idle,
-    /// Waiting for the chord; `message` explains a rejected one.
+    /// Waiting for the chord; `message` explains a rejected one, and `held`
+    /// shows the modifiers releasing them would record.
     Listening {
         target: ShortcutTarget,
         message: Option<&'static str>,
+        held: HotkeyModifiers,
     },
     /// Sent to the service, which validates, registers, and saves it.
     Saving {
@@ -59,21 +61,39 @@ pub(super) enum Capture {
 /// polls the keyboard, since modifier-only chords never reach the window).
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(super) enum Chord {
+    /// The modifiers held so far, shown while the chord is in progress.
+    Held(HotkeyModifiers),
     Captured(Result<HotkeyBinding, &'static str>),
     Cancelled,
 }
 
 /// Follows the host's side of a shortcut edit.
 pub(super) fn advance_capture(ui: &mut Ui) -> bool {
-    let chord = match &mut ui.service {
-        Service::Live(backend) => backend.take_chord(),
-        _ => None,
-    };
-    if let (Some(chord), Capture::Listening { target, .. }) = (chord, ui.capture) {
+    let mut changed = false;
+    loop {
+        let chord = match &mut ui.service {
+            Service::Live(backend) => backend.take_chord(),
+            _ => None,
+        };
+        let (Some(chord), Capture::Listening { target, .. }) = (chord, ui.capture) else {
+            break;
+        };
         match chord {
-            Chord::Captured(binding) => record(ui, target, binding),
-            Chord::Cancelled => cancel_capture(ui),
+            Chord::Held(modifiers) => {
+                hold(ui, modifiers);
+                changed = true;
+            }
+            Chord::Captured(binding) => {
+                record(ui, target, binding);
+                return true;
+            }
+            Chord::Cancelled => {
+                cancel_capture(ui);
+                return true;
+            }
         }
+    }
+    if changed {
         return true;
     }
     let editing = ui.view.as_ref().is_some_and(|view| view.editing);
@@ -166,7 +186,18 @@ fn record(ui: &mut Ui, target: ShortcutTarget, binding: Result<HotkeyBinding, &'
     ui.capture = Capture::Listening {
         target,
         message: Some(message),
+        held: HotkeyModifiers::default(),
     };
+}
+
+/// Shows the modifiers held so far; pressing any clears a rejection.
+pub(super) fn hold(ui: &mut Ui, modifiers: HotkeyModifiers) {
+    if let Capture::Listening { message, held, .. } = &mut ui.capture {
+        if !modifiers.is_empty() {
+            *message = None;
+        }
+        *held = modifiers;
+    }
 }
 
 fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
@@ -180,6 +211,7 @@ fn begin_capture(ui: &mut Ui, target: ShortcutTarget) {
     ui.capture = Capture::Listening {
         target,
         message: None,
+        held: HotkeyModifiers::default(),
     };
 }
 
@@ -792,22 +824,35 @@ pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         Capture::Listening {
             target: active,
             message,
-        } if active == target => frame
-            .fill(c.danger.bg)
-            .border(p.hair.max(0.5), c.danger.border)
-            .child(pulsing_dot(p.danger()).ml(8.0))
-            .child(
-                text(message.unwrap_or(tr("Press shortcut")))
-                    .key("prompt")
-                    .font(label_style)
-                    .color(p.text()),
-            )
-            .child(
+            held,
+        } if active == target => {
+            let frame = frame
+                .fill(c.danger.bg)
+                .border(p.hair.max(0.5), c.danger.border)
+                .child(pulsing_dot(p.danger()).ml(8.0));
+            let frame = if held.is_empty() {
+                frame.child(
+                    text(message.unwrap_or(tr("Press shortcut")))
+                        .key("prompt")
+                        .font(label_style)
+                        .color(p.text()),
+                )
+            } else {
+                let held = HotkeyBinding {
+                    modifiers: held,
+                    key: None,
+                };
+                frame
+                    .child(keycaps(p, "held", &held.keycaps()))
+                    .child(text("…").key("prompt").font(label_style).color(p.muted()))
+            };
+            frame.child(
                 text(tr("Esc to cancel"))
                     .key("cancel")
                     .font(DESCRIPTION)
                     .color(p.muted()),
-            ),
+            )
+        }
         Capture::Saving { target: active, .. } if active == target => {
             frame.child(keycaps(p, "keys", &caps)).child(
                 text(tr("Saving…"))

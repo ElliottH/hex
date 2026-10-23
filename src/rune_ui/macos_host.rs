@@ -247,15 +247,16 @@ impl ChordCapture {
         if code == ESCAPE_KEY_CODE {
             return Some(Chord::Cancelled);
         }
-        self.keyed = true;
+        let mut modifiers = modifiers_from_flags(flags).without_side_constraints();
+        // Arrow and function keys report Fn; a chord never binds it.
+        modifiers.function = false;
+        // Only modifiers held with the key are spent by it.
+        self.keyed = !modifiers.is_empty();
         self.peak = HotkeyModifiers::default();
         let key = match hotkey_key(code, characters) {
             Ok(key) => key,
             Err(message) => return Some(Chord::Captured(Err(message))),
         };
-        let mut modifiers = modifiers_from_flags(flags).without_side_constraints();
-        // Arrow and function keys report Fn; a chord never binds it.
-        modifiers.function = false;
         if modifiers.is_empty() && !is_function_key(&key.label) {
             return Some(Chord::Captured(Err(tr("Add a modifier"))));
         }
@@ -265,17 +266,24 @@ impl ChordCapture {
         })))
     }
 
+    /// While modifiers are down, reports the ones their release would record.
     fn flags_changed(&mut self, flags: u64) -> Option<Chord> {
         let current = normalize_captured_modifiers(modifiers_from_flags(flags));
         if !current.is_empty() {
-            if !self.keyed && current.count() >= self.peak.count() {
+            if self.keyed {
+                return None;
+            }
+            if current.count() >= self.peak.count() {
                 self.peak = current;
             }
-            return None;
+            return Some(Chord::Held(self.peak));
         }
         let keyed = std::mem::take(&mut self.keyed);
         let peak = std::mem::take(&mut self.peak);
-        (!keyed && !peak.is_empty()).then_some(Chord::Captured(Ok(HotkeyBinding {
+        if keyed || peak.is_empty() {
+            return None;
+        }
+        Some(Chord::Captured(Ok(HotkeyBinding {
             modifiers: peak,
             key: None,
         })))
@@ -1237,8 +1245,20 @@ mod tests {
     fn captured(chord: Option<Chord>) -> Result<HotkeyBinding, &'static str> {
         match chord {
             Some(Chord::Captured(result)) => result,
+            Some(Chord::Held(_)) => panic!("still held"),
             Some(Chord::Cancelled) => panic!("cancelled"),
             None => panic!("nothing recorded"),
+        }
+    }
+
+    fn held(chord: Option<Chord>) -> Vec<String> {
+        match chord {
+            Some(Chord::Held(modifiers)) => HotkeyBinding {
+                modifiers,
+                key: None,
+            }
+            .keycaps(),
+            _ => panic!("not holding"),
         }
     }
 
@@ -1318,19 +1338,26 @@ mod tests {
     #[test]
     fn releasing_modifiers_records_the_most_held_with_their_side() {
         let mut capture = ChordCapture::default();
-        assert!(capture.flags_changed(LEFT_OPTION).is_none());
-        assert!(capture.flags_changed(LEFT_OPTION | LEFT_COMMAND).is_none());
-        assert!(capture.flags_changed(LEFT_OPTION).is_none());
+        assert_eq!(held(capture.flags_changed(LEFT_OPTION)), ["L⌥"]);
+        assert_eq!(
+            held(capture.flags_changed(LEFT_OPTION | LEFT_COMMAND)),
+            ["L⌥", "L⌘"]
+        );
+        assert_eq!(
+            held(capture.flags_changed(LEFT_OPTION)),
+            ["L⌥", "L⌘"],
+            "letting one go still shows what releasing records"
+        );
         let binding = captured(capture.flags_changed(0)).unwrap();
         assert_eq!(binding.key, None);
         assert_eq!(binding.modifiers.option, Some(ModifierSide::Left));
         assert_eq!(binding.modifiers.command, Some(ModifierSide::Left));
         let binding = {
-            assert!(capture.flags_changed(RIGHT_OPTION).is_none());
+            assert_eq!(held(capture.flags_changed(RIGHT_OPTION)), ["R⌥"]);
             captured(capture.flags_changed(0)).unwrap()
         };
         assert_eq!(binding.modifiers.option, Some(ModifierSide::Right));
-        assert!(capture.flags_changed(FUNCTION).is_none());
+        assert_eq!(held(capture.flags_changed(FUNCTION)), ["fn"]);
         assert!(
             captured(capture.flags_changed(0))
                 .unwrap()
@@ -1342,7 +1369,7 @@ mod tests {
     #[test]
     fn a_key_records_its_modifiers_on_either_side_and_their_release_nothing() {
         let mut capture = ChordCapture::default();
-        assert!(capture.flags_changed(LEFT_OPTION).is_none());
+        assert_eq!(held(capture.flags_changed(LEFT_OPTION)), ["L⌥"]);
         let binding = captured(capture.key_down(9, false, Some("v"), LEFT_OPTION)).unwrap();
         assert_eq!(binding.modifiers.option, Some(ModifierSide::Either));
         assert_eq!(
@@ -1363,6 +1390,12 @@ mod tests {
             captured(capture.key_down(0, false, Some("a"), 0)),
             Err(tr("Add a modifier"))
         );
+        assert_eq!(
+            held(capture.flags_changed(LEFT_OPTION)),
+            ["L⌥"],
+            "a rejected bare key spends no modifiers"
+        );
+        assert!(captured(capture.flags_changed(0)).is_ok());
         let f12 = captured(capture.key_down(111, false, None, FUNCTION)).unwrap();
         assert!(f12.modifiers.is_empty());
         assert_eq!(f12.key.unwrap().label, "F12");

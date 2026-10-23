@@ -192,6 +192,37 @@ fn escape_cancels_a_shortcut_recording() {
 }
 
 #[test]
+fn a_recorder_shows_the_modifiers_held_so_far() {
+    use crate::app_settings::{HotkeyModifiers, ModifierSide};
+    let mut rt = runtime("capturing", true, GOLDEN_SIZE);
+    let held = HotkeyModifiers {
+        option: Some(ModifierSide::Either),
+        command: Some(ModifierSide::Either),
+        ..HotkeyModifiers::default()
+    };
+    settings::hold(&mut rt.state, held);
+    rt.invalidate();
+    settle(&mut rt);
+    let shown = texts(&rt);
+    let caps = HotkeyBinding {
+        modifiers: held,
+        key: None,
+    }
+    .keycaps();
+    for expected in caps.iter().map(String::as_str).chain(["…"]) {
+        assert!(
+            shown.iter().any(|text| text == expected),
+            "missing {expected:?} in {shown:?}"
+        );
+    }
+    assert!(!shown.iter().any(|text| text == "Press shortcut"));
+    settings::hold(&mut rt.state, HotkeyModifiers::default());
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(texts(&rt).iter().any(|text| text == "Press shortcut"));
+}
+
+#[test]
 fn function_keys_and_super_record_as_linux_key_names() {
     let f12 = recorded_binding(&KeyEvent {
         key: Key::Function(12),

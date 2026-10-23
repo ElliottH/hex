@@ -881,6 +881,17 @@ impl ChordCapture {
         }
         ChordPoll::Pending
     }
+
+    /// The modifiers a release would record so far.
+    pub fn held(&self) -> WindowsHotkey {
+        WindowsHotkey {
+            control: self.seen_control,
+            windows: self.seen_windows,
+            alt: self.seen_alt,
+            shift: self.seen_shift,
+            key: None,
+        }
+    }
 }
 
 /// Whether any pressed key is one the capture cannot map to a binding

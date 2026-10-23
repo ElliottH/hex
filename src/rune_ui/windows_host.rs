@@ -143,6 +143,8 @@ impl ChordWatch {
             .name("hex-chord-capture".into())
             .spawn(move || {
                 let mut capture = ChordCapture::default();
+                // The modifiers last shown while the chord is in progress.
+                let mut shown = capture.held();
                 while !worker_stop.load(Ordering::Relaxed) {
                     std::thread::sleep(CHORD_POLL);
                     // Keys typed into another application never rebind a
@@ -151,12 +153,17 @@ impl ChordWatch {
                         continue;
                     }
                     let chord = match capture.poll() {
-                        ChordPoll::Pending => continue,
+                        ChordPoll::Pending if capture.held() == shown => continue,
+                        ChordPoll::Pending => {
+                            shown = capture.held();
+                            Chord::Held(HotkeyBinding::from(&shown).modifiers)
+                        }
                         ChordPoll::Cancelled => Chord::Cancelled,
                         ChordPoll::Captured(hotkey) => {
                             // A rejected chord: record the next one from
                             // scratch.
                             capture = ChordCapture::default();
+                            shown = capture.held();
                             Chord::Captured(Ok(HotkeyBinding::from(&hotkey)))
                         }
                     };
