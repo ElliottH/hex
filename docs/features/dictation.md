@@ -258,6 +258,11 @@ Model advertises streaming, GPU device             // dictate.streaming
   Voice-delimited and programmatic captures (macOS) -> Whole clip after release
   Nothing is shown or pasted until the final text exists
   Picker -> "Streams" tag on catalog models whose artifact streams   // setup.model-card
+  Picker -> Per-language Recommended/Fastest/Most accurate cards         // setup.model-routing
+  ├── el: Cohere; tr, ms, fil, fa, mk, ar, ja, fi, sv, da: Whisper turbo first
+  ├── auto, yue, ko: no SenseVoice; mt: Parakeet v3 only (Whisper fails Maltese)
+  └── Saved or installed model no longer recommended -> Still listed, no badge,
+      selectable and deletable; never auto-switched or auto-downloaded
 ```
 
 Source: [transcription_engine.rs](../../src/transcription_engine.rs) (one thread

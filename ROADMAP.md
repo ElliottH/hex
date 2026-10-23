@@ -259,6 +259,15 @@ forced final-transcription failure, and live provider detection. Evaluate
 synchronized playback, echo annotation, summarization, and person-level
 diarization only against real meeting recordings.
 
+## Recommend Better Models To Existing Users
+
+After the Rune port is fully done (the macOS app has passed its smoke test),
+add a gentle, dismissible "recommended update" hint in the model picker and
+Settings for users whose saved model is no longer recommended for their
+language, explaining how to switch. Language routing already keeps their model
+and lists it in the picker ([plan](docs/plans/language-recommendations.md)); the
+hint never switches or downloads anything itself.
+
 ## Deliberate Deferrals
 
 The iOS prototype needs explicit accepted-job behavior when its keyboard session

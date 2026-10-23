@@ -1,6 +1,6 @@
 # Per-Language Model Recommendations Plan
 
-**Status:** Plan, 2026-10-22. Synthesizes [`docs/research/language-recommendations-european.md`](../research/language-recommendations-european.md) (`ebd9fc8`), [`docs/research/language-recommendations-other.md`](../research/language-recommendations-other.md) (`fde2bb3`), and [`docs/research/model-watch.md`](../research/model-watch.md), and integrates with [`docs/plans/transcription-quality.md`](transcription-quality.md) (which owns the `transcribe-cpp` `0.2.4 -> 0.4.1` bump, shared vocabulary, and `parakeet-ultra` runtime work).
+**Status:** Approved 2026-10-22; Phase A implemented, Phase B waits for the `transcribe-cpp` bump. Prompting existing users about a better model is deferred until the Rune port is done (see `ROADMAP.md` "Recommend Better Models To Existing Users"); Phase A adds no new UI. Synthesizes [`docs/research/language-recommendations-european.md`](../research/language-recommendations-european.md) (`ebd9fc8`), [`docs/research/language-recommendations-other.md`](../research/language-recommendations-other.md) (`fde2bb3`), and [`docs/research/model-watch.md`](../research/model-watch.md), and integrates with [`docs/plans/transcription-quality.md`](transcription-quality.md) (which owns the `transcribe-cpp` `0.2.4 -> 0.4.1` bump, shared vocabulary, and `parakeet-ultra` runtime work).
 
 ## Summary
 

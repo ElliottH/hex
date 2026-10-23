@@ -167,11 +167,17 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<El> {
             error,
         ));
     }
-    for (index, choice) in transcription_models::choices_for_runtime(&language)
+    let recommended = transcription_models::choices_for_runtime(&language)
         .into_iter()
-        .enumerate()
-    {
-        models = models.child(model_card(ui, p, index, choice, &language));
+        .map(|choice| (choice.model, Some(choice.recommendation)));
+    let retained =
+        transcription_models::retained_models(&language, &ui.settings.transcription, |model| {
+            ui.picker.installed(model, &language)
+        })
+        .into_iter()
+        .map(|model| (model, None));
+    for (index, (model, recommendation)) in recommended.chain(retained).enumerate() {
+        models = models.child(model_card(ui, p, index, model, recommendation, &language));
     }
     let header = row()
         .key("picker-header")
@@ -269,11 +275,11 @@ fn model_card(
     ui: &Ui,
     p: Paint,
     index: usize,
-    choice: transcription_models::ModelChoice,
+    model: &'static ModelDefinition,
+    recommendation: Option<transcription_models::Recommendation>,
     language: &str,
 ) -> El {
     let c = &p.k.c;
-    let model = choice.model;
     let installed = ui.picker.installed(model, language);
     let transcription = ui.view.as_ref().map(|view| &view.transcription);
     let preparing = transcription.and_then(|t| t.preparing) == Some(model.id);
@@ -412,8 +418,10 @@ fn model_card(
                 .key("name")
                 .font(p.k.ty.body_medium)
                 .color(p.text()),
-        )
-        .child(Badge::new(tr(choice.recommendation.label())).build(p.k));
+        );
+    if let Some(recommendation) = recommendation {
+        title = title.child(Badge::new(tr(recommendation.label())).build(p.k));
+    }
     if model.streams {
         title = title.child(Badge::new(tr("Streams")).build(p.k));
     }
