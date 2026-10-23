@@ -469,7 +469,7 @@ impl MacHost {
         match request {
             MeetingRequest::Start => self
                 .runtime()?
-                .meeting(crate::meeting::MeetingRequest::Start),
+                .meeting(crate::meeting::MeetingRequest::Start { title: None }),
             MeetingRequest::Stop => self
                 .runtime()?
                 .meeting(crate::meeting::MeetingRequest::Stop),

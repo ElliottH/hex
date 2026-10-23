@@ -1472,6 +1472,37 @@ pub fn hotkey_conflicts(
         .any(|binding| candidate.overlaps(&binding))
 }
 
+/// A shortcut Settings and `hex settings` record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HotkeySlot {
+    Dictation,
+    VoiceAction,
+    PasteLast,
+}
+
+impl AppSettings {
+    /// Whether `binding` overlaps a shortcut `slot` must not share: the other
+    /// active shortcuts and, where meetings exist (macOS), meeting paste.
+    pub fn hotkey_in_use(&self, slot: HotkeySlot, binding: &HotkeyBinding) -> bool {
+        let mut others = Vec::new();
+        if slot != HotkeySlot::Dictation {
+            others.push(self.dictation_hotkey.clone());
+        }
+        if slot != HotkeySlot::VoiceAction && self.voice_action.enabled {
+            others.push(self.edit_hotkey.clone());
+        }
+        if slot != HotkeySlot::PasteLast
+            && let Some(paste) = &self.paste_last_hotkey
+        {
+            others.push(paste.clone());
+        }
+        if cfg!(target_os = "macos") && self.meetings.available() {
+            others.push(HotkeyBinding::paste_meeting_default());
+        }
+        hotkey_conflicts(binding, others)
+    }
+}
+
 fn set_microphone_selection(device: Option<&str>) {
     let device = device
         .map(str::trim)

@@ -120,7 +120,8 @@ pub fn reveal(path: &Path) {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MeetingRequest {
-    Start,
+    /// Record a meeting now; `title` names it instead of the default.
+    Start { title: Option<String> },
     Stop,
     /// Regenerate Apple Intelligence notes for a completed meeting.
     Summarize(String),

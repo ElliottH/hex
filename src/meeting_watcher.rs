@@ -131,7 +131,9 @@ pub(crate) fn controller_loop(
             .try_iter()
             .take(8)
             .map(|request| match request {
-                MeetingRequest::Start => ControllerCommand::Record(MeetingCandidate::manual()),
+                MeetingRequest::Start { title } => {
+                    ControllerCommand::Record(MeetingCandidate::manual_titled(title))
+                }
                 MeetingRequest::Stop => ControllerCommand::Stop,
                 MeetingRequest::Summarize(id) => ControllerCommand::Summarize(id),
             });
@@ -413,9 +415,14 @@ impl Reminders {
             crate::calendar::wall_clock_ms(),
             lead_ms,
         ) {
-            start.meeting.title = Some(meeting.display_title());
             start.meeting.calendar = Some(calendar_context(meeting));
-            start.title = meeting.display_title();
+            // A title the user gave (`hex meetings record --title`) wins.
+            if !(candidate.named
+                && candidate.source == crate::meeting_detection::MeetingSource::Manual)
+            {
+                start.meeting.title = Some(meeting.display_title());
+                start.title = meeting.display_title();
+            }
         }
         start
     }

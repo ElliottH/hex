@@ -736,7 +736,7 @@ impl Pump {
             }
             StatusItemAction::CheckForUpdates => crate::sparkle::check_for_updates(),
             StatusItemAction::StartMeeting => {
-                if let Err(error) = self.runtime.meeting(MeetingRequest::Start) {
+                if let Err(error) = self.runtime.meeting(MeetingRequest::Start { title: None }) {
                     tracing::warn!(%error, "could not start meeting from status item");
                 }
             }

@@ -1975,7 +1975,7 @@ fn handle_command(
             if matches!(action, Action::StartMeeting | Action::StopMeeting) =>
         {
             let request = match action {
-                Action::StartMeeting => MeetingRequest::Start,
+                Action::StartMeeting => MeetingRequest::Start { title: None },
                 Action::StopMeeting => MeetingRequest::Stop,
                 _ => unreachable!(),
             };

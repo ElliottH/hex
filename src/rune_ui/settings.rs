@@ -277,22 +277,13 @@ pub(super) fn conflicts(
     target: ShortcutTarget,
     binding: &HotkeyBinding,
 ) -> bool {
-    let mut others = Vec::new();
-    if target != ShortcutTarget::Dictation {
-        others.push(settings.dictation_hotkey.clone());
-    }
-    if target != ShortcutTarget::VoiceAction && settings.voice_action.enabled {
-        others.push(settings.edit_hotkey.clone());
-    }
-    if target != ShortcutTarget::PasteLast
-        && let Some(paste) = &settings.paste_last_hotkey
-    {
-        others.push(paste.clone());
-    }
-    if cfg!(target_os = "macos") && settings.meetings.available() {
-        others.push(HotkeyBinding::paste_meeting_default());
-    }
-    crate::app_settings::hotkey_conflicts(binding, others)
+    use crate::app_settings::HotkeySlot;
+    let slot = match target {
+        ShortcutTarget::Dictation => HotkeySlot::Dictation,
+        ShortcutTarget::VoiceAction => HotkeySlot::VoiceAction,
+        ShortcutTarget::PasteLast => HotkeySlot::PasteLast,
+    };
+    settings.hotkey_in_use(slot, binding)
 }
 
 pub(super) fn desktop_shortcut(binding: &HotkeyBinding) -> DesktopShortcut {

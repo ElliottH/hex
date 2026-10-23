@@ -84,6 +84,18 @@ impl MeetingCandidate {
         }
     }
 
+    /// A manual recording, named `title` when one is given.
+    pub fn manual_titled(title: Option<String>) -> Self {
+        match title.map(|title| title.trim().to_owned()) {
+            Some(title) if !title.is_empty() => Self {
+                title,
+                named: true,
+                ..Self::manual()
+            },
+            _ => Self::manual(),
+        }
+    }
+
     pub fn recording_start(&self) -> crate::meeting::MeetingStart {
         crate::meeting::MeetingStart {
             title: self.named.then(|| self.title.clone()),
