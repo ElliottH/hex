@@ -158,7 +158,8 @@ mod tests {
                 "deadline_seconds": 45
             },
             "edit_hotkey": {
-                "modifiers": { "control": "left" }
+                "modifiers": { "control": "left" },
+                "key": null
             }
         }))
         .unwrap();
