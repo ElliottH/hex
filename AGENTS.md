@@ -511,11 +511,13 @@ CoreAudio formats, AppleScript details, or event serialization.
   attendees or a call link and is not all-day, declined, free, or cancelled.
   Reminders are Hex capsules, not notifications, shown once per occurrence at
   the lead time (or on a wake within 5 min of the start) and withdrawn when the
-  meeting is cancelled or moved. EventKit is read on the controller thread on
-  store changes or once a minute, bounded, with no network, never on the audio
-  or UI thread. A reminder never records without a click; Always record still
-  needs the detected call. Recording or dismissing a reminder snoozes the same
-  call's offer and automatic start.
+  meeting is cancelled or moved. One reminder shows at a time, never over a
+  recording. EventKit is read on the controller thread on store changes or once
+  a minute and on Settings' reader thread, bounded, with no network, never on
+  the audio or UI thread; nothing touches the store before Connect. A reminder
+  never records without a click; Always record still needs the detected call.
+  Recording or dismissing a reminder snoozes the same call's offer and
+  automatic start; without a call link, only the next call near the start.
 - Meeting transcription defers to dictation and never loads a second copy of
   the model: each chunk runs on the dictation engine's loaded model at utility
   QoS, starts only while no dictation capture (from the shortcut press) or

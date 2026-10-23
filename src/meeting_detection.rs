@@ -230,7 +230,8 @@ struct CalendarSnooze {
     /// empty when the invitation had no call link, which covers the next
     /// call alone.
     keys: Vec<String>,
-    /// When the meeting ends, in wall-clock milliseconds.
+    /// When the snooze lapses, in wall-clock milliseconds: the meeting's
+    /// end, or shortly after its start when it has no call link.
     until_ms: i64,
 }
 
@@ -249,8 +250,8 @@ impl CalendarSnooze {
 }
 
 impl MeetingDetector {
-    /// A calendar reminder was answered: its call, when detected before the
-    /// meeting ends, is treated as already offered. `keys` names the call
+    /// A calendar reminder was answered: its call, when detected before
+    /// `until_ms`, is treated as already offered. `keys` names the call
     /// service; empty covers the next call detected.
     pub fn snooze_calendar_call(&mut self, keys: Vec<String>, until_ms: i64) {
         self.calendar = Some(CalendarSnooze { keys, until_ms });

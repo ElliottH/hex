@@ -19,7 +19,6 @@ private struct BridgeCalendar: Codable {
     let id: String
     let title: String
     let source: String
-    let color: String
 }
 
 private struct BridgeEvent: Codable {
@@ -54,18 +53,11 @@ private func json<T: Encodable>(_ value: T) -> UnsafeMutablePointer<CChar>? {
     return strdup(String(decoding: data, as: UTF8.self))
 }
 
-private func hexColor(_ color: CGColor?) -> String {
-    guard let rgb = color?.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil),
-          let components = rgb.components, components.count >= 3 else {
-        return ""
-    }
-    let byte = { (value: CGFloat) in Int((min(max(value, 0), 1) * 255).rounded()) }
-    return String(format: "#%02X%02X%02X", byte(components[0]), byte(components[1]), byte(components[2]))
-}
-
+/// Called only once access is granted, never on the window's thread, so the
+/// store is not created before Connect.
 private func startObserving() {
-    changeLock.lock()
-    defer { changeLock.unlock() }
+    storeLock.lock()
+    defer { storeLock.unlock() }
     guard observer == nil else { return }
     observer = NotificationCenter.default.addObserver(
         forName: .EKEventStoreChanged,
@@ -121,8 +113,7 @@ public func hexCalendarCalendars() -> UnsafeMutablePointer<CChar>? {
         BridgeCalendar(
             id: $0.calendarIdentifier,
             title: $0.title,
-            source: $0.source?.title ?? "",
-            color: hexColor($0.cgColor)
+            source: $0.source?.title ?? ""
         )
     }
     return json(calendars)

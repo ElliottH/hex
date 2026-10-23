@@ -14,6 +14,10 @@ use url::Url;
 /// How late a reminder may still show, for a Mac that wakes after the
 /// meeting started.
 pub const LATE_GRACE_MS: i64 = 5 * 60 * 1_000;
+/// How long a reminder stays up after its meeting starts.
+pub const REMINDER_AFTER_START_MS: i64 = 60 * 1_000;
+/// The shortest time a reminder stays up, for one shown late.
+pub const REMINDER_MIN_MS: i64 = 30 * 1_000;
 /// How far ahead Hex reads events: enough for the reminder poll and the
 /// Settings list.
 pub const LOOKAHEAD_MS: i64 = 48 * 60 * 60 * 1_000;
@@ -249,10 +253,12 @@ fn links(text: &str) -> impl Iterator<Item = Url> + '_ {
                 })
                 .unwrap_or(candidate.len());
             let token = candidate[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
-            rest = &candidate[end.max(4)..];
             if !(token.starts_with("https://") || token.starts_with("http://")) {
+                // A link may follow inside this token, as in `http_link:https://…`.
+                rest = &candidate[4..];
                 continue;
             }
+            rest = &candidate[end..];
             if let Ok(url) = Url::parse(token) {
                 return Some(url);
             }
@@ -329,10 +335,19 @@ pub enum ReminderUpdate {
 pub struct ReminderScheduler {
     /// Occurrences already reminded, with when they end, so each reminds once.
     reminded: HashMap<String, i64>,
-    showing: Option<CalendarMeeting>,
+    /// The reminder on screen and when its capsule closes on its own.
+    showing: Option<(CalendarMeeting, i64)>,
+}
+
+/// When a reminder shown at `shown_ms` closes on its own: a minute after its
+/// meeting starts, and never sooner than [`REMINDER_MIN_MS`] after showing.
+pub fn reminder_until_ms(start_ms: i64, shown_ms: i64) -> i64 {
+    (start_ms + REMINDER_AFTER_START_MS).max(shown_ms + REMINDER_MIN_MS)
 }
 
 impl ReminderScheduler {
+    /// One reminder shows at a time: while it is up, an overlapping
+    /// meeting's reminder waits until it is answered or closes.
     pub fn poll(
         &mut self,
         meetings: &[CalendarMeeting],
@@ -342,16 +357,16 @@ impl ReminderScheduler {
         // Bounded: occurrences are forgotten an hour after they end.
         self.reminded
             .retain(|_, end_ms| *end_ms + 60 * 60 * 1_000 > now_ms);
-        if let Some(showing) = &self.showing {
+        if let Some((showing, until_ms)) = &self.showing {
             let current = meetings
                 .iter()
-                .find(|meeting| meeting.occurrence() == showing.occurrence());
-            let expired = now_ms >= showing.start_ms + LATE_GRACE_MS;
-            if current.is_none() || expired {
+                .any(|meeting| meeting.occurrence() == showing.occurrence());
+            if !current || now_ms >= *until_ms {
                 let occurrence = showing.occurrence();
                 self.showing = None;
                 return Some(ReminderUpdate::Withdraw(occurrence));
             }
+            return None;
         }
         let due = meetings.iter().find(|meeting| {
             now_ms >= meeting.start_ms - lead_ms
@@ -360,7 +375,7 @@ impl ReminderScheduler {
                 && !self.reminded.contains_key(&meeting.occurrence())
         })?;
         self.reminded.insert(due.occurrence(), due.end_ms);
-        self.showing = Some(due.clone());
+        self.showing = Some((due.clone(), reminder_until_ms(due.start_ms, now_ms)));
         Some(ReminderUpdate::Show(due.clone()))
     }
 
@@ -369,20 +384,16 @@ impl ReminderScheduler {
         if self
             .showing
             .as_ref()
-            .is_some_and(|showing| showing.occurrence() == occurrence)
+            .is_some_and(|(showing, _)| showing.occurrence() == occurrence)
         {
             self.showing = None;
         }
     }
 
-    /// Reminders were turned off: forget the showing one, returning its
-    /// occurrence.
+    /// Reminders were turned off or a recording started: forget the showing
+    /// one, returning its occurrence.
     pub fn clear(&mut self) -> Option<String> {
-        self.showing.take().map(|showing| showing.occurrence())
-    }
-
-    pub fn showing(&self) -> Option<&CalendarMeeting> {
-        self.showing.as_ref()
+        self.showing.take().map(|(showing, _)| showing.occurrence())
     }
 }
 
@@ -717,6 +728,13 @@ mod tests {
     }
 
     #[test]
+    fn a_link_after_a_bare_http_in_the_same_word_is_found() {
+        let link = link_in("notes", "http_link:https://zoom.us/j/123").unwrap();
+        assert_eq!(link.provider, CallProvider::Zoom);
+        assert_eq!(link.url, "https://zoom.us/j/123");
+    }
+
+    #[test]
     fn the_url_field_wins_over_the_notes() {
         let mut event = event("Sync");
         event.notes = Some("https://zoom.us/j/1".into());
@@ -782,12 +800,56 @@ mod tests {
         );
         assert_eq!(scheduler.poll(&meetings, 99 * MINUTE + 2_000, MINUTE), None);
 
+        // Unanswered, it closes a minute after the start, with the capsule.
         let mut expiring = ReminderScheduler::default();
         expiring.poll(&meetings, 99 * MINUTE, MINUTE);
-        assert_eq!(expiring.poll(&meetings, 104 * MINUTE, MINUTE), None);
+        assert_eq!(expiring.poll(&meetings, 101 * MINUTE - 1, MINUTE), None);
         assert_eq!(
-            expiring.poll(&meetings, 105 * MINUTE, MINUTE),
+            expiring.poll(&meetings, 101 * MINUTE, MINUTE),
             Some(ReminderUpdate::Withdraw("sync@6000000".into()))
+        );
+    }
+
+    #[test]
+    fn an_overlapping_meeting_waits_for_the_showing_reminder() {
+        let mut scheduler = ReminderScheduler::default();
+        let meetings = vec![meeting("first", 100), meeting("second", 100)];
+        assert!(matches!(
+            scheduler.poll(&meetings, 99 * MINUTE, MINUTE),
+            Some(ReminderUpdate::Show(shown)) if shown.id == "first"
+        ));
+        // The second is due too, but never replaces the first on screen.
+        for second in 1..=119 {
+            assert_eq!(
+                scheduler.poll(&meetings, 99 * MINUTE + second * 1_000, MINUTE),
+                None
+            );
+        }
+        assert_eq!(
+            scheduler.poll(&meetings, 101 * MINUTE, MINUTE),
+            Some(ReminderUpdate::Withdraw("first@6000000".into()))
+        );
+        assert!(matches!(
+            scheduler.poll(&meetings, 101 * MINUTE + 1_000, MINUTE),
+            Some(ReminderUpdate::Show(shown)) if shown.id == "second"
+        ));
+
+        // Answering the first shows the second right away.
+        let mut answering = ReminderScheduler::default();
+        answering.poll(&meetings, 99 * MINUTE, MINUTE);
+        answering.answered("first@6000000");
+        assert!(matches!(
+            answering.poll(&meetings, 99 * MINUTE + 1_000, MINUTE),
+            Some(ReminderUpdate::Show(shown)) if shown.id == "second"
+        ));
+    }
+
+    #[test]
+    fn a_late_reminder_stays_up_at_least_half_a_minute() {
+        assert_eq!(reminder_until_ms(100 * MINUTE, 99 * MINUTE), 101 * MINUTE);
+        assert_eq!(
+            reminder_until_ms(100 * MINUTE, 104 * MINUTE),
+            104 * MINUTE + 30_000
         );
     }
 

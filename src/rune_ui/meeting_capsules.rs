@@ -43,11 +43,6 @@ const MEETING_MENU_WIDTH: f32 = 560.0;
 const MEETING_PANEL_HEIGHT: f32 = 64.0;
 /// The reminder: the meeting's title beside up to three buttons.
 const REMINDER_PANEL_WIDTH: f32 = 520.0;
-/// How long an unanswered reminder stays after its meeting starts; it
-/// closes without recording or snoozing anything.
-const REMINDER_AFTER_START: Duration = Duration::from_secs(60);
-/// The shortest an unanswered reminder shows.
-const REMINDER_MIN: Duration = Duration::from_secs(30);
 /// How often an open reminder recounts "Starts in N min".
 const REMINDER_TICK: Duration = Duration::from_secs(5);
 /// The recording capsule's window, as wide as the open pill.
@@ -359,10 +354,11 @@ impl MeetingCapsules {
     pub(crate) fn event(&mut self, event: &ControllerEvent) {
         match event {
             ControllerEvent::Reminder { meeting, automatic } => {
-                let until_start = meeting.start_ms - crate::calendar::wall_clock_ms();
-                let timeout = Duration::from_millis(until_start.max(0) as u64)
-                    .saturating_add(REMINDER_AFTER_START)
-                    .max(REMINDER_MIN);
+                // Unanswered, it closes without recording or snoozing
+                // anything, when the scheduler lets the next one show.
+                let now_ms = crate::calendar::wall_clock_ms();
+                let until_ms = crate::calendar::reminder_until_ms(meeting.start_ms, now_ms);
+                let timeout = Duration::from_millis((until_ms - now_ms).max(0) as u64);
                 self.show_panel(
                     Kind::Reminder {
                         meeting: meeting.clone(),

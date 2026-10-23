@@ -161,7 +161,7 @@ pub(crate) fn controller_loop(
                 }
                 Ok(Some(Detection::Record(candidate))) => {
                     let start = reminders.start_for(&candidate);
-                    start_recording(&mut recording, start, true, &events);
+                    start_recording(&mut recording, &mut reminders, start, true, &events);
                 }
                 Ok(None) => {}
             }
@@ -193,14 +193,14 @@ fn handle_command(
         }
         ControllerCommand::Record(candidate) if recording.is_none() => {
             let start = reminders.start_for(&candidate);
-            start_recording(recording, start, false, events);
+            start_recording(recording, reminders, start, false, events);
         }
         ControllerCommand::RecordMeeting { meeting, join } => {
             reminders.scheduler.answered(&meeting.occurrence());
             if join && let Some(link) = &meeting.link {
                 crate::calendar::open_link(&link.url);
             }
-            detector.snooze_calendar_call(snooze_keys(&meeting), meeting.end_ms);
+            snooze_calendar_call(detector, &meeting);
             if recording.is_some() {
                 tracing::warn!("ignored a calendar recording request while recording");
                 return;
@@ -210,7 +210,13 @@ fn handle_command(
                 join,
                 "calendar meeting recording started from its reminder"
             );
-            start_recording(recording, calendar_start(&meeting), false, events);
+            start_recording(
+                recording,
+                reminders,
+                calendar_start(&meeting),
+                false,
+                events,
+            );
         }
         ControllerCommand::JoinMeeting(meeting) => {
             reminders.scheduler.answered(&meeting.occurrence());
@@ -220,7 +226,7 @@ fn handle_command(
         }
         ControllerCommand::DismissReminder(meeting) => {
             reminders.scheduler.answered(&meeting.occurrence());
-            detector.snooze_calendar_call(snooze_keys(&meeting), meeting.end_ms);
+            snooze_calendar_call(detector, &meeting);
             tracing::info!("calendar meeting reminder dismissed");
         }
         ControllerCommand::Stop => {
@@ -285,16 +291,30 @@ fn calendar_context(meeting: &CalendarMeeting) -> MeetingCalendar {
     }
 }
 
-/// The detected-call keys a calendar meeting's answered reminder covers;
-/// none when it has no call link, which covers the next call alone.
-fn snooze_keys(meeting: &CalendarMeeting) -> Vec<String> {
-    meeting.link.as_ref().map_or_else(Vec::new, |link| {
-        link.provider
-            .detection_keys()
-            .iter()
-            .map(|key| key.to_string())
-            .collect()
-    })
+/// What a calendar meeting's answered reminder covers: its call service's
+/// detected-call keys until the meeting ends. Without a call link, the next
+/// call of any service, but only around the scheduled start, so one
+/// dismissal never silences other calls for the rest of a long event.
+fn calendar_snooze(meeting: &CalendarMeeting) -> (Vec<String>, i64) {
+    match &meeting.link {
+        Some(link) => (
+            link.provider
+                .detection_keys()
+                .iter()
+                .map(|key| key.to_string())
+                .collect(),
+            meeting.end_ms,
+        ),
+        None => (
+            Vec::new(),
+            (meeting.start_ms + crate::calendar::LATE_GRACE_MS).min(meeting.end_ms),
+        ),
+    }
+}
+
+fn snooze_calendar_call(detector: &mut MeetingDetector, meeting: &CalendarMeeting) {
+    let (keys, until_ms) = calendar_snooze(meeting);
+    detector.snooze_calendar_call(keys, until_ms);
 }
 
 /// How often the reminder poll rereads the calendar without a change
@@ -348,12 +368,8 @@ impl Reminders {
                 }
             }
         }
-        // A reminder waits while Hex records; it shows after, if still due.
-        if recording && self.scheduler.showing().is_none() {
-            return;
-        }
         let lead_ms = settings.lead().as_millis() as i64;
-        match self.scheduler.poll(&self.meetings, now_ms, lead_ms) {
+        match self.step(recording, now_ms, lead_ms) {
             Some(ReminderUpdate::Show(meeting)) => {
                 let automatic = records_automatically(
                     &meeting,
@@ -371,6 +387,15 @@ impl Reminders {
             }
             None => {}
         }
+    }
+
+    /// The scheduler pass over the meetings last read. A reminder waits
+    /// while Hex records; it shows after, if still due.
+    fn step(&mut self, recording: bool, now_ms: i64, lead_ms: i64) -> Option<ReminderUpdate> {
+        if recording {
+            return None;
+        }
+        self.scheduler.poll(&self.meetings, now_ms, lead_ms)
     }
 
     /// A detected call's recording, titled from the calendar meeting it
@@ -416,10 +441,14 @@ fn records_automatically(
 
 fn start_recording(
     recording: &mut Option<ActiveRecording>,
+    reminders: &mut Reminders,
     start: Start,
     automatic: bool,
     events: &SyncSender<ControllerEvent>,
 ) {
+    // `Starting` closes a showing reminder; no reminder shows over a
+    // recording.
+    reminders.scheduler.clear();
     if automatic {
         tracing::info!(
             source = start.app_label,
@@ -655,5 +684,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    const MINUTE: i64 = 60_000;
+
+    fn meeting(id: &str, start_minute: i64, minutes: i64) -> CalendarMeeting {
+        CalendarMeeting {
+            id: id.into(),
+            title: id.into(),
+            start_ms: start_minute * MINUTE,
+            end_ms: (start_minute + minutes) * MINUTE,
+            attendees: vec!["Ana Ruiz".into()],
+            link: None,
+        }
+    }
+
+    #[test]
+    fn no_reminder_shows_over_a_recording() {
+        let mut reminders = Reminders {
+            meetings: vec![meeting("sync", 100, 30)],
+            ..Reminders::default()
+        };
+        assert_eq!(reminders.step(true, 99 * MINUTE, MINUTE), None);
+        // After the recording, it shows if still due.
+        assert!(matches!(
+            reminders.step(false, 100 * MINUTE, MINUTE),
+            Some(ReminderUpdate::Show(_))
+        ));
+
+        // A recording that starts while one shows closes it for good.
+        let mut reminders = Reminders {
+            meetings: vec![meeting("sync", 100, 30)],
+            ..Reminders::default()
+        };
+        assert!(reminders.step(false, 99 * MINUTE, MINUTE).is_some());
+        reminders.scheduler.clear();
+        assert_eq!(reminders.step(true, 99 * MINUTE + 1_000, MINUTE), None);
+        assert_eq!(reminders.step(false, 102 * MINUTE, MINUTE), None);
+    }
+
+    #[test]
+    fn a_dismissed_reminder_without_a_link_snoozes_only_around_its_start() {
+        let all_day_workshop = meeting("workshop", 100, 240);
+        assert_eq!(
+            calendar_snooze(&all_day_workshop),
+            (Vec::new(), 100 * MINUTE + crate::calendar::LATE_GRACE_MS)
+        );
+        let short = meeting("standup", 100, 3);
+        assert_eq!(calendar_snooze(&short), (Vec::new(), 103 * MINUTE));
+
+        let mut zoom = meeting("zoom", 100, 240);
+        zoom.link = Some(crate::calendar::CallLink {
+            provider: crate::calendar::CallProvider::Zoom,
+            url: "https://zoom.us/j/1".into(),
+        });
+        let (keys, until_ms) = calendar_snooze(&zoom);
+        assert!(keys.iter().any(|key| key == "us.zoom.xos"), "{keys:?}");
+        assert_eq!(until_ms, zoom.end_ms);
     }
 }

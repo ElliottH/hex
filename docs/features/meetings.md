@@ -164,8 +164,10 @@ Lead time reached (or Mac wakes within 5 min of the start)   // meetings.reminde
      └── Service set to Always record: "Starts in 1 min · Hex records automatically"
          ├── Don't record -> close; the detected call neither offers nor auto-records
          └── Join (only with a link) -> open the link; Always record starts on detection
-  -> Closes 60 s after the start; withdrawn if the meeting is cancelled, moved, or
-     reminders are turned off. Waits while Hex already records.
+  -> Closes 60 s after the start (at least 30 s after showing); withdrawn if the
+     meeting is cancelled, moved, or reminders are turned off. One at a time: an
+     overlapping meeting's reminder waits until this one is answered or closes.
+     Waits while Hex records; a recording that starts closes it.
 Detected call during a calendar meeting on the same service
   -> recording takes the calendar title and attendees
 ```
@@ -182,10 +184,13 @@ The controller thread reads EventKit (one bounded query, 48 hours ahead, at most
 minute by the wall clock, so a wake rereads; each loop is then a cheap
 scheduler pass. Reminders key each occurrence by event ID and start, so a moved
 meeting reminds again and each occurrence reminds once. Settings reads its own
-snapshot on a worker thread while the window shows. No network, never on the
-audio or UI thread. Recording from a reminder (or dismissing it) snoozes
-detected calls from the link's service until the meeting ends; without a link
-it covers only the next detected call. The manifest's `calendar` field and the
+snapshot on a reader thread while the window shows, rereading when the
+settings, access, or (once connected) the store change, and every 30 s; the
+window's thread never calls EventKit. No network, never on the audio or UI
+thread. Recording from a reminder (or dismissing it) snoozes detected calls
+from the link's service until the meeting ends; without a link it covers only
+the next detected call, and only until 5 min after the start (or the end, if
+sooner). The manifest's `calendar` field and the
 Markdown's Attendees line carry the calendar title and attendees, and the notes
 prompt gets them as context.
 
@@ -193,7 +198,11 @@ Checks: `meetings_need_other_people_or_a_call_link`,
 `all_day_declined_free_and_cancelled_events_are_skipped`,
 `excluded_calendars_are_left_out_and_meetings_sort_by_start`,
 `call_links_are_found_in_the_url_location_or_notes`,
-`other_links_and_lookalikes_are_not_calls`, `the_url_field_wins_over_the_notes`,
+`other_links_and_lookalikes_are_not_calls`,
+`a_link_after_a_bare_http_in_the_same_word_is_found`,
+`the_url_field_wins_over_the_notes`,
+`an_overlapping_meeting_waits_for_the_showing_reminder`,
+`a_late_reminder_stays_up_at_least_half_a_minute`,
 `a_reminder_shows_once_at_the_lead_time`, `at_start_reminds_when_the_meeting_begins`,
 `waking_shortly_after_the_start_still_reminds_but_not_much_later`,
 `a_showing_reminder_closes_when_its_meeting_is_cancelled_or_long_started`,
@@ -205,6 +214,9 @@ Checks: `meetings_need_other_people_or_a_call_link`,
 `a_call_answered_from_its_calendar_reminder_is_not_offered_again` and
 `a_reminder_without_a_call_link_covers_only_the_next_call` in
 [meeting_detection.rs](../../src/meeting_detection.rs);
+`no_reminder_shows_over_a_recording` and
+`a_dismissed_reminder_without_a_link_snoozes_only_around_its_start` in
+[meeting_watcher.rs](../../src/meeting_watcher.rs);
 `calendar_reminders_stay_off_until_connected_and_survive_older_files` in
 [app_settings.rs](../../src/app_settings.rs);
 `a_calendar_meeting_gives_its_title_and_attendees_as_context` and

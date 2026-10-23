@@ -348,9 +348,7 @@ fn calendar_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Option<El> {
             p,
             "calendar-connect",
             tr("Remind me before meetings"),
-            Some(tr(
-                "Get a reminder before each meeting, and name its recording",
-            )),
+            Some(tr("Names each recording after its calendar event")),
             button(
                 p,
                 "calendar-connect-button",
@@ -493,7 +491,7 @@ fn calendars_row(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         p,
         "calendar-calendars",
         tr("Calendars"),
-        Some(tr("Meetings from these calendars get reminders")),
+        None,
         select(
             p,
             "calendar-calendars-control",

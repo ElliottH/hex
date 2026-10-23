@@ -634,7 +634,6 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
-        changed |= self.calendar.poll(&mut state.calendar);
         // The Fun pane's demo moves every frame while it records or plays.
         if state.demo.is_none()
             || crate::hex_microphone::demo_is_busy()
@@ -651,6 +650,7 @@ impl NativeHost for MacHost {
             return changed;
         }
         self.refresh_at = Instant::now() + PLATFORM_REFRESH;
+        changed |= self.calendar.poll(&mut state.calendar);
         changed |= update(
             &mut state.tuning,
             crate::hex_microphone::current_tuned_config(),
@@ -748,16 +748,57 @@ impl NativeHost for MacHost {
     }
 }
 
-/// The Calendar card's state, read on a worker thread so EventKit never
-/// blocks the window. Connect asks macOS once, on the person's click.
+/// The Calendar card's state. EventKit is touched only on the reader thread,
+/// never the window's. Connect asks macOS once, on the person's click.
 #[derive(Default)]
 struct CalendarFeed {
     connect: Option<Receiver<CalendarAccess>>,
-    read: Option<Receiver<CalendarSnapshot>>,
-    read_at: Option<Instant>,
-    /// The calendar settings and change count the shown snapshot read.
-    read_for: Option<(CalendarSettings, u64)>,
+    reader: Option<CalendarReader>,
     connect_error: Option<String>,
+}
+
+struct CalendarReader {
+    snapshots: Receiver<CalendarSnapshot>,
+    /// Dropping this stops the reader thread.
+    _stop: mpsc::SyncSender<()>,
+}
+
+/// The Calendar card's reader: rereads when the settings, macOS access, or
+/// (once connected) the EventKit store change, and every
+/// [`CALENDAR_REFRESH`] so started meetings leave the list.
+fn calendar_reader(snapshots: mpsc::SyncSender<CalendarSnapshot>, stop: Receiver<()>) {
+    let mut read_for: Option<(CalendarSettings, CalendarAccess, u64)> = None;
+    let mut read_at: Option<Instant> = None;
+    let mut wait = Duration::ZERO;
+    loop {
+        if let Err(mpsc::RecvTimeoutError::Disconnected) = stop.recv_timeout(wait) {
+            return;
+        }
+        wait = PLATFORM_REFRESH;
+        if !crate::app_settings::meetings_enabled() {
+            read_for = None;
+            continue;
+        }
+        let settings = crate::app_settings::calendar_settings();
+        let changes = if settings.connected {
+            crate::calendar::change_count()
+        } else {
+            0
+        };
+        let key = (settings.clone(), crate::calendar::access(), changes);
+        if read_for.as_ref() == Some(&key)
+            && read_at.is_some_and(|at| at.elapsed() < CALENDAR_REFRESH)
+        {
+            continue;
+        }
+        let snapshot = crate::calendar::snapshot(&settings, crate::calendar::wall_clock_ms());
+        read_for = Some(key);
+        read_at = Some(Instant::now());
+        // The window dropped its feed: stop.
+        if snapshots.send(snapshot).is_err() {
+            return;
+        }
+    }
 }
 
 impl CalendarFeed {
@@ -790,14 +831,25 @@ impl CalendarFeed {
                 self.connect_error = save_calendar_connected().err();
             }
             view.access = access;
-            self.read_at = None;
             changed = true;
         }
         changed |= update(&mut view.connecting, self.connect.is_some());
-        if let Some(receiver) = &self.read
-            && let Ok(snapshot) = receiver.try_recv()
+        if self.reader.is_none() && crate::app_settings::meetings_enabled() {
+            let (sender, snapshots) = mpsc::sync_channel(1);
+            let (stop, stopped) = mpsc::sync_channel(1);
+            let spawned = std::thread::Builder::new()
+                .name("hex-calendar-read".into())
+                .spawn(move || calendar_reader(sender, stopped));
+            if spawned.is_ok() {
+                self.reader = Some(CalendarReader {
+                    snapshots,
+                    _stop: stop,
+                });
+            }
+        }
+        if let Some(reader) = &self.reader
+            && let Ok(snapshot) = reader.snapshots.try_recv()
         {
-            self.read = None;
             let now_ms = crate::calendar::wall_clock_ms();
             let shown = CalendarView {
                 access: snapshot.access,
@@ -812,28 +864,6 @@ impl CalendarFeed {
             };
             changed |= update(view, shown);
         }
-        if !crate::app_settings::meetings_enabled() || self.read.is_some() {
-            return changed;
-        }
-        let settings = crate::app_settings::calendar_settings();
-        let read_for = (settings.clone(), crate::calendar::change_count());
-        let stale = self.read_for.as_ref() != Some(&read_for);
-        if !stale && self.read_at.is_some_and(|at| Instant::now() < at) {
-            return changed;
-        }
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let spawned = std::thread::Builder::new()
-            .name("hex-calendar-read".into())
-            .spawn(move || {
-                let snapshot =
-                    crate::calendar::snapshot(&settings, crate::calendar::wall_clock_ms());
-                let _ = sender.send(snapshot);
-            });
-        if spawned.is_ok() {
-            self.read = Some(receiver);
-        }
-        self.read_for = Some(read_for);
-        self.read_at = Some(Instant::now() + CALENDAR_REFRESH);
         changed
     }
 }
