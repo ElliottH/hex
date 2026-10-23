@@ -150,6 +150,22 @@ install the official HEX skill:
 npx skills add anomalyco/hex --skill hex-personal-commands
 ```
 
+## Read Transcripts From The CLI
+
+The macOS release binary provides read-only queries while the app runs:
+
+```sh
+/Applications/Hex.app/Contents/MacOS/hex history --since 3d --app 'OpenCode Beta' --grep problems --json
+/Applications/Hex.app/Contents/MacOS/hex meetings list --since 7d --json
+/Applications/Hex.app/Contents/MacOS/hex meetings show latest --md
+/Applications/Hex.app/Contents/MacOS/hex meetings search 'release schedule'
+```
+
+History supports `--until`, `--limit`, `--raw`, and `--oldest-first`; queries
+respect the saved retention window. Meetings share the read-only MCP query
+layer. No microphone, GUI, model, or app service starts.
+See [flags and the versioned JSON schema](docs/transcript-cli.md).
+
 ## Privacy And Local Data
 
 - Speech transcription and command recognition run locally.
@@ -157,7 +173,8 @@ npx skills add anomalyco/hex --skill hex-personal-commands
 - History retains successfully pasted dictation and Voice Action text
   for seven days by default, including the local transcript, final text, and
   limited application and timing metadata. It never stores audio, full browser
-  URLs, or window titles. Every retention choice has entry and byte limits.
+  URLs, or window titles. Every retention choice is capped at 10,000 entries and
+  16 MiB of raw plus final text, with oldest entries evicted first.
 - Use **History > Keep: Off** to stop adding entries, or **Clear all** to remove
   existing history. Turning retention off does not delete existing entries or
   disable diagnostic logging.

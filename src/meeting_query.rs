@@ -295,52 +295,18 @@ impl Library {
     }
 
     pub fn list(&self, query: &ListQuery, now_ms: u64) -> Result<String> {
-        let scan = self.scan()?;
-        let range = TimeRange::parse(query.since.as_deref(), query.until.as_deref(), now_ms)?;
-        let words = query
-            .query
-            .as_deref()
-            .map(|query| query.split_whitespace().map(fold).collect::<Vec<_>>())
-            .unwrap_or_default();
-        let matching = scan
-            .meetings
-            .iter()
-            .filter(|meeting| query.include_in_progress || !meeting.in_progress)
-            .filter(|meeting| range.overlaps(meeting, now_ms))
-            .filter(|meeting| {
-                if words.is_empty() {
-                    return true;
-                }
-                let haystack = fold(&format!(
-                    "{} {} {} {}",
-                    meeting.title(),
-                    meeting.manifest.title,
-                    meeting.manifest.app.as_deref().unwrap_or_default(),
-                    meeting.id
-                ));
-                words.iter().all(|word| haystack.contains(word.as_str()))
-            })
-            .collect::<Vec<_>>();
+        let scan = self.list_matches(query, now_ms)?;
+        let matching = &scan.meetings;
         let limit = query.limit.clamp(1, 200);
         let mut output = String::new();
         if matching.is_empty() {
-            let _ = writeln!(
-                output,
-                "No meetings match (searched {} meetings in {}).",
-                scan.meetings.len(),
-                self.root.display()
-            );
+            let _ = writeln!(output, "No meetings match.");
         } else {
             let _ = writeln!(
                 output,
-                "{} of {} meetings, newest first{}:",
+                "{} of {} meetings, newest first:",
                 matching.len().min(limit),
-                matching.len(),
-                if matching.len() > limit {
-                    " (raise limit or narrow since/until for more)"
-                } else {
-                    ""
-                }
+                matching.len()
             );
         }
         for meeting in matching.iter().take(limit) {
@@ -359,7 +325,7 @@ impl Library {
                     "yes"
                 } else {
                     "no"
-                },
+                }
             );
             for warning in &meeting.warnings {
                 let _ = writeln!(output, "  warning: {warning}");
@@ -367,6 +333,37 @@ impl Library {
         }
         write_skipped(&mut output, &scan.skipped);
         Ok(output)
+    }
+
+    /// Shared selection for CLI JSON and MCP text; limit is applied by the renderer.
+    pub fn list_matches(&self, query: &ListQuery, now_ms: u64) -> Result<Scan> {
+        let mut scan = self.scan()?;
+        let range = TimeRange::parse(query.since.as_deref(), query.until.as_deref(), now_ms)?;
+        let words = query
+            .query
+            .as_deref()
+            .map(|query| query.split_whitespace().map(fold).collect::<Vec<_>>())
+            .unwrap_or_default();
+        scan.meetings = scan
+            .meetings
+            .into_iter()
+            .filter(|meeting| query.include_in_progress || !meeting.in_progress)
+            .filter(|meeting| range.overlaps(meeting, now_ms))
+            .filter(|meeting| {
+                if words.is_empty() {
+                    return true;
+                }
+                let haystack = fold(&format!(
+                    "{} {} {} {}",
+                    meeting.title(),
+                    meeting.manifest.title,
+                    meeting.manifest.app.as_deref().unwrap_or_default(),
+                    meeting.id
+                ));
+                words.iter().all(|word| haystack.contains(word.as_str()))
+            })
+            .collect::<Vec<_>>();
+        Ok(scan)
     }
 
     pub fn search(&self, query: &SearchQuery, now_ms: u64) -> Result<String> {
@@ -1647,11 +1644,11 @@ pub fn parse_time(input: &str, now_ms: u64, end_of_day: bool) -> Result<u64> {
         };
         if let Some(unit_ms) = unit_ms {
             let amount: u64 = amount.parse().map_err(|_| invalid())?;
-            return Ok(now_ms.saturating_sub(amount * unit_ms));
+            return Ok(now_ms.saturating_sub(amount.checked_mul(unit_ms).ok_or_else(invalid)?));
         }
     }
     let pattern = regex::Regex::new(
-        r"^(\d{4})-(\d{2})-(\d{2})(?:[t ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?\s*(z|[+-]\d{2}:?\d{2})?$",
+        r"^(\d{4})-(\d{2})-(\d{2})(?:[t ](\d{2}):(\d{2})(?::(\d{2})(?:\.(?P<fraction>\d+))?)?)?\s*(?P<zone>z|[+-]\d{2}:?\d{2})?$",
     )
     .expect("valid time pattern");
     let captures = pattern.captures(&text).ok_or_else(invalid)?;
@@ -1664,7 +1661,20 @@ pub fn parse_time(input: &str, now_ms: u64, end_of_day: bool) -> Result<u64> {
     let (year, month, day) = (number(1)?, number(2)?, number(3)?);
     let has_time = captures.get(4).is_some();
     let (hour, minute, second) = (number(4)?, number(5)?, number(6)?);
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 {
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = match month {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => 0,
+    };
+    if day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
         return Err(invalid());
     }
     let day = if !has_time && end_of_day {
@@ -1672,7 +1682,7 @@ pub fn parse_time(input: &str, now_ms: u64, end_of_day: bool) -> Result<u64> {
     } else {
         day
     };
-    match captures.get(7).map(|zone| zone.as_str()) {
+    let milliseconds = match captures.name("zone").map(|zone| zone.as_str()) {
         Some(zone) => {
             let offset_seconds = if zone == "z" {
                 0
@@ -1681,6 +1691,9 @@ pub fn parse_time(input: &str, now_ms: u64, end_of_day: bool) -> Result<u64> {
                 let digits = zone[1..].replace(':', "");
                 let hours: i64 = digits[..2].parse().map_err(|_| invalid())?;
                 let minutes: i64 = digits[2..].parse().map_err(|_| invalid())?;
+                if hours > 23 || minutes > 59 {
+                    return Err(invalid());
+                }
                 sign * (hours * 3_600 + minutes * 60)
             };
             let seconds = days_from_civil(year.into(), month.into(), day.into()) * 86_400
@@ -1693,16 +1706,26 @@ pub fn parse_time(input: &str, now_ms: u64, end_of_day: bool) -> Result<u64> {
                 .map_err(|_| invalid())
         }
         None => local_to_ms(year as i32, month, day, hour, minute, second).ok_or_else(invalid),
-    }
+    }?;
+    let fraction = captures.name("fraction").map_or(0, |digits| {
+        digits
+            .as_str()
+            .bytes()
+            .take(3)
+            .zip([100, 10, 1])
+            .map(|(digit, scale)| u64::from(digit - b'0') * scale)
+            .sum::<u64>()
+    });
+    Ok(milliseconds + fraction)
 }
 
-struct TimeRange {
+pub struct TimeRange {
     since: Option<u64>,
     until: Option<u64>,
 }
 
 impl TimeRange {
-    fn parse(since: Option<&str>, until: Option<&str>, now_ms: u64) -> Result<Self> {
+    pub fn parse(since: Option<&str>, until: Option<&str>, now_ms: u64) -> Result<Self> {
         let since = since
             .filter(|value| !value.trim().is_empty())
             .map(|value| parse_time(value, now_ms, false))
@@ -1711,7 +1734,18 @@ impl TimeRange {
             .filter(|value| !value.trim().is_empty())
             .map(|value| parse_time(value, now_ms, true))
             .transpose()?;
+        if since
+            .zip(until)
+            .is_some_and(|(since, until)| since >= until)
+        {
+            return Err(eyre!("since must be earlier than until"));
+        }
         Ok(Self { since, until })
+    }
+
+    pub fn contains(&self, timestamp_ms: u64) -> bool {
+        self.since.is_none_or(|since| timestamp_ms >= since)
+            && self.until.is_none_or(|until| timestamp_ms < until)
     }
 
     /// Whether the meeting overlaps `[since, until)`.

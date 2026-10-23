@@ -226,6 +226,10 @@ substitute for source inspection or a second roadmap.
 - `history`: the owner-only bounded retained-dictation store: retention
   windows with hard entry and byte caps, atomic crash-safe persistence, and
   search. Text and bounded metadata only, never audio.
+- `transcript_cli`: read-only macOS release commands `hex history` and
+  `hex meetings list|show|search`, versioned JSON projections and filters.
+  Reads history snapshots without opening the writable store, and shares
+  meeting selection, search, and Markdown with `meeting::query` / MCP.
 - `events`, `dashboard`: bounded asynchronous append-only NDJSON observations
   and bounded incremental reading; the debug `dashboard` TUI and the Activity
   pane are read-only projections.
@@ -470,6 +474,17 @@ CoreAudio formats, AppleScript details, or event serialization.
   Turning retention Off preserves existing entries; clearing history is explicit.
   Time-based retention expires during idle uptime through the shared history
   owner; searches never return expired entries while waiting for disk cleanup.
+  The hard caps are 10,000 entries and 16 MiB of raw + final text (oldest evicted
+  first), with existing per-entry metadata and text limits. There is no archive.
+- `hex history` and `hex meetings` are read-only, release-available on macOS,
+  independent of feature opt-ins. Dispatch before folder migration, process
+  logging, the instance lock, local API, GUI, permissions, or Hex Microphone.
+  Resolve the existing data folder without renaming it. History reads one open
+  file through concurrent atomic replacements, applies the saved retention at
+  query time, and reports malformed files/settings without repairing them.
+  JSON contracts are documented in `docs/transcript-cli.md`; incompatible
+  changes require a version increment. Debug `meeting list/show` use the same
+  read-only path; recording and other debug commands keep their existing roles.
 - Meeting detection may inspect process audio metadata but must not capture
   samples. Detection can offer recording; it must never start automatically, and
   an offer that times out only closes. Release builds keep the meeting controller

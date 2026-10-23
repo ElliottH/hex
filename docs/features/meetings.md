@@ -505,6 +505,10 @@ Before: map-reduce over 8 chunks, 9 calls, 51-minute call  96 s
 
 ### Agent Access (MCP)
 
+The release CLI also supports `hex meetings list`, `show <id|latest>`, and
+`search <query>` through this query layer. See the [transcript CLI map](transcript-cli.md)
+and [versioned JSON contract](../transcript-cli.md).
+
 ```ts
 hex mcp [--meetings-dir <path>]                     // meetings.mcp; release builds
 ├── MCP over stdio; independent of the Meetings opt-in (read-only)

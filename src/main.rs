@@ -138,6 +138,8 @@ mod status_item;
 mod suppression;
 mod text_replacements;
 #[cfg(target_os = "macos")]
+mod transcript_cli;
+#[cfg(target_os = "macos")]
 mod transcription;
 #[cfg(target_os = "macos")]
 mod transcription_benchmark;
@@ -204,6 +206,13 @@ pub(crate) const DEVELOPER_FEATURES_ENABLED: bool = cfg!(debug_assertions);
 #[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum Command {
+    /// Read retained dictation history without starting the app.
+    History(transcript_cli::HistoryArgs),
+    /// Read and search recorded meetings without starting the app.
+    Meetings {
+        #[command(subcommand)]
+        command: transcript_cli::MeetingsCommand,
+    },
     /// Run the desktop app with local dictation.
     App {
         /// Override the configured microphone preference order.
@@ -414,6 +423,29 @@ fn main() -> Result<()> {
     if let Some(Command::Mcp { meetings_dir }) = &cli.command {
         return run_mcp(meetings_dir.clone());
     }
+    match &cli.command {
+        Some(Command::History(args)) => return transcript_cli::history(args),
+        Some(Command::Meetings { command }) => return transcript_cli::meetings(command),
+        #[cfg(debug_assertions)]
+        Some(Command::Meeting {
+            command: MeetingCommand::List,
+        }) => {
+            return transcript_cli::meetings(&transcript_cli::MeetingsCommand::List(
+                Default::default(),
+            ));
+        }
+        #[cfg(debug_assertions)]
+        Some(Command::Meeting {
+            command: MeetingCommand::Show { id },
+        }) => {
+            return transcript_cli::meetings(&transcript_cli::MeetingsCommand::Show {
+                id: id.clone(),
+                md: true,
+                json: false,
+            });
+        }
+        _ => {}
+    }
     if let Some(Command::Dev {
         command:
             DevCommand::VoiceFilter {
@@ -547,7 +579,9 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Mcp { .. } => unreachable!("handled before startup"),
+        Command::Mcp { .. } | Command::History(_) | Command::Meetings { .. } => {
+            unreachable!("handled before startup")
+        }
         Command::Commands {
             command: CommandsCommand::Init,
         } => {
