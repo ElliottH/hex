@@ -56,10 +56,22 @@ jobs:
 
   build:
     needs: resolve
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/build-desktop.yml
     with:
       sha: ${{ needs.resolve.outputs.sha }}
       version: ${{ needs.resolve.outputs.version }}
+      sign-windows: true
+    # Azure Artifact Signing (OIDC); the values live in the release environment.
+    secrets:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
 
   sign:
     name: Sign and validate

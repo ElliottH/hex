@@ -4,6 +4,13 @@ name: Build desktop
 # executables and installers from one commit. Release desktop calls it to
 # release; Test builds calls it with test-build so every push to main has
 # downloadable builds that never self-update from the signed feeds.
+#
+# Windows executables compile without credentials; one packaging job then
+# Authenticode-signs both executables through Azure Artifact Signing (when
+# sign-windows is set and the release environment has the Azure values),
+# builds both installers around the signed bytes, signs the installers, and
+# re-addresses the signed executables in their feed payloads. The installers
+# are then tested on native x64 and ARM64 runners.
 on:
   workflow_call:
     inputs:
@@ -22,6 +29,23 @@ on:
       retention-days:
         type: number
         default: 0
+      sign-windows:
+        description: Authenticode-sign in the release environment when its Azure values exist
+        type: boolean
+        default: false
+    secrets:
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+      AZURE_TRUSTED_SIGNING_ENDPOINT:
+        required: false
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME:
+        required: false
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE:
+        required: false
 
 permissions:
   contents: read
@@ -170,18 +194,195 @@ jobs:
           $imports
           $redist = $imports | Select-String -Pattern 'VCRUNTIME|MSVCP|vcomp'
           if ($redist) { throw "hex.exe imports Visual C++ runtime DLLs: $redist" }
-      - name: Build and silently test the Setup.exe installer
-        shell: pwsh
-        run: |
-          $feed = if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }
-          $label = if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'x64' } else { 'arm64' }
-          $payload = Get-Content "dist/$feed.payload.json" | ConvertFrom-Json
-          $exe = "dist/$($payload.artifact)"
-          tools/scripts/build-windows-installer.ps1 -Executable $exe -Version $env:HEX_VERSION -Arch $env:HEX_WINDOWS_ARCH -OutDir dist
-          tools/scripts/test-windows-installer.ps1 -Installer "dist/HEX-Setup-$env:HEX_VERSION-$label.exe" -Executable $exe -Version $env:HEX_VERSION
+      # Not named after artifact-prefix: Release desktop downloads hex-*-*.
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ inputs.artifact-prefix }}-windows-${{ matrix.arch }}
-          path: ${{ inputs.test-build && 'dist/HEX-*' || 'dist/' }}
+          name: unsigned-windows-${{ matrix.arch }}
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  windows-package:
+    name: Windows sign and package
+    needs: windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # The Azure federated credential trusts only this environment.
+    environment: ${{ inputs.sign-windows && 'release' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      HEX_VERSION: ${{ inputs.version }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: unsigned-windows-*
+          path: dist
+          merge-multiple: true
+      - name: Decide whether to sign
+        id: signing
+        shell: bash
+        env:
+          REQUESTED: ${{ inputs.sign-windows }}
+        run: |
+          configured=true
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_TRUSTED_SIGNING_ENDPOINT \
+            AZURE_TRUSTED_SIGNING_ACCOUNT_NAME AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE; do
+            if [ -z "$(printenv "$name")" ]; then
+              configured=false
+            fi
+          done
+          if [ "$REQUESTED" = true ] && [ "$configured" = true ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Windows executables and installers are Authenticode-signed." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            if [ "$REQUESTED" = true ]; then
+              echo "::warning::Azure Artifact Signing is not configured in the release environment; the Windows builds are unsigned."
+            fi
+            echo "Windows executables and installers are not Authenticode-signed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Sign in to Azure
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign the executables
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Hex
+          description-url: https://github.com/anomalyco/hex
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Build the installers around the executables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force installers | Out-Null
+          foreach ($arch in 'x86_64', 'aarch64') {
+            $feed = if ($arch -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }
+            $payload = Get-Content "dist/$feed.payload.json" | ConvertFrom-Json
+            tools/scripts/build-windows-installer.ps1 -Executable "dist/$($payload.artifact)" -Version $env:HEX_VERSION -Arch $arch -OutDir installers
+          }
+      - name: Sign the installers
+        if: steps.signing.outputs.enabled == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\installers
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Hex
+          description-url: https://github.com/anomalyco/hex
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+      - name: Check the signatures and re-address the signed executables
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: tools/scripts/windows-authenticode.ps1 -Dist dist -Installers installers
+      - name: Collect each architecture's files
+        shell: pwsh
+        env:
+          TEST_BUILD: ${{ inputs.test-build }}
+        run: |
+          foreach ($arch in 'x86_64', 'aarch64') {
+            $feed = if ($arch -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }
+            $label = if ($arch -eq 'x86_64') { 'x64' } else { 'arm64' }
+            $payload = Get-Content "dist/$feed.payload.json" | ConvertFrom-Json
+            $out = New-Item -ItemType Directory -Force "out/$arch"
+            Copy-Item "dist/$($payload.artifact)", "installers/HEX-Setup-$env:HEX_VERSION-$label.exe" $out
+            if ($env:TEST_BUILD -ne 'true') { Copy-Item "dist/$feed.payload.json" $out }
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}-windows-x86_64
+          path: out/x86_64/
           retention-days: ${{ inputs.retention-days }}
           if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}-windows-aarch64
+          path: out/aarch64/
+          retention-days: ${{ inputs.retention-days }}
+          if-no-files-found: error
+
+  windows-installer:
+    name: Windows ${{ matrix.arch }} installer
+    needs: windows-package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            label: x64
+            runner: windows-latest
+          - arch: aarch64
+            label: arm64
+            runner: windows-11-arm
+    env:
+      HEX_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: tools
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-prefix }}-windows-${{ matrix.arch }}
+          path: dist
+      - name: Install, reinstall, refuse a downgrade, and uninstall silently
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Filter "HEX-$env:HEX_VERSION-*-${{ matrix.arch }}-windows.exe" | Select-Object -First 1
+          if (-not $exe) { throw 'The executable is missing.' }
+          tools/scripts/test-windows-installer.ps1 -Installer "dist/HEX-Setup-$env:HEX_VERSION-${{ matrix.label }}.exe" -Executable $exe.FullName -Version $env:HEX_VERSION
+      - name: Upload installer logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-logs-${{ matrix.label }}
+          path: ${{ runner.temp }}/hex-installer-logs
+          if-no-files-found: ignore
