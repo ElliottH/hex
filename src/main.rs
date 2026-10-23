@@ -445,6 +445,8 @@ fn main() -> Result<()> {
                 id: id.clone(),
                 md: true,
                 json: false,
+                from: None,
+                to: None,
             });
         }
         _ => {}

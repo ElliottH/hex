@@ -87,6 +87,16 @@ impl Meeting {
         })
     }
 
+    /// Entries overlapping `range`, or an error when it starts after the meeting.
+    pub fn entries_in(&self, range: OffsetRange, now_ms: u64) -> Result<Vec<&TranscriptEntry>> {
+        range.check(self, now_ms)?;
+        Ok(self
+            .entries
+            .iter()
+            .filter(|entry| range.overlaps(entry))
+            .collect())
+    }
+
     fn status_label(&self) -> String {
         let status = status_name(self.status);
         if self.in_progress {
@@ -384,15 +394,14 @@ impl Library {
 
     pub fn transcript(&self, query: &TranscriptQuery, now_ms: u64) -> Result<String> {
         let meeting = self.meeting(&query.meeting_id)?;
-        let start = query.start.as_deref().map(parse_offset).transpose()?;
-        let end = query.end.as_deref().map(parse_offset).transpose()?;
+        let range = OffsetRange::parse(query.start.as_deref(), query.end.as_deref())?;
+        range.check(&meeting, now_ms)?;
         let speaker = query.speaker.as_deref().map(parse_speaker).transpose()?;
         let cursor = query.cursor.as_deref().map(Cursor::parse).transpose()?;
         Ok(render_transcript(
             &meeting,
             TranscriptWindow {
-                start,
-                end,
+                range,
                 speaker: speaker.flatten(),
                 cursor,
                 max_chars: query.max_chars.clamp(500, 200_000),
@@ -458,9 +467,15 @@ with get_transcript or search_transcripts for details, decisions, and action ite
         Ok(output)
     }
 
-    /// The meeting as Markdown: metadata, stored notes, and labeled turns.
-    pub fn markdown(&self, id: &str, now_ms: u64) -> Result<String> {
+    /// The meeting as Markdown: metadata, stored notes, and labeled turns,
+    /// limited to the entries overlapping `range`.
+    pub fn markdown(&self, id: &str, range: OffsetRange, now_ms: u64) -> Result<String> {
         let meeting = self.meeting(id)?;
+        let entries = meeting
+            .entries_in(range, now_ms)?
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
         let mut output = format!("# {}\n\n", meeting.title());
         let _ = writeln!(output, "- Meeting: {}", meeting.id);
         let _ = writeln!(output, "- Started: {}", iso_local(meeting.start_ms()));
@@ -478,14 +493,18 @@ with get_transcript or search_transcripts for details, decisions, and action ite
             meeting.status_label(),
             meeting.source.label()
         );
+        if range.is_bounded() {
+            let _ = writeln!(output, "- Range: {}", range.describe());
+        }
         if let Some(notes) = &meeting.manifest.notes {
             let _ = write!(output, "\n{}\n", notes_markdown(notes));
         }
-        let _ = write!(
-            output,
-            "\n## Transcript\n\n{}\n",
-            transcript_markdown(&meeting.entries)
-        );
+        let transcript = if entries.is_empty() && range.is_bounded() {
+            "No transcript entries in this range.".into()
+        } else {
+            transcript_markdown(&entries)
+        };
+        let _ = write!(output, "\n## Transcript\n\n{transcript}\n");
         Ok(output)
     }
 }
@@ -919,9 +938,32 @@ impl MatchKind {
     fn weight(self) -> f32 {
         match self {
             Self::Exact => 1.0,
-            Self::Prefix => 0.8,
-            Self::Edit => 0.7,
-            Self::Sound => 0.45,
+            Self::Prefix => 0.5,
+            Self::Edit => 0.35,
+            Self::Sound => 0.2,
+        }
+    }
+}
+
+/// Spelling fallbacks (edit distance and Soundex) apply only to a term found
+/// exactly in fewer passages than this: with more, the transcripts already
+/// spell the word that way and its near neighbours are other words.
+const RARE_EXACT_PASSAGES: u32 = 3;
+/// A spelling fallback is skipped when it is a common word: in more than this
+/// share of the passages searched, and at least `COMMON_MIN_PASSAGES`.
+const COMMON_SHARE: f32 = 0.005;
+const COMMON_MIN_PASSAGES: f32 = 5.0;
+
+/// Whether an expansion found by [`expand`] is used. Prefixes are kept like
+/// stems. Spelling fallbacks need a term whose exact hits are rare and a
+/// candidate that is not a common word, except that a term with no exact hit
+/// at all still reaches a common word one edit away (a plain typo).
+fn admits(kind: MatchKind, exact_passages: u32, passages: u32, common: f32) -> bool {
+    match kind {
+        MatchKind::Exact | MatchKind::Prefix => true,
+        MatchKind::Edit | MatchKind::Sound => {
+            exact_passages < RARE_EXACT_PASSAGES
+                && (passages as f32 <= common || (kind == MatchKind::Edit && exact_passages == 0))
         }
     }
 }
@@ -986,7 +1028,15 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
         .iter()
         .map(|(meeting, index)| &meeting.passages[*index])
         .collect::<Vec<_>>();
-    let mut hits = score(&passages, query, fuzzy)
+    let mut scored = score(&passages, query, fuzzy);
+    scored.sort_by(|left, right| {
+        let (left_meeting, left_passage) = owners[left.document];
+        let (right_meeting, right_passage) = owners[right.document];
+        relevance(left, right)
+            .then_with(|| right_meeting.start_ms().cmp(&left_meeting.start_ms()))
+            .then_with(|| left_passage.cmp(&right_passage))
+    });
+    scored
         .into_iter()
         .map(|scored| {
             let (meeting, passage) = owners[scored.document];
@@ -998,22 +1048,25 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
                 labels: scored.labels,
             }
         })
-        .collect::<Vec<_>>();
-    hits.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| right.meeting.start_ms().cmp(&left.meeting.start_ms()))
-            .then_with(|| left.passage.cmp(&right.passage))
-    });
-    hits
+        .collect()
 }
 
 struct Scored {
     document: usize,
     score: f32,
+    /// Every query term matched an exact stem.
+    exact: bool,
     matched: Vec<usize>,
     labels: Vec<String>,
+}
+
+/// Best first: a passage matching every term exactly outranks one that needs
+/// a fuzzy match, whatever their scores; then by score.
+fn relevance(left: &Scored, right: &Scored) -> std::cmp::Ordering {
+    right
+        .exact
+        .cmp(&left.exact)
+        .then_with(|| right.score.total_cmp(&left.score))
 }
 
 /// BM25 over `passages` as one corpus, with stemmed, optionally fuzzy terms.
@@ -1039,12 +1092,16 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
             .unwrap_or(0) as f32;
         (1.0 + (documents as f32 - frequency + 0.5) / (frequency + 0.5)).ln()
     };
+    let passages_with = |stem: &String| document_frequency.get(stem).copied().unwrap_or(0);
+    let common = (documents as f32 * COMMON_SHARE).max(COMMON_MIN_PASSAGES);
     let expansions = query
         .terms
         .iter()
         .map(|term| {
+            let exact_passages = passages_with(term);
             expand(term, document_frequency.keys().copied(), fuzzy)
                 .into_iter()
+                .filter(|(stem, kind)| admits(*kind, exact_passages, passages_with(stem), common))
                 .map(|(stem, kind)| {
                     let weight = kind.weight() * idf(&stem);
                     (stem, kind, weight)
@@ -1082,7 +1139,7 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
             continue;
         }
         let mut term_score = 0.0;
-        let mut matched_terms = 0;
+        let mut matched_weight = 0.0;
         let mut exact_terms = Vec::with_capacity(query.terms.len());
         for (term, candidates) in query.terms.iter().zip(&expansions) {
             let mut best: Option<(f32, &str, MatchKind)> = None;
@@ -1090,7 +1147,11 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
                 if let Some(frequency) = passage.frequencies.get(stem) {
                     matched_stems.insert(stem);
                     let score = weight * saturate(*frequency);
-                    if best.is_none_or(|(best, _, _)| score > best) {
+                    // The exact stem, when present, always stands for the term.
+                    let better = |(best, _, best_kind): (f32, &str, MatchKind)| {
+                        (*kind == MatchKind::Exact, score) > (best_kind == MatchKind::Exact, best)
+                    };
+                    if best.is_none_or(better) {
                         best = Some((score, stem, *kind));
                     }
                 }
@@ -1098,7 +1159,7 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
             exact_terms.push(matches!(best, Some((_, _, MatchKind::Exact))));
             if let Some((score, stem, kind)) = best {
                 term_score += score;
-                matched_terms += 1;
+                matched_weight += kind.weight();
                 labels.push(if kind == MatchKind::Exact {
                     term.clone()
                 } else {
@@ -1109,10 +1170,11 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
         if term_score == 0.0 && phrase_score == 0.0 {
             continue;
         }
+        // Fuzzy matches cover a term only as far as they are trusted.
         let coverage = if query.terms.is_empty() {
             1.0
         } else {
-            0.5 + 0.5 * matched_terms as f32 / query.terms.len() as f32
+            0.5 + 0.5 * matched_weight / query.terms.len() as f32
         };
         let mut adjacency = 0.0;
         for pair in 0..query.terms.len().saturating_sub(1) {
@@ -1138,6 +1200,7 @@ fn score(passages: &[&Passage], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored>
         hits.push(Scored {
             document,
             score: term_score * coverage + phrase_score + adjacency,
+            exact: exact_terms.iter().all(|exact| *exact),
             matched: matched_positions,
             labels,
         });
@@ -1166,21 +1229,16 @@ pub fn search_texts(texts: &[&str], query: &str) -> Result<Vec<TextHit>> {
         .map(|text| Passage::new(PassageKind::Notes, 0, (*text).to_owned()))
         .collect::<Vec<_>>();
     let documents = passages.iter().collect::<Vec<_>>();
-    let mut hits = score(&documents, &parsed, true)
+    let mut scored = score(&documents, &parsed, true);
+    scored.sort_by(|left, right| relevance(left, right).then(left.document.cmp(&right.document)));
+    Ok(scored
         .into_iter()
         .map(|scored| TextHit {
             index: scored.document,
             score: scored.score,
             snippet: snippet(&passages[scored.document], &scored.matched),
         })
-        .collect::<Vec<_>>();
-    hits.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.index.cmp(&right.index))
-    });
-    Ok(hits)
+        .collect())
 }
 
 fn phrase_starts(passage: &Passage, phrase: &[String]) -> Vec<usize> {
@@ -1416,8 +1474,7 @@ pub struct TranscriptQuery {
 }
 
 struct TranscriptWindow {
-    start: Option<u64>,
-    end: Option<u64>,
+    range: OffsetRange,
     speaker: Option<MeetingSource>,
     cursor: Option<Cursor>,
     max_chars: usize,
@@ -1464,14 +1521,12 @@ fn parse_speaker(speaker: &str) -> Result<Option<MeetingSource>> {
 }
 
 fn render_transcript(meeting: &Meeting, window: TranscriptWindow, now_ms: u64) -> String {
-    let start = window.start.unwrap_or(0);
-    let end = window.end.unwrap_or(u64::MAX);
     let mut ordinals: HashMap<u64, usize> = HashMap::new();
     let selected = meeting
         .entries
         .iter()
         .filter(|entry| window.speaker.is_none_or(|speaker| entry.source == speaker))
-        .filter(|entry| entry.end_ms > start && entry.start_ms < end)
+        .filter(|entry| window.range.overlaps(entry))
         .map(|entry| {
             let ordinal = ordinals.entry(entry.start_ms).or_insert(0);
             let cursor = Cursor {
@@ -1809,6 +1864,81 @@ impl TimeRange {
         let start = meeting.start_ms();
         let end = start + meeting.duration_ms(now_ms);
         self.since.is_none_or(|since| end >= since) && self.until.is_none_or(|until| start < until)
+    }
+}
+
+/// A window of offsets into a meeting. Entries overlapping it are kept whole.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OffsetRange {
+    pub from_ms: Option<u64>,
+    pub to_ms: Option<u64>,
+}
+
+impl OffsetRange {
+    /// Offsets as [`parse_offset`] reads them; a blank bound is open.
+    pub fn parse(from: Option<&str>, to: Option<&str>) -> Result<Self> {
+        let offset = |value: Option<&str>| {
+            value
+                .filter(|value| !value.trim().is_empty())
+                .map(parse_offset)
+                .transpose()
+        };
+        let range = Self {
+            from_ms: offset(from)?,
+            to_ms: offset(to)?,
+        };
+        if let (Some(from), Some(to)) = (range.from_ms, range.to_ms)
+            && from >= to
+        {
+            return Err(eyre!(
+                "The range start {} must be earlier than its end {}.",
+                format_duration(from),
+                format_duration(to)
+            ));
+        }
+        Ok(range)
+    }
+
+    pub fn is_bounded(self) -> bool {
+        self.from_ms.is_some() || self.to_ms.is_some()
+    }
+
+    fn overlaps(self, entry: &TranscriptEntry) -> bool {
+        self.from_ms.is_none_or(|from| entry.end_ms > from)
+            && self.to_ms.is_none_or(|to| entry.start_ms < to)
+    }
+
+    /// A range that starts at or after the meeting's end selects nothing and
+    /// is an error rather than an empty answer.
+    fn check(self, meeting: &Meeting, now_ms: u64) -> Result<()> {
+        let Some(from) = self.from_ms.filter(|from| *from > 0) else {
+            return Ok(());
+        };
+        let end = meeting.duration_ms(now_ms).max(
+            meeting
+                .entries
+                .iter()
+                .map(|entry| entry.end_ms)
+                .max()
+                .unwrap_or_default(),
+        );
+        if from >= end {
+            return Err(eyre!(
+                "The range starts at {}, after the meeting's end at {}{}.",
+                format_duration(from),
+                format_duration(end),
+                if meeting.in_progress { " so far" } else { "" }
+            ));
+        }
+        Ok(())
+    }
+
+    fn describe(self) -> String {
+        format!(
+            "{}–{}",
+            format_duration(self.from_ms.unwrap_or_default()),
+            self.to_ms.map_or_else(|| "end".into(), format_duration)
+        )
     }
 }
 

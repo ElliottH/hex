@@ -11,7 +11,10 @@ Agent or terminal                                // transcripts.cli; macOS relea
 └── hex meetings
     ├── list -> Newest first, overlapping time range, live status
     ├── show <id|latest> -> Markdown or versioned JSON with notes and entries
-    └── search <query> -> MCP's stemmed, fuzzy BM25 passages
+    │   └── --from / --to <mm:ss|h:mm:ss|seconds> -> Only entries overlapping
+    │       the range, finished or still recording; inverted or past-the-end
+    │       ranges fail with an error
+    └── search <query> -> MCP's stemmed, fuzzy BM25 passages; exact stems first
 ```
 
 Commands work beside the running app and independently of feature opt-ins.
@@ -35,7 +38,8 @@ and early dispatch in [main.rs](../../src/main.rs).
 
 Checks in [transcript_cli_tests.rs](../../src/transcript_cli_tests.rs) cover
 filters/order, ranked `--search` within retention, retention and malformed settings, JSON snapshots, atomic-replace
-reads, legacy/symlink paths, and parsing. Existing history checks cover bounded
+reads, legacy/symlink paths, parsing, and `show --from/--to` JSON, Markdown,
+and errors (`meeting_show_ranges_filter_json_entries_and_markdown`). Existing history checks cover bounded
 storage, owner-only files, and expiry. Meeting query fixtures cover locks, partial
 NDJSON, interrupted drafts, and search parity with MCP. These fixture checks do
 not establish a signed installed-app invocation; native install evidence must be

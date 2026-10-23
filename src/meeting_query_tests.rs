@@ -147,6 +147,97 @@ fn search_ranks_names_and_tolerates_recognition_misspellings() {
     assert!(exact.contains("**Dacks** thinks"));
 }
 
+/// A storage discussion at 02:00–02:40 amid chatter full of `made`, `blog`,
+/// `Bob`, and `believe`, which are one edit or a Soundex code away from
+/// `media` and `blob`.
+fn ranked(query: &str) -> String {
+    Library::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings-ranking"))
+        .search(
+            &SearchQuery {
+                query: query.into(),
+                since: None,
+                until: None,
+                meeting_id: None,
+                limit: 10,
+                fuzzy: true,
+                include_in_progress: true,
+            },
+            NOW,
+        )
+        .unwrap()
+}
+
+fn offset(hit: &str) -> &str {
+    hit.split(" · ")
+        .nth(1)
+        .and_then(|when| when.split(' ').next())
+        .unwrap()
+}
+
+#[test]
+fn exact_stems_outrank_loose_matches_to_common_words() {
+    let output = ranked("images database blob storage media");
+    let hits = hit_lines(&output);
+    let mut top = hits
+        .iter()
+        .take(5)
+        .map(|hit| offset(hit))
+        .collect::<Vec<_>>();
+    top.sort_unstable();
+    assert_eq!(
+        top,
+        ["02:00", "02:10", "02:20", "02:30", "02:40"],
+        "{output}"
+    );
+    // `made` is said throughout, so it never stands in for `media`.
+    assert!(!output.contains("mad~media"), "{output}");
+    // Rare `blob` may still reach `blog` and `Bob`, but only below every real hit.
+    assert!(hits.iter().skip(5).all(|hit| hit.contains('~')), "{output}");
+}
+
+#[test]
+fn passages_matching_every_term_exactly_rank_first() {
+    let output = ranked("blob storage");
+    let hits = hit_lines(&output);
+    assert!(hits.len() > 3, "{output}");
+    let exact = hits
+        .iter()
+        .take_while(|hit| hit.ends_with("matched blob, storag"))
+        .count();
+    assert_eq!(exact, 2, "{output}");
+    assert!(
+        hits[exact..]
+            .iter()
+            .all(|hit| !hit.ends_with("matched blob, storag")),
+        "{output}"
+    );
+}
+
+#[test]
+fn a_misspelled_rare_word_still_finds_its_passage() {
+    let output = ranked("thumbnial");
+    let hits = hit_lines(&output);
+    assert_eq!(hits.len(), 1, "{output}");
+    assert_eq!(offset(hits[0]), "02:30", "{output}");
+    assert!(hits[0].ends_with("matched thumbnail~thumbnial"), "{output}");
+}
+
+#[test]
+fn spelling_fallbacks_need_rare_terms_and_uncommon_candidates() {
+    let common = 5.0;
+    assert!(admits(MatchKind::Edit, 2, 4, common));
+    // The term is spelled this way often enough; neighbours are other words.
+    assert!(!admits(MatchKind::Edit, RARE_EXACT_PASSAGES, 1, common));
+    assert!(!admits(MatchKind::Sound, RARE_EXACT_PASSAGES, 1, common));
+    // `made` for `media`.
+    assert!(!admits(MatchKind::Sound, 1, 9, common));
+    assert!(!admits(MatchKind::Edit, 1, 9, common));
+    // A plain typo of a common word still reaches it by one edit.
+    assert!(admits(MatchKind::Edit, 0, 9, common));
+    assert!(!admits(MatchKind::Sound, 0, 9, common));
+    assert!(admits(MatchKind::Prefix, 50, 50, common));
+}
+
 #[test]
 fn search_stems_folds_accents_and_requires_quoted_phrases() {
     let schedule = search("schedule", true);
@@ -233,6 +324,56 @@ without anyone watching. Recurring sessions would wake up in the background and 
 }
 
 #[test]
+fn ranges_keep_overlapping_entries_and_reject_inverted_or_late_ones() {
+    let query = |start: &str, end: &str| {
+        library().transcript(
+            &TranscriptQuery {
+                meeting_id: WEEKLY.into(),
+                start: Some(start.into()),
+                end: Some(end.into()),
+                speaker: None,
+                max_chars: 20_000,
+                cursor: None,
+            },
+            NOW,
+        )
+    };
+    // 00:16.5–00:22 overlaps 00:20 and is kept whole.
+    let window = query("0:00:20", "30").unwrap();
+    assert!(window.contains("Showing 00:16–00:31"), "{window}");
+    let inverted = query("0:30", "0:20").unwrap_err().to_string();
+    assert_eq!(
+        inverted,
+        "The range start 00:30 must be earlier than its end 00:20."
+    );
+    let late = query("0:41", "").unwrap_err().to_string();
+    assert_eq!(
+        late,
+        "The range starts at 00:41, after the meeting's end at 00:40."
+    );
+    assert!(query("soon", "").is_err());
+
+    // A rolling draft's Markdown, limited to the range.
+    let markdown = |from: Option<&str>, to: Option<&str>| {
+        library().markdown(STANDUP, OffsetRange::parse(from, to).unwrap(), NOW)
+    };
+    let draft = markdown(Some("0:04"), Some("9")).unwrap();
+    assert!(draft.contains("- Range: 00:04–00:09\n"), "{draft}");
+    assert!(
+        draft.contains("Rolling text mentions cron again.") && draft.contains("I agree with that."),
+        "{draft}"
+    );
+    assert!(!draft.contains("background worker"), "{draft}");
+    assert!(
+        markdown(None, Some("0:03"))
+            .unwrap()
+            .contains("- Range: 00:00–00:03\n")
+    );
+    let late = markdown(Some("0:10"), None).unwrap_err().to_string();
+    assert!(late.contains("after the meeting's end at 00:10"), "{late}");
+}
+
+#[test]
 fn transcript_of_an_unfinished_meeting_is_labeled_as_a_draft() {
     let output = transcript(STANDUP, |_| {});
     assert!(output.contains("No final transcript was published; this is the unfinished draft."));
@@ -293,6 +434,29 @@ fn a_held_lock_marks_the_meeting_in_progress() {
         notes.contains("No notes yet: the meeting is still recording."),
         "{notes}"
     );
+    // A recording in progress runs until now, past its rolling transcript.
+    let ahead = library
+        .markdown(
+            STANDUP,
+            OffsetRange::parse(Some("0:11"), Some("0:20")).unwrap(),
+            NOW,
+        )
+        .unwrap();
+    assert!(
+        ahead.contains("## Transcript\n\nNo transcript entries in this range."),
+        "{ahead}"
+    );
+    let rolling = library
+        .markdown(
+            STANDUP,
+            OffsetRange::parse(Some("0:05"), None).unwrap(),
+            NOW,
+        )
+        .unwrap();
+    assert!(
+        rolling.contains("Rolling text mentions cron again."),
+        "{rolling}"
+    );
 
     fs2::FileExt::unlock(&lock).unwrap();
     assert!(list(&library, true).contains("interrupted"));
@@ -332,14 +496,16 @@ fn queries_never_write_to_the_meetings_folder() {
     for id in [WEEKLY, ROADMAP, STANDUP] {
         transcript(id, |_| {});
         library.notes(id).unwrap();
-        library.markdown(id, NOW).unwrap();
+        library.markdown(id, OffsetRange::default(), NOW).unwrap();
     }
     assert_eq!(before, snapshot(&fixtures()));
 }
 
 #[test]
 fn markdown_has_metadata_notes_and_turns() {
-    let markdown = library().markdown(WEEKLY, NOW).unwrap();
+    let markdown = library()
+        .markdown(WEEKLY, OffsetRange::default(), NOW)
+        .unwrap();
     assert!(markdown.starts_with("# Weekly sync\n\n- Meeting: 1790000000000-1001\n"));
     assert!(markdown.contains("- App: Zoom"));
     assert!(markdown.contains("## Summary"));

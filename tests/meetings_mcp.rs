@@ -113,6 +113,38 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
     assert!(text.contains("Showing 00:16–00:31"), "{text}");
 
     send(
+        json!({"jsonrpc": "2.0", "id": 41, "method": "tools/call", "params": {
+            "name": "get_transcript",
+            "arguments": {"meeting_id": "1790000000000-1001", "from": "0:20", "to": 30}
+        }}),
+    );
+    let result = receive(41);
+    let text = result["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("Showing 00:16–00:31"), "{text}");
+    assert!(!text.contains("write the spec"), "{text}");
+
+    for (id, arguments) in [
+        (
+            42,
+            json!({"meeting_id": "1790000000000-1001", "from": "0:30", "to": "0:20"}),
+        ),
+        (
+            43,
+            json!({"meeting_id": "1790000000000-1001", "start": "5:00"}),
+        ),
+    ] {
+        send(
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                "name": "get_transcript", "arguments": arguments
+            }}),
+        );
+        let result = receive(id);
+        assert_eq!(result["result"]["isError"], true, "{result}");
+        let text = result["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("The range start"), "{text}");
+    }
+
+    send(
         json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
             "name": "get_meeting_notes",
             "arguments": {"meeting_id": "missing"}

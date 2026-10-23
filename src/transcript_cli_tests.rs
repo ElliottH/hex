@@ -284,7 +284,7 @@ fn meeting_json_contract_snapshot() {
     let library =
         Library::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings"));
     let meeting = library.meeting("1790000500000-1002").unwrap();
-    let json = meeting_json(&meeting, NOW);
+    let json = meeting_json(&meeting, OffsetRange::default(), NOW).unwrap();
     let expected: serde_json::Value =
         serde_json::from_str(include_str!("../tests/fixtures/meeting-cli.json")).unwrap();
     assert_eq!(json, expected);
@@ -298,6 +298,63 @@ fn meeting_json_contract_snapshot() {
             "version": 1, "meetings": [expected["meeting"]], "skipped": [], "truncated": false,
         })
     );
+}
+
+#[test]
+fn meeting_show_ranges_filter_json_entries_and_markdown() {
+    let library =
+        Library::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings"));
+    let meeting = library.meeting("1790000500000-1002").unwrap();
+    let range = OffsetRange::parse(Some("0:06"), Some("14")).unwrap();
+    let json = meeting_json(&meeting, range, NOW).unwrap();
+    assert_eq!(json["version"], 1);
+    assert_eq!(
+        json["range"],
+        serde_json::json!({"from_ms": 6000, "to_ms": 14000})
+    );
+    let starts = json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["start_ms"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(starts, [5500, 13000]);
+    let open = meeting_json(
+        &meeting,
+        OffsetRange::parse(Some("1:00"), None).unwrap(),
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        open["range"],
+        serde_json::json!({"from_ms": 60000, "to_ms": null})
+    );
+    assert_eq!(open["entries"].as_array().unwrap().len(), 1);
+    let late = OffsetRange::parse(Some("1:05"), None).unwrap();
+    assert!(meeting_json(&meeting, late, NOW).is_err());
+    assert!(library.markdown(&meeting.id, late, NOW).is_err());
+
+    let markdown = library.markdown(&meeting.id, range, NOW).unwrap();
+    assert!(markdown.contains("- Range: 00:06–00:14\n"), "{markdown}");
+    assert!(markdown.contains("**You** · 00:05\nPerformance profiling"));
+    assert!(markdown.contains("**Them** · 00:13\nAgreed."));
+    assert!(!markdown.contains("Let's review") && !markdown.contains("release notes"));
+
+    assert!(OffsetRange::parse(Some("0:14"), Some("0:06")).is_err());
+    assert!(OffsetRange::parse(Some("0:06"), Some("0:06")).is_err());
+    let cli = crate::Cli::try_parse_from([
+        "hex", "meetings", "show", "latest", "--from", "1:53:03", "--to", "120:43", "--json",
+    ])
+    .unwrap();
+    let Some(crate::Command::Meetings {
+        command: MeetingsCommand::Show { from, to, .. },
+    }) = cli.command
+    else {
+        panic!("expected meetings show");
+    };
+    let range = OffsetRange::parse(from.as_deref(), to.as_deref()).unwrap();
+    assert_eq!(range.from_ms, Some(6_783_000));
+    assert_eq!(range.to_ms, Some(7_243_000));
 }
 
 #[test]

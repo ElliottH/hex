@@ -687,8 +687,8 @@ Before: map-reduce over 8 chunks, 9 calls, 51-minute call  96 s
 
 ### Agent Access (MCP)
 
-The release CLI also supports `hex meetings list`, `show <id|latest>`, and
-`search <query>` through this query layer. See the [transcript CLI map](transcript-cli.md)
+The release CLI also supports `hex meetings list`, `show <id|latest>` (with
+`--from`/`--to` offsets), and `search <query>` through this query layer. See the [transcript CLI map](transcript-cli.md)
 and [versioned JSON contract](../transcript-cli.md).
 
 ```ts
@@ -708,7 +708,9 @@ hex mcp [--meetings-dir <path>]                     // meetings.mcp; release bui
     │   └── per-meeting counts + ranked passages: id, title, speaker,
     │       mm:ss @ ISO time, snippet with **matches**, before/after lines
     ├── get_transcript(meeting_id, start?, end?, speaker?, max_chars?, cursor?)
-    │   └── merged You/Them turns "[mm:ss · HH:MM:SS] Them: …" + next_cursor
+    │   ├── merged You/Them turns "[mm:ss · HH:MM:SS] Them: …" + next_cursor
+    │   └── start/end (aliases from/to): entries overlapping the range; an
+    │       inverted range or one starting after the meeting is an error
     └── get_meeting_notes(meeting_id)
         └── stored title + two-sentence summary + "read the transcript for
             details, decisions, and action items", or an explicit
@@ -738,10 +740,17 @@ Search: in-memory, rebuilt per meeting when its files' sizes or times change.
 Passages are same-speaker runs of up to 60 words (3 s turn gap) plus one per
 stored notes block. Text is NFKD-folded (case and diacritics), tokenized, and
 lightly stemmed (`scheduled`/`scheduling` -> `schedul`). BM25 (k1 1.2, b 0.75)
-over expanded terms: exact 1.0, prefix 0.8, edit distance 1 (2 from 8 letters)
-0.7, Soundex 0.45 for 3-5 letter words (`Dacks` -> `Dax`); partial-term
-coverage and adjacent-term bonuses. `"Quoted words"` are required exact
-(stemmed) phrases; `fuzzy: false` keeps only exact stems.
+over expanded terms: exact 1.0, prefix 0.5, edit distance 1 (2 from 8 letters)
+0.35, Soundex 0.2 for 3-5 letter words (`Dacks` -> `Dax`); partial-term
+coverage weighted the same way, and adjacent-term bonuses. Passages matching
+every term exactly rank above all others. Edit and Soundex fallbacks apply only
+to a term with fewer than three exact passages, and skip words in more than
+0.5% of the passages searched (at least five) unless the term has no exact hit
+and the word is one edit away. This keeps `made`, `blog`, `Bob`, and `believe`
+out of a `media`/`blob` search once those words appear exactly, while a typo of
+a rare word still finds it. `"Quoted words"` are required exact (stemmed)
+phrases; `fuzzy: false` keeps only exact stems. `hex history --search` shares
+this ranker.
 
 Semantic search is not shipped. On-device candidates are Apple NaturalLanguage
 `NLContextualEmbedding` (asset download, macOS 14+) or the older static
@@ -753,13 +762,27 @@ queries below; embeddings wait until a query fails for lack of paraphrase.
 Sources: [meeting_query.rs](../../src/meeting_query.rs) (`meeting::query`,
 queries and rendering) and [meeting_mcp.rs](../../src/meeting_mcp.rs) (`rmcp`
 3.5 adapter); `run_mcp` in [main.rs](../../src/main.rs). Checks (synthetic
-fixtures in `tests/fixtures/meetings`): `meeting::query::tests::*` (listing and
-skipped folders, filters, misspelling tolerance and ranking, stemming, accents,
-required phrases, context, drafts, cursor paging, notes, held lock,
-`queries_never_write_to_the_meetings_folder`, time parsing) and
+fixtures in `tests/fixtures/meetings` and `tests/fixtures/meetings-ranking`):
+`meeting::query::tests::*` (listing and skipped folders, filters, misspelling
+tolerance and ranking, stemming, accents, required phrases, context, drafts,
+cursor paging, notes, held lock, `queries_never_write_to_the_meetings_folder`,
+time parsing, offset ranges on final, rolling, and in-progress transcripts,
+`exact_stems_outrank_loose_matches_to_common_words`,
+`passages_matching_every_term_exactly_rank_first`,
+`a_misspelled_rare_word_still_finds_its_passage`, and
+`spelling_fallbacks_need_rare_terms_and_uncommon_candidates`) and
 `tests/meetings_mcp.rs` (initialize with protocol 2025-06-18, tools/list with
-schemas and read-only annotations, tools/call, resources/read, stdout carries
-only JSON-RPC, no Application Support state created).
+schemas and read-only annotations, tools/call including `from`/`to` ranges and
+their errors, resources/read, stdout carries only JSON-RPC, no Application
+Support state created).
+
+Observed (2026-10-23, Mac Studio, debug build, live meetings folder, read-only):
+`hex meetings search "images database blob storage media"` dropped from 315 to
+140 matching passages, with no fuzzy-only hit in the top 25 (before: four,
+through `blog`, `blow`, `believe`, `made`, and `motto`); the top hit remains the
+in-progress meeting's 115:02 passage, and 6 of the top 10 fall in its
+113:03–120:43 storage discussion. `show <id> --from 113:03 --to 120:43` returned
+that section's 168 rolling entries as Markdown and JSON.
 
 Observed (2026-10-15, Mac Studio, release build, read-only copy of the Pro's 8
 meetings without WAVs): first launch of a freshly signed binary 440 ms to

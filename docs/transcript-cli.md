@@ -11,6 +11,7 @@ hex history --since 7d --search 'problems board' --json
 hex meetings list --since 7d --json
 hex meetings show latest --md
 hex meetings show 1790000500000-1002 --json
+hex meetings show 1790000500000-1002 --from 113:03 --to 120:43 --md
 hex meetings search 'release schedule'
 ```
 
@@ -56,10 +57,32 @@ The default and `--md` return full Markdown with metadata, stored notes, and
 speaker turns. `--json` returns transcript entries with relative millisecond
 offsets. No notes or transcripts are generated.
 
+`--from` and `--to` limit `show` to part of the meeting, with either output.
+They take offsets into the meeting as `mm:ss` (minutes may exceed 59, as in
+`113:03`), `h:mm:ss`, or seconds (`90`, `90s`, `1.5m`); either may be omitted.
+Every entry overlapping the range is included whole, so the first and last
+entries may start before `--from` or end after `--to`. Markdown adds a
+`- Range:` line; JSON adds `range`. A `--from` at or after `--to`, or at or
+after the meeting's end, is an error. A recording in progress runs until now,
+so a range past its rolling transcript so far is empty rather than an error.
+The MCP `get_transcript` tool takes the same range as `start`/`end` or
+`from`/`to`.
+
 `meetings search QUERY` uses the MCP query's stemmed, fuzzy BM25 ranking over
 transcripts and stored notes. Quoted phrases constrain the search. `--since`,
 `--until`, and `--limit` (default 10, maximum 50) are supported; output is text.
-Use `hex mcp` for bounded transcript paging around a search hit.
+Search for a timestamp, then read around it with `show --from/--to`.
+
+Exact stems clearly outrank fuzzy matches. Passages matching every unquoted
+term exactly come first, whatever their scores. Within each tier a prefix
+counts half as much as an exact stem, one or two edits 0.35, and a Soundex
+sound-alike 0.2, also for the share of terms a passage covers. Spelling
+fallbacks (edits and sound-alikes) are tried only for a term found exactly in
+fewer than three passages, and never reach a word in more than 0.5% of the
+passages searched (and at least five), except that a term with no exact match
+still reaches a common word one edit away. So `blob` does not pull in `blog`,
+`Bob`, or `believe` once the transcripts say `blob`, and `media` does not pull
+in a word as common as `made`. `hex history --search` uses the same ranking.
 
 Debug builds retain `meeting record`, `watch`, `probe`, `transcribe`, and other
 developer commands. Their `meeting list/show` commands use the read-only query
@@ -70,8 +93,9 @@ path too. The plural `meetings` commands are available in release builds.
 Every JSON response has integer `version: 1`. Consumers should ignore unknown
 fields; incompatible field changes require a new version. All `*_ms` fields are
 integer milliseconds. Absolute timestamps use Unix time. Nullable fields are
-present as `null`, except `raw_text`, which is omitted without `--raw`, and
-`score` and `snippet`, which are omitted without `--search`.
+present as `null`, except `raw_text`, which is omitted without `--raw`,
+`score` and `snippet`, which are omitted without `--search`, and `range`, which
+is omitted without `--from` or `--to`.
 JSON goes to stdout; errors go to stderr with a nonzero exit status. Empty
 results are successful responses. `truncated` reports the query's output limit,
 not data already expired or evicted from the store.
@@ -115,7 +139,8 @@ type MeetingShow = {
   version: 1
   meeting: Meeting
   notes: { title: string; summary: string; generated_at_ms: number } | null
-  entries: {
+  range?: { from_ms: number; to_ms: number | null } // only with --from or --to
+  entries: { // with a range, only the entries overlapping it
     source: "microphone" | "system" // You / Them; remote speakers aren't separated
     start_ms: number // relative to the meeting start
     end_ms: number

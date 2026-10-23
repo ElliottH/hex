@@ -19,7 +19,7 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::events::now_ms;
-use crate::meeting::query::{Library, ListQuery, SearchQuery, TranscriptQuery};
+use crate::meeting::query::{Library, ListQuery, OffsetRange, SearchQuery, TranscriptQuery};
 
 const RESOURCE_SCHEME: &str = "hex-meeting://";
 
@@ -97,11 +97,12 @@ impl Offset {
 pub struct GetTranscriptArgs {
     /// The meeting id from list_meetings or search_transcripts.
     pub meeting_id: String,
-    /// Start offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds.
-    #[serde(default)]
+    /// Start offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds (alias `from`).
+    /// Entries overlapping start–end are returned whole.
+    #[serde(default, alias = "from")]
     pub start: Option<Offset>,
-    /// End offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds.
-    #[serde(default)]
+    /// End offset into the meeting: `mm:ss`, `h:mm:ss`, or seconds (alias `to`).
+    #[serde(default, alias = "to")]
     pub end: Option<Offset>,
     /// `you`, `them`, or `all` (default).
     #[serde(default)]
@@ -199,8 +200,10 @@ and fuzzy for speech-recognition errors (Dax/DAX/Dacks).",
 
     #[tool(
         description = "Read a meeting transcript as merged You/Them turns with mm:ss offsets and \
-local clock times. Optionally limit to a time range or one speaker. Long results stop at \
-max_chars and return next_cursor to continue.",
+local clock times. Optionally limit to a time range (start/end, or from/to, as mm:ss, h:mm:ss, \
+or seconds; entries overlapping it are included, and an inverted range or one starting after the \
+meeting is an error) or one speaker. Long results stop at max_chars and return next_cursor to \
+continue.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     fn get_transcript(
@@ -306,7 +309,7 @@ impl ServerHandler for MeetingServer {
         };
         let markdown = self
             .library
-            .markdown(id.trim_end_matches('/'), now_ms())
+            .markdown(id.trim_end_matches('/'), OffsetRange::default(), now_ms())
             .map_err(|error| ErrorData::resource_not_found(error.to_string(), None))?;
         Ok(ReadResourceResult::new(vec![
             ResourceContents::text(markdown, request.uri.clone()).with_mime_type("text/markdown"),

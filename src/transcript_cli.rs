@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::history::{HistoryEntry, HistoryKind, HistoryRetention};
 use crate::meeting::query::{
-    Library, ListQuery, Meeting, SearchQuery, TextHit, TimeRange, TranscriptSource, search_texts,
+    Library, ListQuery, Meeting, OffsetRange, SearchQuery, TextHit, TimeRange, TranscriptSource,
+    search_texts,
 };
 
 #[derive(Args, Debug)]
@@ -76,6 +77,12 @@ pub enum MeetingsCommand {
         md: bool,
         #[arg(long)]
         json: bool,
+        /// Only entries overlapping this offset or later: mm:ss, h:mm:ss, or seconds.
+        #[arg(long)]
+        from: Option<String>,
+        /// Only entries starting before this offset: mm:ss, h:mm:ss, or seconds.
+        #[arg(long)]
+        to: Option<String>,
     },
     /// Search transcripts and notes with the same stemmed, fuzzy BM25 query as MCP.
     Search {
@@ -292,14 +299,20 @@ fn meeting_row(meeting: &Meeting, now: u64) -> MeetingRow<'_> {
     }
 }
 
-fn meeting_json(meeting: &Meeting, now: u64) -> serde_json::Value {
+fn meeting_json(meeting: &Meeting, range: OffsetRange, now: u64) -> Result<serde_json::Value> {
     let notes = meeting.manifest.notes.as_ref().map(|notes| serde_json::json!({
         "title": notes.title, "summary": notes.summary, "generated_at_ms": notes.generated_at_ms,
     }));
-    serde_json::json!({
+    let mut json = serde_json::json!({
         "version": 1, "meeting": meeting_row(meeting, now), "notes": notes,
-        "entries": meeting.entries,
-    })
+        "entries": meeting.entries_in(range, now)?,
+    });
+    if range.is_bounded() {
+        json["range"] = serde_json::json!({
+            "from_ms": range.from_ms.unwrap_or_default(), "to_ms": range.to_ms,
+        });
+    }
+    Ok(json)
 }
 
 fn meeting_list_json(
@@ -345,7 +358,10 @@ pub fn meetings(command: &MeetingsCommand) -> Result<()> {
                 Ok(())
             }
         }
-        MeetingsCommand::Show { id, json, .. } => {
+        MeetingsCommand::Show {
+            id, json, from, to, ..
+        } => {
+            let range = OffsetRange::parse(from.as_deref(), to.as_deref())?;
             let meeting = if id == "latest" {
                 library
                     .scan()?
@@ -357,9 +373,9 @@ pub fn meetings(command: &MeetingsCommand) -> Result<()> {
                 library.meeting(id)?
             };
             if *json {
-                write_json(&mut out, &meeting_json(&meeting, now))
+                write_json(&mut out, &meeting_json(&meeting, range, now)?)
             } else {
-                write!(out, "{}", library.markdown(&meeting.id, now)?)?;
+                write!(out, "{}", library.markdown(&meeting.id, range, now)?)?;
                 Ok(())
             }
         }
