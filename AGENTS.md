@@ -795,7 +795,7 @@ calls the same workflow on every push to `main` with `test-build`, plus an
 ad-hoc signed `Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle
 ID `com.kitlangton.hex2.test`, no Sparkle), as unsigned 14-day artifacts for
 teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` also compiles Windows
-builds that never self-update. A job that compiles nothing then signs all three
+builds that never check for updates. A job that compiles nothing then signs all three
 feeds with `scripts/release-feed.sh` and validates signatures, sizes, SHA-256,
 version order against the live feeds, and the absence of Visual C++ runtime
 imports. The `release` environment, limited to `main` and `app-v*` tags, holds
@@ -826,8 +826,14 @@ keeps settings. It refuses to roll back a newer self-updated version. Keep its
 `AppId` forever: the updater rewrites that Apps & Features entry's version.
 Release desktop and the Windows installer workflow install, reinstall, refuse a
 downgrade with, and uninstall it silently on x64 and ARM64 runners
-(`scripts/test-windows-installer.ps1`). The installer and `hex.exe` are not
-Authenticode-signed, so SmartScreen warns on first run.
+(`scripts/test-windows-installer.ps1`). With `sign-windows` (Release desktop),
+Build desktop's `windows-package` job, the only one in the `release`
+environment, Authenticode-signs both `hex.exe` through Azure Artifact Signing
+(GitHub OIDC, SHA-256, RFC 3161 timestamp) before building the installers,
+signs the installers, and re-addresses the signed executables in their feed
+payloads (`scripts/windows-authenticode.ps1`). Compile jobs and test builds
+never hold signing credentials, and signing is skipped with a warning until
+the Azure values exist in `release`. See `docs/windows-signing.md`.
 
 Both scripts still work locally: `prepare` builds and signs with the Ed25519
 private PEM in `HEX_RELEASE_SIGNING_KEY` (or `HEX_LINUX_SIGNING_KEY`), and

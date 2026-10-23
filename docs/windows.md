@@ -34,9 +34,11 @@ Download and run the installer for your PC:
 [hex.kitlangton.com](https://hex.kitlangton.com/) picks the right one. The
 installer needs no administrator rights: it installs for the current user,
 adds Hex to the Start menu and to **Settings › Apps** for uninstalling, and
-opens Hex, whose first run downloads a speech model. Neither the installer nor
-`hex.exe` is code-signed yet, so SmartScreen may say it protected your PC;
-choose **More info**, then **Run anyway**.
+opens Hex, whose first run downloads a speech model. Releases built once
+Anomaly's Azure Artifact Signing is configured are Authenticode-signed
+([windows-signing.md](windows-signing.md)). Until then, and while a new
+publisher builds SmartScreen reputation, SmartScreen may say it protected your
+PC; choose **More info**, then **Run anyway**.
 
 **x64** decodes on the GPU through Vulkan and needs a current NVIDIA, AMD, or
 Intel graphics driver (it supplies `vulkan-1.dll`); the installer stops with an
@@ -270,7 +272,7 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Recognition hints for Whisper-family models | Implemented |
 | Release microphone while idle | Implemented; mutually exclusive with audio pre-roll, as documented in Settings |
 | While-dictating audio control (mute other apps or pause media) | Implemented via WASAPI session volumes and GSMTC |
-| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `downloads.hex.kitlangton.dev` origin as Linux, one feed per architecture, activating into a user-local versions directory with a restart button. Source builds keep the GitHub release link |
+| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `downloads.hex.kitlangton.dev` origin as Linux, one feed per architecture, activating into a user-local versions directory. Checks 10 s after launch and every 6 h (or Check now); a staged update shows Restart to update in the tray menu, the window's sidebar, and Settings, and the tray tooltip says an update is available. Source builds keep the GitHub release link (Download update); CI test builds never check |
 | Web-domain mode rules and browser context via UI Automation | Implemented; the page URL comes from the browser's UIA document element, bounded so a hung provider degrades to application-only context |
 | Opt-in voice Commands | Missing; blocked on a Windows streaming command model |
 | Managed installer with Start Menu integration and clean uninstall | Implemented as `scripts/install-windows.ps1`; it creates the self-updating versions layout, and updates retarget the managed shortcut and Launch-at-login entry |

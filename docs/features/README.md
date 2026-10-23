@@ -757,8 +757,18 @@ Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
 ├── Ctrl+Space -> Hold or Toggle -> Capture -> Stream (GPU) -> Paste
 ├── Escape -> Cancel; a held modifier alone never ends or cancels a capture
 ├── Paste -> Waits for Shift, Alt, and Win; a held Ctrl is kept and harmless
+├── Update staged (managed install) -> Tray, sidebar, Settings: Restart to update
+├── Newer release (unmanaged install) -> Tray, sidebar, Settings: Download update
 └── Modes, Voice Action, History, Activity, transformations -> as on macOS
 ```
+
+Windows update checks run 10 s after launch, every 6 h, and on Check now
+([windows_updater.rs](../../src/windows_updater.rs)). CI test builds never
+check. The tray item and tooltip
+([windows_rune.rs](../../src/windows_rune.rs)) follow the published update
+state. They pass the cross-compiled Clippy check, but no one has clicked them
+on a real Windows PC. Releases are Authenticode-signed once Azure Artifact
+Signing is configured ([windows-signing.md](../windows-signing.md)).
 
 No Windows Commands, Meetings, or local transcription API. See the
 [Windows guide](../windows.md) for the parity table, streaming notes, and
