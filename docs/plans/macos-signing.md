@@ -63,32 +63,43 @@ test-builds.yml            // per-push ad-hoc Hex Test DMG (unsigned)
 
 ## Plan
 
-1. **CI signing path (implemented, opt-in).** `.github/workflows/macos-signed.yml`
-   (manual dispatch) builds the release-identity `Hex.app`, signs with team
-   `5NZ4Q7NXJ4`, notarizes and staples the app and DMG through
-   `scripts/notarize-app.sh`, runs `scripts/validate-app.sh`, and uploads the DMG
-   as a 14-day artifact. Without the secrets it skips, with a note in the run
-   summary. It publishes nothing and signs no appcast. `hex_notarize` in
-   `scripts/macos-signing.sh` uses `HEX_NOTARY_PROFILE` when set (local releases
-   unchanged), else the API key (`HEX_NOTARY_KEY`, `HEX_NOTARY_KEY_ID`,
-   `HEX_NOTARY_ISSUER`).
-2. **Sign the test builds.** Once the secrets exist, `test-builds.yml` can sign
+1. **Release build in CI (implemented).** `.github/workflows/build-macos.yml`
+   (`workflow_call`, environment `release`) runs `scripts/release-app.sh prepare`
+   on `macos-26` with team `5NZ4Q7NXJ4`: build, Developer ID signing,
+   notarization and stapling of the app and DMG (`scripts/notarize-app.sh`), the
+   Sparkle ZIP (root `HEX.app`), and the appcast at `<download-base>/appcast.xml`
+   (the live appcast when a staging prefix has none) extended with an item
+   EdDSA-signed with `SPARKLE_ED_PRIVATE_KEY` (`HEX_SPARKLE_KEY_FILE`). It then
+   checks staples, Gatekeeper, `validate-app.sh` on both bundles, identical
+   payloads, the item's signature against the app's `SUPublicEDKey`, and a
+   15-second launch (`scripts/smoke-macos-app.sh`). It uploads one artifact,
+   `hex-macos-arm64` (DMG, ZIP, `appcast.xml`); the Release workflow publishes
+   archives first and the appcast last. Missing secrets fail the job.
+   `release-app.sh` keeps working locally with `HEX_NOTARY_PROFILE` and Kit's
+   keychain key.
+2. **Signed candidates.** `.github/workflows/macos-signed.yml` (manual) builds,
+   signs, notarizes, validates, and launches a DMG without touching any appcast;
+   it skips when the Apple secrets are absent.
+3. **Sign the test builds.** Once the secrets exist, `test-builds.yml` can sign
    `Hex Test.app` with the same Developer ID (needs `build-app.sh` to accept a
    team with `HEX_TEST_BUILD=1`). The designated requirement then stays stable
    across builds, so testers grant permissions once instead of every build, and
-   the `xattr` quarantine step goes away. Notarization is optional there.
-3. **Move the Sparkle key, not change it.** Keep `SUPublicEDKey`. Kit exports the
-   private key (`generate_keys -x`) into a `SPARKLE_ED_PRIVATE_KEY` secret in the
-   `release` environment; `release-app.sh` then reads the key from a file in CI
-   instead of the keychain. Until then, signed CI DMGs are candidates and Kit
-   signs the appcast locally.
-4. **First Anomaly-signed release.** Run `release-app.sh` (or a CI port of its
-   prepare step) with `VOICE_CONTROL_TEAM_ID=5NZ4Q7NXJ4`, ship release notes that
-   explain the permission re-grant, validate updating from the current
-   Kit-signed release, then publish as usual. Update AGENTS.md's signing
-   section, `test-app-identity.sh` fixtures if needed, and the Homebrew cask.
-5. **Later, separately: identity and hosts.** Keep `com.kitlangton.hex2` and
-   `downloads.hex.kitlangton.dev` for now (see below).
+   the `xattr` quarantine step goes away.
+4. **Keep the Sparkle key.** Kit exports the existing private key
+   (`generate_keys -x`) into `SPARKLE_ED_PRIVATE_KEY`. The Apple team changes in
+   the same release, so the EdDSA key cannot rotate there.
+5. **First Anomaly-signed release.** Ship release notes that explain the
+   permission re-grant, validate updating from the current Kit-signed release on
+   a real Mac, then publish. Update AGENTS.md's signing section,
+   `test-app-identity.sh` fixtures if needed, and the Homebrew cask.
+
+## Feed host
+
+Downloads move to `https://downloads.hex.anoma.ly` (Anomaly's `hex-releases`
+R2 bucket). The bucket is seeded with byte copies of Kit's, and
+`downloads.hex.kitlangton.{dev,com}/*` redirects there; Sparkle follows the
+redirect, so installed apps with the old `SUFeedURL` read the new appcast and
+updates carry the new `SUFeedURL`. The bundle ID stays `com.kitlangton.hex2`.
 
 ## Secrets for `anomalyco/hex`
 
@@ -102,7 +113,7 @@ APPLE_CERTIFICATE_PASSWORD  // the .p12 password
 APPLE_API_KEY_PATH          // App Store Connect API key .p8 contents (OpenCode's naming)
 APPLE_API_KEY               // that key's ID
 APPLE_API_ISSUER            // the App Store Connect issuer ID
-SPARKLE_ED_PRIVATE_KEY      // step 3 only: Hex's existing Sparkle EdDSA private key (from Kit)
+SPARKLE_ED_PRIVATE_KEY      // Hex's existing Sparkle EdDSA private key (from Kit, generate_keys -x)
 ```
 
 `APPLE_ID`, `APPLE_PASSWORD`, and `KEYCHAIN_PASSWORD` are not needed.
@@ -132,13 +143,10 @@ SPARKLE_ED_PRIVATE_KEY      // step 3 only: Hex's existing Sparkle EdDSA private
   the in-app Update reinstalls it.
 - **Keychain items and app groups.** Hex stores none, so nothing else breaks.
 
-## Bundle ID and feed host: later
+## Bundle ID: later
 
 Changing the bundle ID (for example to an `ai.opencode` or `ly.anoma` prefix)
 makes macOS treat Hex as a new app: settings domain, login item, and
 permissions all reset, and Sparkle discovery from existing installs needs the
-filename workaround already used for 2.0.x. The feed host can move with a
-redirect, but `SUFeedURL` is baked into installed apps and
-`validate-app.sh`. Neither is needed for signing, and doing them together with
-the team change multiplies the risk; do the team change first and revisit the
-identity and domains as a separate migration.
+filename workaround already used for 2.0.x. It is not needed for signing;
+doing it together with the team change multiplies the risk.

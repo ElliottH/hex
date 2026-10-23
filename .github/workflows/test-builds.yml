@@ -79,6 +79,7 @@ jobs:
           scripts/setup.sh
           bundle=$(scripts/build-app.sh)
           "$bundle/Contents/MacOS/hex" --version
+          scripts/smoke-macos-app.sh "$bundle"
           mkdir -p dist/staging
           /usr/bin/ditto "$bundle" "dist/staging/$(basename "$bundle")"
           ln -s /Applications dist/staging/Applications

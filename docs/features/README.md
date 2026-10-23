@@ -660,9 +660,12 @@ The release Settings preview built and launched, but window screenshot capture
 failed; no visual or installed-app startup verification is claimed.
 
 ```ts
-Update available                         // maintain.updates
-├── Sidebar Update -> Sparkle update dialog
-└── Menu bar > Check for Updates -> Same dialog
+Sparkle finds an update                  // maintain.updates
+├── At launch, manual check, or user away -> Sparkle's dialog, in focus
+├── Scheduled check while the user works -> No dialog behind other windows
+│   └── Sidebar Update, Settings Update, Menu bar > Update Available… -> Dialog
+├── Remind Me Later -> Update stays offered
+└── Skip This Version -> Offer withdrawn until a manual check
 
 Remind Me Later -> Dismiss this offer -> Manual update -> Reopen the offer
 
@@ -681,7 +684,13 @@ No automated check covers it; the read is a single preference lookup in
 [sparkle.rs](../../src/sparkle.rs).
 
 The Rune sidebar's Update button asks the host to show Sparkle's dialog; no
-Rune test clicks the sidebar Update yet.
+Rune test clicks the sidebar Update yet. [sparkle.rs](../../src/sparkle.rs)
+implements Sparkle's gentle reminders: a scheduled update is shown by Sparkle
+only when it proposes immediate focus; otherwise the update status turns on the
+Update buttons and the menu-bar title, which bring the waiting dialog forward.
+`native_delegate_completion_allows_retry_and_preserves_results` drives the
+delegate methods through `objc_msgSend` without Sparkle; the native gentle
+reminder path has not been observed with a real update.
 
 **Fixed in 2.1.13:** older releases through 2.1.12 used app-global dispatch from
 inside the sidebar click, losing the action while the active window was borrowed.

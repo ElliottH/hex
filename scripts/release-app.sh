@@ -7,9 +7,10 @@ team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Develope
 mode=${1:-prepare}
 version=$(hex_version "$root")
 build_number=$(hex_build_number "$version")
-: "${HEX_NOTARY_PROFILE:?Set HEX_NOTARY_PROFILE to the matching notarization profile}"
 bucket=${HEX_RELEASE_BUCKET:-hex-releases}
 base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
+# The appcast this release extends; a staging prefix starts from the live one.
+appcast_url=${HEX_RELEASE_APPCAST_URL:-$base_url/appcast.xml}
 release_notes=${HEX_RELEASE_NOTES:-$root/docs/releases/$version.md}
 dist="$root/dist"
 updates="$dist/updates"
@@ -25,10 +26,13 @@ if [ -n "$(git -C "$root" status --porcelain)" ]; then
   echo "Commit or remove all working-tree changes before releasing." >&2
   exit 1
 fi
-upstream=$(git -C "$root" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)
-if [ -z "$upstream" ] || [ "$(git -C "$root" rev-parse HEAD)" != "$(git -C "$root" rev-parse "$upstream")" ]; then
-  echo "Push the release commit to its upstream branch before releasing." >&2
-  exit 1
+# GitHub Actions checks out the exact pushed commit, detached from any branch.
+if [ "${GITHUB_ACTIONS:-}" != true ]; then
+  upstream=$(git -C "$root" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)
+  if [ -z "$upstream" ] || [ "$(git -C "$root" rev-parse HEAD)" != "$(git -C "$root" rev-parse "$upstream")" ]; then
+    echo "Push the release commit to its upstream branch before releasing." >&2
+    exit 1
+  fi
 fi
 case "$build_number" in
   ''|*[!0-9]*)
@@ -36,11 +40,16 @@ case "$build_number" in
     exit 1
     ;;
 esac
-published_build=$(curl --fail --silent --show-error "$base_url/appcast.xml" \
+published_build=$(curl --fail --silent --show-error "$appcast_url" \
   | sed -n 's|.*<sparkle:version>\([0-9][0-9]*\)</sparkle:version>.*|\1|p' \
   | head -1)
-if [ -z "$published_build" ] || [ "$build_number" -le "$published_build" ]; then
-  echo "Build $build_number must be newer than published build ${published_build:-unknown}." >&2
+if [ -z "$published_build" ]; then
+  echo "Could not read the published build from $appcast_url." >&2
+  exit 1
+fi
+# A staging rehearsal may rebuild the published version; Sparkle offers only newer builds.
+if [ "$build_number" -le "$published_build" ] && [ "${HEX_RELEASE_REQUIRE_NEWER:-1}" != 0 ]; then
+  echo "Build $build_number must be newer than published build $published_build." >&2
   exit 1
 fi
 
@@ -123,12 +132,14 @@ mkdir -p "$dist/update-staging" "$updates"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$dist/update-staging/HEX.app" "$dist/$update_artifact"
 cp "$dist/$update_artifact" "$updates/$update_artifact"
 cp "$release_notes" "$updates/HEX-$version-arm64.md"
-curl --fail --silent --show-error "$base_url/appcast.xml" -o "$updates/appcast.xml" || rm -f "$updates/appcast.xml"
+curl --fail --silent --show-error "$appcast_url" -o "$updates/appcast.xml"
 sparkle_dir=$("$root/scripts/setup-sparkle.sh")
-security find-generic-password \
-  -s 'https://sparkle-project.org' \
-  -a ed25519 \
-  -w | "$sparkle_dir/bin/generate_appcast" \
+# CI passes the exported key file; a local release reads Kit's login keychain.
+if [ -n "${HEX_SPARKLE_KEY_FILE:-}" ]; then
+  cat "$HEX_SPARKLE_KEY_FILE"
+else
+  security find-generic-password -s 'https://sparkle-project.org' -a ed25519 -w
+fi | "$sparkle_dir/bin/generate_appcast" \
   --ed-key-file - \
   --download-url-prefix "$base_url/releases/" \
   --embed-release-notes \

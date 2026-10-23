@@ -698,6 +698,9 @@ impl Pump {
                 &self.meeting_state,
                 crate::app_settings::meetings_enabled(),
             );
+            crate::status_item::update_software(
+                crate::sparkle::status() == crate::sparkle::UpdateStatus::UpdateAvailable,
+            );
             self.meeting_menu_at = now + MEETING_MENU_REFRESH;
         }
     }

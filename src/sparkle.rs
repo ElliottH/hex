@@ -34,6 +34,16 @@ objc2::extern_protocol!(
     unsafe trait SPUUpdaterDelegate: NSObjectProtocol {}
 );
 
+objc2::extern_protocol!(
+    /// # Safety
+    /// As for [`SPUUpdaterDelegate`].
+    #[allow(clippy::missing_safety_doc)]
+    unsafe trait SPUStandardUserDriverDelegate: NSObjectProtocol {}
+);
+
+/// `SPUUserUpdateChoiceSkip` in Sparkle 2.9.4's SPUUserUpdateState.h.
+const USER_UPDATE_CHOICE_SKIP: NSInteger = 0;
+
 objc2::define_class!(
     #[unsafe(super = NSObject)]
     #[name = "HexSparkleUpdaterDelegate"]
@@ -67,6 +77,43 @@ objc2::define_class!(
             // No update is also an error (SUNoUpdateError). Keep that confirmation,
             // and keep a found update available when installation is deferred.
             clear_status(self.ivars(), UpdateStatus::Checking);
+        }
+
+        #[unsafe(method(updater:userDidMakeChoice:forUpdate:state:))]
+        fn user_did_make_choice(
+            &self,
+            _updater: &AnyObject,
+            choice: NSInteger,
+            _item: &AnyObject,
+            _state: &AnyObject,
+        ) {
+            // A skipped version is not offered again until the user checks.
+            if choice == USER_UPDATE_CHOICE_SKIP {
+                clear_status(self.ivars(), UpdateStatus::UpdateAvailable);
+            }
+        }
+    }
+
+    // Gentle reminders (SPUStandardUserDriverDelegate.h): Sparkle shows a
+    // scheduled update itself only when it would take focus (near launch or
+    // after the user was away). Otherwise, instead of an alert left behind
+    // other windows, the sidebar, Settings, and the menu bar offer Update,
+    // which brings the waiting alert forward through check_for_updates.
+    unsafe impl SPUStandardUserDriverDelegate for SparkleDelegate {
+        #[unsafe(method(supportsGentleScheduledUpdateReminders))]
+        fn supports_gentle_reminders(&self) -> Bool {
+            Bool::YES
+        }
+
+        #[unsafe(method(standardUserDriverShouldHandleShowingScheduledUpdate:andInImmediateFocus:))]
+        fn should_show_scheduled_update(&self, _item: &AnyObject, immediate_focus: Bool) -> Bool {
+            immediate_focus
+        }
+
+        #[unsafe(method(standardUserDriverWillHandleShowingUpdate:forUpdate:state:))]
+        fn will_show_update(&self, _handled: Bool, _item: &AnyObject, _state: &AnyObject) {
+            self.ivars()
+                .store(UpdateStatus::UpdateAvailable as u8, Ordering::Release);
         }
     }
 );
@@ -134,7 +181,7 @@ fn start_inner() -> Result<()> {
             allocated,
             initWithStartingUpdater: Bool::NO,
             updaterDelegate: ProtocolObject::<dyn SPUUpdaterDelegate>::from_ref(&*delegate),
-            userDriverDelegate: std::ptr::null_mut::<AnyObject>()
+            userDriverDelegate: ProtocolObject::<dyn SPUStandardUserDriverDelegate>::from_ref(&*delegate)
         ];
         Retained::from_raw(controller)
             .ok_or_else(|| eyre!("Sparkle updater initialization returned null"))?
@@ -310,6 +357,10 @@ mod tests {
                 sel!(updater:didFinishUpdateCycleForUpdateCheck:error:),
                 false,
             );
+            protocol.add_method_description::<(&AnyObject, NSInteger, &AnyObject, &AnyObject), ()>(
+                sel!(updater:userDidMakeChoice:forUpdate:state:),
+                false,
+            );
             protocol.register()
         });
 
@@ -401,6 +452,48 @@ mod tests {
                     UpdateStatus::UpdateAvailable as u8
                 );
             }
+
+            // Remind Me Later keeps Update offered; Skip This Version withdraws it.
+            for (choice, expected) in [
+                (2 as NSInteger, UpdateStatus::UpdateAvailable),
+                (USER_UPDATE_CHOICE_SKIP, UpdateStatus::Idle),
+            ] {
+                unsafe {
+                    let _: () = msg_send![
+                        &*delegate,
+                        updater: &*object,
+                        userDidMakeChoice: choice,
+                        forUpdate: &*object,
+                        state: &*object
+                    ];
+                }
+                assert_eq!(STATUS.load(Ordering::Acquire), expected as u8);
+            }
+
+            // A scheduled update Sparkle would show behind other windows is
+            // left to Hex's Update buttons, which the reminder turns on.
+            unsafe {
+                let gentle: Bool = msg_send![&*delegate, supportsGentleScheduledUpdateReminders];
+                assert!(gentle.as_bool());
+                for focus in [Bool::YES, Bool::NO] {
+                    let shown: Bool = msg_send![
+                        &*delegate,
+                        standardUserDriverShouldHandleShowingScheduledUpdate: &*object,
+                        andInImmediateFocus: focus
+                    ];
+                    assert_eq!(shown.as_bool(), focus.as_bool());
+                }
+                let _: () = msg_send![
+                    &*delegate,
+                    standardUserDriverWillHandleShowingUpdate: Bool::NO,
+                    forUpdate: &*object,
+                    state: &*object
+                ];
+            }
+            assert_eq!(
+                STATUS.load(Ordering::Acquire),
+                UpdateStatus::UpdateAvailable as u8
+            );
         });
     }
 }

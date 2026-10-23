@@ -96,7 +96,7 @@ jobs:
           scripts/validate-app.sh "$bundle" Hex.app "$VERSION" "$build_number"
           mkdir -p dist
           scripts/notarize-app.sh "$bundle" "dist/Hex-$VERSION-$SHORT-arm64.dmg" Hex
-          "$bundle/Contents/MacOS/hex" --version
+          scripts/smoke-macos-app.sh "$bundle"
       - name: Remove the notary key
         if: always()
         run: rm -f "$RUNNER_TEMP/notary-key.p8"
