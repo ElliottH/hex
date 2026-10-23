@@ -7,7 +7,7 @@ team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Develope
 mode=${1:-prepare}
 version=$(hex_version "$root")
 build_number=$(hex_build_number "$version")
-notary_profile=${HEX_NOTARY_PROFILE:?Set HEX_NOTARY_PROFILE to the matching notarization profile}
+: "${HEX_NOTARY_PROFILE:?Set HEX_NOTARY_PROFILE to the matching notarization profile}"
 bucket=${HEX_RELEASE_BUCKET:-hex-releases}
 base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.kitlangton.dev}
 release_notes=${HEX_RELEASE_NOTES:-$root/docs/releases/$version.md}
@@ -111,27 +111,11 @@ fi
 
 export HEX_VERSION="$version" HEX_BUILD_NUMBER="$build_number"
 bundle=$("$root/scripts/build-app.sh")
-bundle_name=$(basename "$bundle")
 "$root/scripts/validate-app.sh" "$bundle" Hex.app "$version" "$build_number" >/dev/null
-identity=$(hex_codesign_identity "$team_id")
-rm -rf "$dist/staging" "$dist/update-staging" "$updates"
-rm -f "$dist/HEX-$version.zip" "$dist/$artifact" "$dist/$update_artifact"
-mkdir -p "$dist/staging" "$dist/update-staging" "$updates"
-
-# Notarize the app first so its ticket can be stapled inside the distributable DMG.
-/usr/bin/ditto -c -k --sequesterRsrc --keepParent "$bundle" "$dist/HEX-$version.zip"
-xcrun notarytool submit "$dist/HEX-$version.zip" --keychain-profile "$notary_profile" --wait
-xcrun stapler staple "$bundle"
-xcrun stapler validate "$bundle"
-
-/usr/bin/ditto "$bundle" "$dist/staging/$bundle_name"
-ln -s /Applications "$dist/staging/Applications"
-hdiutil create -quiet -fs APFS -format ULFO -volname Hex -srcfolder "$dist/staging" "$dist/$artifact"
-codesign --force --timestamp --sign "$identity" "$dist/$artifact"
-xcrun notarytool submit "$dist/$artifact" --keychain-profile "$notary_profile" --wait
-xcrun stapler staple "$dist/$artifact"
-xcrun stapler validate "$dist/$artifact"
-spctl --assess --type open --context context:primary-signature --verbose=2 "$dist/$artifact"
+rm -rf "$dist/update-staging" "$updates"
+rm -f "$dist/$artifact" "$dist/$update_artifact"
+mkdir -p "$dist/update-staging" "$updates"
+"$root/scripts/notarize-app.sh" "$bundle" "$dist/$artifact" Hex
 
 # Sparkle 2.9.4 discovers updates by exact app filename or matching bundle ID.
 # Retain the old Rust archive name so 2.0.x can find the new bundle identity.

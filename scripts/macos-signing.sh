@@ -22,6 +22,20 @@ hex_codesign_identity() {
   printf '%s\n' "$identity"
 }
 
+# Submit one artifact and wait. A local notarytool keychain profile wins;
+# otherwise CI authenticates with an App Store Connect API key file.
+hex_notarize() {
+  if [ -n "${HEX_NOTARY_PROFILE:-}" ]; then
+    xcrun notarytool submit "$1" --keychain-profile "$HEX_NOTARY_PROFILE" --wait
+  else
+    xcrun notarytool submit "$1" \
+      --key "${HEX_NOTARY_KEY:?Set HEX_NOTARY_PROFILE, or HEX_NOTARY_KEY with HEX_NOTARY_KEY_ID and HEX_NOTARY_ISSUER}" \
+      --key-id "${HEX_NOTARY_KEY_ID:?Set HEX_NOTARY_KEY_ID to the App Store Connect API key ID}" \
+      --issuer "${HEX_NOTARY_ISSUER:?Set HEX_NOTARY_ISSUER to the App Store Connect issuer ID}" \
+      --wait
+  fi
+}
+
 hex_version() {
   printf '%s\n' "${HEX_VERSION:-$(cargo metadata --no-deps --format-version 1 --manifest-path "$1/Cargo.toml" | jq -r '.packages[0].version')}"
 }

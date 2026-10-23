@@ -733,6 +733,10 @@ his personal Developer ID signing team `QC99C9JE59` for this app. Signing requir
 an explicit `VOICE_CONTROL_TEAM_ID` and matching `HEX_NOTARY_PROFILE`; the build
 and release scripts verify the selected team rather than assuming an Anomaly team.
 `scripts/validate-app.sh` checks this identity before preparation and publication.
+The move to Anomaly's team (`5NZ4Q7NXJ4`) is planned in
+`docs/plans/macos-signing.md`; the manual `macOS signed build` workflow signs
+and notarizes an unpublished candidate once the Apple secrets are in the
+`release` environment.
 The manual DMG contains `Hex.app`; the signed Sparkle ZIP preserves `HEX.app`
 as its archive root so existing Rust 2.0.x installations can discover the update
 despite the new bundle ID. Both artifacts contain the same signed, stapled app.
