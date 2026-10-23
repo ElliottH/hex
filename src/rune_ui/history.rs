@@ -227,7 +227,11 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
     let empty = if ui.settings.history_retention.is_off() {
         Some(tr("History is off. New dictations are not retained."))
     } else if pane.entries.is_empty() && pane.error.is_none() {
-        Some(tr("No dictations retained yet."))
+        Some(if pane.searched.trim().is_empty() {
+            tr("No dictations retained yet.")
+        } else {
+            tr("No dictations match.")
+        })
     } else {
         None
     };

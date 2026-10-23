@@ -401,6 +401,49 @@ fn history_copy_writes_the_clipboard() {
 }
 
 #[test]
+fn history_search_without_matches_says_so() {
+    use crate::history::{History, HistoryDraft, HistoryKind, HistoryRetention, HistoryStore};
+    let directory = std::env::temp_dir().join(format!("hex-rune-history-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    let store = HistoryStore::open(
+        directory.join("history.json"),
+        HistoryRetention::Week,
+        crate::history::now_ms(),
+    );
+    let history = History::new(store);
+    history
+        .record(HistoryDraft {
+            kind: HistoryKind::Dictation,
+            raw_text: "ship it".into(),
+            final_text: "Ship it.".into(),
+            application: None,
+            processing: None,
+            audio_ms: 900,
+            inference_ms: 80,
+            total_ms: 200,
+        })
+        .unwrap();
+    let mut rt = runtime("history-empty", true, PANE_SIZE);
+    rt.state.history = history::HistoryPane::shared(Some(history));
+    rt.state.history.reload();
+    settle(&mut rt);
+    assert!(texts(&rt).iter().all(|text| text != "No dictations match."));
+    tap(&mut rt, "history-search");
+    rt.paste("zebra");
+    settle(&mut rt);
+    assert!(rt.state.history.entries.is_empty());
+    let texts = texts(&rt);
+    assert!(texts.iter().any(|text| text == "No dictations match."));
+    assert!(
+        texts
+            .iter()
+            .all(|text| text != "No dictations retained yet.")
+    );
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
 fn modes_add_select_and_delete() {
     let mut rt = runtime("modes", true, PANE_SIZE);
     tap(&mut rt, "add-mode");

@@ -316,6 +316,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("No corrections in this mode.", ["Brak korekt w tym trybie.", "此模式中没有更正规则。", "このモードには修正がありません。", "Keine Korrekturen in diesem Modus.", "No hay correcciones en este modo."]),
     ("History is off. New dictations are not retained.", ["Historia jest wyłączona. Nowe dyktowania nie są zapisywane.", "历史记录已关闭。不会保存新的听写。", "履歴はオフです。新しい音声入力は保存されません。", "Verlauf ist aus. Neue Diktate werden nicht gespeichert.", "El historial está desactivado. No se guardan nuevos dictados."]),
     ("No dictations retained yet.", ["Brak zapisanych dyktowań.", "尚无保存的听写。", "保存された音声入力はまだありません。", "Noch keine Diktate gespeichert.", "Aún no hay dictados guardados."]),
+    ("No dictations match.", ["Brak pasujących dyktowań.", "没有匹配的听写。", "一致する音声入力はありません。", "Keine passenden Diktate.", "No hay dictados que coincidan."]),
     ("Select a history entry.", ["Wybierz wpis z historii.", "选择一条历史记录。", "履歴の項目を選択してください。", "Wählen Sie einen Verlaufseintrag.", "Selecciona una entrada del historial."]),
     ("History could not be loaded.", ["Nie udało się wczytać historii.", "无法加载历史记录。", "履歴を読み込めませんでした。", "Verlauf konnte nicht geladen werden.", "No se pudo cargar el historial."]),
     ("Hex could not apply this change.", ["Hex nie mógł zastosować tej zmiany.", "Hex 无法应用此更改。", "Hex はこの変更を適用できませんでした。", "Hex konnte diese Änderung nicht übernehmen.", "Hex no pudo aplicar este cambio."]),
