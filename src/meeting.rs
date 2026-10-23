@@ -1500,3 +1500,7 @@ mod tests;
 #[cfg(test)]
 #[path = "meeting_echo_replay_tests.rs"]
 mod echo_replay_tests;
+
+#[cfg(test)]
+#[path = "meeting_live_replay_tests.rs"]
+mod live_replay_tests;
