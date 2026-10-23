@@ -151,11 +151,18 @@ Record (offer, menu bar "Record Meeting", Meetings pane, or voice command)
   -> Floating recording indicator (when Show recording indicator is on) // meetings.indicator
      ├── Rune interactive overlay: a non-activating panel that never becomes key
      ├── In the saved recording_indicator_corner
-     ├── Red dot · mm:ss · title
+     ├── Red dot · title · mm:ss
+     ├── Copy new (N) -> copies the in-call turns not yet copied or pasted
+     │   ├── Shares Option-Control-V's cursor: either one advances both
+     │   ├── N = speaker turns waiting; disabled at 0; "Copied" for 1.5 s
+     │   └── Copies exactly the turns counted (the ticker's last read)
+     ├── Copy all -> the in-call transcript so far as speaker-turn Markdown;
+     │   disabled until there is text
+     │   └── Both read the Parakeet in-call transcript (TranscriptReader) once a
+     │       second on the ticker thread, never on the main thread
      ├── Open -> activates Hex, then opens the active meeting in the Meetings pane
      ├── Stop -> Stop & Transcribe
-     └── Not built on Rune: dragging to a corner, hover expansion, Copy new (N),
-         Copy all (the GPUI capsule had them; Option-Control-V still pastes new turns)
+     └── Not built on Rune: dragging to a corner, hover expansion
   -> Settings window may stay closed
 
 Detected app leaves the microphone for about 3 s     // meetings.call-ended
@@ -198,9 +205,12 @@ interactive, non-activating `NSPanel`s at status level on every Space,
 fed by the controller events the menu-bar pump receives
 ([macos_rune.rs](../../src/macos_rune.rs)). The offer (20 s), "left the
 call", ready (15 s, Copy / Reveal, notes refresh) and a recording capsule
-(title, elapsed time, Open, Stop, in the configured corner) are ported.
-Not ported yet: Copy new / Copy all, hover expansion, and dragging the
-recording capsule. A "Never offer" or "Always record" choice is saved and
+(title, elapsed time, Copy new, Copy all, Open, Stop, in the configured
+corner) are ported. Not ported yet: hover expansion and dragging the
+recording capsule. Copy new and Copy all are checked by
+`the_recording_capsule_copies_the_in_call_transcript` and rendered by
+`capsule_snapshots` (`recording-empty`, `-live`, `-copied`); they have not
+been clicked on a real Mac. A "Never offer" or "Always record" choice is saved and
 also written into the window's live settings. On 2026-10-22 a signed build on a MacBook Pro
 showed the recording capsule (Open opened the meeting while it kept
 recording; Stop transcribed) and the ready capsule (Copy copied the
@@ -684,8 +694,8 @@ Granola import: see [granola-import.md](../plans/granola-import.md).
 - In-call text trails speech by one chunk plus its settling (seconds, see the
   replay numbers); nothing shows a partial sentence before then. A track that
   falls more than 120 s behind skips audio until Stop rebuilds it.
-- The Rune recording capsule has no Copy new / Copy all yet; Option-Control-V
-  and the Meetings pane are the in-call copy paths.
+- The recording capsule's Copy new / Copy all are unverified on a real Mac
+  screen; its count can trail the transcript by up to a second.
 - The Meetings pane is verified by Rune goldens rendered offscreen (on Linux
   and on hailmary's Metal), not on a Mac screen; the capsules have no golden.
 - Echo thresholds are tuned on two speaker-mode calls (2026-10-15 and

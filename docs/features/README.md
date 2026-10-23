@@ -1039,8 +1039,9 @@ macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── Sidebar and pane header move the window (Rune El::window_drag; the title bar is transparent)
 ├── While the window shows, its poll re-checks timed state every 250 ms (Rune Tx::wake_after); close hides it (Dock policy restored)
 ├── ⌘Q / menu-bar Quit / Ctrl-C quit and join
-├── Meeting capsules: Rune interactive overlays (offer, call ended, ready, recording)
-└── Not yet: capsule Copy new/all, hover expansion, drag
+├── Meeting capsules: Rune interactive overlays (offer, call ended, ready, recording
+│   with Copy new (N) / Copy all of the in-call transcript)
+└── Not yet: capsule hover expansion, drag
 Windows `hex app` -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost (listener, model preparation, OpenCode, transformations, updater)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit

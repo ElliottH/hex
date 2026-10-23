@@ -1171,7 +1171,6 @@ impl MeetingPasteCursor {
         unseen
     }
 
-    #[cfg(test)]
     /// Number of coalesced speaker turns available since the last committed
     /// copy or paste for `id`.
     pub fn pending_turn_count(&self, id: &str, entries: &[TranscriptEntry]) -> usize {
@@ -1241,6 +1240,32 @@ pub fn consume_delta_for_id(
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .consume_entries(id, &entries, commit_output)
+}
+
+/// Like [`consume_delta_for_id`] over entries the caller already read, for the
+/// main thread: it fails rather than wait while Option-Control-V holds the
+/// cursor through its paste.
+pub fn try_consume_delta_from(
+    id: &str,
+    entries: &[TranscriptEntry],
+    commit_output: impl FnOnce(&str) -> Result<()>,
+) -> Result<String> {
+    let mut cursor = match shared_paste_cursor().try_lock() {
+        Ok(cursor) => cursor,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return Err(eyre!("a meeting paste is in progress"));
+        }
+    };
+    cursor.consume_entries(id, entries, commit_output)
+}
+
+/// Speaker turns in `entries` that the shared cursor has not handed out.
+pub fn pending_delta_turns(id: &str, entries: &[TranscriptEntry]) -> usize {
+    shared_paste_cursor()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .pending_turn_count(id, entries)
 }
 
 /// Consumes new completed turns for the active or most recent meeting using

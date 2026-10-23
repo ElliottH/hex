@@ -155,6 +155,6 @@ Before cutting the first release with the Rune front end:
   transcription picker scrim and arrow-key navigation in `rune-kit` selects and
   menus (model and application search popovers already support Up/Down/Enter
   via `controls::Highlight`).
-- **Meeting capsule extras (macOS):** Copy new / Copy all, hover expansion, and
-  corner dragging on the floating recording capsule.
+- **Meeting capsule extras (macOS):** hover expansion and corner dragging on
+  the floating recording capsule.
 - **Windows custom caption:** uses the native Win32 title bar for now.
