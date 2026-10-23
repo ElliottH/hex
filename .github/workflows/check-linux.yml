@@ -78,6 +78,13 @@ jobs:
             pulseaudio pulseaudio-utils libasound2-plugins xdotool
       - run: cargo fmt --all --check
       - run: cargo test --locked --bin voice-control
+      - name: Upload renders that missed their goldens
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-actual
+          path: /tmp/rune-settings-*-actual.png
+          if-no-files-found: ignore
       - name: Exercise X11 grabs on an isolated display
         run: |
           xvfb-run -a --server-args="-screen 0 1280x900x24 -noreset" sh -c '
