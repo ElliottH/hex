@@ -32,6 +32,17 @@ Neither proves the physical dictation shortcut; see the [feature index](README.m
 
 ## Sub-features
 
+### Vocabulary Quality Checks
+
+`hex benchmark-transcription` accepts a scoring vocabulary and expected terms,
+and reports recall, excess vocabulary occurrences and WER by corpus group, plus
+overall latency. Its companion scorer also reports per-group latency.
+The [fixture guide](../../tests/fixtures/vocabulary/README.md) describes
+the synthetic set, public guard download, and ignored private manifest path.
+This is offline evaluation coverage, not a shipped vocabulary feature or proof
+of recognition quality on a microphone. Metric checks live in
+`transcription_benchmark::tests`; inference results belong in the research report.
+
 ### Hold And Short Taps
 
 ```ts
