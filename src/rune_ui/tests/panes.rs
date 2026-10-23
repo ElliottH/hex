@@ -422,6 +422,7 @@ fn a_refused_microphone_points_to_system_settings() {
 /// The macOS and Windows surfaces in both appearances.
 #[test]
 fn platform_goldens() {
+    let _goldens = Goldens::collect();
     for dark in [true, false] {
         check_golden("mac-settings", dark, (980.0, 2100.0));
         for scene in [
@@ -641,6 +642,7 @@ fn macos_27_names_accessibility_as_system_settings_does() {
 
 #[test]
 fn fun_goldens() {
+    let _goldens = Goldens::collect();
     for dark in [true, false] {
         check_golden("mac-fun", dark, PANE_SIZE);
         check_golden("mac-hud-lab", dark, PANE_SIZE);

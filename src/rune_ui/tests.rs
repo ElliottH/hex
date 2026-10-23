@@ -719,16 +719,53 @@ fn check_golden(scene: &str, dark: bool, size: (f32, f32)) {
     if differing > limit {
         let actual = std::env::temp_dir().join(format!("rune-settings-{name}-actual.png"));
         rune::render::write_png(&actual, width, height, &pixels).unwrap();
-        panic!(
+        let miss = format!(
             "{name}: {differing} pixels differ (limit {limit}); actual render at {}",
             actual.display()
         );
+        if !GOLDEN_MISSES.with(|misses| {
+            misses
+                .borrow_mut()
+                .as_mut()
+                .map(|misses| misses.push(miss.clone()))
+                .is_some()
+        }) {
+            panic!("{miss}");
+        }
+    }
+}
+
+thread_local! {
+    static GOLDEN_MISSES: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Collects every golden mismatch in a test and fails once at the end, so
+/// one CI run uploads every render that moved rather than only the first.
+struct Goldens;
+
+impl Goldens {
+    fn collect() -> Self {
+        GOLDEN_MISSES.with(|misses| *misses.borrow_mut() = Some(Vec::new()));
+        Self
+    }
+}
+
+impl Drop for Goldens {
+    fn drop(&mut self) {
+        let misses = GOLDEN_MISSES
+            .with(|misses| misses.borrow_mut().take())
+            .unwrap_or_default();
+        if !misses.is_empty() && !std::thread::panicking() {
+            panic!("{}", misses.join("\n"));
+        }
     }
 }
 
 /// Every pane in both appearances; Settings at its full height.
 #[test]
 fn goldens() {
+    let _goldens = Goldens::collect();
     for dark in [true, false] {
         check_golden("portal", dark, GOLDEN_SIZE);
         for scene in [
