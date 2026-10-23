@@ -1,8 +1,10 @@
 # Keep the phrase boost experimental
 
 The tested greedy phrase boost does not clear the shipping gate. It improves
-synthetic names, including held-out sentences, but both retained Abattoir misses
-still decode as Avatar. The real Hanks-to-Hex recording was unavailable. Keep
+synthetic names, including held-out sentences, but both original Abattoir misses
+still decode as Avatar. An expanded real-meeting evaluation recovers few of the
+additional Abattoir misses. The located Hanks miss belongs to a live draft;
+both tested Parakeet configurations already recognize Hex in that clip. Keep
 Hex on its released upstream engine and retain this patch for research; carrying
 a production fork is not justified by these measurements.
 
@@ -54,9 +56,62 @@ tuning audio, so they establish that the decoder path consumes the boost, not
 independent generalization. They do not exercise Hex's pause detector,
 overlap deduplication, echo suppression, or native meeting scheduler.
 
+## More real audio confirms that Abattoir remains difficult
+
+The follow-up evaluates 168 private clips totaling 2,207 seconds: 20 retained
+dictations, 131 meeting clips with final-transcript references, and 17 with
+rolling-transcript references. All 11 available meetings are represented.
+Bonus and margin stay frozen at 1.5; none of these clips selected parameters.
+Original recordings were read-only. Only aggregate counts and hashes are
+committed in [`spike/real-results.json`](../../spike/real-results.json).
+
+References are automatic history or meeting transcripts, with 16 contextual
+Avatar-to-Abattoir corrections across 15 clips recorded before inference.
+These corrections are not a human audit of the surrounding words. Selection
+favored vocabulary-bearing passages, known misses and a few term-free guards;
+the sample does not estimate everyday accuracy. Crops follow transcript
+timestamps with bounded padding, which can include or omit neighboring words.
+The following word-error counts therefore measure **proxy disagreement**.
+
+| Final-reference cohort | Recall, baseline → boost | Proxy word errors, baseline → boost | Excess vocabulary occurrences |
+| --- | ---: | ---: | ---: |
+| Microphone, offline (69 clips) | 59/74 → 62/74 | 158 → 166 / 3,054 words | 1 → 3 |
+| Microphone, streaming | 62/74 → 64/74 | 206 → 215 / 3,054 words | 0 → 2 |
+| System, offline (62 clips) | 60/66 → 61/66 | 117 → 122 / 2,150 words | 1 → 2 |
+| System, streaming | 61/66 → 62/66 | 137 → 139 / 2,150 words | 2 → 2 |
+
+The microphone proxy-disagreement rate increases by 0.262 percentage points
+offline and 0.295 streaming. These vocabulary-heavy cohorts do not measure
+the guard WER gate, and their reference text has not been human-audited.
+The new excess occurrences are Scrawl and Dax. Both Scrawl passages discuss
+the app, so the proxy's “scroll” is likely wrong; the Dax reference also has
+an uncertain name. These counts do not establish false replacements. Frozen
+references preserve the comparison rather than retroactively crediting gains.
+
+Abattoir-only recall in the corrected subset is much lower than overall recall.
+Each clip contributes one expectation even when it contains repeated mentions:
+
+| Corrected subset | Offline baseline → boost | Streaming baseline → boost |
+| --- | ---: | ---: |
+| Microphone, 11 clips | 0/11 → 1/11 | 2/11 → 3/11 |
+| System, 4 clips | 0/4 → 0/4 | 0/4 → 1/4 |
+
+The Hanks clip already says Hex in the final transcript and in all four runs.
+It demonstrates a live-draft/final-decoder difference, not a boost recovery.
+The separate literal Avatar guard retains Avatar offline in both runs;
+streaming drops Avatar in both. Neither inserts Abattoir. One short,
+timestamp-cropped guard cannot establish collision safety.
+
+All 20 dictations are term-free. Their proxy errors stay at 13/392 words
+offline and 1/392 streaming, with zero excess vocabulary. The rolling-reference
+meeting remains exploratory: microphone recall stays 10/10 in both modes,
+while system recall stays 7/7 offline and rises 6/7 → 7/7 streaming. Microphone
+proxy errors are 6 → 7 / 266 words offline and 11 → 11 streaming; system errors
+stay 16/183 offline and 14/183 streaming. No rolling clip has excess vocabulary.
+
 ## Timing does not establish a latency pass
 
-Each final comparison has one whole-corpus warmup and five measured passes.
+The initial comparisons have one whole-corpus warmup and five measured passes.
 Offline p95 compute time rises from 177.44 to 246.61 ms (+69.18 ms); median rises
 from 68.12 to 85.44 ms. Streaming total-compute p95 falls from 645.40 to 539.14 ms
 and finalize p95 falls from 81.97 to 68.92 ms. Other worker jobs ran during
@@ -69,6 +124,11 @@ the patch's full overhead against pristine upstream. Streams receive audio as
 fast as compute permits, without real-time sleeps. Neither shortcut-to-paste
 latency nor concurrent meeting/dictation latency was measured. The required
 no-measurable-latency-hit gate is **unproven**, not passed.
+The expanded real-audio runs use one whole-corpus warmup, three measured
+offline passes and one streaming pass. They share those timing limitations
+and do not exercise the native meeting scheduler or shortcut-to-paste path.
+Accuracy metrics use the first measured transcript pass; additional passes
+contribute timing only.
 
 ## The corpus separates public fixtures from private evidence
 
@@ -84,8 +144,9 @@ requesting 30 days. Every retained raw/final pair was identical, so history did
 not provide corrected ground truth. Five timestamp-matched diagnostic WAVs
 were retained outside git. Their references use history plus context-inferred
 proper-name corrections, and have not been human-audited. Two contain the
-Abattoir/Avatar miss; neither improves. No matching Hanks/Hex WAV was found.
-The real-audio gate therefore fails on available evidence and is incomplete.
+Abattoir/Avatar miss; neither improves. The later meeting extraction described
+above supplies the Hanks clip and more Abattoir examples. Real Abattoir recall
+remains below the 70% target, and human-audited accuracy remains incomplete.
 
 Scoring ignores case and internal spacing for term recall, but requires whole
 word boundaries; `open code` counts as OpenCode, while `toolkit` does not count

@@ -2,6 +2,7 @@
 /.venv
 /logs
 /perf/transcription-corpus
+/perf/real-voice-expansion/
 /perf/moonshine-corpus
 /.local-corpus/
 /dist

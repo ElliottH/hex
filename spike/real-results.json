@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "model": "parakeet_unified_en",
+  "model_sha256": "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
+  "manifest_sha256": "8290bf8bd6335cdfbb1f680f754bd45d35da7da2e1fffec473ae08b41016fa8d",
+  "clips": 168,
+  "audio_seconds": 2207.224125,
+  "meetings": 11,
+  "candidate_bonus": 1.5,
+  "candidate_margin": 1.5,
+  "parameters_frozen_before_real_evaluation": true,
+  "reference_status": "Automatic transcript proxies with contextual Abattoir corrections; not human-audited WER.",
+  "recall_unit": "Distinct expected term per clip; corrected_abattoir cohorts count only Abattoir.",
+  "accuracy_pass": "First measured transcript pass; additional passes contribute timing only.",
+  "excess_status": "Vocabulary occurrences beyond the proxy reference; not verified false replacements.",
+  "cohort_overlap": "Diagnostic cohorts are subsets of their matching base cohort; never sum them.",
+  "latency_gate": "unproven",
+  "columns": ["clips", "reference_words", "expected_terms", "recalled_terms", "word_errors", "false_replacements"],
+  "runs": [
+    {
+      "name": "baseline-offline",
+      "measured_passes": 3,
+      "raw_result_sha256": "f8552aea9414177486cf2ce97daf7a25d644826e64577a4907bc34f4891213ae",
+      "cohorts": {
+        "dictation_microphone_history": [20, 392, 0, 0, 13, 0],
+        "meeting_microphone_final": [69, 3054, 74, 59, 158, 1],
+        "meeting_system_final": [62, 2150, 66, 60, 117, 1],
+        "meeting_microphone_rolling": [9, 266, 10, 10, 6, 0],
+        "meeting_system_rolling": [8, 183, 7, 7, 16, 0],
+        "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 0, 33, 0],
+        "corrected_abattoir_meeting_system_final": [4, 88, 4, 0, 4, 0],
+        "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0],
+        "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 1, 0]
+      }
+    },
+    {
+      "name": "candidate-offline",
+      "measured_passes": 3,
+      "raw_result_sha256": "d5c857316282dba196b5ce9025e8c3a733df3ef72aab35c86933dc3246e38d74",
+      "cohorts": {
+        "dictation_microphone_history": [20, 392, 0, 0, 13, 0],
+        "meeting_microphone_final": [69, 3054, 74, 62, 166, 3],
+        "meeting_system_final": [62, 2150, 66, 61, 122, 2],
+        "meeting_microphone_rolling": [9, 266, 10, 10, 7, 0],
+        "meeting_system_rolling": [8, 183, 7, 7, 16, 0],
+        "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 1, 32, 0],
+        "corrected_abattoir_meeting_system_final": [4, 88, 4, 0, 4, 0],
+        "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0],
+        "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 1, 0]
+      }
+    },
+    {
+      "name": "baseline-stream",
+      "measured_passes": 1,
+      "raw_result_sha256": "3db215790d8e4ebf93f99f56495476b41a195d09687312f85d888d79df9def1b",
+      "cohorts": {
+        "dictation_microphone_history": [20, 392, 0, 0, 1, 0],
+        "meeting_microphone_final": [69, 3054, 74, 62, 206, 0],
+        "meeting_system_final": [62, 2150, 66, 61, 137, 2],
+        "meeting_microphone_rolling": [9, 266, 10, 10, 11, 0],
+        "meeting_system_rolling": [8, 183, 7, 6, 14, 0],
+        "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 2, 49, 0],
+        "corrected_abattoir_meeting_system_final": [4, 88, 4, 0, 4, 0],
+        "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0],
+        "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 2, 0]
+      }
+    },
+    {
+      "name": "candidate-stream",
+      "measured_passes": 1,
+      "raw_result_sha256": "f4e7ddc683e4d87d22be163eb7477f74491f2fc890113f4ab7687ea0038eb69c",
+      "cohorts": {
+        "dictation_microphone_history": [20, 392, 0, 0, 1, 0],
+        "meeting_microphone_final": [69, 3054, 74, 64, 215, 2],
+        "meeting_system_final": [62, 2150, 66, 62, 139, 2],
+        "meeting_microphone_rolling": [9, 266, 10, 10, 11, 0],
+        "meeting_system_rolling": [8, 183, 7, 7, 14, 0],
+        "corrected_abattoir_meeting_microphone_final": [11, 536, 11, 3, 48, 0],
+        "corrected_abattoir_meeting_system_final": [4, 88, 4, 1, 3, 0],
+        "known_live_hanks_meeting_microphone_final": [1, 9, 1, 1, 1, 0],
+        "literal_avatar_meeting_microphone_final": [1, 5, 0, 0, 2, 0]
+      }
+    }
+  ]
+}

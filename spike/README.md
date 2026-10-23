@@ -71,3 +71,43 @@ worth pursuing. CTC is untouched. TDT is hooked but not audio-evaluated here.
 implementation using the GGUF's actual pieces, scores and types. Run it in a
 temporary worker environment with `sentencepiece==0.2.1` and `protobuf`; pass the
 GGUF and a runner JSONL. No tokenizer package is installed on Studio.
+
+## Additional real-voice evaluation
+
+`evaluate-real.py` takes a private corpus manifest and keeps the selected bonus
+and margin frozen at 1.5. It checks source hashes, normalizes copies to mono
+16 kHz PCM, then evaluates every clip offline and streaming. Run it through
+HiveMind with the existing runner and model:
+
+```sh
+python3 spike/evaluate-real.py "$CARGO_TARGET_DIR/release/parakeet-boost-eval" \
+  /path/to/parakeet-unified-en-0.6b-Q8_0.gguf perf/real-voice-expansion
+```
+
+The private manifest extends the normal clip fields with `sha256`, `origin`
+(`dictation` or `meeting`), `source` (`microphone` or `system`) and
+`reference_quality` (`history-proxy`, `final-proxy` or `rolling-proxy`). Optional
+`corrected_entry_ids`, `known_live_hanks` and `collision_guard` label the
+diagnostic cohorts. Its `vocabulary.txt` must exactly match the manifest's terms.
+Every cohort, including diagnostics, separates origin, track and reference
+quality. Corrected-Abattoir recall counts only Abattoir, once per clip; other
+cohorts count distinct expected terms per clip. Diagnostic cohorts overlap
+their parent cohorts and must not be added to them.
+Source audio opens read-only; normalized copies, references and per-clip output
+remain under the ignored corpus directory. Only `results/summary.json` is
+suitable for a public aggregate receipt.
+
+History and generated meeting transcripts are proxy references. Contextual
+proper-name corrections must be recorded before examining candidate output;
+they do not make the remaining words human-audited ground truth. Keep rolling,
+final, microphone and system-track evidence separate when reporting results.
+
+Rescore existing outputs against the exact manifest used for inference without
+normalizing audio or running the engine again:
+
+```sh
+python3 spike/evaluate-real.py unused unused perf/real-voice-expansion --score-only
+```
+
+`real-results.json` is the checked-in count-only receipt for this follow-up.
+Timing remains in the private summaries and does not establish a latency pass.
