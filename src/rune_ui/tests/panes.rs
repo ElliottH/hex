@@ -229,7 +229,7 @@ fn meetings_select_search_and_copy_a_transcript() {
         Some("preview-design")
     );
     tap(&mut rt, "meeting-copy-transcript");
-    let copied = rt.copy_request.clone().unwrap();
+    let copied = rt.copy_request.as_deref().unwrap().to_owned();
     assert!(copied.starts_with("**You** · 00:09\nOh nice."), "{copied}");
     rt.state.meetings.search = TextEdit::new("roblox");
     refresh(&mut rt);
