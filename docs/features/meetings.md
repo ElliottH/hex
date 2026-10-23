@@ -284,22 +284,18 @@ final transcript the earlier 30 s chunks produced.
 ```ts
                             Moonshine draft +      Parakeet only,
                             30 s Parakeet chunks   3-12 s chunks
-Meeting CPU                 105% of a core         4.1%
-Footprint, idle 829 MB      mean 1345, peak 1438   mean 849, peak 867 MB
-Dictation release -> text   p50 80, p95 93 ms      p50 87, p95 104 ms
+Meeting CPU                 105% of a core         4.4%
+Footprint, idle ~830 MB     mean 1345, peak 1438   mean 854, peak 869 MB
+Dictation release -> text   p50 80, p95 93 ms      p50 84, p95 89 ms
 Speech end -> copyable      p50 16.5, p95 28.7 s   p50 6.3, p95 11.4 s
   (Parakeet; the draft showed in about 1 s)
-Option-Control-V text       Moonshine, 17% WER     Parakeet, 6.0% mid-call
-Pasted vs final, Them/You   16.7% / 14.9%          0.0%* / 0.0%, no repeats
-Final transcript            after flush            187 ms after Stop, 4.0% WER
+Option-Control-V text       Moonshine, 17% WER     Parakeet, 5.6% mid-call
+Pasted vs final, Them/You   16.7% / 14.9%          0.0% / 0.0%, no repeats
+Final transcript            after flush            181 ms after Stop, 3.7% WER
 ```
 
-\* 1.8% Them in the 10-minute run: the harness's paste after Stop read the
-rolling file, not the published final, and missed the flushed tail. With that
-fixed, a 3-minute rerun pasted exactly the final's 574 words.
-
-Dictation latency in this run stays within run-to-run spread (the first
-Parakeet-only run measured p50 92 ms, p95 103 ms).
+Dictation latency stays within run-to-run spread (earlier Parakeet-only runs
+measured p50 87-92 ms, p95 103-104 ms).
 Commands still run their own Moonshine when that opt-in is on; the meeting
 never loads it.
 
