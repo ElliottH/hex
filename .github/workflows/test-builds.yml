@@ -73,6 +73,7 @@ jobs:
         run: |
           scripts/setup.sh
           bundle=$(scripts/build-app.sh)
+          "$bundle/Contents/MacOS/hex" --version
           mkdir -p dist/staging
           /usr/bin/ditto "$bundle" "dist/staging/$(basename "$bundle")"
           ln -s /Applications dist/staging/Applications
