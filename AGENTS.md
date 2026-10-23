@@ -289,9 +289,14 @@ substitute for source inspection or a second roadmap.
 - `microphone_activity`: permission-light CoreAudio process input observation.
 - `meeting_detection`: pure provider classification, debounce, per-call snooze,
   and call-ended presence.
+- `calendar`: calendar meetings on every OS as a pure model (which events
+  count as meetings, call-link parsing, the wall-clock reminder scheduler),
+  plus the macOS EventKit bridge (`calendar.swift`): access, the change
+  counter, bounded event reads, and the Settings snapshot.
 - `meeting_watcher`: the meeting controller loop: call detection, offers,
-  recording workers, call-ended presence, notes, and the menu-bar meeting
-  state. The capsules that show its events are `rune_ui::meeting_capsules`.
+  calendar reminders, recording workers, call-ended presence, notes, and the
+  menu-bar meeting state. The capsules that show its events are
+  `rune_ui::meeting_capsules`.
 - `file_dialog`: the one native open dialog for a file or folder (Modes'
   "Choose a file…", the macOS meetings folder): `NSOpenPanel` modeless on
   AppKit's main thread, `IFileOpenDialog` on its own STA thread, the portal on
@@ -500,6 +505,17 @@ CoreAudio formats, AppleScript details, or event serialization.
   detected call app leaves the microphone, offer `Keep Recording` or
   `Stop & Transcribe`; never stop automatically. An active recording stays
   visible and stoppable from the menu bar without the Settings window.
+- Calendar access is asked for only by Settings' Connect calendar, never at
+  launch, and only with Meetings on; Meetings off means no EventKit reads and
+  no reminders. `meetings.calendar.connected` defaults off. A meeting has other
+  attendees or a call link and is not all-day, declined, free, or cancelled.
+  Reminders are Hex capsules, not notifications, shown once per occurrence at
+  the lead time (or on a wake within 5 min of the start) and withdrawn when the
+  meeting is cancelled or moved. EventKit is read on the controller thread on
+  store changes or once a minute, bounded, with no network, never on the audio
+  or UI thread. A reminder never records without a click; Always record still
+  needs the detected call. Recording or dismissing a reminder snoozes the same
+  call's offer and automatic start.
 - Meeting transcription defers to dictation and never loads a second copy of
   the model: each chunk runs on the dictation engine's loaded model at utility
   QoS, starts only while no dictation capture (from the shortcut press) or

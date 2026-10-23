@@ -5,21 +5,23 @@
 //! model notice. Their state is [`PlatformState`](super::platform::PlatformState)
 //! data and their actions are [`PlatformRequest`]s.
 
-use rune::{El, row, text};
+use rune::{El, Icon, row, text};
 use rune_kit::Switch;
 
-use super::ShortcutTarget;
-use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, Paint, button, note, section, segmented, setting_row, toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, note, section, segmented, select, setting_row,
+    toggle_row,
 };
 use super::lists::{PermissionControl, Tone, permission_control, tone_tag};
-use super::platform::{MeetingRequest, NotesAvailability, PlatformRequest};
+use super::platform::{CalendarRequest, MeetingRequest, NotesAvailability, PlatformRequest};
+use super::settings::toggle_menu;
+use super::{Menu, ShortcutTarget, Ui};
 use crate::app_settings::{
-    AppSettings, HotkeyBinding, KNOWN_MEETING_PROVIDERS, MeetingPolicy, MeetingProviderChoice,
-    ModifierSide,
+    AppSettings, CALENDAR_LEAD_MINUTES, HotkeyBinding, KNOWN_MEETING_PROVIDERS, MeetingPolicy,
+    MeetingProviderChoice, ModifierSide,
 };
-use crate::desktop_i18n::{tr, tr_fill};
+use crate::calendar::{CalendarAccess, CallProvider};
+use crate::desktop_i18n::{tr, tr_fill, tr_named};
 use crate::hex_microphone::DriverActionState;
 use crate::login_item::LoginItemStatus;
 use crate::onboarding::{PermissionAction, PermissionKind, PermissionWarning};
@@ -167,7 +169,7 @@ fn folder_label(ui: &Ui) -> String {
 /// Meetings (beta): the opt-in, then its permission, indicator, folder, and
 /// Apple Intelligence notes; once on, a second card with each detected call
 /// provider's Ask / Always record / Never offer choice.
-pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Vec<El> {
+pub(super) fn meetings_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<El> {
     if !ui.platform.caps.meetings {
         return Vec::new();
     }
@@ -269,9 +271,239 @@ pub(super) fn meetings_section(ui: &Ui, p: Paint) -> Vec<El> {
     }
     let mut sections = vec![section(p, "meetings", tr("Meetings"), rows)];
     if meetings.enabled {
+        sections.extend(calendar_section(ui, p, layer));
         sections.push(detected_calls_section(ui, p));
     }
     sections
+}
+
+static ZOOM_ICON: Icon = Icon {
+    name: "hex-provider-zoom",
+    view: 16.0,
+    body: include_str!("../../assets/icons/providers/zoom.svg"),
+};
+static MEET_ICON: Icon = Icon {
+    name: "hex-provider-meet",
+    view: 16.0,
+    body: include_str!("../../assets/icons/providers/meet.svg"),
+};
+static TEAMS_ICON: Icon = Icon {
+    name: "hex-provider-teams",
+    view: 16.0,
+    body: include_str!("../../assets/icons/providers/teams.svg"),
+};
+static SLACK_ICON: Icon = Icon {
+    name: "hex-provider-slack",
+    view: 16.0,
+    body: include_str!("../../assets/icons/providers/slack.svg"),
+};
+static WEBEX_ICON: Icon = Icon {
+    name: "hex-provider-webex",
+    view: 16.0,
+    body: include_str!("../../assets/icons/providers/webex.svg"),
+};
+
+fn provider_icon(provider: CallProvider) -> &'static Icon {
+    match provider {
+        CallProvider::Zoom => &ZOOM_ICON,
+        CallProvider::GoogleMeet => &MEET_ICON,
+        CallProvider::Teams => &TEAMS_ICON,
+        CallProvider::Slack => &SLACK_ICON,
+        CallProvider::Webex => &WEBEX_ICON,
+    }
+}
+
+/// Calendar reminders: Connect calendar (the only thing that asks macOS for
+/// access), then the reminder switch, lead time, included calendars, and
+/// the next few meetings.
+fn calendar_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Option<El> {
+    if !ui.platform.caps.calendar {
+        return None;
+    }
+    let view = &ui.platform.calendar;
+    let calendar = &ui.settings.meetings.calendar;
+    let mut rows = Vec::new();
+    if view.access.blocked() {
+        rows.push(setting_row(
+            p,
+            "calendar-blocked",
+            tr("Calendar access is off"),
+            Some(tr(
+                "Allow Hex under Privacy & Security › Calendars to get meeting reminders",
+            )),
+            button(
+                p,
+                "calendar-privacy",
+                tr("Open settings"),
+                ButtonKind::Secondary,
+                |ui: &mut Ui, _| {
+                    ui.ask(PlatformRequest::Calendar(
+                        CalendarRequest::OpenPrivacySettings,
+                    ))
+                },
+            ),
+        ));
+    } else if !calendar.connected || view.access != CalendarAccess::FullAccess {
+        rows.push(setting_row(
+            p,
+            "calendar-connect",
+            tr("Remind me before meetings"),
+            Some(tr(
+                "Get a reminder before each meeting, and name its recording",
+            )),
+            button(
+                p,
+                "calendar-connect-button",
+                if view.connecting {
+                    tr("Connecting…")
+                } else {
+                    tr("Connect calendar")
+                },
+                ButtonKind::Secondary,
+                |ui: &mut Ui, _| {
+                    if !ui.platform.calendar.connecting {
+                        ui.ask(PlatformRequest::Calendar(CalendarRequest::Connect));
+                    }
+                },
+            ),
+        ));
+    } else {
+        rows.push(toggle_row(
+            p,
+            "calendar-remind",
+            tr("Remind me before meetings"),
+            tr("Shows a reminder with Record and Join buttons"),
+            calendar.remind,
+            |ui: &mut Ui| {
+                let remind = !ui.settings.meetings.calendar.remind;
+                ui.update(|settings| settings.meetings.calendar.remind = remind);
+            },
+        ));
+        if calendar.remind {
+            let labels = [tr("At start"), tr("1 min"), tr("2 min"), tr("5 min")];
+            let lead = calendar.lead().as_secs() / 60;
+            rows.push(setting_row(
+                p,
+                "calendar-lead",
+                tr("Remind me"),
+                None,
+                segmented(
+                    p,
+                    "lead",
+                    &labels,
+                    CALENDAR_LEAD_MINUTES
+                        .iter()
+                        .position(|minutes| u64::from(*minutes) == lead)
+                        .unwrap_or(1),
+                    |ui, index| {
+                        ui.update(|settings| {
+                            settings.meetings.calendar.lead_minutes = CALENDAR_LEAD_MINUTES[index];
+                        });
+                    },
+                ),
+            ));
+        }
+        rows.push(calendars_row(ui, p, layer));
+        if view.upcoming.is_empty() {
+            rows.push(note(
+                "calendar-none",
+                tr("No meetings in the next two days"),
+                p.muted(),
+            ));
+        }
+        rows.extend(view.upcoming.iter().enumerate().map(|(index, meeting)| {
+            let provider = meeting.provider.map(|provider| {
+                row()
+                    .key("provider")
+                    .gap(6.0)
+                    .center_y()
+                    .label(provider.label())
+                    .child(
+                        rune::icon(provider_icon(provider), 16.0)
+                            .key("icon")
+                            .color(p.muted()),
+                    )
+                    .child(
+                        text(provider.label())
+                            .key("name")
+                            .font(DESCRIPTION)
+                            .color(p.muted()),
+                    )
+            });
+            setting_row(
+                p,
+                &format!("upcoming{index}"),
+                &meeting.title,
+                Some(&meeting.when),
+                provider.unwrap_or_else(|| row().key("provider")),
+            )
+        }));
+    }
+    if let Some(error) = &view.error {
+        rows.push(note("calendar-error", error, p.danger()));
+    }
+    Some(section(p, "calendar", tr("Calendar"), rows))
+}
+
+/// Which calendars remind: all by default, each one switched in the menu.
+fn calendars_row(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
+    let calendar = &ui.settings.meetings.calendar;
+    let calendars = &ui.platform.calendar.calendars;
+    let included = calendars
+        .iter()
+        .filter(|info| calendar.includes(&info.id))
+        .count();
+    let label = if included == calendars.len() {
+        tr("All calendars").to_string()
+    } else {
+        tr_named(
+            "{included} of {total} calendars",
+            &[
+                ("included", &included.to_string()),
+                ("total", &calendars.len().to_string()),
+            ],
+        )
+    };
+    let choices = calendars
+        .iter()
+        .map(|info| {
+            let id = info.id.clone();
+            Choice {
+                label: if info.source.is_empty() {
+                    info.title.clone()
+                } else {
+                    format!("{} · {}", info.title, info.source)
+                },
+                selected: calendar.includes(&info.id),
+                choose: Box::new(move |ui: &mut Ui| {
+                    let id = id.clone();
+                    ui.update(|settings| {
+                        let excluded = &mut settings.meetings.calendar.excluded_calendars;
+                        if let Some(index) = excluded.iter().position(|known| *known == id) {
+                            excluded.remove(index);
+                        } else {
+                            excluded.push(id);
+                        }
+                    });
+                }),
+            }
+        })
+        .collect();
+    setting_row(
+        p,
+        "calendar-calendars",
+        tr("Calendars"),
+        Some(tr("Meetings from these calendars get reminders")),
+        select(
+            p,
+            "calendar-calendars-control",
+            &label,
+            ui.open == Some(Menu::Calendars),
+            choices,
+            |ui: &mut Ui| toggle_menu(ui, Menu::Calendars),
+            layer,
+        ),
+    )
 }
 
 /// The known services, then every other website or app the user chose for,

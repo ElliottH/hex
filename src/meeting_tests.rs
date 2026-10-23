@@ -158,6 +158,7 @@ fn capture_failures_are_persisted_instead_of_looking_interrupted() {
         provisional_title: None,
         notes: None,
         notes_error: None,
+        calendar: None,
     };
     write_manifest(&directory, &manifest).unwrap();
 
@@ -198,6 +199,7 @@ fn mid_meeting_capture_loss_proceeds_to_transcription_when_audio_was_recorded() 
         provisional_title: None,
         notes: None,
         notes_error: None,
+        calendar: None,
     };
     let (sender, receiver) = mpsc::sync_channel(4);
 

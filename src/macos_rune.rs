@@ -765,7 +765,9 @@ impl Pump {
     fn controller_event(&mut self, event: ControllerEvent) {
         self.capsules.event(&event);
         match event {
-            ControllerEvent::Offer(_) => {}
+            ControllerEvent::Offer(_)
+            | ControllerEvent::Reminder { .. }
+            | ControllerEvent::ReminderWithdrawn { .. } => {}
             ControllerEvent::Starting => self.meeting_state = MeetingMenuState::Starting,
             ControllerEvent::RecordingStarted { title, .. } => {
                 self.meeting_state = MeetingMenuState::Recording {

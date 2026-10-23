@@ -1669,6 +1669,20 @@ pub(super) fn render_markdown(manifest: &MeetingManifest, entries: &[TranscriptE
     if let Some(app) = &manifest.app {
         markdown.push_str(&format!("- **App:** {app}\n"));
     }
+    if let Some(calendar) = &manifest.calendar {
+        if calendar.title.trim() != manifest.title.trim() && !calendar.title.trim().is_empty() {
+            markdown.push_str(&format!("- **Calendar:** {}\n", calendar.title.trim()));
+        }
+        let attendees = calendar
+            .attendees
+            .iter()
+            .map(|name| name.trim())
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        if !attendees.is_empty() {
+            markdown.push_str(&format!("- **Attendees:** {}\n", attendees.join(", ")));
+        }
+    }
     markdown.push_str("\n## Transcript\n\n");
     let turns = coalesce_transcript(entries.iter().cloned());
     if turns.is_empty() {
@@ -2716,6 +2730,20 @@ mod tests {
         assert!(markdown.contains("- **Duration:** 02:05\n- **App:** Zoom\n"));
         assert!(markdown.contains("**You** · 00:01\nHi. Can you hear me?\n\n"));
         assert!(markdown.contains("**Them** · 00:04\nLoud and clear.\n"));
+        assert!(!markdown.contains("Attendees"));
+    }
+
+    #[test]
+    fn markdown_lists_the_calendar_attendees() {
+        let mut manifest = manifest();
+        manifest.title = "Q4 launch sync".into();
+        manifest.calendar = Some(crate::meeting::MeetingCalendar {
+            title: "Q4 launch sync".into(),
+            attendees: vec!["Ana Ruiz".into(), "Ben Ito".into()],
+        });
+        let markdown = render_markdown(&manifest, &[]);
+        assert!(markdown.contains("- **App:** Zoom\n- **Attendees:** Ana Ruiz, Ben Ito\n"));
+        assert!(!markdown.contains("**Calendar:**"));
     }
 
     #[test]

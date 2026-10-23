@@ -4,7 +4,7 @@
 use super::*;
 use crate::login_item::LoginItemStatus;
 use crate::onboarding::{Input, Observation, PermissionAction, PermissionKind, Practice, Step};
-use platform::{MeetingRequest, PlatformHost, PlatformRequest};
+use platform::{CalendarRequest, MeetingRequest, PlatformHost, PlatformRequest};
 
 fn asked(rt: &Runtime<Ui>) -> &[PlatformRequest] {
     match &rt.state.host {
@@ -148,6 +148,66 @@ fn meetings_settings_save_and_ask_for_system_audio() {
     tap(&mut rt, "meetings-enabled");
     assert!(!rt.state.settings.meetings.enabled);
     assert!(rt.find("meeting-folder").is_none());
+}
+
+#[test]
+fn the_calendar_asks_for_access_only_when_connect_is_pressed() {
+    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
+    assert!(rt.find("calendar-connect").is_some());
+    assert!(rt.find("calendar-remind").is_none());
+    assert!(asked(&rt).is_empty());
+    tap(&mut rt, "calendar-connect-button");
+    assert_eq!(
+        asked(&rt),
+        [PlatformRequest::Calendar(CalendarRequest::Connect)]
+    );
+
+    // Meetings off: no calendar card, so nothing can ask for access.
+    tap(&mut rt, "meetings-enabled");
+    assert!(rt.find("calendar").is_none());
+    for scene in ["portal", "windows-settings"] {
+        let rt = runtime(scene, true, GOLDEN_SIZE);
+        assert!(rt.find("calendar").is_none(), "{scene} has no calendar");
+    }
+}
+
+#[test]
+fn a_connected_calendar_saves_reminders_and_lists_meetings() {
+    let mut rt = runtime("mac-settings-calendar", true, (980.0, 2600.0));
+    let shown = texts(&rt);
+    for text in [
+        "Design sync",
+        "Today · 2:30 PM",
+        "Google Meet",
+        "2 of 3 calendars",
+    ] {
+        assert!(shown.iter().any(|shown| shown == text), "shows {text}");
+    }
+    assert!(rt.find("upcoming2").is_some());
+    assert!(
+        rt.find("upcoming2/provider/icon").is_none(),
+        "no link, no icon"
+    );
+    tap(&mut rt, "calendar-lead/lead/segment3");
+    assert_eq!(rt.state.settings.meetings.calendar.lead_minutes, 5);
+    tap(&mut rt, "calendar-remind");
+    assert!(!rt.state.settings.meetings.calendar.remind);
+    assert!(rt.find("calendar-lead").is_none());
+    tap(&mut rt, "calendar-calendars-control-trigger");
+    assert_eq!(rt.state.open, Some(Menu::Calendars));
+}
+
+#[test]
+fn denied_calendar_access_links_to_privacy_settings() {
+    let mut rt = runtime("mac-settings-calendar-denied", true, (980.0, 2400.0));
+    assert!(rt.find("calendar-connect").is_none());
+    tap(&mut rt, "calendar-privacy");
+    assert_eq!(
+        asked(&rt),
+        [PlatformRequest::Calendar(
+            CalendarRequest::OpenPrivacySettings
+        )]
+    );
 }
 
 #[test]
@@ -433,6 +493,8 @@ fn platform_goldens() {
     let _goldens = Goldens::collect();
     for dark in [true, false] {
         check_golden("mac-settings", dark, (980.0, 2100.0));
+        check_golden("mac-settings-calendar", dark, (980.0, 2500.0));
+        check_golden("mac-settings-calendar-denied", dark, (980.0, 2100.0));
         for scene in [
             "mac-commands",
             "meetings",

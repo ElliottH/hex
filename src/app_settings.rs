@@ -23,6 +23,7 @@ static MEETING_INDICATOR_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEETING_INDICATOR_CORNER: AtomicU8 = AtomicU8::new(0);
 static MEETING_OUTPUT_FOLDER: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
 static MEETING_PROVIDERS: OnceLock<RwLock<Vec<MeetingProviderChoice>>> = OnceLock::new();
+static CALENDAR_SETTINGS: OnceLock<RwLock<CalendarSettings>> = OnceLock::new();
 static MICROPHONE_POLICY: AtomicU8 = AtomicU8::new(0);
 static CUSTOM_TRANSFORMATIONS_ENABLED: AtomicBool = AtomicBool::new(false);
 static INDICATOR_POSITION: AtomicU8 = AtomicU8::new(0);
@@ -629,6 +630,64 @@ pub struct MeetingSettings {
     /// and so read as Never offer.
     #[serde(alias = "never_offer")]
     pub providers: Vec<MeetingProviderChoice>,
+    /// Reminders before calendar meetings (macOS). Off until the user
+    /// connects a calendar.
+    pub calendar: CalendarSettings,
+}
+
+/// The connected calendar and its meeting reminders.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct CalendarSettings {
+    /// Set once the user clicks Connect calendar and macOS grants access;
+    /// Hex never asks for calendar access before that.
+    pub connected: bool,
+    /// Calendars left out of reminders, by EventKit identifier. Every
+    /// calendar is included by default, so new ones are too.
+    pub excluded_calendars: Vec<String>,
+    /// Show a reminder capsule before each meeting.
+    pub remind: bool,
+    /// How many minutes before a meeting starts the reminder shows; zero
+    /// shows it at the start.
+    pub lead_minutes: u8,
+}
+
+/// The reminder lead times Settings offers, in minutes.
+pub const CALENDAR_LEAD_MINUTES: [u8; 4] = [0, 1, 2, 5];
+
+impl Default for CalendarSettings {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            excluded_calendars: Vec::new(),
+            remind: true,
+            lead_minutes: 1,
+        }
+    }
+}
+
+impl CalendarSettings {
+    /// Whether reminders should run: connected, and wanted.
+    pub fn reminders_active(&self) -> bool {
+        self.connected && self.remind
+    }
+
+    /// The lead time, snapped to an offered choice.
+    pub fn lead(&self) -> std::time::Duration {
+        let minutes = if CALENDAR_LEAD_MINUTES.contains(&self.lead_minutes) {
+            self.lead_minutes
+        } else {
+            1
+        };
+        std::time::Duration::from_secs(u64::from(minutes) * 60)
+    }
+
+    pub fn includes(&self, calendar: &str) -> bool {
+        !self
+            .excluded_calendars
+            .iter()
+            .any(|excluded| excluded == calendar)
+    }
 }
 
 /// The call services Settings always lists, by provider key (the app's
@@ -679,6 +738,7 @@ impl Default for MeetingSettings {
             show_recording_indicator: true,
             recording_indicator_corner: MeetingIndicatorCorner::TopRight,
             providers: Vec::new(),
+            calendar: CalendarSettings::default(),
         }
     }
 }
@@ -1209,6 +1269,10 @@ impl AppSettings {
             .get_or_init(Default::default)
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.meetings.providers.clone();
+        *CALENDAR_SETTINGS
+            .get_or_init(Default::default)
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = self.meetings.calendar.clone();
         *HOTKEYS
             .get_or_init(Default::default)
             .write()
@@ -1533,6 +1597,16 @@ pub fn meeting_provider_choices() -> Vec<MeetingProviderChoice> {
         .clone()
 }
 
+/// The connected calendar's reminder settings, as last applied.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn calendar_settings() -> CalendarSettings {
+    CALENDAR_SETTINGS
+        .get_or_init(Default::default)
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
 /// Sets one provider's policy; returns whether the settings changed.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn set_meeting_provider(meetings: &mut MeetingSettings, choice: MeetingProviderChoice) -> bool {
@@ -1767,6 +1841,37 @@ mod tests {
                 .ends_with("Hex Meetings")
         );
         assert!(settings.text_replacements.is_empty());
+    }
+
+    #[test]
+    fn calendar_reminders_stay_off_until_connected_and_survive_older_files() {
+        let older: AppSettings =
+            serde_json::from_str(r#"{"meetings":{"enabled":true,"providers":[]}}"#).unwrap();
+        assert_eq!(older.meetings.calendar, CalendarSettings::default());
+        assert!(!older.meetings.calendar.connected);
+        assert!(!older.meetings.calendar.reminders_active());
+        assert_eq!(
+            older.meetings.calendar.lead(),
+            std::time::Duration::from_secs(60)
+        );
+
+        let partial: AppSettings =
+            serde_json::from_str(r#"{"meetings":{"calendar":{"connected":true}}}"#).unwrap();
+        assert!(partial.meetings.calendar.reminders_active());
+        assert!(partial.meetings.calendar.includes("any-calendar"));
+
+        let mut calendar = partial.meetings.calendar.clone();
+        calendar.excluded_calendars.push("work".into());
+        calendar.lead_minutes = 5;
+        let written = serde_json::to_value(&calendar).unwrap();
+        let reread: CalendarSettings = serde_json::from_value(written).unwrap();
+        assert_eq!(reread, calendar);
+        assert!(!reread.includes("work"));
+        assert_eq!(reread.lead(), std::time::Duration::from_secs(300));
+
+        // A hand-edited lead time outside the choices falls back to a minute.
+        let odd: CalendarSettings = serde_json::from_str(r#"{"lead_minutes":7}"#).unwrap();
+        assert_eq!(odd.lead(), std::time::Duration::from_secs(60));
     }
 
     #[test]

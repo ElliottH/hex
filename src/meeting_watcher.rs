@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, eyre};
 
+use crate::calendar::{CalendarMeeting, ReminderScheduler, ReminderUpdate};
 use crate::context::ContextSnapshot;
-use crate::meeting::{self, MeetingRequest};
+use crate::meeting::{self, MeetingCalendar, MeetingRequest, MeetingStart};
 use crate::meeting_detection::{
     CallPresence, Detection, MeetingCandidate, MeetingDetector, candidate_from_microphone,
 };
@@ -25,10 +26,33 @@ pub(crate) enum ControllerCommand {
     Stop,
     Open(String),
     Summarize(String),
+    /// Record a calendar meeting from its reminder, first opening its call
+    /// link when `join`.
+    RecordMeeting {
+        meeting: CalendarMeeting,
+        join: bool,
+    },
+    /// Open the meeting's call link without recording (Always record
+    /// starts once the call is detected).
+    JoinMeeting(CalendarMeeting),
+    /// Not now, or Don't record: the meeting's call is neither offered nor
+    /// recorded automatically.
+    DismissReminder(CalendarMeeting),
 }
 
 pub(crate) enum ControllerEvent {
     Offer(MeetingCandidate),
+    /// A calendar meeting is about to start. `automatic` when its call
+    /// service is set to Always record.
+    Reminder {
+        meeting: CalendarMeeting,
+        automatic: bool,
+    },
+    /// Close this occurrence's reminder: it was cancelled, moved, is long
+    /// past, or reminders were turned off.
+    ReminderWithdrawn {
+        occurrence: String,
+    },
     Starting,
     /// `automatic` when the provider is set to Always record.
     RecordingStarted {
@@ -97,6 +121,7 @@ pub(crate) fn controller_loop(
 ) -> Result<()> {
     let mut detector = MeetingDetector::default();
     let mut recording: Option<ActiveRecording> = None;
+    let mut reminders = Reminders::default();
     let mut observed_microphone_apps = Vec::new();
     tracing::info!("meeting watcher started");
 
@@ -111,10 +136,18 @@ pub(crate) fn controller_loop(
                 MeetingRequest::Summarize(id) => ControllerCommand::Summarize(id),
             });
         for command in commands.try_iter().take(8).chain(requested_commands) {
-            handle_command(&mut recording, command, enabled, &events);
+            handle_command(
+                &mut recording,
+                &mut detector,
+                &mut reminders,
+                command,
+                enabled,
+                &events,
+            );
         }
 
         poll_recording(&mut recording, &events)?;
+        reminders.poll(enabled, recording.is_some(), &events);
 
         if recording.is_none() && enabled {
             let choices = crate::app_settings::meeting_provider_choices();
@@ -127,7 +160,8 @@ pub(crate) fn controller_loop(
                     let _ = events.send(ControllerEvent::Offer(candidate));
                 }
                 Ok(Some(Detection::Record(candidate))) => {
-                    start_recording(&mut recording, candidate, true, &events);
+                    let start = reminders.start_for(&candidate);
+                    start_recording(&mut recording, start, true, &events);
                 }
                 Ok(None) => {}
             }
@@ -147,16 +181,47 @@ pub(crate) fn controller_loop(
 
 fn handle_command(
     recording: &mut Option<ActiveRecording>,
+    detector: &mut MeetingDetector,
+    reminders: &mut Reminders,
     command: ControllerCommand,
     enabled: bool,
     events: &SyncSender<ControllerEvent>,
 ) {
     match command {
-        ControllerCommand::Record(_) if !enabled => {
+        ControllerCommand::Record(_) | ControllerCommand::RecordMeeting { .. } if !enabled => {
             tracing::warn!("ignored a meeting recording request while meetings are off");
         }
         ControllerCommand::Record(candidate) if recording.is_none() => {
-            start_recording(recording, candidate, false, events);
+            let start = reminders.start_for(&candidate);
+            start_recording(recording, start, false, events);
+        }
+        ControllerCommand::RecordMeeting { meeting, join } => {
+            reminders.scheduler.answered(&meeting.occurrence());
+            if join && let Some(link) = &meeting.link {
+                crate::calendar::open_link(&link.url);
+            }
+            detector.snooze_calendar_call(snooze_keys(&meeting), meeting.end_ms);
+            if recording.is_some() {
+                tracing::warn!("ignored a calendar recording request while recording");
+                return;
+            }
+            tracing::info!(
+                provider = meeting.link.as_ref().map(|link| link.provider.label()),
+                join,
+                "calendar meeting recording started from its reminder"
+            );
+            start_recording(recording, calendar_start(&meeting), false, events);
+        }
+        ControllerCommand::JoinMeeting(meeting) => {
+            reminders.scheduler.answered(&meeting.occurrence());
+            if let Some(link) = &meeting.link {
+                crate::calendar::open_link(&link.url);
+            }
+        }
+        ControllerCommand::DismissReminder(meeting) => {
+            reminders.scheduler.answered(&meeting.occurrence());
+            detector.snooze_calendar_call(snooze_keys(&meeting), meeting.end_ms);
+            tracing::info!("calendar meeting reminder dismissed");
         }
         ControllerCommand::Stop => {
             if let Some(active) = recording.as_ref()
@@ -173,29 +238,206 @@ fn handle_command(
     }
 }
 
+/// What a recording starts with, and what the controller watches while it
+/// runs.
+struct Start {
+    meeting: MeetingStart,
+    title: String,
+    /// The call app whose leaving the microphone ends the call.
+    application: Option<String>,
+    app_label: String,
+}
+
+impl Start {
+    fn from_candidate(candidate: &MeetingCandidate) -> Self {
+        Self {
+            meeting: candidate.recording_start(),
+            title: candidate.title.clone(),
+            application: candidate.application.clone(),
+            app_label: candidate.source.label().into(),
+        }
+    }
+}
+
+/// A recording for a calendar meeting: its title, attendees, and call app.
+fn calendar_start(meeting: &CalendarMeeting) -> Start {
+    let provider = meeting.link.as_ref().map(|link| link.provider);
+    Start {
+        meeting: MeetingStart {
+            title: Some(meeting.display_title()),
+            app: provider.map(|provider| provider.label().to_string()),
+            calendar: Some(calendar_context(meeting)),
+        },
+        title: meeting.display_title(),
+        application: provider
+            .and_then(|provider| provider.application())
+            .map(str::to_string),
+        app_label: provider
+            .map_or("Meeting", |provider| provider.label())
+            .into(),
+    }
+}
+
+fn calendar_context(meeting: &CalendarMeeting) -> MeetingCalendar {
+    MeetingCalendar {
+        title: meeting.display_title(),
+        attendees: meeting.attendees.clone(),
+    }
+}
+
+/// The detected-call keys a calendar meeting's answered reminder covers;
+/// none when it has no call link, which covers the next call alone.
+fn snooze_keys(meeting: &CalendarMeeting) -> Vec<String> {
+    meeting.link.as_ref().map_or_else(Vec::new, |link| {
+        link.provider
+            .detection_keys()
+            .iter()
+            .map(|key| key.to_string())
+            .collect()
+    })
+}
+
+/// How often the reminder poll rereads the calendar without a change
+/// notification.
+const CALENDAR_REREAD_MS: i64 = 60_000;
+
+/// Calendar reminders on the controller thread: a bounded EventKit read on
+/// each store change or once a minute, and a cheap scheduler pass on every
+/// loop. No network; never on the audio or UI thread.
+#[derive(Default)]
+struct Reminders {
+    scheduler: ReminderScheduler,
+    meetings: Vec<CalendarMeeting>,
+    change_count: Option<u64>,
+    /// Wall-clock time of the last read, so a wake from sleep rereads.
+    read_at_ms: Option<i64>,
+    read_failed: bool,
+}
+
+impl Reminders {
+    fn poll(&mut self, enabled: bool, recording: bool, events: &SyncSender<ControllerEvent>) {
+        let settings = crate::app_settings::calendar_settings();
+        if !enabled || !settings.reminders_active() {
+            self.meetings.clear();
+            self.change_count = None;
+            self.read_at_ms = None;
+            if let Some(occurrence) = self.scheduler.clear() {
+                let _ = events.send(ControllerEvent::ReminderWithdrawn { occurrence });
+            }
+            return;
+        }
+        let now_ms = crate::calendar::wall_clock_ms();
+        let changes = crate::calendar::change_count();
+        let stale = self
+            .read_at_ms
+            .is_none_or(|read_at| (now_ms - read_at).abs() >= CALENDAR_REREAD_MS);
+        if stale || self.change_count != Some(changes) {
+            self.change_count = Some(changes);
+            self.read_at_ms = Some(now_ms);
+            match crate::calendar::read_meetings(&settings, now_ms) {
+                Ok(meetings) => {
+                    self.meetings = meetings;
+                    self.read_failed = false;
+                }
+                Err(error) => {
+                    if !self.read_failed {
+                        tracing::warn!(%error, "could not read calendar meetings");
+                    }
+                    self.read_failed = true;
+                    self.meetings.clear();
+                }
+            }
+        }
+        // A reminder waits while Hex records; it shows after, if still due.
+        if recording && self.scheduler.showing().is_none() {
+            return;
+        }
+        let lead_ms = settings.lead().as_millis() as i64;
+        match self.scheduler.poll(&self.meetings, now_ms, lead_ms) {
+            Some(ReminderUpdate::Show(meeting)) => {
+                let automatic = records_automatically(
+                    &meeting,
+                    &crate::app_settings::meeting_provider_choices(),
+                );
+                tracing::info!(
+                    provider = meeting.link.as_ref().map(|link| link.provider.label()),
+                    automatic,
+                    "calendar meeting reminder shown"
+                );
+                let _ = events.send(ControllerEvent::Reminder { meeting, automatic });
+            }
+            Some(ReminderUpdate::Withdraw(occurrence)) => {
+                let _ = events.send(ControllerEvent::ReminderWithdrawn { occurrence });
+            }
+            None => {}
+        }
+    }
+
+    /// A detected call's recording, titled from the calendar meeting it
+    /// belongs to when there is one.
+    fn start_for(&self, candidate: &MeetingCandidate) -> Start {
+        let mut start = Start::from_candidate(candidate);
+        let keys = [candidate.site.as_deref(), candidate.application.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let lead_ms = crate::app_settings::calendar_settings().lead().as_millis() as i64;
+        if let Some(meeting) = crate::calendar::current_for_call(
+            &self.meetings,
+            &keys,
+            crate::calendar::wall_clock_ms(),
+            lead_ms,
+        ) {
+            start.meeting.title = Some(meeting.display_title());
+            start.meeting.calendar = Some(calendar_context(meeting));
+            start.title = meeting.display_title();
+        }
+        start
+    }
+}
+
+/// Whether the meeting's call service is set to Always record, so its call
+/// records once detected.
+fn records_automatically(
+    meeting: &CalendarMeeting,
+    choices: &[crate::app_settings::MeetingProviderChoice],
+) -> bool {
+    meeting
+        .link
+        .as_ref()
+        .and_then(|link| link.provider.choice_key())
+        .is_some_and(|key| {
+            choices.iter().any(|choice| {
+                choice.key == key
+                    && choice.policy == crate::app_settings::MeetingPolicy::AlwaysRecord
+            })
+        })
+}
+
 fn start_recording(
     recording: &mut Option<ActiveRecording>,
-    candidate: MeetingCandidate,
+    start: Start,
     automatic: bool,
     events: &SyncSender<ControllerEvent>,
 ) {
     if automatic {
         tracing::info!(
-            source = candidate.source.label(),
-            title = candidate.title,
+            source = start.app_label,
+            title = start.title,
             "meeting recording started automatically"
         );
     }
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
     let (update_sender, updates) = mpsc::sync_channel(4);
-    let start = candidate.recording_start();
-    let worker = thread::spawn(move || meeting::record(start, &worker_stop, Some(update_sender)));
+    let meeting_start = start.meeting;
+    let worker =
+        thread::spawn(move || meeting::record(meeting_start, &worker_stop, Some(update_sender)));
     let _ = events.send(ControllerEvent::Starting);
     *recording = Some(ActiveRecording {
-        title: candidate.title,
-        application: candidate.application,
-        app_label: candidate.source.label().into(),
+        title: start.title,
+        application: start.application,
+        app_label: start.app_label,
         automatic,
         presence: CallPresence::default(),
         stop,

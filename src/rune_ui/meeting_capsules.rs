@@ -1,5 +1,6 @@
-//! The macOS meeting capsules on Rune: the recording offer, "left the
-//! call", the ready transcript, and the recording capsule. Each is an
+//! The macOS meeting capsules on Rune: the calendar meeting reminder, the
+//! recording offer, "left the call", the ready transcript, and the recording
+//! capsule. Each is an
 //! interactive Rune overlay, which on macOS is a non-activating `NSPanel`:
 //! its buttons take clicks while the call app keeps focus and Hex never
 //! activates. An offer that times out only closes; nothing starts or stops
@@ -29,6 +30,7 @@ use rune_kit::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant};
 
 use super::controls::{Paint, pulsing_dot, status_dot};
 use crate::app_settings::{MeetingIndicatorCorner, MeetingPolicy, MeetingProviderChoice};
+use crate::calendar::CalendarMeeting;
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::meeting::{self, MeetingManifest, TranscriptEntry};
 use crate::meeting_detection::MeetingCandidate;
@@ -39,6 +41,15 @@ const MEETING_PANEL_WIDTH: f32 = 420.0;
 /// The offer's "…" choices need room for three buttons beside the name.
 const MEETING_MENU_WIDTH: f32 = 560.0;
 const MEETING_PANEL_HEIGHT: f32 = 64.0;
+/// The reminder: the meeting's title beside up to three buttons.
+const REMINDER_PANEL_WIDTH: f32 = 520.0;
+/// How long an unanswered reminder stays after its meeting starts; it
+/// closes without recording or snoozing anything.
+const REMINDER_AFTER_START: Duration = Duration::from_secs(60);
+/// The shortest an unanswered reminder shows.
+const REMINDER_MIN: Duration = Duration::from_secs(30);
+/// How often an open reminder recounts "Starts in N min".
+const REMINDER_TICK: Duration = Duration::from_secs(5);
 /// The recording capsule's window, as wide as the open pill.
 const RECORDING_PANEL_WIDTH: f32 = 640.0;
 /// The resting pill: the dot, the title and elapsed time, and a `+N` tag.
@@ -65,6 +76,12 @@ const DOCK: f32 = 24.0;
 
 #[derive(Clone)]
 enum Kind {
+    /// A calendar meeting is about to start; `automatic` when its call
+    /// service is set to Always record.
+    Reminder {
+        meeting: CalendarMeeting,
+        automatic: bool,
+    },
     Offer(MeetingCandidate),
     CallEnded {
         app: String,
@@ -341,6 +358,31 @@ impl MeetingCapsules {
     /// Shows, updates, or closes a capsule for each controller event.
     pub(crate) fn event(&mut self, event: &ControllerEvent) {
         match event {
+            ControllerEvent::Reminder { meeting, automatic } => {
+                let until_start = meeting.start_ms - crate::calendar::wall_clock_ms();
+                let timeout = Duration::from_millis(until_start.max(0) as u64)
+                    .saturating_add(REMINDER_AFTER_START)
+                    .max(REMINDER_MIN);
+                self.show_panel(
+                    Kind::Reminder {
+                        meeting: meeting.clone(),
+                        automatic: *automatic,
+                    },
+                    Some(timeout),
+                );
+            }
+            ControllerEvent::ReminderWithdrawn { occurrence } => {
+                let (occurrence, generation) = (occurrence.clone(), self.generation.clone());
+                let panel = self.panel.clone();
+                self.panel.update(move |capsule, _| {
+                    if matches!(&capsule.kind, Some(Kind::Reminder { meeting, .. }) if meeting.occurrence() == occurrence)
+                    {
+                        generation.fetch_add(1, Ordering::SeqCst);
+                        capsule.kind = None;
+                        panel.hide();
+                    }
+                });
+            }
             ControllerEvent::Offer(candidate) => {
                 tracing::info!(
                     source = candidate.source.label(),
@@ -405,8 +447,15 @@ impl MeetingCapsules {
 
     fn show_panel(&self, kind: Kind, timeout: Option<Duration>) {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.panel
-            .resize((MEETING_PANEL_WIDTH, MEETING_PANEL_HEIGHT));
+        let reminder = matches!(kind, Kind::Reminder { .. });
+        self.panel.resize((
+            if reminder {
+                REMINDER_PANEL_WIDTH
+            } else {
+                MEETING_PANEL_WIDTH
+            },
+            MEETING_PANEL_HEIGHT,
+        ));
         self.panel.update(move |capsule, tx| {
             capsule.kind = Some(kind);
             capsule.more_open = false;
@@ -414,6 +463,17 @@ impl MeetingCapsules {
             tx.instant();
         });
         self.panel.show();
+        if reminder && let Some(timeout) = timeout {
+            // Recount "Starts in N min" while this reminder may show.
+            let (panel, current) = (self.panel.clone(), self.generation.clone());
+            let until = Instant::now() + timeout;
+            std::thread::spawn(move || {
+                while current.load(Ordering::SeqCst) == generation && Instant::now() < until {
+                    std::thread::sleep(REMINDER_TICK);
+                    panel.update(|_, _| {});
+                }
+            });
+        }
         if let Some(timeout) = timeout {
             let (panel, current) = (self.panel.clone(), self.generation.clone());
             std::thread::spawn(move || {
@@ -545,6 +605,9 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
                 }
             })],
         ),
+        Kind::Reminder { meeting, automatic } => {
+            reminder(p, meeting, *automatic, crate::calendar::wall_clock_ms())
+        }
         Kind::Offer(candidate) if capsule.more_open => offer_choices(p, candidate),
         Kind::Offer(candidate) => {
             let mut actions = Vec::new();
@@ -597,6 +660,102 @@ fn view(capsule: &Capsule, cx: &mut Cx<Capsule>) -> El {
         Kind::Ready(manifest) => ready(p, manifest, capsule.copied),
     };
     pill(p, dot, &title, &subtitle, actions)
+}
+
+/// "Starts in 1 min", "Starting now", or "Started 2 min ago".
+fn starts_label(start_ms: i64, now_ms: i64) -> String {
+    let minutes = crate::calendar::minutes_until(start_ms, now_ms);
+    if minutes > 0 {
+        tr_fill("Starts in {} min", &minutes.to_string())
+    } else {
+        let ago = (now_ms - start_ms) / 60_000;
+        if ago < 1 {
+            tr("Starting now").to_owned()
+        } else {
+            tr_fill("Started {} min ago", &ago.to_string())
+        }
+    }
+}
+
+/// The calendar reminder: Record, or Join & record when the invitation has
+/// a call link. With Always record set for its service, it says so and
+/// offers Join and Don't record instead.
+fn reminder(
+    p: Paint,
+    meeting: &CalendarMeeting,
+    automatic: bool,
+    now_ms: i64,
+) -> (rune::Color, String, String, Vec<El>) {
+    let when = starts_label(meeting.start_ms, now_ms);
+    let has_link = meeting.link.is_some();
+    let send_meeting = |command: fn(CalendarMeeting) -> ControllerCommand| {
+        move |c: &mut Capsule| {
+            let Some(Kind::Reminder { meeting, .. }) = &c.kind else {
+                return;
+            };
+            let command = command(meeting.clone());
+            c.send(command);
+            c.close();
+        }
+    };
+    if automatic {
+        let mut actions = vec![button(
+            p,
+            "dont-record",
+            tr("Don't record"),
+            false,
+            send_meeting(ControllerCommand::DismissReminder),
+        )];
+        if has_link {
+            actions.push(button(
+                p,
+                "join",
+                tr("Join"),
+                true,
+                send_meeting(ControllerCommand::JoinMeeting),
+            ));
+        }
+        return (
+            p.accent(),
+            meeting.display_title(),
+            tr_fill("{} · Hex records automatically", &when),
+            actions,
+        );
+    }
+    let mut actions = vec![button(
+        p,
+        "not-now",
+        tr("Not now"),
+        false,
+        send_meeting(ControllerCommand::DismissReminder),
+    )];
+    if has_link {
+        actions.push(button(
+            p,
+            "join-record",
+            tr("Join & record"),
+            false,
+            send_meeting(|meeting| ControllerCommand::RecordMeeting {
+                meeting,
+                join: true,
+            }),
+        ));
+    }
+    actions.push(button(
+        p,
+        "record",
+        tr("Record"),
+        true,
+        send_meeting(|meeting| ControllerCommand::RecordMeeting {
+            meeting,
+            join: false,
+        }),
+    ));
+    let subtitle = match &meeting.link {
+        Some(link) => format!("{when} · {}", link.provider.label()),
+        None => when,
+    };
+    (p.accent(), meeting.display_title(), subtitle, actions)
 }
 
 /// The offer's "…": never offer this provider again, or always record it
@@ -864,6 +1023,30 @@ mod tests {
     const PANEL: (f32, f32) = (MEETING_PANEL_WIDTH, MEETING_PANEL_HEIGHT);
     const MENU: (f32, f32) = (MEETING_MENU_WIDTH, MEETING_PANEL_HEIGHT);
     const RECORDING: (f32, f32) = (RECORDING_PANEL_WIDTH, RECORDING_PANEL_HEIGHT);
+    const REMINDER: (f32, f32) = (REMINDER_PANEL_WIDTH, MEETING_PANEL_HEIGHT);
+
+    /// "Design sync" a minute from now, with a Zoom link or none.
+    fn design_sync(link: bool) -> CalendarMeeting {
+        let start_ms = crate::calendar::wall_clock_ms() + 59_000;
+        CalendarMeeting {
+            id: "design-sync".into(),
+            title: "Design sync".into(),
+            start_ms,
+            end_ms: start_ms + 30 * 60_000,
+            attendees: vec!["Dax".into(), "Adam".into()],
+            link: link.then(|| crate::calendar::CallLink {
+                provider: crate::calendar::CallProvider::Zoom,
+                url: "https://anomaly.zoom.us/j/123456789".into(),
+            }),
+        }
+    }
+
+    fn reminder(link: bool, automatic: bool) -> Kind {
+        Kind::Reminder {
+            meeting: design_sync(link),
+            automatic,
+        }
+    }
 
     fn slack_huddle() -> MeetingCandidate {
         MeetingCandidate {
@@ -996,6 +1179,78 @@ mod tests {
         let earlier = Instant::now() - AUTOMATIC_LABEL - Duration::from_secs(1);
         let (rt, _, _) = runtime(recording(earlier), false, true, RECORDING);
         assert!(!texts(&rt).iter().any(|text| text.contains("automatically")));
+    }
+
+    #[test]
+    fn a_reminder_with_a_link_joins_and_records_on_one_click() {
+        let (mut rt, commands, _) = runtime(reminder(true, false), false, true, REMINDER);
+        let shown = texts(&rt);
+        assert!(shown.contains(&"Design sync".to_string()), "{shown:?}");
+        assert!(
+            shown.contains(&"Starts in 1 min · Zoom".to_string()),
+            "{shown:?}"
+        );
+        assert!(rt.find("record").is_some());
+        tap(&mut rt, "join-record");
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::RecordMeeting { meeting, join: true }) if meeting.id == "design-sync"
+        ));
+        assert!(rt.state.kind.is_none());
+    }
+
+    #[test]
+    fn a_reminder_without_a_link_only_records() {
+        let (mut rt, commands, _) = runtime(reminder(false, false), false, false, REMINDER);
+        assert!(texts(&rt).contains(&"Starts in 1 min".to_string()));
+        assert!(rt.find("join-record").is_none());
+        tap(&mut rt, "record");
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::RecordMeeting { join: false, .. })
+        ));
+    }
+
+    #[test]
+    fn dismissing_a_reminder_tells_the_controller() {
+        let (mut rt, commands, _) = runtime(reminder(true, false), false, true, REMINDER);
+        tap(&mut rt, "not-now");
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::DismissReminder(meeting)) if meeting.id == "design-sync"
+        ));
+        assert!(rt.state.kind.is_none());
+    }
+
+    #[test]
+    fn an_always_record_reminder_says_so_and_never_offers_record() {
+        let (mut rt, commands, _) = runtime(reminder(true, true), false, true, REMINDER);
+        assert!(texts(&rt).contains(&"Starts in 1 min · Hex records automatically".to_string()));
+        assert!(rt.find("record").is_none());
+        assert!(rt.find("join-record").is_none());
+        tap(&mut rt, "join");
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::JoinMeeting(_))
+        ));
+
+        let (mut rt, commands, _) = runtime(reminder(false, true), false, true, REMINDER);
+        assert!(rt.find("join").is_none());
+        tap(&mut rt, "dont-record");
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ControllerCommand::DismissReminder(_))
+        ));
+    }
+
+    #[test]
+    fn the_reminder_counts_down_to_the_start() {
+        let now = 1_000_000;
+        assert_eq!(starts_label(now + 4 * 60_000 + 1, now), "Starts in 5 min");
+        assert_eq!(starts_label(now + 60_000, now), "Starts in 1 min");
+        assert_eq!(starts_label(now, now), "Starting now");
+        assert_eq!(starts_label(now - 59_000, now), "Starting now");
+        assert_eq!(starts_label(now - 2 * 60_000, now), "Started 2 min ago");
     }
 
     fn live_recording(id: &str) -> Kind {
@@ -1176,6 +1431,9 @@ mod tests {
             ("offer", Kind::Offer(slack_huddle()), false, PANEL),
             ("offer-choices", Kind::Offer(slack_huddle()), true, MENU),
             ("offer-choices-site", Kind::Offer(google_meet), true, MENU),
+            ("reminder", reminder(true, false), false, REMINDER),
+            ("reminder-no-link", reminder(false, false), false, REMINDER),
+            ("reminder-automatic", reminder(true, true), false, REMINDER),
             (
                 "recording-automatic",
                 Kind::Recording {

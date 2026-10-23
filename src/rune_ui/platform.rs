@@ -10,6 +10,7 @@
 //! data on its own OS.
 
 use super::meetings::Meeting;
+use crate::calendar::{CalendarAccess, CalendarInfo, CallProvider};
 use crate::commands::CommandScope;
 use crate::hex_microphone::{
     DemoPlaybackTrack, DemoSnapshot, DemoSourceKind, HexMicrophoneStatus, TunedFilterConfig,
@@ -33,6 +34,9 @@ pub(super) struct Capabilities {
     pub(super) commands: bool,
     /// Meeting recording, its pane, and its Settings section (macOS beta).
     pub(super) meetings: bool,
+    /// Calendar meeting reminders: the Calendar card under Meetings
+    /// (macOS, EventKit).
+    pub(super) calendar: bool,
     /// Privacy permissions gate dictation (macOS).
     pub(super) permissions: bool,
     pub(super) launch_at_login: bool,
@@ -62,6 +66,7 @@ impl Capabilities {
         os: Os::Linux,
         commands: false,
         meetings: false,
+        calendar: false,
         permissions: false,
         launch_at_login: false,
         dock_icon: false,
@@ -79,6 +84,7 @@ impl Capabilities {
         os: Os::Macos,
         commands: true,
         meetings: true,
+        calendar: true,
         permissions: true,
         launch_at_login: true,
         dock_icon: true,
@@ -96,6 +102,7 @@ impl Capabilities {
         os: Os::Windows,
         commands: false,
         meetings: false,
+        calendar: false,
         permissions: false,
         launch_at_login: true,
         dock_icon: false,
@@ -124,6 +131,71 @@ impl Capabilities {
             ..os
         }
     }
+}
+
+/// What the Calendar card shows; the host reads it off the main thread.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct CalendarView {
+    pub(super) access: CalendarAccess,
+    pub(super) calendars: Vec<CalendarInfo>,
+    /// The next meetings from the included calendars, once connected.
+    pub(super) upcoming: Vec<UpcomingMeeting>,
+    /// Connect calendar was pressed and macOS is asking.
+    pub(super) connecting: bool,
+    pub(super) error: Option<String>,
+}
+
+impl CalendarView {
+    /// A connected calendar with three meetings coming up, for scenes.
+    pub(super) fn preview() -> Self {
+        let calendar = |id: &str, title: &str, source: &str| CalendarInfo {
+            id: id.into(),
+            title: title.into(),
+            source: source.into(),
+        };
+        let meeting = |title: &str, when: &str, provider| UpcomingMeeting {
+            title: title.into(),
+            when: when.into(),
+            provider,
+        };
+        Self {
+            access: CalendarAccess::FullAccess,
+            calendars: vec![
+                calendar("work", "Work", "kit@anoma.ly"),
+                calendar("home", "Home", "iCloud"),
+                calendar("birthdays", "Birthdays", "Other"),
+            ],
+            upcoming: vec![
+                meeting(
+                    "Design sync",
+                    "Today · 2:30 PM",
+                    Some(CallProvider::GoogleMeet),
+                ),
+                meeting("Rune review", "Today · 4:00 PM", Some(CallProvider::Zoom)),
+                meeting("1:1 with Dax", "Tomorrow · 10:00 AM", None),
+            ],
+            connecting: false,
+            error: None,
+        }
+    }
+}
+
+/// One upcoming meeting as Settings lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct UpcomingMeeting {
+    pub(super) title: String,
+    /// "Today · 2:30 PM", already localized.
+    pub(super) when: String,
+    pub(super) provider: Option<CallProvider>,
+}
+
+/// What the Calendar card asks the host for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CalendarRequest {
+    /// Ask macOS for full calendar access, then mark the calendar connected.
+    Connect,
+    /// System Settings › Privacy & Security › Calendars.
+    OpenPrivacySettings,
 }
 
 /// The voice command model's state while commands are on (macOS).
@@ -210,6 +282,8 @@ pub(super) struct PlatformState {
     pub(super) notes: NotesAvailability,
     /// A meeting folder that could not be revealed or chosen.
     pub(super) meeting_folder_error: Option<String>,
+    /// The Calendar card's access, calendars, and next meetings.
+    pub(super) calendar: CalendarView,
     /// The tour's relaunch failed; the person must reopen Hex.
     pub(super) relaunch_failed: bool,
     /// Developer builds: the Activity and HUD Lab panes
@@ -314,6 +388,7 @@ impl PlatformState {
             context: None,
             notes: NotesAvailability::Available,
             meeting_folder_error: None,
+            calendar: CalendarView::default(),
             relaunch_failed: false,
             developer: false,
             accessibility_renamed: false,
@@ -492,6 +567,7 @@ pub(super) enum PlatformRequest {
     InstallHexMicrophone,
     UninstallHexMicrophone,
     Meeting(MeetingRequest),
+    Calendar(CalendarRequest),
     CreateCommandsConfig,
     OpenCommandsConfig,
     RetryCommandModel,

@@ -252,6 +252,7 @@ fn meeting_live_replay() {
         provisional_title: None,
         notes: None,
         notes_error: None,
+        calendar: None,
     };
     write_manifest(&directory, &manifest).unwrap();
 

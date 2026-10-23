@@ -88,6 +88,7 @@ impl MeetingCandidate {
         crate::meeting::MeetingStart {
             title: self.named.then(|| self.title.clone()),
             app: self.app_label(),
+            calendar: None,
         }
     }
 
@@ -218,9 +219,43 @@ pub struct MeetingDetector {
     offered: Option<String>,
     offered_application: Option<String>,
     absent_observations: u8,
+    calendar: Option<CalendarSnooze>,
+}
+
+/// A call the user already answered a calendar reminder for: recorded it,
+/// or dismissed it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CalendarSnooze {
+    /// App bundle IDs and website hosts of the meeting's call service;
+    /// empty when the invitation had no call link, which covers the next
+    /// call alone.
+    keys: Vec<String>,
+    /// When the meeting ends, in wall-clock milliseconds.
+    until_ms: i64,
+}
+
+impl CalendarSnooze {
+    fn covers(&self, candidate: &MeetingCandidate) -> bool {
+        self.keys.is_empty()
+            || [candidate.site.as_deref(), candidate.application.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|key| {
+                    self.keys
+                        .iter()
+                        .any(|known| crate::calendar::key_matches(key, known))
+                })
+    }
 }
 
 impl MeetingDetector {
+    /// A calendar reminder was answered: its call, when detected before the
+    /// meeting ends, is treated as already offered. `keys` names the call
+    /// service; empty covers the next call detected.
+    pub fn snooze_calendar_call(&mut self, keys: Vec<String>, until_ms: i64) {
+        self.calendar = Some(CalendarSnooze { keys, until_ms });
+    }
+
     pub fn is_application_snoozed(&self, canonical_bundle_id: &str) -> bool {
         self.offered_application.as_deref() == Some(canonical_bundle_id)
     }
@@ -234,6 +269,15 @@ impl MeetingDetector {
         candidate: Option<MeetingCandidate>,
         choices: &[MeetingProviderChoice],
     ) -> Option<Detection> {
+        self.detect_at(candidate, choices, crate::calendar::wall_clock_ms())
+    }
+
+    fn detect_at(
+        &mut self,
+        candidate: Option<MeetingCandidate>,
+        choices: &[MeetingProviderChoice],
+        now_ms: i64,
+    ) -> Option<Detection> {
         if candidate
             .as_ref()
             .is_some_and(|candidate| candidate.policy(choices) == MeetingPolicy::NeverOffer)
@@ -243,14 +287,23 @@ impl MeetingDetector {
             self.absent_observations = 0;
             return None;
         }
-        let candidate = self.observe(candidate)?;
+        let candidate = self.observe_at(candidate, now_ms)?;
         Some(match candidate.policy(choices) {
             MeetingPolicy::AlwaysRecord => Detection::Record(candidate),
             _ => Detection::Offer(candidate),
         })
     }
 
+    #[cfg(test)]
     fn observe(&mut self, candidate: Option<MeetingCandidate>) -> Option<MeetingCandidate> {
+        self.observe_at(candidate, 0)
+    }
+
+    fn observe_at(
+        &mut self,
+        candidate: Option<MeetingCandidate>,
+        now_ms: i64,
+    ) -> Option<MeetingCandidate> {
         let Some(candidate) = candidate else {
             self.pending = None;
             self.absent_observations = self.absent_observations.saturating_add(1);
@@ -284,6 +337,25 @@ impl MeetingDetector {
         self.pending = None;
         self.offered = Some(candidate.key.clone());
         self.offered_application = candidate.application.clone();
+        if self
+            .calendar
+            .as_ref()
+            .is_some_and(|snooze| now_ms >= snooze.until_ms)
+        {
+            self.calendar = None;
+        }
+        if let Some(snooze) = &self.calendar
+            && snooze.covers(&candidate)
+        {
+            tracing::info!(
+                source = candidate.source.label(),
+                "detected call already answered from its calendar reminder"
+            );
+            if snooze.keys.is_empty() {
+                self.calendar = None;
+            }
+            return None;
+        }
         Some(candidate)
     }
 }
@@ -940,5 +1012,92 @@ mod tests {
             assert!(detector.observe(Some(candidate.clone())).is_none());
         }
         assert!(detector.observe(Some(candidate)).is_some());
+    }
+
+    /// Observes `candidate` until it is stable; returns what the last
+    /// observation detected.
+    fn stable(
+        detector: &mut MeetingDetector,
+        candidate: &MeetingCandidate,
+        choices: &[MeetingProviderChoice],
+        now_ms: i64,
+    ) -> Option<Detection> {
+        for _ in 0..candidate.required_observations() - 1 {
+            assert_eq!(
+                detector.detect_at(Some(candidate.clone()), choices, now_ms),
+                None
+            );
+        }
+        detector.detect_at(Some(candidate.clone()), choices, now_ms)
+    }
+
+    fn leave(detector: &mut MeetingDetector, now_ms: i64) {
+        for _ in 0..ABSENT_OBSERVATIONS_TO_RESET {
+            assert_eq!(detector.detect_at(None, &[], now_ms), None);
+        }
+    }
+
+    #[test]
+    fn a_call_answered_from_its_calendar_reminder_is_not_offered_again() {
+        let zoom = candidate(MeetingSource::Zoom, "us.zoom.xos", "Zoom meeting");
+        let zoom = MeetingCandidate {
+            application: Some("us.zoom.xos".into()),
+            ..zoom
+        };
+        let zoom_keys = crate::calendar::CallProvider::Zoom
+            .detection_keys()
+            .iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>();
+        let mut detector = MeetingDetector::default();
+        detector.snooze_calendar_call(zoom_keys.clone(), 1_000);
+        assert_eq!(stable(&mut detector, &zoom, &[], 10), None);
+        // Rejoining the same meeting later is still covered.
+        leave(&mut detector, 20);
+        assert_eq!(stable(&mut detector, &zoom, &[], 30), None);
+        // Always record doesn't restart a call the user already stopped.
+        leave(&mut detector, 40);
+        let always = [choice("us.zoom.xos", MeetingPolicy::AlwaysRecord)];
+        assert_eq!(stable(&mut detector, &zoom, &always, 50), None);
+        // Another service's call is offered as usual.
+        let slack = slack_huddle();
+        leave(&mut detector, 60);
+        assert_eq!(
+            stable(&mut detector, &slack, &[], 70),
+            Some(Detection::Offer(slack.clone()))
+        );
+        // Once the meeting ends, its service's calls are offered again.
+        leave(&mut detector, 2_000);
+        assert_eq!(
+            stable(&mut detector, &zoom, &[], 2_000),
+            Some(Detection::Offer(zoom.clone()))
+        );
+
+        // A Meet link covers the site in any browser.
+        let meet = candidate_from_microphone(
+            &brave(),
+            &context(
+                "Brave Browser",
+                Some("https://meet.google.com/abc-defg-hij"),
+                "Design sync - Google Meet",
+            ),
+        )
+        .unwrap();
+        let mut detector = MeetingDetector::default();
+        detector.snooze_calendar_call(vec!["meet.google.com".into()], 1_000);
+        assert_eq!(stable(&mut detector, &meet, &[], 10), None);
+    }
+
+    #[test]
+    fn a_reminder_without_a_call_link_covers_only_the_next_call() {
+        let slack = slack_huddle();
+        let mut detector = MeetingDetector::default();
+        detector.snooze_calendar_call(Vec::new(), 1_000);
+        assert_eq!(stable(&mut detector, &slack, &[], 10), None);
+        leave(&mut detector, 20);
+        assert_eq!(
+            stable(&mut detector, &slack, &[], 30),
+            Some(Detection::Offer(slack))
+        );
     }
 }

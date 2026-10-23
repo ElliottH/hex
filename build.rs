@@ -47,6 +47,8 @@ fn main() {
         &["FoundationModels"],
     );
     println!("cargo:rustc-link-arg=-Wl,-weak_framework,FoundationModels");
+    compile_swift_bridge("calendar", "HEXCalendarBridge", &[]);
+    println!("cargo:rustc-link-lib=framework=EventKit");
     compile_indicator_shader();
     compile_permission_guide();
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");

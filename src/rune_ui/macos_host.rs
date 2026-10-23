@@ -24,12 +24,16 @@ use objc2_app_kit::{NSEvent, NSEventMask, NSEventType};
 
 use super::meetings::{Meeting, Status, Transcript, Turn};
 use super::platform::{
-    CatalogCommand, CommandModel, DemoRequest, HudDemo, HudLab, MeetingRequest, NativeHost,
-    NotesAvailability, PlatformRequest, PlatformState, Workspace,
+    CalendarRequest, CalendarView, CatalogCommand, CommandModel, DemoRequest, HudDemo, HudLab,
+    MeetingRequest, NativeHost, NotesAvailability, PlatformRequest, PlatformState, UpcomingMeeting,
+    Workspace,
 };
 use super::settings::Chord;
 use super::{HostState, ServiceView};
-use crate::app_settings::{HotkeyBinding, HotkeyKey, HotkeyModifiers, modifiers_from_flags};
+use crate::app_settings::{
+    CalendarSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, modifiers_from_flags,
+};
+use crate::calendar::{CalendarAccess, CalendarSnapshot};
 use crate::commands::{CommandInfo, CommandScope};
 use crate::desktop_host::DesktopAction;
 use crate::desktop_i18n::tr;
@@ -49,6 +53,9 @@ pub(super) const QUIT_IN_WINDOW: bool = false;
 
 /// How often the native host re-reads permissions and driver state.
 const PLATFORM_REFRESH: Duration = Duration::from_secs(1);
+/// How often the Calendar card rereads EventKit when nothing changed, so
+/// started meetings leave the list.
+const CALENDAR_REFRESH: Duration = Duration::from_secs(30);
 const ESCAPE_KEY_CODE: u16 = 53;
 
 /// The runtime is found through its own module; nothing is handed over.
@@ -410,6 +417,7 @@ struct MacHost {
     practice: Option<PracticeFeed>,
     /// The meetings folder panel, while it is open.
     folder_choice: Option<crate::file_dialog::Pending>,
+    calendar: CalendarFeed,
 }
 
 impl MacHost {
@@ -430,6 +438,7 @@ impl MacHost {
             meetings: MeetingFeed::default(),
             practice: None,
             folder_choice: None,
+            calendar: CalendarFeed::default(),
         };
         host.request_login(LoginItemRequest::Status);
         host
@@ -524,6 +533,10 @@ impl NativeHost for MacHost {
                 crate::hex_microphone::uninstall_driver_async()
             }
             PlatformRequest::Meeting(request) => self.meeting(request)?,
+            PlatformRequest::Calendar(CalendarRequest::Connect) => self.calendar.connect(),
+            PlatformRequest::Calendar(CalendarRequest::OpenPrivacySettings) => {
+                crate::calendar::open_privacy_settings();
+            }
             PlatformRequest::CreateCommandsConfig => {
                 if self.workspace.is_none() {
                     let (sender, receiver) = mpsc::sync_channel(1);
@@ -621,6 +634,7 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
+        changed |= self.calendar.poll(&mut state.calendar);
         // The Fun pane's demo moves every frame while it records or plays.
         if state.demo.is_none()
             || crate::hex_microphone::demo_is_busy()
@@ -732,6 +746,129 @@ impl NativeHost for MacHost {
         }
         inputs
     }
+}
+
+/// The Calendar card's state, read on a worker thread so EventKit never
+/// blocks the window. Connect asks macOS once, on the person's click.
+#[derive(Default)]
+struct CalendarFeed {
+    connect: Option<Receiver<CalendarAccess>>,
+    read: Option<Receiver<CalendarSnapshot>>,
+    read_at: Option<Instant>,
+    /// The calendar settings and change count the shown snapshot read.
+    read_for: Option<(CalendarSettings, u64)>,
+    connect_error: Option<String>,
+}
+
+impl CalendarFeed {
+    fn connect(&mut self) {
+        if self.connect.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("hex-calendar-connect".into())
+            .spawn(move || {
+                let _ = sender.send(crate::calendar::request_access());
+            });
+        match spawned {
+            Ok(_) => {
+                self.connect = Some(receiver);
+                self.connect_error = None;
+            }
+            Err(error) => self.connect_error = Some(error.to_string()),
+        }
+    }
+
+    fn poll(&mut self, view: &mut CalendarView) -> bool {
+        let mut changed = false;
+        if let Some(receiver) = &self.connect
+            && let Ok(access) = receiver.try_recv()
+        {
+            self.connect = None;
+            if access == CalendarAccess::FullAccess {
+                self.connect_error = save_calendar_connected().err();
+            }
+            view.access = access;
+            self.read_at = None;
+            changed = true;
+        }
+        changed |= update(&mut view.connecting, self.connect.is_some());
+        if let Some(receiver) = &self.read
+            && let Ok(snapshot) = receiver.try_recv()
+        {
+            self.read = None;
+            let now_ms = crate::calendar::wall_clock_ms();
+            let shown = CalendarView {
+                access: snapshot.access,
+                calendars: snapshot.calendars,
+                upcoming: snapshot
+                    .upcoming
+                    .iter()
+                    .map(|meeting| upcoming_meeting(meeting, now_ms))
+                    .collect(),
+                connecting: view.connecting,
+                error: snapshot.error.or_else(|| self.connect_error.clone()),
+            };
+            changed |= update(view, shown);
+        }
+        if !crate::app_settings::meetings_enabled() || self.read.is_some() {
+            return changed;
+        }
+        let settings = crate::app_settings::calendar_settings();
+        let read_for = (settings.clone(), crate::calendar::change_count());
+        let stale = self.read_for.as_ref() != Some(&read_for);
+        if !stale && self.read_at.is_some_and(|at| Instant::now() < at) {
+            return changed;
+        }
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let spawned = std::thread::Builder::new()
+            .name("hex-calendar-read".into())
+            .spawn(move || {
+                let snapshot =
+                    crate::calendar::snapshot(&settings, crate::calendar::wall_clock_ms());
+                let _ = sender.send(snapshot);
+            });
+        if spawned.is_ok() {
+            self.read = Some(receiver);
+        }
+        self.read_for = Some(read_for);
+        self.read_at = Some(Instant::now() + CALENDAR_REFRESH);
+        changed
+    }
+}
+
+/// One upcoming meeting as the Calendar card lists it: "Today · 2:30 PM".
+fn upcoming_meeting(meeting: &crate::calendar::CalendarMeeting, now_ms: i64) -> UpcomingMeeting {
+    let start = meeting.start_ms.max(0) as u64;
+    let now = now_ms.max(0) as u64;
+    let day = if crate::meeting::day_label(start, now) == "Today" {
+        tr("Today").to_string()
+    } else if crate::meeting::day_label(start, now + 86_400_000) == "Today" {
+        tr("Tomorrow").to_string()
+    } else {
+        crate::meeting::day_label(start, now)
+    };
+    UpcomingMeeting {
+        title: meeting.display_title(),
+        when: format!("{day} · {}", crate::meeting::clock(start)),
+        provider: meeting.link.as_ref().map(|link| link.provider),
+    }
+}
+
+/// Marks the calendar connected after macOS granted access; the runtime
+/// publishes it to the window and starts reminders.
+fn save_calendar_connected() -> Result<(), String> {
+    let mut settings =
+        crate::app_settings::AppSettings::load().map_err(|error| format!("{error:#}"))?;
+    settings.meetings.calendar.connected = true;
+    settings.save().map_err(|error| format!("{error:#}"))?;
+    if let Some(runtime) = crate::macos_rune::runtime() {
+        runtime
+            .send(Request::ReloadSettings)
+            .map_err(|error| format!("{error:#}"))?;
+    }
+    Ok(())
 }
 
 /// The Meetings pane's listing from the read-only store query, rescanned at

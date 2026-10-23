@@ -42,6 +42,17 @@ pub struct MeetingStart {
     pub title: Option<String>,
     /// The detected call application, such as `Zoom`.
     pub app: Option<String>,
+    /// The calendar event the recording was started for.
+    pub calendar: Option<MeetingCalendar>,
+}
+
+/// The calendar event behind a meeting: its title and the other attendees,
+/// kept as context for the transcript and its notes.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MeetingCalendar {
+    pub title: String,
+    #[serde(default)]
+    pub attendees: Vec<String>,
 }
 
 /// What the recorder reports to its owner while it runs.
@@ -149,6 +160,9 @@ pub struct MeetingManifest {
     pub notes: Option<MeetingNotes>,
     #[serde(default)]
     pub notes_error: Option<String>,
+    /// The calendar event the recording was started for, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<MeetingCalendar>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -363,6 +377,7 @@ pub fn record(
         provisional_title: None,
         notes: None,
         notes_error: None,
+        calendar: start.calendar,
     };
     write_manifest(&meeting_dir, &manifest)?;
 

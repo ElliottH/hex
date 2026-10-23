@@ -244,9 +244,52 @@ pub(super) fn summarize_entries(
     entries: &[TranscriptEntry],
     max_chars: usize,
     deadline: Instant,
+    generate: impl FnMut(&str, &str, Duration) -> Result<GeneratedNotes, GenerationError>,
+) -> Result<Summary> {
+    summarize_with_calendar(entries, None, max_chars, deadline, generate)
+}
+
+/// The most attendee names a notes prompt lists.
+const MAX_PROMPT_ATTENDEES: usize = 12;
+
+/// The calendar event's title and attendees, ahead of the transcript.
+fn calendar_preamble(calendar: Option<&super::MeetingCalendar>) -> String {
+    let Some(calendar) = calendar else {
+        return String::new();
+    };
+    let mut preamble = String::new();
+    let title = calendar.title.trim();
+    if !title.is_empty() {
+        let title = title.chars().take(200).collect::<String>();
+        preamble.push_str(&format!("Calendar event: {title}\n"));
+    }
+    let attendees = calendar
+        .attendees
+        .iter()
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty())
+        .take(MAX_PROMPT_ATTENDEES)
+        .map(|name| name.chars().take(80).collect::<String>())
+        .collect::<Vec<_>>();
+    if !attendees.is_empty() {
+        preamble.push_str(&format!("Attendees: {}\n", attendees.join(", ")));
+    }
+    if !preamble.is_empty() {
+        preamble.push('\n');
+    }
+    preamble
+}
+
+/// [`summarize_entries`] with the calendar event as context.
+pub(super) fn summarize_with_calendar(
+    entries: &[TranscriptEntry],
+    calendar: Option<&super::MeetingCalendar>,
+    max_chars: usize,
+    deadline: Instant,
     mut generate: impl FnMut(&str, &str, Duration) -> Result<GeneratedNotes, GenerationError>,
 ) -> Result<Summary> {
-    let mut max_chars = max_chars;
+    let preamble = calendar_preamble(calendar);
+    let mut max_chars = max_chars.saturating_sub(preamble.len()).max(1);
     let mut calls = 0;
     loop {
         let excerpt = excerpt(entries, max_chars);
@@ -258,7 +301,7 @@ pub(super) fn summarize_entries(
             return Err(eyre!("Apple Intelligence did not finish in time"));
         }
         calls += 1;
-        let prompt = format!("Meeting transcript:\n\n{}", excerpt.text);
+        let prompt = format!("{preamble}Meeting transcript:\n\n{}", excerpt.text);
         match generate(NOTES_INSTRUCTIONS, &prompt, remaining.min(CALL_TIMEOUT)) {
             Ok(notes) => {
                 return Ok(Summary {
@@ -730,8 +773,9 @@ fn summarize_claimed(id: &str, _claim: InProgress) -> Result<MeetingManifest> {
     let entries = super::read_ndjson(&directory.join("transcript.ndjson"))?;
     let started = Instant::now();
     let never = AtomicBool::new(false);
-    let result = summarize_entries(
+    let result = summarize_with_calendar(
         &entries,
+        manifest.calendar.as_ref(),
         excerpt_budget(apple_intelligence::context_tokens(), FINAL_EXCERPT_CHARS),
         started + TOTAL_DEADLINE,
         |instructions, prompt, timeout| {
@@ -998,6 +1042,29 @@ mod tests {
             "They reviewed the launch plan. Docs move to Friday."
         );
         assert_eq!(summary.excerpt_chars, summary.transcript_chars);
+    }
+
+    #[test]
+    fn a_calendar_meeting_gives_its_title_and_attendees_as_context() {
+        let calendar = crate::meeting::MeetingCalendar {
+            title: "Q4 launch sync".into(),
+            attendees: vec!["Ana Ruiz".into(), " ".into(), "Ben Ito".into()],
+        };
+        let mut prompts = Vec::new();
+        summarize_with_calendar(
+            &conversation(2),
+            Some(&calendar),
+            FINAL_EXCERPT_CHARS,
+            Instant::now() + Duration::from_secs(60),
+            |_, prompt, _| {
+                prompts.push(prompt.to_string());
+                Ok(generated("Launch", "They met."))
+            },
+        )
+        .unwrap();
+        assert!(prompts[0].starts_with(
+            "Calendar event: Q4 launch sync\nAttendees: Ana Ruiz, Ben Ito\n\nMeeting transcript:\n\n[00:00] You: Turn 0"
+        ));
     }
 
     #[test]

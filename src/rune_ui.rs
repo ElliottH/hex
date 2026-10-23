@@ -406,6 +406,8 @@ enum Menu {
     Variant,
     /// The selected meeting's overflow menu.
     MeetingActions,
+    /// The calendars meeting reminders read.
+    Calendars,
 }
 
 pub(crate) struct Ui {
@@ -1149,6 +1151,16 @@ const SCENES: &[Scene] = &[
         ui.platform.command_model = platform::CommandModel::Failed;
         ui.platform.login_item = Some(crate::login_item::LoginItemStatus::RequiresApproval);
         ui.platform.accessibility_renamed = true;
+    }),
+    ("mac-settings-calendar", |ui| {
+        *ui = mac_fixture();
+        ui.settings.meetings.calendar.connected = true;
+        ui.settings.meetings.calendar.excluded_calendars = vec!["birthdays".into()];
+        ui.platform.calendar = platform::CalendarView::preview();
+    }),
+    ("mac-settings-calendar-denied", |ui| {
+        *ui = mac_fixture();
+        ui.platform.calendar.access = crate::calendar::CalendarAccess::Denied;
     }),
     ("windows-settings", |ui| {
         *ui = fixture(DesktopShortcuts::Registered);

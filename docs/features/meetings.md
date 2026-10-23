@@ -21,6 +21,7 @@ Settings > Meetings > Meetings (beta)               // meetings.opt-in; off by d
 │   ├── Show recording indicator -> on by default; corner-snapping floating capsule
 │   ├── Transcript folder -> ~/Documents/Hex Meetings by default; Reveal / choose
 │   ├── Summarize with Apple Intelligence -> on by default; one-line availability
+│   ├── Calendar -> Connect calendar; reminders before meetings // meetings.calendar
 │   └── Detected calls -> Ask / Always record / Never offer per provider // meetings.policy
 │       ├── Slack huddles, Zoom, Google Meet, Microsoft Teams, FaceTime (always listed)
 │       └── then each website or app chosen for from an offer's "…"
@@ -133,8 +134,101 @@ Brave WebRTC `getUserMedia({audio: true})` reproduction on Pro confirmed
 `com.brave.Browser` and `com.tinyspeck.slackmacgap` afterward.
 
 The capsules have no `--snap` scene. `HEX_CAPSULE_SNAPS=<folder> cargo test
---bin voice-control capsule_snapshots` renders the offer, its choices, and the
-automatic-recording states in light and dark on a Mac with a GPU.
+--bin voice-control capsule_snapshots` renders the offer, its choices, the
+calendar reminders, and the automatic-recording states in light and dark on a
+Mac with a GPU.
+
+### Calendar Reminders
+
+```ts
+Settings > Meetings > Calendar                       // meetings.calendar (macOS)
+├── Connect calendar -> macOS full-access prompt, on this click only
+│   ├── Granted -> meetings.calendar.connected = true; reminders on, 1 min lead
+│   └── Denied / Restricted / write-only -> "Calendar access is off"
+│       └── Open settings -> Privacy & Security › Calendars
+└── Connected
+    ├── Remind me before meetings -> on by default
+    ├── Remind me -> At start / 1 / 2 / 5 min
+    ├── Calendars -> All calendars, or "2 of 3 calendars"; each switched in the menu
+    └── Next 3 meetings: title, "Today · 2:30 PM", provider icon when it has a call link
+
+Meeting = not all-day, declined, free, or cancelled, AND has other attendees or a
+          Zoom / Google Meet / Teams / Slack huddle / Webex link (URL, location, notes)
+
+Lead time reached (or Mac wakes within 5 min of the start)   // meetings.reminder
+  -> Reminder capsule, offer-capsule placement, focus-free
+     ├── "Design sync" · "Starts in 1 min · Zoom"
+     │   ├── Not now -> close; this call is not offered when detected
+     │   ├── Join & record (only with a link) -> open the link, then record
+     │   └── Record -> recording titled "Design sync" with its attendees
+     └── Service set to Always record: "Starts in 1 min · Hex records automatically"
+         ├── Don't record -> close; the detected call neither offers nor auto-records
+         └── Join (only with a link) -> open the link; Always record starts on detection
+  -> Closes 60 s after the start; withdrawn if the meeting is cancelled, moved, or
+     reminders are turned off. Waits while Hex already records.
+Detected call during a calendar meeting on the same service
+  -> recording takes the calendar title and attendees
+```
+
+Settings persist as `meetings.calendar` (`connected`, `excluded_calendars`,
+`remind`, `lead_minutes`) in `settings.json`; missing means not connected, so
+files from older builds stay off. Every calendar is included unless excluded.
+Hex never asks for calendar access at launch: only Connect calendar calls
+`requestFullAccessToEvents` (`NSCalendarsFullAccessUsageDescription`). With
+Meetings off there is no Calendar card, no EventKit read, and no reminder.
+
+The controller thread reads EventKit (one bounded query, 48 hours ahead, at most
+200 events) when the store's change notification bumps its counter or once a
+minute by the wall clock, so a wake rereads; each loop is then a cheap
+scheduler pass. Reminders key each occurrence by event ID and start, so a moved
+meeting reminds again and each occurrence reminds once. Settings reads its own
+snapshot on a worker thread while the window shows. No network, never on the
+audio or UI thread. Recording from a reminder (or dismissing it) snoozes
+detected calls from the link's service until the meeting ends; without a link
+it covers only the next detected call. The manifest's `calendar` field and the
+Markdown's Attendees line carry the calendar title and attendees, and the notes
+prompt gets them as context.
+
+Checks: `meetings_need_other_people_or_a_call_link`,
+`all_day_declined_free_and_cancelled_events_are_skipped`,
+`excluded_calendars_are_left_out_and_meetings_sort_by_start`,
+`call_links_are_found_in_the_url_location_or_notes`,
+`other_links_and_lookalikes_are_not_calls`, `the_url_field_wins_over_the_notes`,
+`a_reminder_shows_once_at_the_lead_time`, `at_start_reminds_when_the_meeting_begins`,
+`waking_shortly_after_the_start_still_reminds_but_not_much_later`,
+`a_showing_reminder_closes_when_its_meeting_is_cancelled_or_long_started`,
+`a_moved_meeting_is_reminded_at_its_new_time`, `back_to_back_meetings_each_remind`,
+`reminded_occurrences_are_forgotten_after_they_end`,
+`turning_reminders_off_withdraws_the_showing_one`, and
+`a_detected_call_belongs_to_the_current_meeting_on_its_service` in
+[calendar.rs](../../src/calendar.rs);
+`a_call_answered_from_its_calendar_reminder_is_not_offered_again` and
+`a_reminder_without_a_call_link_covers_only_the_next_call` in
+[meeting_detection.rs](../../src/meeting_detection.rs);
+`calendar_reminders_stay_off_until_connected_and_survive_older_files` in
+[app_settings.rs](../../src/app_settings.rs);
+`a_calendar_meeting_gives_its_title_and_attendees_as_context` and
+`markdown_lists_the_calendar_attendees`; the reminder capsule checks in
+[meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs)
+(`a_reminder_with_a_link_joins_and_records_on_one_click`,
+`a_reminder_without_a_link_only_records`,
+`dismissing_a_reminder_tells_the_controller`,
+`an_always_record_reminder_says_so_and_never_offers_record`,
+`the_reminder_counts_down_to_the_start`); and the Linux pane tests
+`the_calendar_asks_for_access_only_when_connect_is_pressed`,
+`a_connected_calendar_saves_reminders_and_lists_meetings`, and
+`denied_calendar_access_links_to_privacy_settings`. Scenes:
+`mac-settings` (disconnected), `mac-settings-calendar`, and
+`mac-settings-calendar-denied`.
+
+Not yet observed: the EventKit bridge against a real calendar, the macOS
+permission prompt, and a reminder on screen. The controller loop that turns a
+reminder click into a recording has no automated test; it shares the manual
+Record path. Sources: [calendar.rs](../../src/calendar.rs),
+[calendar.swift](../../src/calendar.swift), `Reminders` in
+[meeting_watcher.rs](../../src/meeting_watcher.rs), `CalendarFeed` in
+[macos_host.rs](../../src/rune_ui/macos_host.rs), and
+[platform_settings.rs](../../src/rune_ui/platform_settings.rs).
 
 ### Record
 

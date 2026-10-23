@@ -314,7 +314,7 @@ fn sound_volume_index(settings: &AppSettings) -> usize {
         .map_or(0, |(index, _)| index + 1)
 }
 
-fn toggle_menu(ui: &mut Ui, menu: Menu) {
+pub(super) fn toggle_menu(ui: &mut Ui, menu: Menu) {
     ui.open = (ui.open != Some(menu)).then_some(menu);
     if ui.open == Some(Menu::Microphone) && !matches!(ui.service, Service::Fixture(_)) {
         ui.microphones = crate::audio::input_device_names().map_err(|error| error.to_string());
@@ -353,7 +353,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         })
         .child(dictation_section(ui, p, layer))
         .child(behavior_section(ui, p))
-        .children(os::meetings_section(ui, p))
+        .children(os::meetings_section(ui, p, layer))
         .child(application_section(ui, p, layer))
         .children(os::hex_microphone_section(ui, p));
     super::scroll_body("scroll", content)

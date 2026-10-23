@@ -11,6 +11,8 @@ mod application_catalog;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod audio;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+mod calendar;
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod command_grammar;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod commands;
@@ -624,7 +626,15 @@ fn main() -> Result<()> {
             command: MeetingCommand::Record { title },
         } => {
             app_settings::AppSettings::load()?;
-            meeting::record(meeting::MeetingStart { title, app: None }, &SHUTDOWN, None).map(|_| ())
+            meeting::record(
+                meeting::MeetingStart {
+                    title,
+                    ..Default::default()
+                },
+                &SHUTDOWN,
+                None,
+            )
+            .map(|_| ())
         }
         #[cfg(debug_assertions)]
         Command::Meeting {
