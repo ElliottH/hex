@@ -135,6 +135,21 @@ Remove the application while preserving logs and settings with:
 sh install-linux.sh uninstall
 ```
 
+### AUR
+
+From the next release on, the AUR package `hex-bin` installs `/usr/bin/hex`,
+the desktop entry, and the systemd user unit `hex.service`, from the same
+signed release executable. It is not on the AUR yet. With an AUR helper:
+
+```sh
+yay -S hex-bin
+systemctl --user enable hex.service   # optional: start Hex at login
+```
+
+pacman updates it; Hex never replaces a package-installed executable, and
+Settings says "Updated by your package manager". It is unrelated to the
+official `hex` package (a hex dump tool that installs `/usr/bin/hx`).
+
 ## Install From Source
 
 Install the native dependencies and, for a source build, the Rust toolchain:

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stage, test, and publish the AUR package hex-voice-bin from a release's
+# Stage, test, and publish the AUR package hex-bin from a release's
 # Linux executable. Runs on Arch (CI uses the archlinux container).
 #
 #   release-aur.sh stage   <version> <executable> <dir>  # PKGBUILD, .SRCINFO, files
@@ -13,7 +13,7 @@
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-package=hex-voice-bin
+package=hex-bin
 usage() {
   echo "Usage: $0 stage <version> <executable> <dir> | test <dir> | publish <dir> | check" >&2
   exit 1

@@ -254,13 +254,13 @@ jobs:
         with:
           name: signed-release
           path: dist
-      - name: Stage and test hex-voice-bin
+      - name: Stage and test hex-bin
         run: |
           artifact=$(jq -r .payload dist/linux-update.json | openssl base64 -d -A | jq -r .artifact)
           chown -R builder: "$GITHUB_WORKSPACE"
           runuser -u builder -- tools/scripts/release-aur.sh stage "$HEX_VERSION" "dist/$artifact" aur
           runuser -u builder -- tools/scripts/release-aur.sh test aur
-          pacman -U --noconfirm aur/hex-voice-bin-*.pkg.tar.zst
+          pacman -U --noconfirm aur/hex-bin-*.pkg.tar.zst
           test "$(hex --version | awk 'NF { value=$NF } END { print value }')" = "$HEX_VERSION"
           { echo '### AUR PKGBUILD'; echo '```'; cat aur/PKGBUILD; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Push to the AUR

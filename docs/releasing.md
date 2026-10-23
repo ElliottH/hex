@@ -13,7 +13,7 @@ Release (workflow_dispatch: ref, channel; or push tag app-v<version>)
 ├─ sign           ed25519-signs the Linux/Windows feeds (never compiles); stable
 │                 requires Authenticode signatures
 ├─ publish        R2 + GitHub release (scripts/publish-release.sh)
-└─ aur            builds, installs, and tests hex-voice-bin; stable pushes it
+└─ aur            builds, installs, and tests hex-bin; stable pushes it
 ```
 
 ## Channels
@@ -136,7 +136,7 @@ alias). Current builds compile `https://anoma.ly/hex/files`.
 | `HEX_RELEASE_SIGNING_KEY` | ed25519 feed signing key (Linux, Windows) |
 | `CLOUDFLARE_API_TOKEN`, var `CLOUDFLARE_ACCOUNT_ID` | site deploys (`github-actions-hex`) |
 | `R2_SECRET_ACCESS_KEY`, var `R2_ACCESS_KEY_ID` | uploads to the Hex buckets (same token) |
-| `AUR_SSH_PRIVATE_KEY` | pushes `hex-voice-bin` (key `github-actions-hex-aur`) |
+| `AUR_SSH_PRIVATE_KEY` | pushes `hex-bin` (key `github-actions-hex-aur`) |
 | `AZURE_*` | Authenticode (docs/windows-signing.md) |
 | `APPLE_*`, `SPARKLE_ED_PRIVATE_KEY` | macOS signing and appcast (docs/plans/macos-signing.md) |
 
@@ -145,11 +145,12 @@ alias). Current builds compile `https://anoma.ly/hex/files`.
 - **Direct install** (`curl -fsSL https://anoma.ly/hex/files/install-linux.sh | sh`):
   the user-local version layout; it self-updates from `linux-update.json` and
   the window offers "Update" (restart into the staged version).
-- **AUR** `hex-voice-bin` (`packaging/aur`, `scripts/release-aur.sh`):
+- **AUR** `hex-bin` (`packaging/aur`, `scripts/release-aur.sh`):
   `/usr/bin/hex`, the desktop entry, and the systemd user unit
   `/usr/lib/systemd/user/hex.service`, from the GitHub release's Linux
-  executable. (`hex` is taken by the official hex-dump package, so the AUR
-  name says what it is.) Maintained under Dax's AUR account.
+  executable. Not a prebuilt of the official `extra/hex` (a hex dump tool
+  that installs `/usr/bin/hx`), so it neither provides nor conflicts with it;
+  its description says so. Maintained under Dax's AUR account.
 - **Nix**: `nix/package.nix` builds from source; flake inputs update it.
 - **Source** (`scripts/install-linux.sh`): the version layout with a
   `source-build` marker; the checkout updates it.

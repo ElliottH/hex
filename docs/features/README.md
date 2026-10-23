@@ -798,7 +798,7 @@ smoke tests on Windows 10 and on ARM64 hardware have not been run.
 Linux updates                            // maintain.linux-updates
 ├── Direct install (user-local versions/) -> signed feed -> staged -> sidebar Update, Settings: Restart to update
 ├── Source install (source-build marker) -> Settings: Updated from your source checkout
-├── pacman (/usr/bin, root-owned) or Nix store -> Settings: Updated by your package manager
+├── pacman (AUR hex-bin: /usr/bin, root-owned) or Nix store -> Settings: Updated by your package manager
 └── Anything else (a downloaded executable) -> no update row
 ```
 

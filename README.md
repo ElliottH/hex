@@ -247,6 +247,10 @@ Install the signed release on x86_64 Arch Linux (glibc 2.44 or later) with:
 curl -fsSL https://anoma.ly/hex/files/install-linux.sh | sh
 ```
 
+From the next release on, Arch users can instead install the AUR package
+`hex-bin` (for example `yay -S hex-bin`), which pacman updates; it is not on the
+AUR yet.
+
 The [Linux installation guide](docs/linux.md) covers inspecting the installer
 first, uninstalling, and building from source. It also describes
 requirements and limitations.

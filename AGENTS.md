@@ -823,7 +823,7 @@ different bytes), the GitHub release mirror (verified byte for byte), the
 content-addressed artifacts, installers as committed at the release commit,
 and the feeds after rechecking that the version is newer, then
 `HEX-latest-arm64.dmg` and the appcast. The `aur` job builds, installs, and
-tests `hex-voice-bin` and pushes it to the AUR for stable releases.
+tests `hex-bin` and pushes it to the AUR for stable releases.
 Rerunning after an interruption is safe.
 
 `HEX-Setup-<version>-<x64|arm64>.exe` is a per-user Inno Setup installer
