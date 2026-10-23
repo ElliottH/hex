@@ -22,8 +22,12 @@ GitHub wraps each artifact in a zip; unzip it first.
 The test app is **Hex Test.app** (bundle ID `com.kitlangton.hex2.test`),
 ad-hoc signed and built without Sparkle. Its own name and bundle ID let it sit
 beside a released `Hex.app` without touching that app's permissions, login
-item, or updates. Both use the same settings, models, and History, and only one
-can run at a time.
+item, or updates. It also keeps its own data: settings, models, History, and
+meetings live in `~/Library/Application Support/hex-test`, personal commands in
+`~/.config/hex-test`, and meeting Markdown in `~/Documents/Hex Test Meetings`,
+so it starts with onboarding and never reads or changes the installed Hex's
+data. Both apps listen to the same shortcut and microphone, so run one at a
+time.
 
 1. Quit Hex from its menu-bar icon.
 2. Open the DMG and drag **Hex Test** to Applications.

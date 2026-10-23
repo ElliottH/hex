@@ -6,12 +6,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use color_eyre::eyre::{Result, eyre};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
+/// Whether this is a macOS `Hex Test.app` build (`HEX_TEST_BUILD=1`), which
+/// keeps its data, settings, and user config apart from the installed Hex.
+pub fn is_macos_test_build() -> bool {
+    cfg!(target_os = "macos") && option_env!("HEX_TEST_BUILD") == Some("1")
+}
+
 pub fn support_dir() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("HEX_APPLICATION_SUPPORT_DIR") {
         return Ok(path.into());
     }
     let data =
         dirs::data_dir().ok_or_else(|| eyre!("application data directory is unavailable"))?;
+    #[cfg(target_os = "macos")]
+    if is_macos_test_build() {
+        return Ok(data.join(data_folder::TEST));
+    }
     #[cfg(target_os = "macos")]
     return Ok(data_folder::resolve(&data));
     #[cfg(not(target_os = "macos"))]
@@ -23,7 +33,7 @@ pub fn support_dir() -> Result<PathBuf> {
 /// opens a file in Application Support; log the outcome once logging is up.
 #[cfg(target_os = "macos")]
 pub fn migrate_data_folder() -> Option<data_folder::Outcome> {
-    if std::env::var_os("HEX_APPLICATION_SUPPORT_DIR").is_some() {
+    if std::env::var_os("HEX_APPLICATION_SUPPORT_DIR").is_some() || is_macos_test_build() {
         return None;
     }
     let data = dirs::data_dir()?;
@@ -67,6 +77,8 @@ pub mod data_folder {
 
     pub const LEGACY: &str = "voice-control";
     pub const CURRENT: &str = "hex";
+    /// `Hex Test.app`'s folder; never migrated or shared with `CURRENT`.
+    pub const TEST: &str = "hex-test";
 
     #[derive(Debug)]
     pub enum Outcome {
@@ -352,7 +364,11 @@ pub fn personal_commands_status_file() -> Result<PathBuf> {
 pub fn personal_commands_workspace() -> Result<PathBuf> {
     Ok(dirs::home_dir()
         .ok_or_else(|| eyre!("home directory is unavailable"))?
-        .join(".config/hex"))
+        .join(if is_macos_test_build() {
+            ".config/hex-test"
+        } else {
+            ".config/hex"
+        }))
 }
 
 #[cfg(target_os = "macos")]

@@ -733,7 +733,11 @@ pub fn default_meeting_output_folder() -> PathBuf {
     dirs::document_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("Hex Meetings")
+        .join(if crate::app_paths::is_macos_test_build() {
+            "Hex Test Meetings"
+        } else {
+            "Hex Meetings"
+        })
 }
 
 /// Where the recording HUD appears while dictating.
