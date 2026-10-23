@@ -168,7 +168,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish (${{ needs.resolve.outputs.channel }})
+    name: Publish
     needs: [resolve, sign]
     runs-on: ubuntu-24.04
     environment: release
@@ -209,7 +209,7 @@ jobs:
         run: tools/scripts/publish-release.sh dist
 
   aur:
-    name: AUR (${{ needs.resolve.outputs.channel == 'stable' && 'publish' || 'build and test' }})
+    name: AUR
     needs: [resolve, sign, publish]
     runs-on: ubuntu-24.04
     container: archlinux:base-devel

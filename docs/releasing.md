@@ -87,6 +87,10 @@ alias). Builds from 3a61146 on compile `https://downloads.hex.anoma.ly`.
   (curl `--location`, HTTPS-only redirects, since the first updater) follow it,
   so installed apps read the new feeds without a bridge release. The redirect
   must stay up while old installs remain.
+- Kit's bucket stays as it is, frozen at 2.3.1, with its
+  `pub-089d681d41754031a4aefa7017d8c2fb.r2.dev` endpoint: builds 2.0.9–2.1.16
+  read that URL directly (no redirect is possible there), update to 2.3.1,
+  and reach the new origin from there.
 - If the redirect is not possible, the fallback is one bridge release
   published to both buckets (Kit's credentials), after which the old bucket
   is frozen.
