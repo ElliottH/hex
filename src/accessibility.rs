@@ -77,7 +77,8 @@ fn copy_attribute(element: &CfObject, name: &CStr) -> Option<CfObject> {
     let attribute = CfObject(cf_string_literal(name)?);
     let mut value = ptr::null();
     let status = unsafe { AXUIElementCopyAttributeValue(element.0, attribute.0, &mut value) };
-    (status == 0 && !value.is_null()).then_some(CfObject(value))
+    // `then`, not `then_some`: dropping a `CfObject(null)` would CFRelease(NULL).
+    (status == 0 && !value.is_null()).then(|| CfObject(value))
 }
 
 fn copy_element(element: &CfObject, name: &CStr) -> Option<CfObject> {
@@ -127,6 +128,11 @@ fn cf_string(value: CfTypeRef) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_attribute_is_none() {
+        assert_eq!(focused_window_title(i32::MAX), None);
+    }
 
     #[test]
     #[ignore = "requires a trusted signed process and a focused selected text fixture"]
