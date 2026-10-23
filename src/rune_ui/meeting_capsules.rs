@@ -212,7 +212,12 @@ impl MeetingCapsules {
             std::thread::spawn(move || {
                 std::thread::sleep(timeout);
                 if current.load(Ordering::SeqCst) == generation {
-                    panel.update(|capsule, _| {
+                    panel.update(move |capsule, _| {
+                        // Checked again when applied: a newer capsule may
+                        // have been shown since.
+                        if current.load(Ordering::SeqCst) != generation {
+                            return;
+                        }
                         if let Some(Kind::Offer(candidate)) = &capsule.kind {
                             tracing::info!(
                                 source = candidate.source.label(),
@@ -227,9 +232,13 @@ impl MeetingCapsules {
         }
     }
 
+    // Hide through the handle, not `Capsule::close`: a hide requested inside
+    // an update runs on the event loop after a show queued in the same batch,
+    // so closing then showing a capsule would leave it hidden.
     fn close_panel(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.panel.update(|capsule, _| capsule.close());
+        self.panel.update(|capsule, _| capsule.kind = None);
+        self.panel.hide();
     }
 
     fn show_recording(&self, id: String, title: String) {
@@ -268,7 +277,8 @@ impl MeetingCapsules {
 
     fn close_recording(&self) {
         *self.ticking.lock().unwrap() = None;
-        self.recording.update(|capsule, _| capsule.close());
+        self.recording.update(|capsule, _| capsule.kind = None);
+        self.recording.hide();
     }
 }
 

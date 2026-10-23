@@ -155,8 +155,9 @@ Checks: `call_end_is_reported_once_per_sustained_absence`,
 `mid_meeting_capture_loss_proceeds_to_transcription_when_audio_was_recorded`,
 `writer_fills_a_capture_gap_with_silence_and_records_it`, and
 `a_source_that_resumes_after_an_outage_is_padded_back_onto_the_timeline` in
-[meeting_tests.rs](../../src/meeting_tests.rs). Native menu-bar and capsule clicks
-are unverified.
+[meeting_tests.rs](../../src/meeting_tests.rs). Menu-bar Record Meeting and
+Stop & Transcribe, and the recording and ready capsule buttons, were clicked
+on a real Mac on 2026-10-22; no automated test covers them.
 
 The capsules are Rune overlays in [meeting_capsules.rs](../../src/rune_ui/meeting_capsules.rs):
 interactive, non-activating `NSPanel`s at status level on every Space,
@@ -166,10 +167,12 @@ call", ready (15 s, Copy / Reveal, notes refresh) and a recording capsule
 (title, elapsed time, Open, Stop, in the configured corner) are ported.
 Not ported yet: Copy new / Copy all, hover expansion, and dragging the
 recording capsule. A "Never offer" choice is saved and also written into
-the window's live settings. Compiled with clippy `-D warnings` on
-hailmary; never seen on screen (the Mac sits at its login window), so
-clicks and non-activation are unverified. Rune's panel itself was observed
-there at level 25 with the right bounds.
+the window's live settings. On 2026-10-22 a signed build on a MacBook Pro
+showed the recording capsule (Open opened the meeting while it kept
+recording; Stop transcribed) and the ready capsule (Copy copied the
+Markdown). Before that day's fix the recording capsule never appeared: it
+closed and reopened in one overlay batch, and the hide ran last. The offer,
+"left the call" and "Never offer" capsules remain unseen on screen.
 
 ### Transcribe
 
