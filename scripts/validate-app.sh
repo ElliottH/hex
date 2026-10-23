@@ -11,7 +11,7 @@ expected_name=$2
 version=$3
 build_number=$4
 team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Developer signing team}
-feed_url=${HEX_EXPECTED_APP_FEED_URL:-https://downloads.hex.kitlangton.dev/appcast.xml}
+feed_url=${HEX_EXPECTED_APP_FEED_URL:-https://downloads.hex.anoma.ly/appcast.xml}
 sparkle_key=mIek27lttJe8cIBqVZFhh6reRKjpTx1h9ZY9OKWPtuM=
 plist="$bundle/Contents/Info.plist"
 

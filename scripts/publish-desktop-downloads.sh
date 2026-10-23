@@ -16,7 +16,7 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 repo=${HEX_RELEASE_REPO:-anomalyco/hex}
 bucket=${HEX_RELEASE_BUCKET:-hex-releases}
-base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.kitlangton.dev}
+base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
 wrangler=${HEX_WRANGLER:-wrangler}
 if [ $# -ne 2 ]; then
   echo "Usage: $0 <dist> <version>" >&2

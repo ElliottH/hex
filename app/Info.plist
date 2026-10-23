@@ -43,7 +43,7 @@
   <key>SUAllowsAutomaticUpdates</key>
   <false/>
   <key>SUFeedURL</key>
-  <string>https://downloads.hex.kitlangton.dev/appcast.xml</string>
+  <string>https://downloads.hex.anoma.ly/appcast.xml</string>
   <key>SUPublicEDKey</key>
   <string>mIek27lttJe8cIBqVZFhh6reRKjpTx1h9ZY9OKWPtuM=</string>
   <key>SUVerifyUpdateBeforeExtraction</key>

@@ -15,9 +15,9 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use semver::Version;
 use serde::Deserialize;
 
-/// The release origin shared with Linux and macOS: the `hex-releases` R2
-/// bucket behind its custom domain.
-pub const RELEASE_BASE: &str = "https://downloads.hex.kitlangton.dev";
+/// The release origin shared with Linux and macOS: Anomaly's `hex-releases`
+/// R2 bucket behind its custom domain. The previous origin redirects here.
+const RELEASE_BASE: &str = "https://downloads.hex.anoma.ly";
 pub const MAX_FEED_BYTES: u64 = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -51,6 +51,21 @@ pub struct Manifest {
     pub artifact: String,
     pub bytes: u64,
     pub sha256: String,
+}
+
+/// The URL of `path` on the release origin. `HEX_RELEASE_BASE_URL` points a
+/// test at a staged release (HTTPS only); the compiled key still decides
+/// what is trusted.
+pub fn release_url(path: &str) -> String {
+    let base = std::env::var("HEX_RELEASE_BASE_URL")
+        .ok()
+        .filter(|base| base.starts_with("https://"));
+    format!(
+        "{}/{path}",
+        base.as_deref()
+            .unwrap_or(RELEASE_BASE)
+            .trim_end_matches('/')
+    )
 }
 
 pub fn verify_feed(bytes: &[u8], public_key: &[u8; 32]) -> Result<Manifest> {

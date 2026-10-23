@@ -21,7 +21,7 @@ use fs2::FileExt;
 use semver::Version;
 
 use crate::self_update::{
-    MAX_FEED_BYTES, PUBLIC_KEY, RELEASE_BASE, UpdateTarget, download, read_bounded,
+    MAX_FEED_BYTES, PUBLIC_KEY, UpdateTarget, download, read_bounded, release_url,
     validate_manifest, verify_artifact, verify_feed,
 };
 
@@ -202,11 +202,7 @@ fn install_latest() -> Result<Option<PathBuf>> {
     lock.try_lock_exclusive()
         .wrap_err("another Windows update is already in progress")?;
     let feed_path = updates.join("windows-update.json.partial");
-    download(
-        &format!("{RELEASE_BASE}/{FEED}"),
-        &feed_path,
-        MAX_FEED_BYTES,
-    )?;
+    download(&release_url(FEED), &feed_path, MAX_FEED_BYTES)?;
     let feed = read_bounded(&feed_path, MAX_FEED_BYTES)?;
     let _ = fs::remove_file(&feed_path);
     let manifest = verify_feed(&feed, &PUBLIC_KEY)?;
@@ -219,7 +215,7 @@ fn install_latest() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    let artifact_url = format!("{RELEASE_BASE}/releases/{}", manifest.artifact);
+    let artifact_url = release_url(&format!("releases/{}", manifest.artifact));
     let partial = updates.join("update.download");
     download(&artifact_url, &partial, manifest.bytes)?;
     let activation = (|| {

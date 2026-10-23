@@ -16,7 +16,7 @@ set -eu
 script_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 source_root=${HEX_RELEASE_SOURCE:-$script_root}
 bucket=${HEX_RELEASE_BUCKET:-hex-releases}
-base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.kitlangton.dev}
+base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
 wrangler=${HEX_WRANGLER:-wrangler}
 expected_public_key=bfad02e62208ff144b5c9d21c7e79c7c16c6904299a437d857303007cd4ff7d8
 public_key_prefix=302a300506032b6570032100

@@ -8,7 +8,7 @@ use fs2::FileExt;
 use semver::Version;
 
 use crate::self_update::{
-    MAX_FEED_BYTES, PUBLIC_KEY, RELEASE_BASE, UpdateTarget, download, read_bounded,
+    MAX_FEED_BYTES, PUBLIC_KEY, UpdateTarget, download, read_bounded, release_url,
     validate_manifest, verify_artifact, verify_feed,
 };
 
@@ -26,15 +26,40 @@ pub(crate) struct InstalledUpdate(PathBuf);
 /// from the release feed.
 const SOURCE_MARKER: &str = "source-build";
 
-/// A release install in the user-local version layout, which the signed
-/// feed updates.
-pub(crate) fn managed_install() -> bool {
-    installed_version_dir().is_some_and(|directory| !directory.join(SOURCE_MARKER).exists())
+/// How this executable was installed, which decides what updates it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Install {
+    /// The user-local version layout the signed feed updates.
+    Release,
+    /// Built from a checkout into that layout; the checkout updates it.
+    Source,
+    /// In the Nix store or owned by another user (a pacman package's
+    /// `/usr/bin/hex`): its package manager updates it.
+    Package,
+    /// Anything else, such as a downloaded executable run in place.
+    Unmanaged,
 }
 
-/// A build installed from a source checkout into the version layout.
-pub(crate) fn source_install() -> bool {
-    installed_version_dir().is_some_and(|directory| directory.join(SOURCE_MARKER).exists())
+pub(crate) fn install() -> Install {
+    if let Some(directory) = installed_version_dir() {
+        return if directory.join(SOURCE_MARKER).exists() {
+            Install::Source
+        } else {
+            Install::Release
+        };
+    }
+    let Ok(executable) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
+        return Install::Unmanaged;
+    };
+    // geteuid has no preconditions and does not mutate process state.
+    let user = unsafe { libc::geteuid() };
+    if executable.starts_with("/nix/store")
+        || fs::metadata(&executable).is_ok_and(|metadata| metadata.uid() != user)
+    {
+        Install::Package
+    } else {
+        Install::Unmanaged
+    }
 }
 
 /// This executable's version directory, when it runs from the user-local
@@ -64,7 +89,7 @@ fn installed_version_dir() -> Option<PathBuf> {
 }
 
 pub(crate) fn install_latest() -> Result<Option<InstalledUpdate>> {
-    if !managed_install() {
+    if install() != Install::Release {
         return Ok(None);
     }
     let support = crate::app_paths::support_dir()?;
@@ -81,7 +106,7 @@ pub(crate) fn install_latest() -> Result<Option<InstalledUpdate>> {
     lock.try_lock_exclusive()
         .wrap_err("another Linux update is already in progress")?;
     let feed_path = updates.join("linux-update.json.partial");
-    let feed_url = format!("{RELEASE_BASE}/{FEED}");
+    let feed_url = release_url(FEED);
     download(&feed_url, &feed_path, MAX_FEED_BYTES)?;
     let feed = read_bounded(&feed_path, MAX_FEED_BYTES)?;
     let _ = fs::remove_file(&feed_path);
@@ -95,7 +120,7 @@ pub(crate) fn install_latest() -> Result<Option<InstalledUpdate>> {
         return Ok(None);
     }
 
-    let artifact_url = format!("{RELEASE_BASE}/releases/{}", manifest.artifact);
+    let artifact_url = release_url(&format!("releases/{}", manifest.artifact));
     let partial = updates.join("update.download");
     download(&artifact_url, &partial, manifest.bytes)?;
     let activation = (|| {

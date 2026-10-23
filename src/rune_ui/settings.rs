@@ -1123,6 +1123,7 @@ fn software_update(ui: &Ui, p: Paint) -> Option<El> {
         DesktopUpdateStatus::Current => status(tr("Up to date")),
         DesktopUpdateStatus::Failed => status(tr("Check failed; retrying later")),
         DesktopUpdateStatus::SourceBuild => status(tr("Updated from your source checkout")),
+        DesktopUpdateStatus::PackageManager => status(tr("Updated by your package manager")),
         DesktopUpdateStatus::Available => button(
             p,
             "open-update",

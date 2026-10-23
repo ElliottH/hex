@@ -27,7 +27,7 @@ use crate::events::EventReader;
 use crate::linux_dictation::ListenerUpdate;
 use crate::linux_input::{LinuxHotkey, ShortcutCommand};
 use crate::linux_service::{self, Activation, Control, Published, ShortcutRoute, Status};
-use crate::linux_updater::InstalledUpdate;
+use crate::linux_updater::{Install, InstalledUpdate};
 
 const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(20);
@@ -137,6 +137,8 @@ enum UpdateState {
     Unmanaged,
     /// Built from a checkout: updates come from that checkout.
     SourceBuild,
+    /// Installed by a package manager (pacman, Nix), which updates it.
+    PackageManager,
     Checking(Receiver<Result<Option<InstalledUpdate>, String>>),
     Failed(Instant),
     Waiting(Instant),
@@ -314,12 +316,11 @@ pub(crate) fn run(
         ),
     };
     crate::linux_dictation::initialize_feedback(&settings);
-    let update = if crate::linux_updater::managed_install() {
-        UpdateState::Checking(start_update_check())
-    } else if crate::linux_updater::source_install() {
-        UpdateState::SourceBuild
-    } else {
-        UpdateState::Unmanaged
+    let update = match crate::linux_updater::install() {
+        Install::Release => UpdateState::Checking(start_update_check()),
+        Install::Source => UpdateState::SourceBuild,
+        Install::Package => UpdateState::PackageManager,
+        Install::Unmanaged => UpdateState::Unmanaged,
     };
     // Before any thread can load a model or the window can create its GPU.
     crate::local_transcriber::initialize_backends();
@@ -986,6 +987,7 @@ impl LinuxDesktopHost {
         let update_status = match &self.update {
             UpdateState::Unmanaged => DesktopUpdateStatus::Unavailable,
             UpdateState::SourceBuild => DesktopUpdateStatus::SourceBuild,
+            UpdateState::PackageManager => DesktopUpdateStatus::PackageManager,
             UpdateState::Checking(_) => DesktopUpdateStatus::Checking,
             UpdateState::Failed(_) => DesktopUpdateStatus::Failed,
             UpdateState::Waiting(_) => DesktopUpdateStatus::Current,

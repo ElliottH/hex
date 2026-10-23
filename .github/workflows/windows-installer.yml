@@ -35,7 +35,7 @@ jobs:
       - id: fetch
         name: Download and verify the signed feeds and their artifacts
         run: |
-          base=https://downloads.hex.kitlangton.dev
+          base=https://downloads.hex.anoma.ly
           mkdir -p dist
           for feed in linux-update.json windows-update.json windows-aarch64-update.json; do
             curl --fail --silent --show-error --proto '=https' "$base/$feed" -o "dist/$feed"

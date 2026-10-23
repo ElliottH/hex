@@ -68,6 +68,8 @@ pub(crate) enum DesktopUpdateStatus {
     /// Installed from a source checkout, which updates it; the release feed
     /// never replaces it.
     SourceBuild,
+    /// Installed by a package manager (pacman, Nix), which updates it.
+    PackageManager,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]

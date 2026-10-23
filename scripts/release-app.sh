@@ -9,7 +9,7 @@ version=$(hex_version "$root")
 build_number=$(hex_build_number "$version")
 : "${HEX_NOTARY_PROFILE:?Set HEX_NOTARY_PROFILE to the matching notarization profile}"
 bucket=${HEX_RELEASE_BUCKET:-hex-releases}
-base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.kitlangton.dev}
+base_url=${HEX_RELEASE_BASE_URL:-https://downloads.hex.anoma.ly}
 release_notes=${HEX_RELEASE_NOTES:-$root/docs/releases/$version.md}
 dist="$root/dist"
 updates="$dist/updates"
