@@ -216,16 +216,18 @@ While recording                                      // meetings.rolling
   -> Each track -> one-second blocks -> bounded queue (about 10 minutes)
   -> 16 kHz streaming resampler -> chunker + echo envelope
      ├── First pause after 6 s (pause segmenter; never under 3 s) -> boundary
-     ├── No pause by 10 s -> hard cut; next chunk overlaps 2 s
+     ├── No pause by 10 s -> hard cut; next chunk repeats its last 2 s
+     │   (so a chunk is at most 12 s of audio)
      └── Silent chunk (no 20 ms frame ≥ -60 dB) -> skipped, no inference
   -> Each chunk runs on dictation's loaded model, only while dictation is idle
      └── A dictation request or live stream came first -> retried once idle
-  -> Timed words joined word by word at the middle of each overlap
+  -> Timed words joined word by word at a shared word near each overlap's middle
      -> sentences (punctuation or a 600 ms pause)
   -> transcript.rolling.ndjson: per-track coverage line, then entries
      ├── Only settled sentences: wholly before the next seam, so a later chunk
      │   never rewrites or retracts a published line
-     ├── You entries publish only once the system track is transcribed past them
+     ├── You entries publish only once the system track is transcribed past them,
+     │   or once system capture is over 5 s behind the microphone (stalled)
      ├── Capture gap -> the track restarts after the gap; nothing is dropped
      ├── Backlog over 120 s of audio -> oldest chunks skipped, track marked
      │   incomplete; rebuilt from its WAV after Stop
@@ -250,7 +252,7 @@ a newer dictation request was sent, is turned away and retried 250 ms later,
 once dictation is idle. A chunk already running cannot be aborted
 (transcribe.cpp ignores its cancel callback on Metal), but it can only have
 started before the press, so it finishes during the 300 ms hold threshold and
-200 ms release tail (a chunk of at most 10 s takes well under 0.2 s on the
+200 ms release tail (a chunk of at most 12 s takes well under 0.2 s on the
 Pro). Gating at
 the intentional hold instead let a chunk start just before the threshold; with
 the shortest hold that added about 85 ms at p95 on the Pro. The job runs at utility QoS on
@@ -258,8 +260,11 @@ the engine thread, which returns to user-interactive afterwards. Apple Speech ru
 Apple Speech selected, and in a process without the engine (the CLI), the
 meeting loads its own transcriber as before.
 
-Seams: words starting before the middle of an overlap belong to the earlier
-chunk, and repeated words (two to twelve) at the join are removed. Joining
+Seams: the two chunks are spliced at a word both heard within 300 ms of the
+middle of the overlap (the same word's timing can shift between chunks);
+without one, words starting before the middle belong to the earlier chunk.
+Repeated words (two to twelve) at the join are removed, and Stop publishes the
+words still waiting on a seam. Joining
 words rather than sentences keeps a sentence that runs across a hard cut whole;
 joining sentences lost its words on one side (10% word error on `You` lines).
 
@@ -278,19 +283,20 @@ final transcript the earlier 30 s chunks produced.
 
 ```ts
                             Moonshine draft +      Parakeet only,
-                            30 s Parakeet chunks   3-10 s chunks
+                            30 s Parakeet chunks   3-12 s chunks
 Meeting CPU                 105% of a core         4.1%
 Footprint, idle 829 MB      mean 1345, peak 1438   mean 849, peak 867 MB
 Dictation release -> text   p50 80, p95 93 ms      p50 87, p95 104 ms
 Speech end -> copyable      p50 16.5, p95 28.7 s   p50 6.3, p95 11.4 s
   (Parakeet; the draft showed in about 1 s)
 Option-Control-V text       Moonshine, 17% WER     Parakeet, 6.0% mid-call
-Pasted vs final, Them/You   16.7% / 14.9%          1.8%* / 0.0%, no repeats
+Pasted vs final, Them/You   16.7% / 14.9%          0.0%* / 0.0%, no repeats
 Final transcript            after flush            187 ms after Stop, 4.0% WER
 ```
 
-\* The replay's last paste read the rolling file, not the published final, and
-missed the flushed tail; fixed in the harness.
+\* 1.8% Them in the 10-minute run: the harness's paste after Stop read the
+rolling file, not the published final, and missed the flushed tail. With that
+fixed, a 3-minute rerun pasted exactly the final's 574 words.
 
 Dictation latency in this run stays within run-to-run spread (the first
 Parakeet-only run measured p50 92 ms, p95 103 ms).
@@ -410,9 +416,10 @@ Meetings pane -> Row Copy (completed rows), detail Copy transcript, Reveal Markd
 Menu bar (idle) -> Copy Last Meeting Transcript
 Option-Control-V -> `MeetingPasteCursor` in `meeting.rs` over the rolling transcript
 ├── Pastes settled turns added since the last successful paste
-├── Remembers, per source, the capture time it pasted through; an entry is new
-│   when its midpoint is later, so nothing repeats or drops when the final
-│   transcript replaces rolling after Stop
+├── Remembers, per source, the capture time spans it pasted (spans within 1.5 s
+│   merge); an entry is new when its midpoint is outside them, so nothing
+│   repeats or drops when the final transcript replaces rolling after Stop, and
+│   text the final pass recovers for audio rolling skipped still pastes
 └── Resets when Hex restarts
 ```
 

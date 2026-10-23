@@ -503,6 +503,39 @@ fn paste_cursor_neither_repeats_nor_drops_text_when_the_transcript_is_rewritten(
     );
 }
 
+#[test]
+fn paste_cursor_pastes_text_the_final_pass_recovers_for_skipped_audio() {
+    let entry = |start_ms, end_ms, text: &str| TranscriptEntry {
+        source: MeetingSource::System,
+        start_ms,
+        end_ms,
+        text: text.into(),
+    };
+    let mut cursor = MeetingPasteCursor::default();
+    let mut paste = |entries: &[TranscriptEntry]| {
+        cursor
+            .consume_entries("meeting", entries, |_| Ok(()))
+            .unwrap_or_default()
+    };
+    // The in-call transcript fell behind and skipped 10–40 s of audio.
+    assert_eq!(
+        paste(&[
+            entry(0, 9_000, "Before the backlog."),
+            entry(41_000, 45_000, "After the backlog."),
+        ]),
+        "Them: Before the backlog.\n\nThem: After the backlog."
+    );
+    // The final pass rebuilt the skipped audio; only that text is new.
+    assert_eq!(
+        paste(&[
+            entry(0, 9_000, "Before the backlog."),
+            entry(12_000, 30_000, "Recovered middle."),
+            entry(41_000, 45_000, "After the backlog."),
+        ]),
+        "Them: Recovered middle."
+    );
+}
+
 fn packet_at(source: MeetingSource, arrival_ms: u64, samples: usize) -> AudioPacket {
     AudioPacket {
         source,

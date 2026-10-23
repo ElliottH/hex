@@ -502,7 +502,8 @@ CoreAudio formats, AppleScript details, or event serialization.
   dictation inference is active, never interrupts a live stream, and is retried
   when a dictation request was sent first. A chunk already running cannot be
   aborted on Metal; it finishes during the hold threshold and release tail.
-  Chunks are short (first pause after 6 s, hard cut at 10 s), so a running one
+  Chunks are short (first pause after 6 s, hard cut at 10 s of new audio plus
+  2 s overlap), so a running one
   finishes well within the hold threshold. It uses whatever model
   dictation has loaded, so a model switch applies from the next chunk; Apple
   Speech and a process without the engine use their own transcriber. Its queue

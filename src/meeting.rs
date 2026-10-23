@@ -1135,30 +1135,35 @@ pub fn shared_paste_cursor() -> &'static Mutex<MeetingPasteCursor> {
     MEETING_PASTE_CURSOR.get_or_init(Default::default)
 }
 
-/// What "Copy new" and Option-Control-V already handed out: for each source,
-/// the end of the last entry copied. The in-call transcript can still change
+/// What Option-Control-V already handed out: for each source, the capture
+/// time spans of the entries pasted. The in-call transcript can still change
 /// near its live edge, where echo is judged again as audio arrives, and the
 /// final transcript replaces it after Stop, so the cursor follows time rather
-/// than identical entries. An entry is new when most of it lies after what
-/// was copied from its source.
+/// than identical entries. An entry is new when its midpoint lies outside
+/// every pasted span, so text the final pass recovers for audio the in-call
+/// transcript skipped is still pasted later.
 #[derive(Clone, Debug, Default)]
 pub struct MeetingPasteCursor {
     meeting_id: Option<String>,
-    copied_through_ms: [Option<u64>; 2],
+    copied: [Vec<(u64, u64)>; 2],
 }
+
+/// Pasted spans closer than this merge, so a sentence split differently in
+/// the final transcript is not pasted again through the pause between two
+/// pasted ones.
+const PASTE_SPAN_JOIN_MS: u64 = 1_500;
 
 impl MeetingPasteCursor {
     fn unseen(&self, id: &str, entries: &[TranscriptEntry]) -> Vec<TranscriptEntry> {
-        let through = if self.meeting_id.as_deref() == Some(id) {
-            self.copied_through_ms
-        } else {
-            [None, None]
-        };
+        let same_meeting = self.meeting_id.as_deref() == Some(id);
         let mut unseen = entries
             .iter()
             .filter(|entry| {
-                through[cursor_slot(entry.source)]
-                    .is_none_or(|through| entry.start_ms + entry.end_ms > through * 2)
+                let middle = (entry.start_ms + entry.end_ms) / 2;
+                !same_meeting
+                    || !self.copied[cursor_slot(entry.source)]
+                        .iter()
+                        .any(|&(start, end)| start <= middle && middle <= end)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1186,11 +1191,20 @@ impl MeetingPasteCursor {
         commit_output(&text)?;
         if self.meeting_id.as_deref() != Some(id) {
             self.meeting_id = Some(id.to_string());
-            self.copied_through_ms = [None, None];
+            self.copied = Default::default();
         }
         for entry in unseen {
-            let through = &mut self.copied_through_ms[cursor_slot(entry.source)];
-            *through = Some(through.map_or(entry.end_ms, |through| through.max(entry.end_ms)));
+            let spans = &mut self.copied[cursor_slot(entry.source)];
+            spans.push((entry.start_ms, entry.end_ms));
+            spans.sort_unstable();
+            let mut merged: Vec<(u64, u64)> = Vec::with_capacity(spans.len());
+            for &(start, end) in spans.iter() {
+                match merged.last_mut() {
+                    Some(last) if start <= last.1 + PASTE_SPAN_JOIN_MS => last.1 = last.1.max(end),
+                    _ => merged.push((start, end)),
+                }
+            }
+            *spans = merged;
         }
         Ok(text)
     }

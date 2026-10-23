@@ -63,6 +63,11 @@ const ECHO_SIMILARITY: f32 = 0.6;
 /// A pause this long between timed words starts a new sentence.
 const SENTENCE_PAUSE_MS: i64 = 600;
 const SEAM_MAX_WORDS: usize = 12;
+/// How far apart two chunks may place the same word and still splice on it.
+const SEAM_ANCHOR_MS: i64 = 300;
+/// How far the system source's capture may trail the microphone's before
+/// microphone text stops waiting for it.
+const SYSTEM_STALL_MS: u64 = 5_000;
 
 pub(super) const ROLLING_FILE: &str = "transcript.rolling.ndjson";
 
@@ -188,11 +193,14 @@ impl TrackTranscript {
         let duration_ms = samples_ms(chunk.samples.len());
         let next_seam = chunk_ms + duration_ms - samples_ms(chunk.tail) / 2;
         self.settled_ms = self.settled_ms.max(next_seam);
-        if !transcript.words.is_empty() || !self.words.is_empty() {
+        let untimed = !transcript.segments.is_empty() || !transcript.text.trim().is_empty();
+        if !transcript.words.is_empty() || (!untimed && !self.words.is_empty()) {
             self.accept_words(chunk, chunk_ms, duration_ms, transcript.words);
             self.publish_sentences(next_seam, chunk.tail == 0);
             return;
         }
+        // A model without word timings (Apple Speech) took over mid-track.
+        self.finish();
         let segments = transcript.segments;
         let segmented = !segments.is_empty();
         let mut incoming: Vec<TranscriptEntry> = if segmented {
@@ -259,7 +267,13 @@ impl TrackTranscript {
                 })
             })
             .collect::<Vec<_>>();
-        if chunk.overlap > 0 {
+        if chunk.overlap > 0
+            && let Some((kept, skipped)) =
+                seam_anchor(&self.words, &incoming, chunk_ms, samples_ms(chunk.overlap))
+        {
+            self.words.truncate(kept);
+            incoming.drain(..skipped);
+        } else if chunk.overlap > 0 {
             let seam = (chunk_ms + samples_ms(chunk.overlap) / 2) as i64;
             self.words.retain(|word| word.start_ms < seam);
             incoming.retain(|word| word.start_ms >= seam);
@@ -281,6 +295,14 @@ impl TrackTranscript {
             incoming.drain(..repeated_prefix(&previous, &next));
         }
         self.words.extend(incoming);
+    }
+
+    /// Publishes every pending word, as when no chunk follows.
+    fn finish(&mut self) {
+        if let Some(end) = self.words.iter().map(|word| word.end_ms).max() {
+            self.settled_ms = self.settled_ms.max(end as u64 + 1);
+        }
+        self.publish_sentences(self.settled_ms, true);
     }
 
     /// Moves sentences no later chunk can change into the entries: every
@@ -351,6 +373,50 @@ fn sentence_groups(words: &[TranscriptSegment]) -> Vec<std::ops::Range<usize>> {
         }
     }
     groups
+}
+
+/// A word both chunks heard inside their overlap, at nearly the same time,
+/// closest to the overlap's middle: the earlier chunk keeps it and the words
+/// before it, the later chunk supplies what follows. Returns how many pending
+/// words to keep and how many incoming words to skip. Splicing at a shared
+/// word neither drops nor repeats a word whose timestamp shifts across the
+/// middle between the two chunks.
+fn seam_anchor(
+    previous: &[TranscriptSegment],
+    incoming: &[TranscriptSegment],
+    overlap_start_ms: u64,
+    overlap_ms: u64,
+) -> Option<(usize, usize)> {
+    let start = overlap_start_ms as i64;
+    let end = start + overlap_ms as i64;
+    let middle = start + overlap_ms as i64 / 2;
+    let in_overlap = |word: &TranscriptSegment| word.start_ms >= start && word.start_ms < end;
+    let mut best: Option<(i64, usize, usize)> = None;
+    for (kept, old) in previous
+        .iter()
+        .enumerate()
+        .filter(|(_, word)| in_overlap(word))
+    {
+        let old_text = normalize_word(&old.text);
+        if old_text.is_empty() {
+            continue;
+        }
+        for (skipped, new) in incoming
+            .iter()
+            .enumerate()
+            .filter(|(_, word)| in_overlap(word))
+        {
+            if (old.start_ms - new.start_ms).abs() <= SEAM_ANCHOR_MS
+                && normalize_word(&new.text) == old_text
+            {
+                let distance = (old.start_ms - middle).abs();
+                if best.is_none_or(|(best, _, _)| distance < best) {
+                    best = Some((distance, kept + 1, skipped + 1));
+                }
+            }
+        }
+    }
+    best.map(|(_, kept, skipped)| (kept, skipped))
 }
 
 /// Removes words at the start of `next` that repeat the end of `previous`.
@@ -860,6 +926,7 @@ fn run_rolling(
     let mut envelope = EchoEnvelope::default();
     let mut model = ChunkModel::new(selection.clone());
     let mut model_failed = false;
+    let mut microphone_shown_ms = 0;
     loop {
         let mut disconnected = false;
         loop {
@@ -887,7 +954,7 @@ fn run_rolling(
                 &mut model_failed,
             )
         {
-            write_rolling_snapshot(directory, &tracks, &envelope);
+            write_rolling_snapshot(directory, &tracks, &mut microphone_shown_ms, &envelope);
             continue;
         }
         match receiver.recv_timeout(Duration::from_millis(200)) {
@@ -914,6 +981,9 @@ fn run_rolling(
         ) {
             thread::sleep(PREEMPTED_RETRY);
         }
+    }
+    for track in tracks.iter_mut().flatten() {
+        track.transcript.finish();
     }
     let [system, microphone] = tracks;
     let complete = |track: Option<RollingTrack>, index: usize| {
@@ -1112,10 +1182,12 @@ impl FromIterator<RollingLine> for RollingView {
 /// replace. A microphone entry is published only once the system track is
 /// transcribed through its end, so echo is judged against the remote words
 /// regardless of which chunk finished first. A system track that stopped
-/// advancing is not waited for.
+/// advancing is not waited for. Microphone entries through
+/// `microphone_shown_ms` were already shown and stay shown.
 fn rolling_view(
     tracks: [Option<&TrackTranscript>; 2],
     system_advancing: bool,
+    microphone_shown_ms: u64,
     envelope: &EchoEnvelope,
 ) -> RollingView {
     let origin_ms = tracks
@@ -1127,7 +1199,10 @@ fn rolling_view(
     let [system, microphone] = tracks;
     let system_settled = system.map(|track| track.settled_ms);
     let microphone_settled = microphone.map(|track| match system_settled {
-        Some(system) if system_advancing => track.settled_ms.min(system),
+        Some(system) if system_advancing => track
+            .settled_ms
+            .min(system)
+            .max(microphone_shown_ms.min(track.settled_ms)),
         _ => track.settled_ms,
     });
     let settled = |track: &TrackTranscript, through: Option<u64>| {
@@ -1166,15 +1241,35 @@ fn rolling_view(
 fn write_rolling_snapshot(
     directory: &Path,
     tracks: &[Option<RollingTrack>; 2],
+    microphone_shown_ms: &mut u64,
     envelope: &EchoEnvelope,
 ) {
     let result = (|| -> Result<()> {
         let [system, microphone] = tracks;
+        let captured_ms = |track: &RollingTrack| track.transcript.origin_ms + samples_ms(track.fed);
+        // A system source in a capture outage receives nothing; microphone
+        // text does not wait for it.
+        let system_advancing = system.as_ref().is_some_and(|system| {
+            !system.failed
+                && microphone.as_ref().is_none_or(|microphone| {
+                    captured_ms(microphone) <= captured_ms(system) + SYSTEM_STALL_MS
+                })
+        });
         let view = rolling_view(
             [system, microphone].map(|track| track.as_ref().map(|track| &track.transcript)),
-            system.as_ref().is_some_and(|track| !track.failed),
+            system_advancing,
+            *microphone_shown_ms,
             envelope,
         );
+        if let (Some(covered), Some(microphone)) = (view.covered_ms.microphone, microphone) {
+            let origin_ms = tracks
+                .iter()
+                .flatten()
+                .map(|track| track.transcript.origin_ms)
+                .min()
+                .unwrap_or(microphone.transcript.origin_ms);
+            *microphone_shown_ms = (*microphone_shown_ms).max(origin_ms + covered);
+        }
         let temporary = directory.join(format!("{ROLLING_FILE}.tmp"));
         let mut file = BufWriter::new(File::create(&temporary)?);
         set_owner_only(&temporary, false)?;
@@ -1341,6 +1436,7 @@ fn transcribe_file(
     if let Some(chunk) = chunker.finish() {
         transcribe_chunk(chunk, &mut transcript)?;
     }
+    transcript.finish();
     Ok(transcript)
 }
 
@@ -1426,6 +1522,7 @@ pub(super) fn echo_report(
                 new_track.accept(&chunk, transcript);
             }
         }
+        new_track.finish();
         old_entries.extend(old_track.entries);
         new_entries.extend(new_track.entries);
     }
@@ -1730,7 +1827,7 @@ pub(super) fn replay_views(
     microphone: &TrackTranscript,
     envelope: &EchoEnvelope,
 ) -> (RollingView, Vec<TranscriptEntry>, Vec<TranscriptEntry>) {
-    let view = rolling_view([Some(system), Some(microphone)], true, envelope);
+    let view = rolling_view([Some(system), Some(microphone)], true, 0, envelope);
     let entries = system
         .entries
         .iter()
@@ -1938,7 +2035,7 @@ mod tests {
         );
         let envelope = EchoEnvelope::default();
         let view = |track: &TrackTranscript| {
-            rolling_view([Some(track), None], true, &envelope)
+            rolling_view([Some(track), None], true, 0, &envelope)
                 .entries
                 .into_iter()
                 .map(|entry| entry.text)
@@ -2267,7 +2364,7 @@ mod tests {
             ],
         );
         let envelope = EchoEnvelope::default();
-        let view = rolling_view([Some(&system), Some(&microphone)], true, &envelope);
+        let view = rolling_view([Some(&system), Some(&microphone)], true, 0, &envelope);
         assert_eq!(
             view.entries
                 .iter()
@@ -2285,12 +2382,12 @@ mod tests {
 
         // Before any system chunk, the microphone covers nothing yet.
         let pending = track(MeetingSource::System, 0, &[]);
-        let view = rolling_view([Some(&pending), Some(&microphone)], true, &envelope);
+        let view = rolling_view([Some(&pending), Some(&microphone)], true, 0, &envelope);
         assert!(view.entries.is_empty());
         assert_eq!(view.covered_ms.microphone, Some(0));
 
         // A system track that stopped advancing is not waited for.
-        let view = rolling_view([Some(&system), Some(&microphone)], false, &envelope);
+        let view = rolling_view([Some(&system), Some(&microphone)], false, 0, &envelope);
         assert_eq!(view.entries.len(), 3);
         assert_eq!(view.covered_ms.microphone, Some(20_000));
     }
@@ -2410,6 +2507,144 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Done.", "Interface elements don't pop in."]
         );
+    }
+
+    fn hard_cut_track(old: &[(i64, &str)], new: &[(i64, &str)]) -> TrackTranscript {
+        let words = |words: &[(i64, &str)], offset: i64| {
+            words
+                .iter()
+                .map(|&(start_ms, text)| TranscriptSegment {
+                    start_ms: start_ms - offset,
+                    end_ms: start_ms - offset + 200,
+                    text: text.into(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut track = TrackTranscript::new(MeetingSource::System, 0);
+        // Cut at 10 s; the next chunk starts at 8 s, so its seam is at 9 s.
+        track.accept(
+            &Chunk {
+                start: 0,
+                overlap: 0,
+                tail: 2 * RATE,
+                samples: vec![0.0; 10 * RATE],
+            },
+            Transcript {
+                words: words(old, 0),
+                ..Transcript::default()
+            },
+        );
+        if !new.is_empty() {
+            track.accept(
+                &Chunk {
+                    start: 8 * RATE,
+                    overlap: 2 * RATE,
+                    tail: 0,
+                    samples: vec![0.0; 4 * RATE],
+                },
+                Transcript {
+                    words: words(new, 8_000),
+                    ..Transcript::default()
+                },
+            );
+        }
+        track
+    }
+
+    fn texts(track: &TrackTranscript) -> Vec<&str> {
+        track
+            .entries
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_word_whose_time_shifts_across_the_seam_appears_once() {
+        // The two chunks place "nine" on opposite sides of the 9 s middle.
+        let earlier = [
+            (8_400, "We"),
+            (8_700, "said"),
+            (9_050, "nine"),
+            (9_500, "times"),
+        ];
+        let later = [
+            (8_400, "We"),
+            (8_700, "said"),
+            (8_950, "nine"),
+            (9_500, "times."),
+        ];
+        assert_eq!(
+            texts(&hard_cut_track(&earlier, &later)),
+            ["We said nine times."]
+        );
+        let earlier = [
+            (8_400, "We"),
+            (8_700, "said"),
+            (8_950, "nine"),
+            (9_500, "times"),
+        ];
+        let later = [
+            (8_400, "We"),
+            (8_700, "said"),
+            (9_050, "nine"),
+            (9_500, "times."),
+        ];
+        assert_eq!(
+            texts(&hard_cut_track(&earlier, &later)),
+            ["We said nine times."]
+        );
+    }
+
+    #[test]
+    fn stopping_right_after_a_hard_cut_publishes_the_pending_words() {
+        let mut track = hard_cut_track(&[(1_000, "Done."), (8_500, "One"), (9_200, "more")], &[]);
+        assert_eq!(texts(&track), ["Done."]);
+        track.finish();
+        assert_eq!(texts(&track), ["Done.", "One more"]);
+        assert!(
+            track
+                .entries
+                .iter()
+                .all(|entry| entry.start_ms < track.settled_ms)
+        );
+    }
+
+    #[test]
+    fn a_model_without_word_timings_does_not_discard_its_text() {
+        let mut track = hard_cut_track(&[(8_500, "One"), (9_200, "more")], &[]);
+        track.accept(
+            &Chunk {
+                start: 8 * RATE,
+                overlap: 2 * RATE,
+                tail: 0,
+                samples: vec![0.0; 4 * RATE],
+            },
+            Transcript {
+                text: "One more thing.".into(),
+                segments: vec![TranscriptSegment {
+                    start_ms: 1_500,
+                    end_ms: 3_000,
+                    text: "thing.".into(),
+                }],
+                ..Transcript::default()
+            },
+        );
+        assert_eq!(texts(&track), ["One more", "thing."]);
+    }
+
+    #[test]
+    fn microphone_text_already_shown_stays_shown() {
+        let system = track(MeetingSource::System, 10_000, &[]);
+        let microphone = track(
+            MeetingSource::Microphone,
+            20_000,
+            &[(12_000, 14_000, "Ship the beta on Friday.")],
+        );
+        let envelope = EchoEnvelope::default();
+        let view = rolling_view([Some(&system), Some(&microphone)], true, 15_000, &envelope);
+        assert_eq!(view.entries.len(), 1);
+        assert_eq!(view.covered_ms.microphone, Some(15_000));
     }
 
     #[test]
