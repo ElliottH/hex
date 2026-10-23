@@ -296,6 +296,11 @@ fn clean_summary(summary: &str) -> String {
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>()
         .join(" ");
+    // Guided generation sometimes leaks a closing brace from its JSON.
+    let text = text
+        .trim_start_matches(['{', '['])
+        .trim_end_matches(['}', ']'])
+        .trim();
     let mut end = text.len();
     let mut sentences = 0;
     for (index, character) in text.char_indices() {
@@ -1115,6 +1120,10 @@ mod tests {
             "Version 2.1 ships. Docs follow."
         );
         assert_eq!(clean_summary("No end punctuation"), "No end punctuation");
+        assert_eq!(
+            clean_summary("The team shipped. Docs were discussed.}"),
+            "The team shipped. Docs were discussed."
+        );
         let long = clean_summary(&"word ".repeat(200));
         assert!(long.len() <= MAX_SUMMARY_CHARS + "…".len() && long.ends_with('…'));
     }
