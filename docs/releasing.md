@@ -25,7 +25,8 @@ Release (workflow_dispatch: ref, channel; or push tag app-v<version>)
   apps never read the prefix. To try a staged update on Linux or Windows, run
   Hex with `HEX_RELEASE_BASE_URL=https://downloads.hex.anoma.ly/staging/<run-id>`
   (HTTPS only; the compiled key still decides what is trusted). A staging run
-  without the macOS build publishes Linux and Windows only.
+  without the macOS build publishes Linux and Windows only. Staging objects
+  expire after 30 days (bucket lifecycle rule `expire-staging`).
 - `stable` publishes the public release: root keys, a published GitHub release
   `app-v<version>` (kept off "Latest", which the SDK uses), and the AUR push.
   It needs every platform, Authenticode-signed Windows executables, and
