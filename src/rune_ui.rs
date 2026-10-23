@@ -893,6 +893,13 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
         .radius(p.k.radius.md)
         .hover(c.hover)
         .press(c.pressed)
+        // Switch on pointer down, like a native sidebar; the press keeps
+        // keyboard activation.
+        .on_drag(move |ui: &mut Ui, d: &mut rune::Drag, tx: &mut Tx| {
+            if d.phase == rune::Phase::Down {
+                ui.select_pane(pane, tx);
+            }
+        })
         .on_press_tx(move |ui: &mut Ui, tx: &mut Tx| ui.select_pane(pane, tx))
         .child(icon(pane.icon(), 16.0).key("icon").color(if on {
             c.icon_base

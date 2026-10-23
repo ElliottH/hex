@@ -266,6 +266,18 @@ fn the_sidebar_switches_panes_and_keeps_settings() {
 }
 
 #[test]
+fn the_sidebar_switches_on_press_not_release() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    let (x, y) = rt.find("nav-modes").expect("the Modes item");
+    rt.pointer_down(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.pane, Pane::Modes);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.pane, Pane::Modes);
+}
+
+#[test]
 fn switching_panes_is_instant() {
     let mut rt = runtime("portal", true, PANE_SIZE);
     let (x, y) = rt.find("nav-modes").expect("the Modes item");
