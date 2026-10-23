@@ -759,8 +759,12 @@ GitHub mirror/version link in `README.md`, and (macOS) the Homebrew cask.
 `bun run --cwd site check:downloads` fails until every download link serves a
 file; every deploy runs it. Verify the live links afterwards.
 The Rust app is named `Hex`, packaged as `Hex.app`,
-with bundle identifier `com.kitlangton.hex2` and executable `hex`. Kit has approved
-his personal Developer ID signing team `QC99C9JE59` for this app. Signing requires
+with bundle identifier `anomaly.hex` (deliberately not reverse-DNS) and executable
+`hex`; its SDK helper is `anomaly.hex.service` and the virtual microphone driver
+`anomaly.hex.microphone.driver`. Releases through 2.3.1 were `com.kitlangton.hex2`,
+signed by Kit's team `QC99C9JE59`; macOS treats `anomaly.hex` as a new app (fresh
+permissions, login item, and preferences domain), while the `hex` Application
+Support folder, and with it settings, history, and models, is shared. Signing requires
 an explicit `VOICE_CONTROL_TEAM_ID` and matching `HEX_NOTARY_PROFILE`; the build
 and release scripts verify the selected team rather than assuming an Anomaly team.
 `scripts/validate-app.sh` checks this identity before preparation and publication.
@@ -810,7 +814,7 @@ each script's `build` mode, through the reusable
 `.github/workflows/build-desktop.yml`. `.github/workflows/test-builds.yml`
 calls the same workflow on every push to `main` with `test-build`, plus an
 ad-hoc signed `Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle
-ID `com.kitlangton.hex2.test`, no Sparkle, its own `hex-test` data folder and
+ID `anomaly.hex.test`, no Sparkle, its own `hex-test` data folder and
 `~/.config/hex-test`; it must never read the real `hex` data), as unsigned 14-day artifacts for
 teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` also compiles Windows
 builds that never check for updates. A job that compiles nothing then signs all three

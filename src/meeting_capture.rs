@@ -541,7 +541,7 @@ fn create_tap_aggregate(tap_uid: &NSString) -> Result<AudioObjectID> {
         ],
     );
     let taps = NSArray::from_retained_slice(&[sub_tap]);
-    let uid = format!("com.kitlangton.hex.meeting-tap.{}", std::process::id());
+    let uid = format!("anomaly.hex.meeting-tap.{}", std::process::id());
     let description: Retained<NSDictionary<NSString, AnyObject>> =
         NSDictionary::from_retained_objects(
             &[

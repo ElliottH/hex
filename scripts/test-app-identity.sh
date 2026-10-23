@@ -10,7 +10,7 @@ mkdir -p "$bundle/Contents"
 plist="$bundle/Contents/Info.plist"
 cp "$root/app/Info.plist" "$plist"
 
-[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = com.kitlangton.hex2 ]
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = anomaly.hex ]
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")" = hex ]
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$plist")" = Hex ]
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$plist")" = Hex ]
@@ -30,6 +30,8 @@ expect_rejection 'wrong bundle identifier'
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier ly.anoma.Hex' "$plist"
 expect_rejection 'wrong bundle identifier'
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier com.kitlangton.hex2' "$plist"
+expect_rejection 'wrong bundle identifier'
+/usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier anomaly.hex' "$plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable voice-control-watch' "$plist"
 expect_rejection 'wrong executable name'
 

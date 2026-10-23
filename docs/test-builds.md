@@ -19,7 +19,7 @@ GitHub wraps each artifact in a zip; unzip it first.
 
 ## macOS (Apple silicon, macOS 15 or later)
 
-The test app is **Hex Test.app** (bundle ID `com.kitlangton.hex2.test`),
+The test app is **Hex Test.app** (bundle ID `anomaly.hex.test`),
 ad-hoc signed and built without Sparkle. Its own name and bundle ID let it sit
 beside a released `Hex.app` without touching that app's permissions, login
 item, or updates. It also keeps its own data: settings, models, History, and

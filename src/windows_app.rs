@@ -82,7 +82,7 @@ pub(crate) struct WindowsDesktopHost {
 }
 
 /// Names the event that marks the running Hex app in this login session.
-const APP_INSTANCE_EVENT: &str = r"Local\com.kitlangton.hex.app";
+const APP_INSTANCE_EVENT: &str = r"Local\anomaly.hex.app";
 
 /// Ownership of the one Hex app in this login session.
 ///

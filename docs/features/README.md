@@ -535,6 +535,7 @@ HEX_EXPERIMENTAL_MIC=1 or experimental.hex_microphone = true // fun.hex-micropho
 ├── Hex Microphone card
 │   ├── Driver status -> Installed v<ver> / In use by <app> + Uninstall
 │   │   ├── Version mismatch -> v<old> installed + Update + Uninstall
+│   │   ├── Pre-Anomaly com.kitlangton driver at the same path -> Update replaces it in place
 │   │   ├── Not installed -> Install -> macOS admin prompt -> copies bundled HexMicrophone.driver + restarts coreaudiod
 │   │   └── Inline state -> Installing… / Uninstalling… / Cancelled / Failed with reason
 │   ├── Mode while dictating -> Muffled (default), Muted, Quiet, Normal, Chipmunk, Robot, Walkie, Underwater, Far
@@ -684,11 +685,13 @@ DisableUpdates = true at launch          // maintain.managed-updates
 └── Menu bar -> Disabled "Updates Managed by Your Organization"
 ```
 
-Administrators set the `DisableUpdates` Boolean in the `com.kitlangton.hex2`
+Administrators set the `DisableUpdates` Boolean in the `anomaly.hex`
 domain, normally through a configuration profile
 ([#100](https://github.com/anomalyco/hex/issues/100)). HEX reads the effective
 `NSUserDefaults` value once at launch, so a forced profile value wins over a local
 one and a change applies after relaunch. Speech-model downloads are unaffected.
+Releases through 2.3.1 read `com.kitlangton.hex2`; there is no fallback to it, so
+profiles must name `anomaly.hex`.
 No automated check covers it; the read is a single preference lookup in
 [sparkle.rs](../../src/sparkle.rs).
 

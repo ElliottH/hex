@@ -11,6 +11,9 @@ on:
       - "macos/HexMicrophoneDriver/Info.plist"
       - "resources/**"
       - "assets/**"
+      - "app/**"
+      - "scripts/validate-app.sh"
+      - "scripts/test-app-identity.sh"
       - ".github/workflows/check-macos.yml"
   push:
     branches: [main, rune-ui]
@@ -23,6 +26,9 @@ on:
       - "macos/HexMicrophoneDriver/Info.plist"
       - "resources/**"
       - "assets/**"
+      - "app/**"
+      - "scripts/validate-app.sh"
+      - "scripts/test-app-identity.sh"
       - ".github/workflows/check-macos.yml"
 
 permissions:
@@ -49,6 +55,7 @@ jobs:
       - name: Install the Metal toolchain
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - run: cargo fmt --all --check
+      - run: scripts/test-app-identity.sh
       - run: cargo clippy --locked --bin voice-control --tests -- -D warnings
       - run: cargo test --locked --bin voice-control
       - name: No compromised eMudhra CA roots

@@ -10,12 +10,12 @@ if [ "${HEX_TEST_BUILD:-}" = 1 ]; then
   team_id=
   identity=-
   app_name="Hex Test"
-  bundle_id=com.kitlangton.hex2.test
+  bundle_id=anomaly.hex.test
 else
   team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Developer signing team}
   identity=$(hex_codesign_identity "$team_id")
   app_name=Hex
-  bundle_id=com.kitlangton.hex2
+  bundle_id=anomaly.hex
 fi
 icon_output="$root/target/AppIcon.assets"
 icon_info="$root/target/AppIcon-info.plist"

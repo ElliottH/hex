@@ -94,7 +94,7 @@ no instance, otherwise    -> become the instance in this process (custom data ro
 [`windows_app.rs`](../../src/windows_app.rs), and
 [`rune_ui/windows_host.rs`](../../src/rune_ui/windows_host.rs):
 
-- Single instance uses the named auto-reset event `Local\com.kitlangton.hex.app`.
+- Single instance uses the named auto-reset event `Local\anomaly.hex.app`.
   A second launch grants `AllowSetForegroundWindow`, signals the event, and
   exits (`--hidden` exits without signaling).
 - The main thread creates the `tray-icon` (pumped by winit's Win32 message loop)

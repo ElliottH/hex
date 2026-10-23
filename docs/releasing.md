@@ -48,6 +48,15 @@ Release (workflow_dispatch: ref, channel; or push tag app-v<version>)
    version link, and the Homebrew cask (`anomalyco/homebrew-tap`,
    `Casks/hex.rb`: version and the DMG's sha256).
 
+The first Anomaly-signed macOS release also changes the bundle ID to
+`anomaly.hex` (docs/plans/macos-signing.md). Its notes must tell Mac users
+that macOS sees a new app: grant Microphone, Input Monitoring, Accessibility,
+and (for meetings) Screen & System Audio Recording once more, removing any
+stale Hex entry in System Settings first; turn Launch at login on again; and
+point `DisableUpdates` profiles at `anomaly.hex`. Settings, history, and
+models carry over. Decide how 2.3.1 installs reach it first (same doc,
+"Existing installs").
+
 The macOS build number is `major*10000 + minor*100 + patch`; Sparkle compares
 it, so it must exceed every published and distributed beta build. The feeds
 refuse an equal or older version.
