@@ -41,6 +41,10 @@ const MEETING_PANEL_WIDTH: f32 = 420.0;
 /// The offer's "…" choices need room for three buttons beside the name.
 const MEETING_MENU_WIDTH: f32 = 560.0;
 const MEETING_PANEL_HEIGHT: f32 = 64.0;
+/// Between a capsule's buttons and its right edge.
+const ACTIONS_INSET: f32 = 8.0;
+/// The recording capsule stays a full pill.
+const PILL_RADIUS: f32 = 999.0;
 /// The reminder: the meeting's title beside up to three buttons.
 const REMINDER_PANEL_WIDTH: f32 = 520.0;
 /// How often an open reminder recounts "Starts in N min".
@@ -926,11 +930,11 @@ fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automat
             .build(p.k)
             .key("pending")
     });
-    let pill = pill_body(p, pulsing_dot(p.danger()), title, &subtitle)
+    let pill = pill_body(p, pulsing_dot(p.danger()), title, &subtitle, PILL_RADIUS)
         .pr(if pending.is_some() { 12.0 } else { 8.0 })
         .children(pending)
         .children(open.then(|| row().key("actions").gap(8.0).children(actions)))
-        .clip_rounded(999.0)
+        .clip_rounded(PILL_RADIUS)
         .cursor(Cursor::Grab)
         .motion(if open {
             RECORDING_OPEN
@@ -953,7 +957,8 @@ fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automat
     .child(pill)
 }
 
-/// The capsule's pill: status dot, two truncated lines, and its actions.
+/// The panel capsule (reminder, offer, call ended, ready): status dot, two
+/// truncated lines, and its actions, in a rounded rectangle.
 fn pill(p: Paint, dot: rune::Color, title: &str, subtitle: &str, actions: Vec<El>) -> El {
     row()
         .key("capsule")
@@ -962,23 +967,30 @@ fn pill(p: Paint, dot: rune::Color, title: &str, subtitle: &str, actions: Vec<El
         .px(4.0)
         .py(4.0)
         .child(
-            pill_body(p, status_dot(dot), title, subtitle)
+            pill_body(p, status_dot(dot), title, subtitle, panel_radius(p))
                 .w_full()
                 .child(row().key("actions").gap(8.0).children(actions)),
         )
 }
 
-/// The rounded pill with its dot and two truncated lines.
-fn pill_body(p: Paint, dot: El, title: &str, subtitle: &str) -> El {
+/// The panel capsule's corners, concentric with its buttons' (`radius.md`)
+/// across the [`ACTIONS_INSET`] between them and the edge.
+fn panel_radius(p: Paint) -> f32 {
+    p.k.radius.md + ACTIONS_INSET
+}
+
+/// The capsule body with its dot and two truncated lines: a rounded
+/// rectangle for the panel capsules, a full pill for the recording capsule.
+fn pill_body(p: Paint, dot: El, title: &str, subtitle: &str, radius: f32) -> El {
     let c = &p.k.c;
     row()
         .key("pill")
         .h_full()
         .gap(12.0)
         .pl(16.0)
-        .pr(8.0)
+        .pr(ACTIONS_INSET)
         .center_y()
-        .radius(999.0)
+        .radius(radius)
         .fill(c.bg_base)
         .border(p.hair, c.border_base)
         .child(dot)
