@@ -101,6 +101,16 @@ jobs:
       AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
       AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
 
+  macos:
+    needs: resolve
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      sha: ${{ needs.resolve.outputs.sha }}
+      version: ${{ needs.resolve.outputs.version }}
+      download-base: ${{ needs.resolve.outputs.base-url }}
+      require-newer: ${{ needs.resolve.outputs.channel == 'stable' }}
+    secrets: inherit
+
   sign:
     name: Sign and validate
     needs: [resolve, build]
@@ -169,7 +179,12 @@ jobs:
 
   publish:
     name: Publish
-    needs: [resolve, sign]
+    needs: [resolve, sign, macos]
+    # A staging dry run publishes without macOS when its build failed (for
+    # example before the Apple secrets exist); stable needs every platform.
+    if: >-
+      !cancelled() && needs.sign.result == 'success' &&
+      (needs.macos.result == 'success' || needs.resolve.outputs.channel == 'staging')
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -197,7 +212,7 @@ jobs:
           name: signed-release
           path: dist
       - uses: actions/download-artifact@v8
-        continue-on-error: ${{ needs.resolve.outputs.channel != 'stable' }}
+        if: needs.macos.result == 'success'
         with:
           name: hex-macos-arm64
           path: dist
@@ -211,6 +226,7 @@ jobs:
   aur:
     name: AUR
     needs: [resolve, sign, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-24.04
     container: archlinux:base-devel
     environment: release
