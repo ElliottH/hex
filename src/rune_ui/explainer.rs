@@ -10,7 +10,7 @@ use std::cell::Cell;
 use std::time::Duration;
 
 use rune::{
-    Color, Cursor, El, LineCap, Shape, SpringPair, Transition, Tx, canvas, col, el, row, text,
+    Color, Cursor, Cx, El, LineCap, Shape, SpringPair, Transition, Tx, canvas, col, el, row, text,
 };
 
 use super::Ui;
@@ -30,9 +30,10 @@ const KEY_DEPTH: f32 = 2.5;
 const KEY_TRAVEL: f32 = 2.0;
 /// Seconds for the face to sink; it rises on the controls' spring.
 const KEY_PRESS: f32 = 0.07;
+/// Between the keycaps of a chord.
+const KEY_GAP: f32 = 3.0;
 const VISUAL_GAP: f32 = 10.0;
-/// The lanes' drawing width with a one-glyph keycap; a wider keycap
-/// stretches the drawing a little.
+/// The lanes' width with one one-glyph keycap, until layout measures them.
 const CARD_LANES: f32 =
     (MODAL_WIDTH - 2.0 * PADDING - CARD_GAP) / 2.0 - 2.0 * CARD_PADDING - KEYCAP_WIDTH - VISUAL_GAP;
 const LOCK_LANES: f32 =
@@ -49,10 +50,11 @@ const LOOP: f32 = 3800.0;
 const T0: f32 = 200.0;
 const T1: f32 = 2740.0;
 /// The finished frame: the key up and both lanes fully drawn.
-const DONE: f32 = 3000.0;
+pub(super) const DONE: f32 = 3000.0;
 const FADE_FROM: f32 = 3300.0;
 const FADE: f32 = 400.0;
-/// A press lands at least this wide, so a tap is never a sliver.
+/// A press widens to at least this once the playhead passes, so a tap is
+/// never a sliver.
 const MIN_PRESS: f32 = 9.0;
 /// Frozen snapshots show the playhead mid-loop.
 pub(super) const SNAPSHOT_MS: f32 = 1800.0;
@@ -108,7 +110,11 @@ impl Explainer {
     }
 }
 
+/// Opens the modal over General, alone: it ends a shortcut recording and
+/// closes the model picker and any menu.
 pub(super) fn open(ui: &mut Ui) {
+    super::settings::cancel_capture(ui);
+    super::picker::close(ui);
     ui.open = None;
     ui.explainer.open = true;
     ui.explainer.start = None;
@@ -157,16 +163,22 @@ pub(super) fn link(p: Paint) -> El {
         .child(text(label).key("label").font(DESCRIPTION).color(p.accent()))
 }
 
-pub(super) fn modal(ui: &Ui, p: Paint, reduced: bool) -> Option<[El; 2]> {
+pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
+    // Kept while closed too, so the poll after opening already knows.
+    ui.explainer.reduced.set(cx.system_reduced_motion());
     if !ui.explainer.open {
         return None;
     }
-    ui.explainer.reduced.set(reduced);
     let t = ui.explainer.time();
     let c = &p.k.c;
     let colors = Colors::new(p);
-    let key = ui.settings.dictation_hotkey.keycaps().join("+");
+    let keys = ui.settings.dictation_hotkey.keycaps();
     let hold = ui.settings.shortcut_mode == ShortcutMode::Hold;
+    // The lanes draw at the width they lay out at, whatever the keycaps take.
+    let lanes = |owner: &str, estimate: f32| {
+        cx.layout(&format!("{owner}/visual/lanes"))
+            .map_or(estimate, |[_, _, width, _]| width)
+    };
     let cards = row()
         .key("modes")
         .equal_columns(2)
@@ -177,7 +189,7 @@ pub(super) fn modal(ui: &Ui, p: Paint, reduced: bool) -> Option<[El; 2]> {
             ShortcutMode::Hold,
             tr("Hold"),
             tr("Hold to talk. Let go to paste."),
-            visual(p, &colors, "visual", &key, &HOLD, CARD_LANES, t),
+            visual(p, &colors, &keys, &HOLD, lanes("mode-hold", CARD_LANES), t),
         ))
         .child(card(
             ui,
@@ -185,13 +197,21 @@ pub(super) fn modal(ui: &Ui, p: Paint, reduced: bool) -> Option<[El; 2]> {
             ShortcutMode::Toggle,
             tr("Toggle"),
             tr("Press to start, press to stop."),
-            visual(p, &colors, "visual", &key, &TOGGLE, CARD_LANES, t),
+            visual(
+                p,
+                &colors,
+                &keys,
+                &TOGGLE,
+                lanes("mode-toggle", CARD_LANES),
+                t,
+            ),
         ));
+    let lock_lanes = lanes("double-tap", LOCK_LANES);
     let body = col()
         .key("explainer-body")
         .gap(CARD_GAP)
         .child(cards)
-        .children(hold.then(|| lock_row(ui, p, &colors, &key, t)));
+        .children(hold.then(|| lock_row(ui, p, &colors, &keys, lock_lanes, t)));
     let mut panel = col()
         .key("shortcut-explainer")
         .role("dialog")
@@ -300,14 +320,14 @@ fn pick(ui: &mut Ui, mode: ShortcutMode) {
     }
 }
 
-fn lock_row(ui: &Ui, p: Paint, colors: &Colors, key: &str, t: f32) -> El {
+fn lock_row(ui: &Ui, p: Paint, colors: &Colors, keys: &[String], width: f32, t: f32) -> El {
     let c = &p.k.c;
+    // Like General's switch rows, the switch shows focus for the row.
     col()
         .key("double-tap")
         .role("toggle")
         .label(tr("Double-tap to lock"))
         .focusable(true)
-        .focus_ring(2.0, 2.0, c.border_focus)
         .py(10.0)
         .px(CARD_PADDING)
         .gap(8.0)
@@ -343,7 +363,7 @@ fn lock_row(ui: &Ui, p: Paint, colors: &Colors, key: &str, t: f32) -> El {
                 )
                 .child(row_switch(p, ui.settings.double_tap_lock)),
         )
-        .child(visual(p, colors, "visual", key, &LOCK, LOCK_LANES, t))
+        .child(visual(p, colors, keys, &LOCK, width, t))
 }
 
 /// Double-tap to lock, as General's row flips it.
@@ -357,23 +377,23 @@ pub(super) fn flip_lock(ui: &mut Ui) {
     });
 }
 
-fn visual(
-    p: Paint,
-    colors: &Colors,
-    key: &str,
-    label: &str,
-    script: &Script,
-    width: f32,
-    t: f32,
-) -> El {
+/// One keycap per key of the shortcut, pressing together, beside the lanes
+/// drawn `width` points wide.
+fn visual(p: Paint, colors: &Colors, keys: &[String], script: &Script, width: f32, t: f32) -> El {
     let down = script.presses.iter().any(|&(d, u)| d <= t && t < u);
     row()
-        .key(key)
+        .key("visual")
         .role("none")
         .h(28.0)
         .gap(VISUAL_GAP)
         .center_y()
-        .child(keycap(p, label, down))
+        .child(
+            row().key("keys").gap(KEY_GAP).children(
+                keys.iter()
+                    .enumerate()
+                    .map(|(index, label)| keycap(p, index, label, down)),
+            ),
+        )
         .child(
             canvas(lanes(colors, script, width, t))
                 .key("lanes")
@@ -383,10 +403,10 @@ fn visual(
         )
 }
 
-/// The shortcut's key, pressed while the script holds it: a face on a base
-/// whose lip shows below it. A press sinks the face into the lip; the key's
-/// bounds never change.
-fn keycap(p: Paint, label: &str, down: bool) -> El {
+/// One key of the shortcut, pressed while the script holds it: a face on a
+/// base whose lip shows below it. A press sinks the face into the lip; the
+/// key's bounds never change.
+fn keycap(p: Paint, index: usize, label: &str, down: bool) -> El {
     let c = &p.k.c;
     let face_height = KEY_HEIGHT - KEY_DEPTH;
     // Each change springs with the spring of the state it heads to: in
@@ -425,7 +445,11 @@ fn keycap(p: Paint, label: &str, down: bool) -> El {
                 .font(DESCRIPTION)
                 .color(if down { p.text() } else { p.muted() }),
         );
-    col().key("keycap").h(KEY_HEIGHT).child(base).child(face)
+    col()
+        .key(format!("keycap{index}"))
+        .h(KEY_HEIGHT)
+        .child(base)
+        .child(face)
 }
 
 /// Opaque lane colours over the panel, so overlapping pieces never darken.
@@ -457,16 +481,10 @@ impl Colors {
 
 /// Both lanes at `t`: each segment draws up to the playhead.
 fn lanes(colors: &Colors, script: &Script, width: f32, t: f32) -> Shape {
-    let x = |ms: f32| (ms - T0) / (T1 - T0) * width;
+    let x = |ms: f32| at(ms, width);
     let fade = ((t - FADE_FROM) / FADE).clamp(0.0, 1.0);
     let ink = |color: Color| color.mix(colors.track, fade);
-    let drawn = |(d, u): (f32, f32), min: f32| {
-        if t < d {
-            0.0
-        } else {
-            (x(t.min(u)) - x(d)).max(min)
-        }
-    };
+    let drawn = |stretch: (f32, f32), min: f32| drawn(stretch, min, width, t);
     let mut shape = Shape::new();
     for y in [KEY_LANE_Y, RECORD_LANE_Y] {
         shape = bar(shape, 0.0, width, y, colors.track, (true, true));
@@ -522,6 +540,21 @@ fn lanes(colors: &Colors, script: &Script, width: f32, t: f32) -> Shape {
         );
     }
     shape.view_box(width, LANES_HEIGHT)
+}
+
+/// Where `ms` falls across lanes `width` points wide.
+fn at(ms: f32, width: f32) -> f32 {
+    (ms - T0) / (T1 - T0) * width
+}
+
+/// How much of the stretch from `d` to `u` shows at `t`: up to the playhead.
+/// A tap widens to `min` as the playhead passes, never ahead of it.
+fn drawn((d, u): (f32, f32), min: f32, width: f32, t: f32) -> f32 {
+    if t < d {
+        return 0.0;
+    }
+    let held = at(t.min(u), width) - at(d, width);
+    held.max(min).min(at(t, width) - at(d, width))
 }
 
 /// A lane-thick bar from `start` to `end`, each end round or square.
@@ -633,6 +666,21 @@ mod tests {
         let clipped = clip_x(&band, 2.0, 8.0);
         assert!(clipped.iter().all(|[x, _]| (2.0..=8.0).contains(x)));
         assert!(clip_x(&band, 20.0, 30.0).is_empty());
+    }
+
+    #[test]
+    fn a_tap_never_draws_ahead_of_the_playhead() {
+        let width = 60.0;
+        for &press in TOGGLE.presses.iter().chain(LOCK.presses) {
+            let mut t = press.0;
+            while t < DONE {
+                let end = at(press.0, width) + drawn(press, MIN_PRESS, width, t);
+                assert!(end <= at(t, width) + 1e-3, "{press:?} at {t} ms");
+                t += 5.0;
+            }
+            let done = drawn(press, MIN_PRESS, width, DONE);
+            assert!(done >= MIN_PRESS, "{press:?} finishes {done} wide");
+        }
     }
 
     #[test]

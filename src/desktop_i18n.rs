@@ -865,6 +865,7 @@ mod tests {
         include_str!("rune_ui.rs"),
         include_str!("rune_ui/activity.rs"),
         include_str!("rune_ui/commands.rs"),
+        include_str!("rune_ui/explainer.rs"),
         include_str!("rune_ui/fun.rs"),
         include_str!("rune_ui/history.rs"),
         include_str!("rune_ui/hud_lab.rs"),

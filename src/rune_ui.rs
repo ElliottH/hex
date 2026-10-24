@@ -204,6 +204,8 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
         Destination::VoiceAction => Pane::VoiceAction,
         Destination::History => Pane::History,
     };
+    picker::close(ui);
+    explainer::close(ui);
     if pane.shown(ui) {
         ui.select_pane(pane, tx);
     }
@@ -790,6 +792,8 @@ impl Ui {
         self.flush_drafts();
         settings::cancel_capture(self);
         self.open = None;
+        picker::close(self);
+        explainer::close(self);
         self.pane = pane;
         match pane {
             Pane::History => self.history.reload(),
@@ -982,7 +986,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     if let Some(modal) = picker::modal(ui, p) {
         layer.extend(modal);
     }
-    if let Some(modal) = explainer::modal(ui, p, cx.system_reduced_motion()) {
+    if let Some(modal) = explainer::modal(ui, cx, p) {
         layer.extend(modal);
     }
     if let Some(tour) = onboarding::overlay(ui, p) {
@@ -1362,6 +1366,14 @@ const SCENES: &[Scene] = &[
     ("shortcut-explainer-toggle", |ui| {
         *ui = mac_fixture();
         ui.settings.shortcut_mode = crate::dictation::ShortcutMode::Toggle;
+        explainer::fixture(ui, Some(explainer::SNAPSHOT_MS));
+    }),
+    // A three-key chord: Control-Option-Space.
+    ("shortcut-explainer-chord", |ui| {
+        *ui = mac_fixture();
+        ui.settings.double_tap_lock = true;
+        let modifiers = &mut ui.settings.dictation_hotkey.modifiers;
+        modifiers.control = modifiers.option;
         explainer::fixture(ui, Some(explainer::SNAPSHOT_MS));
     }),
     // Loops, for `--frames` clips.

@@ -122,24 +122,31 @@ an isolated Xwayland display). No physical keyboard check yet.
 
 ```ts
 General > Shortcut mode > How it works                // dictate.shortcut-explainer
-  -> Modal: Hold and Toggle cards, each a keycap over two lanes
-     (key above, recording below) drawn on one looping playhead
+  -> Modal: Hold and Toggle cards, each the shortcut's keycaps (one per key,
+     pressing together) beside two lanes (key above, recording below) drawn
+     on one looping playhead; opening it ends a shortcut recording and closes
+     the model picker
   ├── Pick a card (click, Enter, Space) -> Saves Shortcut mode
   ├── Hold -> Double-tap to lock row: switch + striped hands-free lane
   ├── Toggle -> No lock row
   ├── Tab -> Hold, Toggle, lock switch, Close; focus stays inside
   ├── Close, Escape, or a press outside -> Closes; focus returns to the link
-  └── Reduce Motion -> The finished frame, no loop
+  ├── Change pane, menu bar, or `hex window show` -> Closes
+  └── Reduce Motion -> The finished frame, no loop, no wakes
 ```
 
-The lanes are Rune shapes redrawn from the window's poll clock while the modal
-is open (`src/rune_ui/explainer.rs`). Checks:
-`how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside`,
-`explainer_cards_pick_the_shortcut_mode`, and
-`the_explainer_loops_on_the_poll_clock` in
+The lanes are Rune shapes drawn at their laid-out width and redrawn from the
+window's poll clock while the modal is open (`src/rune_ui/explainer.rs`).
+Checks: `how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside`,
+`explainer_cards_pick_the_shortcut_mode`,
+`the_explainer_loops_on_the_poll_clock`,
+`reduce_motion_shows_the_finished_explainer_without_waking`,
+`the_explainer_draws_a_keycap_per_key_and_lines_up_the_lanes`, and
+`the_explainer_picker_and_shortcut_recording_never_share_the_window` in
 [tests/panes.rs](../../src/rune_ui/tests/panes.rs), plus the
-`shortcut-explainer` and `shortcut-explainer-toggle` goldens (frozen at
-1.8 s into the loop). The animation itself has been seen only in headless
+`shortcut-explainer`, `shortcut-explainer-toggle`, and
+`shortcut-explainer-chord` (Ctrl+Alt+Space) goldens (frozen at 1.8 s into the
+loop). The animation itself has been seen only in headless
 frames, not on a real window.
 
 On Linux, `hex dictation start` and `stop` bypass Hold, Toggle, and the

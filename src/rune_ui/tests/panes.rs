@@ -421,7 +421,7 @@ fn the_explainer_loops_on_the_poll_clock() {
     let pressed = |rt: &Runtime<Ui>| {
         rt.elements()
             .into_iter()
-            .find(|e| e.path.ends_with("mode-hold/visual/keycap/cap"))
+            .find(|e| e.path.ends_with("mode-hold/visual/keys/keycap0/cap"))
             .map(|e| e.target[1])
             .unwrap()
     };
@@ -433,6 +433,112 @@ fn the_explainer_loops_on_the_poll_clock() {
     assert_eq!(pressed(&rt), up, "and comes back up");
     let held = runtime("shortcut-explainer", true, PANE_SIZE);
     assert_eq!(held.state.explainer.time(), explainer::SNAPSHOT_MS);
+}
+
+#[test]
+fn reduce_motion_shows_the_finished_explainer_without_waking() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    rt.set_system_reduced_motion(true);
+    settle(&mut rt);
+    assert_eq!(rt.wake_deadline(), None);
+    // Opened from outside a handler, so the next poll runs before any view.
+    explainer::open(&mut rt.state);
+    let mut tx = rune::Tx::default();
+    assert!(
+        !explainer::poll(&mut rt.state, 1.0, true, &mut tx),
+        "the first poll already knows"
+    );
+    settle(&mut rt);
+    assert!(rt.state.explainer.open);
+    assert_eq!(rt.state.explainer.time(), explainer::DONE);
+    assert_eq!(rt.wake_deadline(), None, "the loop never ticks");
+}
+
+#[test]
+fn the_explainer_draws_a_keycap_per_key_and_lines_up_the_lanes() {
+    use crate::app_settings::{HotkeyBinding, HotkeyModifiers};
+    let mut rt = runtime("shortcut-explainer-chord", true, PANE_SIZE);
+    let default = rt.state.settings.dictation_hotkey.clone();
+    let one = HotkeyBinding {
+        modifiers: HotkeyModifiers {
+            option: default.modifiers.option,
+            ..HotkeyModifiers::default()
+        },
+        key: None,
+    };
+    let three = rt.state.settings.dictation_hotkey.clone();
+    for binding in [one, default, three] {
+        rt.state.settings.dictation_hotkey = binding.clone();
+        refresh(&mut rt);
+        let elements = rt.elements();
+        let rect = |suffix: &str| {
+            elements
+                .iter()
+                .find(|e| e.path.ends_with(suffix))
+                .map(|e| e.target)
+                .unwrap_or_else(|| panic!("no {suffix}"))
+        };
+        let labels = binding.keycaps();
+        for owner in ["mode-hold", "mode-toggle", "double-tap"] {
+            let caps: Vec<_> = (0..labels.len())
+                .map(|index| rect(&format!("{owner}/visual/keys/keycap{index}")))
+                .collect();
+            assert!(
+                elements.iter().all(|e| !e
+                    .path
+                    .ends_with(&format!("{owner}/visual/keys/keycap{}", labels.len()))),
+                "{owner} draws one keycap per key of {labels:?}"
+            );
+            for pair in caps.windows(2) {
+                assert!(
+                    pair[1][0] > pair[0][0] + pair[0][2],
+                    "{owner}'s keycaps sit side by side"
+                );
+                assert_eq!(pair[0][1], pair[1][1], "{owner}'s keycaps share a baseline");
+            }
+        }
+        let hold = rect("mode-hold/visual/lanes");
+        let toggle = rect("mode-toggle/visual/lanes");
+        let lock = rect("double-tap/visual/lanes");
+        assert!(
+            (hold[0] - lock[0]).abs() < 0.5,
+            "{labels:?}: lanes start together"
+        );
+        assert!(
+            (hold[2] - toggle[2]).abs() < 0.5,
+            "{labels:?}: both cards' lanes are as wide"
+        );
+        assert!(hold[2] > 30.0, "{labels:?}: lanes keep room to draw");
+    }
+}
+
+#[test]
+fn the_explainer_picker_and_shortcut_recording_never_share_the_window() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    tap(&mut rt, "dictation-hotkey");
+    assert!(matches!(
+        rt.state.capture,
+        settings::Capture::Listening { .. }
+    ));
+    explainer::open(&mut rt.state);
+    assert!(matches!(rt.state.capture, settings::Capture::Idle));
+    assert!(sent(&rt).contains(&Request::CancelShortcut));
+
+    picker::open(&mut rt.state, "en".into());
+    assert!(!rt.state.explainer.open, "the picker closes the explainer");
+    explainer::open(&mut rt.state);
+    assert!(
+        rt.state.picker.language.is_none(),
+        "and the explainer the picker"
+    );
+
+    rt.state
+        .select_pane(Pane::History, &mut rune::Tx::default());
+    assert!(!rt.state.explainer.open);
+    picker::open(&mut rt.state, "en".into());
+    rt.state
+        .select_pane(Pane::General, &mut rune::Tx::default());
+    assert!(rt.state.picker.language.is_none());
 }
 
 #[test]
@@ -916,6 +1022,7 @@ fn platform_goldens() {
             check_golden(scene, dark, PANE_SIZE);
         }
     }
+    check_golden("shortcut-explainer-chord", false, PANE_SIZE);
     check_golden("mac-settings-permissions", true, PANE_SIZE);
     check_golden("mac-settings-advanced", false, PANE_SIZE);
     check_golden("meetings-calendar-denied", true, PANE_SIZE);

@@ -68,6 +68,7 @@ impl Picker {
 }
 
 pub(super) fn open(ui: &mut Ui, language: String) {
+    super::explainer::close(ui);
     ui.open = None;
     ui.picker.set_language(Some(language));
 }
