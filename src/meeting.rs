@@ -451,10 +451,11 @@ pub fn record(
         notes: None,
         notes_error: None,
         calendar: start.calendar,
-        title_source: Some(title_source),
+        title_source: None,
         chapters: Vec::new(),
         chapters_refined: false,
     };
+    set_title_source(&mut manifest, title_source);
     write_manifest(&meeting_dir, &manifest)?;
 
     let result = (|| -> Result<MeetingManifest> {
@@ -574,12 +575,14 @@ pub fn record(
         ) {
             Ok(()) => manifest.status = MeetingStatus::Complete,
             Err(error) => {
+                keep_rename(&meeting_dir, &mut manifest);
                 manifest.status = MeetingStatus::Failed;
                 manifest.error = Some(error.to_string());
                 write_manifest(&meeting_dir, &manifest)?;
                 return Err(error);
             }
         }
+        keep_rename(&meeting_dir, &mut manifest);
         write_manifest(&meeting_dir, &manifest)?;
         println!("Saved meeting {}", meeting_dir.display());
         Ok(manifest)
@@ -628,6 +631,17 @@ fn record_chapters(
         if title != previous_title {
             let _ = updates.try_send(RecordingUpdate::Retitled { title });
         }
+    }
+}
+
+/// Records where the title came from, which only live chapters read; with
+/// the experiment off, a manifest that has neither stays as it was.
+fn set_title_source(manifest: &mut MeetingManifest, source: TitleSource) {
+    if manifest.title_source.is_some()
+        || !manifest.chapters.is_empty()
+        || crate::experiments::enabled(crate::experiments::Experiment::LiveChapters)
+    {
+        manifest.title_source = Some(source);
     }
 }
 
@@ -717,7 +731,8 @@ fn prepare_for_transcription(
         }
     }
     if let Some(updates) = updates {
-        let _ = updates.try_send(RecordingUpdate::Transcribing);
+        // Never dropped: the controller drains until the recorder finishes.
+        let _ = updates.send(RecordingUpdate::Transcribing);
     }
     manifest.status = MeetingStatus::Transcribing;
     manifest.error = None;
@@ -946,6 +961,8 @@ fn transcribe(
     let (transcript, echo_suppressed) =
         transcript::transcribe(directory, manifest, selection, rolling)?;
     manifest.echo_suppressed_utterances = echo_suppressed;
+    // Transcription takes a while; the headings use a rename made meanwhile.
+    keep_rename(directory, manifest);
 
     let ndjson_temporary = directory.join("transcript.ndjson.tmp");
     let markdown_temporary = directory.join("transcript.md.tmp");
@@ -1234,7 +1251,7 @@ fn rename_meeting(directory: &Path, title: &str) -> Result<MeetingManifest> {
     let mut manifest = read_manifest(directory)?;
     let previous = display_title(&manifest);
     manifest.title = title;
-    manifest.title_source = Some(TitleSource::User);
+    set_title_source(&mut manifest, TitleSource::User);
     let next = display_title(&manifest);
     let mut markdown_error = None;
     if previous != next

@@ -1,5 +1,6 @@
 use super::*;
-use crate::meeting::MeetingSource;
+use crate::meeting::{MeetingSource, MeetingStatus};
+use std::fs;
 use std::sync::atomic::AtomicUsize;
 
 fn entry(source: MeetingSource, start_ms: u64, text: &str) -> TranscriptEntry {
@@ -283,9 +284,15 @@ fn refine_with(
     answers: Vec<Result<Vec<i64>, GenerationError>>,
 ) -> Result<Refinement> {
     let mut answers = answers.into_iter();
-    refine(&every_30s(21), live, 10_000, timeout, &[], |_, _, _| {
-        answers.next().expect("one answer per call")
-    })
+    refine(
+        &every_30s(21),
+        live,
+        10_000,
+        timeout,
+        &[],
+        || true,
+        |_, _, _| answers.next().expect("one answer per call"),
+    )
 }
 
 fn starts(refinement: &Refinement) -> Vec<u64> {
@@ -307,6 +314,7 @@ fn the_boundary_pass_asks_once_per_boundary_and_moves_it_to_the_best_split() {
         10_000,
         Duration::from_secs(1),
         &[],
+        || true,
         |instructions, text, _| {
             assert_eq!(instructions, REFINE_INSTRUCTIONS);
             prompts.push(text.to_string());
@@ -387,6 +395,78 @@ fn the_boundary_pass_fails_only_when_every_call_does() {
 }
 
 #[test]
+fn a_stopped_boundary_pass_records_nothing_and_runs_again() {
+    let directory = std::env::temp_dir().join(format!(
+        "hex-refine-stop-{}-{}",
+        std::process::id(),
+        crate::events::now_ms()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    let export = directory.join("Team sync.md");
+    fs::write(
+        &export,
+        "# Team sync: Image storage, Motion lint, Chat app name\n",
+    )
+    .unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/meetings-chapters/1790003000000-1005/manifest.json");
+    let mut manifest: MeetingManifest =
+        serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
+    manifest.chapters = live_three().to_vec();
+    manifest.chapters_refined = false;
+    manifest.duration_ms = Some(630_000);
+    manifest.export_path = Some(export.clone());
+    write_manifest(&directory, &manifest).unwrap();
+    let stored = || fs::read(directory.join("manifest.json")).unwrap();
+    let before = stored();
+    let mut answers = vec![(13..=21).collect::<Vec<i64>>(), (6..=13).collect()];
+
+    // Dictation or a quit stops the pass before its second call.
+    let mut checks = 0;
+    let mut calls = 0;
+    refine_meeting_with(
+        &directory,
+        &every_30s(21),
+        10_000,
+        || {
+            checks += 1;
+            checks == 1
+        },
+        |_, _, _| {
+            calls += 1;
+            Ok(answers.pop().unwrap())
+        },
+    );
+    assert_eq!((checks, calls), (2, 1));
+    assert_eq!(stored(), before, "a stopped pass leaves the manifest alone");
+    assert_eq!(
+        fs::read_to_string(&export).unwrap(),
+        "# Team sync: Image storage, Motion lint, Chat app name\n"
+    );
+
+    // The next run redoes it and records it once.
+    let mut answers = vec![(13..=21).collect::<Vec<i64>>(), (6..=13).collect()];
+    refine_meeting_with(
+        &directory,
+        &every_30s(21),
+        10_000,
+        || true,
+        |_, _, _| Ok(answers.pop().unwrap()),
+    );
+    let refined = read_manifest(&directory).unwrap();
+    assert!(refined.chapters_refined);
+    assert_eq!(
+        refined
+            .chapters
+            .iter()
+            .map(|chapter| chapter.start_ms)
+            .collect::<Vec<_>>(),
+        [0, 150_000, 360_000]
+    );
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn a_title_adds_the_longest_chapters_in_meeting_order() {
     let chapters = [
         chapter("Image storage", 0),
@@ -422,6 +502,43 @@ fn a_title_adds_the_longest_chapters_in_meeting_order() {
     assert_eq!(
         title,
         "Team sync: A very long chapter name about storage buckets"
+    );
+    // The cap holds for the first name too; a shorter one may still fit.
+    let first_too_long = [
+        chapter(&"Storage ".repeat(12), 0),
+        chapter("Motion lint", 900_000),
+    ];
+    assert_eq!(
+        titled("Team sync", &first_too_long, Some(1_200_000)),
+        "Team sync: Motion lint"
+    );
+}
+
+#[test]
+fn a_recording_title_counts_the_last_chapter_until_now() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/meetings-chapters/1790003000000-1005/manifest.json");
+    let mut manifest: MeetingManifest =
+        serde_json::from_slice(&fs::read(fixture).unwrap()).unwrap();
+    // The last chapter has been recording for 20 min, the longest of all.
+    manifest.chapters = vec![
+        chapter("Image storage", 0),
+        chapter("Motion lint", 100_000),
+        chapter("Chat app name", 240_000),
+        chapter("Launch plan", 660_000),
+    ];
+    manifest.status = MeetingStatus::Recording;
+    manifest.duration_ms = None;
+    manifest.created_at_ms = crate::events::now_ms() - 1_860_000;
+    assert_eq!(
+        display_title(&manifest),
+        "Team sync: Motion lint, Chat app name, Launch plan"
+    );
+    // Stopped without a duration, the last chapter counts as empty.
+    manifest.status = MeetingStatus::Complete;
+    assert_eq!(
+        display_title(&manifest),
+        "Team sync: Image storage, Motion lint, Chat app name"
     );
 }
 
@@ -459,8 +576,8 @@ fn the_vocabulary_line_lists_trimmed_terms() {
     assert_eq!(vocabulary_line(&[]), "");
     assert_eq!(vocabulary_line(&[" ".into()]), "");
     assert_eq!(
-        vocabulary_line(&[" Rune ".into(), "Hex".into()]),
-        "Names and terms that may appear: Rune, Hex\n\n"
+        vocabulary_line(&[" Rune ".into(), "Hex\n\tMicrophone".into()]),
+        "Names and terms that may appear: Rune, Hex Microphone\n\n"
     );
 }
 

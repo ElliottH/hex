@@ -735,16 +735,23 @@ After final publication, inside the notes thread       // meetings.chapters.refi
      cover at least half the lines after the live boundary and the new start
      stays after the previous chapter's
   -> chapters_refined = true; a failed call keeps its boundary
-Copy section (pane, per chapter; menu bar "Copy Section" while recording)
-  -> "## <name>\n\n<line>\n\n" + that chapter's turns as Markdown
+  -> Each call first waits (≤30 s) for dictation; a stop or quit ends the pass
+     with nothing saved, so the next notes run redoes it
+Copy section (pane, per chapter; menu bar "Copy Section" while recording;
+`hex meetings show --chapter N`)
+  -> "## <name>\n\n<line>\n\n" + the transcript lines that start inside the
+     chapter, joined into turns only within it (one shared function)
 ```
 
-Titles: the manifest records `title_source` (`default`, `call`, `calendar`,
-`user`). Unless it is `user`, the shown title is the base title plus up to three
-of the longest chapters in meeting order, once there are two: "Team sync: image
-storage, motion lint, chat app name" (≤100 chars). A title the user typed,
-including a rename while recording, is never extended. Manifests without the
-field read as `user` when their title is not the default.
+Titles: with the experiment on, the manifest records `title_source` (`default`,
+`call`, `calendar`, `user`); off, it is written only to a manifest that already
+has it or has chapters. Unless it is `user`, the shown title is the base title
+plus up to three of the longest chapters in meeting order, once there are two:
+"Team sync: image storage, motion lint, chat app name" (≤100 chars; a name that
+would pass that is left out). While recording, the last chapter runs until now.
+A title the user typed, including a rename while recording or transcribing, is
+never extended. Manifests without the field read as `user` when their title is
+not the default.
 
 Read surfaces: `hex meetings chapters <id> [--json]`, `hex meetings show <id>
 --chapter N`, a `## Chapters` list in `show`, `chapters` in `show --json`
@@ -758,8 +765,11 @@ and `TitleSource` in [meeting.rs](../../src/meeting.rs). Checks in
 two-passes-away, minimum length, name overlap and the model's flag, refusals,
 prompt order, pass window, confirming on another topic, Stop opening a waiting
 departure, the boundary pass (one call per boundary, unsupported answers kept,
-partial failures), title building, section Markdown, and the worker;
+partial failures, a stopped pass saving nothing), title building and the
+recording title, section Markdown, and the worker;
 `meeting::tests::chapters_extend_every_title_but_one_the_user_typed`;
+`copy_section_matches_the_menu_bar_and_the_cli` (macOS host: pane, menu bar,
+and CLI give the same section when one speaker's turn crosses a boundary);
 `copy_section_copies_one_chapter` (Linux-only Rune tests). The menu bar
 submenu, the recorder writing chapters during a real recording, and the
 `meetings-chapters` scene on a Mac screen are unexercised.

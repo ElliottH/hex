@@ -1034,13 +1034,16 @@ fn pane_meeting(meeting: &crate::meeting::query::Meeting, now_ms: u64) -> Meetin
         notes_error: manifest.notes_error.clone(),
         live_error: manifest.live_transcription_error.clone(),
         transcript,
-        chapters: manifest
-            .chapters
+        // Sections come from the transcript lines, not the merged turns, as
+        // the menu bar and `hex meetings show --chapter` read them.
+        chapters: meeting
+            .chapter_views(now_ms)
             .iter()
-            .map(|chapter| super::meetings::Chapter {
-                title: chapter.title.clone(),
-                summary: chapter.summary.clone(),
-                start_ms: chapter.start_ms,
+            .map(|view| super::meetings::Chapter {
+                title: view.chapter.title.clone(),
+                summary: view.chapter.summary.clone(),
+                start_ms: view.chapter.start_ms,
+                markdown: view.markdown(),
             })
             .collect(),
     }
@@ -1346,6 +1349,64 @@ mod tests {
             feed.poll().is_none(),
             "an unchanged listing is not sent again"
         );
+    }
+
+    #[test]
+    fn copy_section_matches_the_menu_bar_and_the_cli() {
+        let root = std::env::temp_dir().join(format!(
+            "hex-copy-section-{}-{}",
+            std::process::id(),
+            crate::events::now_ms()
+        ));
+        let id = "1790003000000-1005";
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/meetings-chapters")
+            .join(id);
+        let directory = root.join(id);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::copy(
+            fixture.join("manifest.json"),
+            directory.join("manifest.json"),
+        )
+        .unwrap();
+        // One speaker's two lines join into one turn across the boundary
+        // at 06:30; the second line belongs to the chapter after.
+        let line = |start_ms: u64, end_ms: u64, text: &str| crate::meeting::TranscriptEntry {
+            source: crate::meeting::MeetingSource::Microphone,
+            start_ms,
+            end_ms,
+            text: text.into(),
+        };
+        let entries = [
+            line(181_000, 188_000, "Next, the motion lint."),
+            line(386_000, 389_000, "That settles the lint."),
+            line(390_500, 397_000, "Last thing: a name for the chat app."),
+        ];
+        let ndjson = entries
+            .iter()
+            .map(|entry| serde_json::to_string(entry).unwrap() + "\n")
+            .collect::<String>();
+        std::fs::write(directory.join("transcript.ndjson"), ndjson).unwrap();
+
+        let library = crate::meeting::query::Library::new(&root);
+        let meeting = library.meeting(id).unwrap();
+        let now_ms = crate::events::now_ms();
+        let pane = pane_meeting(&meeting, now_ms);
+        let chapters = &meeting.manifest.chapters;
+        for (index, chapter) in pane.chapters.iter().enumerate() {
+            // The menu bar's Copy Section (`meeting::section_for_id`).
+            let menu = crate::meeting::section_markdown(
+                &chapters[index],
+                &crate::meeting::chapter_entries(&entries, chapters, index),
+            );
+            assert_eq!(chapter.markdown, menu);
+            let cli = library.chapter_markdown(id, index + 1, now_ms).unwrap();
+            assert!(cli.ends_with(&format!("\n{menu}\n")), "{cli}");
+        }
+        assert!(pane.chapters[1].markdown.contains("That settles the lint."));
+        assert!(!pane.chapters[1].markdown.contains("Last thing"));
+        assert!(pane.chapters[2].markdown.contains("Last thing"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

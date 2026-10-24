@@ -131,7 +131,7 @@ pub fn section_for_id(id: &str, index: usize) -> Result<String> {
 pub(super) fn vocabulary_line(terms: &[String]) -> String {
     let terms = terms
         .iter()
-        .map(|term| term.trim())
+        .map(|term| term.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|term| !term.is_empty())
         .take(MAX_TERMS)
         .map(|term| term.chars().take(40).collect::<String>())
@@ -145,8 +145,9 @@ pub(super) fn vocabulary_line(terms: &[String]) -> String {
 
 /// `base` followed by the chapters that cover the most time, in meeting
 /// order: `Team sync: image storage, motion lint, chat app name`. Chapters
-/// that repeat the base are left out; with fewer than two chapters, or
-/// nothing left to add, the base stands alone.
+/// that repeat the base, or would take the title past `MAX_TITLE_CHARS`,
+/// are left out; with fewer than two chapters, or nothing left to add, the
+/// base stands alone.
 pub(super) fn titled(base: &str, chapters: &[Chapter], end_ms: Option<u64>) -> String {
     let base = base.trim();
     if chapters.len() < 2 {
@@ -178,10 +179,10 @@ pub(super) fn titled(base: &str, chapters: &[Chapter], end_ms: Option<u64>) -> S
             continue;
         }
         let length = base.len() + 2 + names.iter().map(|name| name.len() + 2).sum::<usize>();
-        if !names.is_empty() && length + title.len() > MAX_TITLE_CHARS {
-            break;
+        // A shorter chapter later on may still fit.
+        if length + title.len() <= MAX_TITLE_CHARS {
+            names.push(title);
         }
-        names.push(title);
     }
     if names.is_empty() {
         base.into()
@@ -775,13 +776,15 @@ fn split(section: &Section, about_next: &[i64], live_ms: u64, after_ms: u64) -> 
 /// One call per live boundary, within one deadline: the model lists the
 /// lines about the chapter after, and Rust moves the boundary to the split
 /// that agrees with it best. A failed or refused call keeps its boundary;
-/// the pass fails only when every call does.
+/// the pass fails only when every call does. `proceed` runs before each
+/// call; when it returns false the whole pass fails, so nothing is kept.
 pub(super) fn refine(
     entries: &[TranscriptEntry],
     chapters: &[Chapter],
     max_chars: usize,
     timeout: Duration,
     terms: &[String],
+    mut proceed: impl FnMut() -> bool,
     mut generate: impl FnMut(&str, &str, Duration) -> Result<Vec<i64>, GenerationError>,
 ) -> Result<Refinement> {
     let deadline = Instant::now() + timeout;
@@ -794,6 +797,9 @@ pub(super) fn refine(
     let mut first_error = None;
     let mut answered = false;
     for section in sections(entries, chapters, max_chars) {
+        if !proceed() {
+            return Err(eyre!("the boundary pass stopped"));
+        }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             break;
@@ -825,22 +831,40 @@ pub(super) fn refine(
 /// Corrects a finished meeting's live boundaries once and records them.
 /// The Markdown heading follows a title the new chapters change. Failures
 /// leave the live chapters in place.
+/// Each call first yields to dictation; a stop or quit ends the pass
+/// without recording anything, so the next notes run redoes it.
 pub(super) fn refine_meeting(directory: &Path, entries: &[TranscriptEntry], stop: &AtomicBool) {
+    refine_meeting_with(
+        directory,
+        entries,
+        super::notes::excerpt_budget(apple_intelligence::context_tokens(), REFINE_EXCERPT_CHARS),
+        || super::notes::wait_for_dictation(stop) && !crate::process_exit::quitting(),
+        apple_intelligence::generate_chapter_lines,
+    );
+}
+
+fn refine_meeting_with(
+    directory: &Path,
+    entries: &[TranscriptEntry],
+    max_chars: usize,
+    proceed: impl FnMut() -> bool,
+    generate: impl FnMut(&str, &str, Duration) -> Result<Vec<i64>, GenerationError>,
+) {
     let Ok(manifest) = read_manifest(directory) else {
         return;
     };
     if manifest.chapters.len() < 2 || manifest.chapters_refined {
         return;
     }
-    super::notes::wait_for_dictation(stop);
     let started = Instant::now();
     let result = refine(
         entries,
         &manifest.chapters,
-        super::notes::excerpt_budget(apple_intelligence::context_tokens(), REFINE_EXCERPT_CHARS),
+        max_chars,
         REFINE_TIMEOUT,
         &crate::vocabulary::terms(),
-        apple_intelligence::generate_chapter_lines,
+        proceed,
+        generate,
     );
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let refinement = match result {
@@ -1036,6 +1060,7 @@ pub fn chapters_file(path: &Path) -> Result<String> {
         super::notes::excerpt_budget(apple_intelligence::context_tokens(), REFINE_EXCERPT_CHARS),
         REFINE_TIMEOUT,
         &terms,
+        || true,
         apple_intelligence::generate_chapter_lines,
     )?;
     report.push_str(&format!(

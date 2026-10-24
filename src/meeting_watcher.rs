@@ -549,7 +549,8 @@ fn start_recording(
     }
     let stop = Arc::new(AtomicBool::new(false));
     let worker_stop = stop.clone();
-    let (update_sender, updates) = mpsc::sync_channel(4);
+    // Stop can send six updates before the controller next drains them.
+    let (update_sender, updates) = mpsc::sync_channel(16);
     let meeting_start = start.meeting;
     let worker =
         thread::spawn(move || meeting::record(meeting_start, &worker_stop, Some(update_sender)));

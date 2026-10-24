@@ -389,11 +389,18 @@ pub fn display_title(manifest: &MeetingManifest) -> String {
     if manifest.chapters.is_empty() || manifest.title_source() == super::TitleSource::User {
         return base;
     }
-    super::chapters::titled(&base, &manifest.chapters, manifest.duration_ms)
+    // While recording, the last chapter runs until now.
+    let end_ms = manifest.duration_ms.or_else(|| {
+        manifest
+            .status
+            .is_active()
+            .then(|| now_ms().saturating_sub(manifest.created_at_ms))
+    });
+    super::chapters::titled(&base, &manifest.chapters, end_ms)
 }
 
 fn base_title(manifest: &MeetingManifest) -> String {
-    if manifest.title != super::default_title(manifest.app.as_deref(), manifest.created_at_ms) {
+    if manifest.title_source() != super::TitleSource::Default {
         return manifest.title.clone();
     }
     manifest

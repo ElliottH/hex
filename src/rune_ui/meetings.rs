@@ -62,6 +62,9 @@ pub(super) struct Chapter {
     pub(super) title: String,
     pub(super) summary: String,
     pub(super) start_ms: u64,
+    /// What Copy section copies, from the same transcript lines as the menu
+    /// bar and `hex meetings show --chapter`.
+    pub(super) markdown: String,
 }
 
 // Only the macOS host reports the states fixtures do not show.
@@ -101,28 +104,6 @@ impl Meeting {
             Transcript::Loaded(turns) => turns,
             Transcript::Unavailable(_) => &[],
         }
-    }
-
-    /// Chapter `index` as Markdown: its name, its line, and the turns that
-    /// start inside it, as `meeting::section_markdown`.
-    fn section_markdown(&self, index: usize) -> Option<String> {
-        let chapter = self.chapters.get(index)?;
-        let end = self.chapters.get(index + 1).map(|next| next.start_ms);
-        let turns = self
-            .turns()
-            .iter()
-            .filter(|turn| {
-                turn.start_ms >= chapter.start_ms && end.is_none_or(|end| turn.start_ms < end)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut markdown = format!("## {}\n\n", chapter.title.trim());
-        if !chapter.summary.trim().is_empty() {
-            markdown.push_str(chapter.summary.trim());
-            markdown.push_str("\n\n");
-        }
-        markdown.push_str(&transcript_markdown(&turns));
-        Some(markdown.trim_end().to_string())
     }
 
     fn searchable(&self) -> String {
@@ -374,30 +355,52 @@ impl MeetingsPane {
     /// meeting with notes, its title extended by them.
     pub(super) fn chapters_fixture() -> Self {
         let mut pane = Self::fixture();
-        let chapter = |title: &str, summary: &str, seconds: u64| Chapter {
-            title: title.into(),
-            summary: summary.into(),
-            start_ms: seconds * 1_000,
-        };
+        let chapters = [
+            (
+                "One login",
+                "One login for every Arcade game, twenty to thirty games in a couple of months.",
+                0,
+            ),
+            (
+                "Gravity well",
+                "A pulse and gravity well for transitions, prototyped in WebGPU.",
+                31_000,
+            ),
+            (
+                "Build screen",
+                "The build screen needs a written proposal.",
+                95_000,
+            ),
+        ];
         if let Some(notes) = pane.meetings.iter_mut().find(|m| m.id == "preview-notes") {
             notes.title = "Arcade launch plan: One login, Gravity well, Build screen".into();
-            notes.chapters = vec![
-                chapter(
-                    "One login",
-                    "One login for every Arcade game, twenty to thirty games in a couple of months.",
-                    0,
-                ),
-                chapter(
-                    "Gravity well",
-                    "A pulse and gravity well for transitions, prototyped in WebGPU.",
-                    31,
-                ),
-                chapter(
-                    "Build screen",
-                    "The build screen needs a written proposal.",
-                    95,
-                ),
-            ];
+            let turns = notes.turns().to_vec();
+            notes.chapters = chapters
+                .iter()
+                .enumerate()
+                .map(|(index, &(title, summary, start_ms))| {
+                    let end_ms = chapters.get(index + 1).map(|next| next.2);
+                    let inside = turns
+                        .iter()
+                        .filter(|turn| {
+                            turn.start_ms >= start_ms
+                                && end_ms.is_none_or(|end| turn.start_ms < end)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    Chapter {
+                        title: title.into(),
+                        summary: summary.into(),
+                        start_ms,
+                        markdown: format!(
+                            "## {title}\n\n{summary}\n\n{}",
+                            transcript_markdown(&inside)
+                        )
+                        .trim_end()
+                        .into(),
+                    }
+                })
+                .collect();
         }
         pane
     }
@@ -907,7 +910,8 @@ fn chapters(p: Paint, meeting: &Meeting, copied: &dyn Fn(&str) -> bool) -> El {
                         if let Some(markdown) = ui
                             .meetings
                             .meeting(&id)
-                            .and_then(|meeting| meeting.section_markdown(index))
+                            .and_then(|meeting| meeting.chapters.get(index))
+                            .map(|chapter| chapter.markdown.clone())
                         {
                             copy(ui, tx, id.clone(), what.clone(), markdown);
                         }
