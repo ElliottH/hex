@@ -512,14 +512,15 @@ pub fn decide(
 }
 
 /// Resolves a target URL against the manifest URL (RFC 3986 for the
-/// relative paths the service writes); only HTTPS results are accepted.
-pub fn resolve_url(manifest_url: &str, relative: &str) -> Option<String> {
-    if relative.contains("://") {
-        return https_url(&Value::from(relative));
+/// absolute-path and relative references the service writes); only HTTPS
+/// results on a normalized path are accepted.
+pub fn resolve_url(manifest_url: &str, reference: &str) -> Option<String> {
+    if reference.contains("://") {
+        return https_url(&Value::from(reference));
     }
-    if relative.starts_with('/')
-        || relative.contains(['?', '#', '\\'])
-        || relative
+    if reference.starts_with("//")
+        || reference.contains(['?', '#', '\\'])
+        || reference
             .chars()
             .any(|character| character.is_control() || character.is_whitespace())
     {
@@ -527,8 +528,14 @@ pub fn resolve_url(manifest_url: &str, relative: &str) -> Option<String> {
     }
     let rest = manifest_url.strip_prefix("https://")?;
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let mut segments: Vec<&str> = path.split('/').collect();
-    segments.pop();
+    let (mut segments, relative): (Vec<&str>, &str) = match reference.strip_prefix('/') {
+        Some(absolute) => (Vec::new(), absolute),
+        None => {
+            let mut base: Vec<&str> = path.split('/').collect();
+            base.pop();
+            (base, reference)
+        }
+    };
     for segment in relative.split('/') {
         match segment {
             "." => {}
@@ -627,6 +634,18 @@ mod tests {
     fn target_urls_resolve_against_the_manifest() {
         let manifest = "https://anoma.ly/release/hex/desktop/stable.json";
         assert_eq!(
+            resolve_url(manifest, "/release/hex/files/abc/Hex.zip").as_deref(),
+            Some("https://anoma.ly/release/hex/files/abc/Hex.zip")
+        );
+        assert_eq!(
+            resolve_url(
+                "https://dev.anoma.ly/release/hex/desktop/dev.json",
+                "/release/hex/files/abc/Hex.zip"
+            )
+            .as_deref(),
+            Some("https://dev.anoma.ly/release/hex/files/abc/Hex.zip")
+        );
+        assert_eq!(
             resolve_url(manifest, "../files/abc/Hex.zip").as_deref(),
             Some("https://anoma.ly/release/hex/files/abc/Hex.zip")
         );
@@ -640,7 +659,8 @@ mod tests {
         );
         for refused in [
             "http://example.com/a",
-            "/etc/passwd",
+            "//example.com/a",
+            "/../x",
             "../../../../../x",
             "a b",
             "a?b",

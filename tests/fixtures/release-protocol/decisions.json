@@ -20,7 +20,7 @@
         "reason": "newer",
         "version": "2.4.0",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -64,7 +64,7 @@
         "reason": "required",
         "version": "2.4.0",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -89,7 +89,7 @@
         "reason": "revoked",
         "version": "2.4.0",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -152,7 +152,7 @@
         "reason": "newer",
         "version": "2.4.0",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -359,7 +359,7 @@
         "reason": "required",
         "version": "2.4.0",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -384,7 +384,7 @@
         "reason": "revoked",
         "version": "2.3.8",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -470,7 +470,7 @@
         "reason": "newer",
         "version": "2.5.0-dev.10",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }
@@ -533,7 +533,7 @@
         "reason": "newer",
         "version": "2.4.0",
         "target": {
-          "url": "files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
+          "url": "/release/example/files/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/example-2.4.0-macos-arm64.zip",
           "size": 1000,
           "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         }

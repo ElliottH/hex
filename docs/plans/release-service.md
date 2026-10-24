@@ -85,8 +85,8 @@ source and test builds      (never check)
 anything else               unknown        stable            Download update → notes_url
 ```
 
-Target URLs resolve against the manifest URL (RFC 3986), so the service must
-write `../files/<sha256>/<name>`; `files/…` would resolve under
-`desktop/`. Downloads resume into `<support>/updates/<sha256>/` and are
+Target URLs are absolute-path references (`/release/hex/files/<sha256>/<name>`)
+resolved against the manifest URL (RFC 3986), so they keep the manifest's
+host (`anoma.ly` or `dev.anoma.ly`). Downloads resume into `<support>/updates/<sha256>/` and are
 checked against `size` and `sha256` before any other use. The rollout bucket
 is `<support>/update-bucket`.
