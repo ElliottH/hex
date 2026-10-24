@@ -711,7 +711,8 @@ Recording starts, experiment on                        // meetings.chapters.live
      (nothing read while Apple Intelligence is unavailable or titles are off)
   -> ≥ 3 min of new meeting time and ≥ 40 new words -> waits (≤30 s) for dictation
   -> ONE call over only the new lines (≤3,600 chars, newest kept, "[…]" before)
-     ├── Prompt: vocabulary terms (none yet) -> new lines -> "Current chapter: X"
+     ├── Prompt: vocabulary terms (≤30, vocabulary experiment) -> new lines ->
+     │   "Current chapter: X"
      └── Answer: a 2–5 word name, one line, and "same topic or not"
   -> Rust decides, not the model's flag alone
      ├── First name -> chapter 1 at 00:00

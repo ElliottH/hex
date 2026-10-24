@@ -58,7 +58,6 @@ pub fn enabled() -> bool {
 
 /// The saved terms, as last applied from settings; empty while the
 /// experiment is off.
-#[allow(dead_code)] // For prompts (live chapters) once they adopt it.
 pub fn terms() -> Vec<String> {
     entries().into_iter().map(|entry| entry.term).collect()
 }

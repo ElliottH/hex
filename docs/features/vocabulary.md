@@ -33,6 +33,10 @@ OpenCode rewriting (Modes)               // vocabulary.prompt
 └── Prompt gains "Vocabulary (spell these exactly when the speaker means them):
     term (may be transcribed as a, b); …" before the foreground application
 
+Live meeting chapters (experiment live-chapters)  // vocabulary.chapters
+└── Chapter passes and the boundary pass start with "Names and terms that may
+    appear: a, b, …" (first 30 terms, no spellings), read on each call
+
 Search                                   // vocabulary.search
 ├── hex meetings search, MCP search_transcripts, hex history --search
 ├── Query word = a one-word term, fuzzy on
@@ -59,6 +63,7 @@ Provisional defaults, each changed in one place:
 ```ts
 hex vocabulary listed in --help          // control/cli.rs: add #[command(hide = true)] to hide it
 Prompt wording                           // dictation_processor.rs: vocabulary_lines
+Chapter prompt wording                   // meeting_chapters.rs: vocabulary_line
 Short-name rule                          // meeting_query.rs: SOUND_ALIKE_MIN_CONSONANTS
 Suggested terms                          // vocabulary.rs: SUGGESTED
 ```

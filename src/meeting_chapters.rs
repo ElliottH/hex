@@ -607,7 +607,8 @@ fn chapter_while_recording(
             return;
         }
         let started = Instant::now();
-        let result = run_pass(&mut next, &window, &[], generate);
+        // Read per pass, so vocabulary edits apply mid-meeting.
+        let result = run_pass(&mut next, &window, &crate::vocabulary::terms(), generate);
         let elapsed_ms = started.elapsed().as_millis() as u64;
         match result {
             Ok(outcome) => {
@@ -838,7 +839,7 @@ pub(super) fn refine_meeting(directory: &Path, entries: &[TranscriptEntry], stop
         &manifest.chapters,
         super::notes::excerpt_budget(apple_intelligence::context_tokens(), REFINE_EXCERPT_CHARS),
         REFINE_TIMEOUT,
-        &[],
+        &crate::vocabulary::terms(),
         apple_intelligence::generate_chapter_lines,
     );
     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -956,6 +957,13 @@ pub fn chapters_file(path: &Path) -> Result<String> {
         .wrap_err_with(|| format!("could not read {}", path.display()))?;
     let entries = super::notes::entries_from_markdown(&text);
     let end_ms = entries.iter().map(|entry| entry.end_ms).max().unwrap_or(0);
+    // This process never loads settings, so read the saved list directly.
+    let terms = crate::app_paths::support_dir()
+        .map(|root| crate::vocabulary::read_saved(&root))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| entry.term)
+        .collect::<Vec<_>>();
     let mut report = String::new();
     let mut state = Chaptering::default();
     let mut plan = PassPlan::default();
@@ -976,15 +984,21 @@ pub fn chapters_file(path: &Path) -> Result<String> {
         };
         let started = Instant::now();
         let mut said = String::new();
-        let result = run_pass(&mut state, &window, &[], |instructions, prompt, timeout| {
-            let generated = apple_intelligence::generate_chapter(instructions, prompt, timeout)?;
-            said = format!(
-                "{} ({})",
-                generated.title,
-                if generated.same_topic { "same" } else { "new" }
-            );
-            Ok(generated)
-        });
+        let result = run_pass(
+            &mut state,
+            &window,
+            &terms,
+            |instructions, prompt, timeout| {
+                let generated =
+                    apple_intelligence::generate_chapter(instructions, prompt, timeout)?;
+                said = format!(
+                    "{} ({})",
+                    generated.title,
+                    if generated.same_topic { "same" } else { "new" }
+                );
+                Ok(generated)
+            },
+        );
         report.push_str(&format!(
             "pass at {} · {:.1}s · {}\n",
             format_duration(timeline_ms),
@@ -1021,7 +1035,7 @@ pub fn chapters_file(path: &Path) -> Result<String> {
         &state.chapters,
         super::notes::excerpt_budget(apple_intelligence::context_tokens(), REFINE_EXCERPT_CHARS),
         REFINE_TIMEOUT,
-        &[],
+        &terms,
         apple_intelligence::generate_chapter_lines,
     )?;
     report.push_str(&format!(
