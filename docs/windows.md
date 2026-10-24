@@ -189,10 +189,11 @@ hex app
 
 - Quit Hex in the window or the tray stops the listener and ends the app;
   closing the window only hides it.
-- The window uses the shared Rune panes (Settings, Modes, Voice Action,
+- The window uses the shared Rune panes (General, Modes, Voice Action,
   History, the transcription picker, first-run setup) with Windows rows:
-  Launch at login (the current-user Run key), Check now and Update for
-  unmanaged installs, no terminal-paste row. Shortcuts are recorded by
+  Launch at login (the current-user Run key), no terminal-paste row. The
+  sidebar footer holds Check for updates, and Download update for unmanaged
+  installs. Shortcuts are recorded by
   polling the keyboard with the listener's hook suspended, because modifier-only chords never reach the window as key events.
 - Models are prepared in-process through `transcription_preparation`; the
   runtime saves the selection when it is ready and restarts the listener.
@@ -271,7 +272,7 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Recognition hints for Whisper-family models | Implemented |
 | Release microphone while idle | Implemented; mutually exclusive with audio pre-roll, as documented in Settings |
 | While-dictating audio control (mute other apps or pause media) | Implemented via WASAPI session volumes and GSMTC |
-| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `https://anoma.ly/hex/files` origin as Linux, one feed per architecture, activating into a user-local versions directory. Checks 10 s after launch and every 6 h (or Check now); a staged update shows Restart to update in the tray menu, the window's sidebar, and Settings, and the tray tooltip says an update is available. Source builds keep the GitHub release link (Download update); CI test builds never check |
+| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `https://anoma.ly/hex/files` origin as Linux, one feed per architecture, activating into a user-local versions directory. Checks 10 s after launch and every 6 h (or Check for updates); a staged update shows Restart to update in the tray menu and the window's sidebar footer, and the tray tooltip says an update is available. Source builds keep the GitHub release link (Download update); CI test builds never check |
 | Web-domain mode rules and browser context via UI Automation | Implemented; the page URL comes from the browser's UIA document element, bounded so a hung provider degrades to application-only context |
 | Opt-in voice Commands | Missing; blocked on a Windows streaming command model |
 | Managed installer with Start Menu integration and clean uninstall | Implemented as `scripts/install-windows.ps1`; it creates the self-updating versions layout, and updates retarget the managed shortcut and Launch-at-login entry |

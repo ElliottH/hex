@@ -484,6 +484,19 @@ fn listener_card(ui: &Ui, p: Paint) -> El {
 /// What a shortcuts portal granted for `target`, since the desktop decides
 /// which trigger Hex actually gets.
 pub(super) fn granted(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<(String, rune::Color)> {
+    Some(match portal_grant(ui, target)? {
+        DesktopGrantedShortcut {
+            trigger: Some(trigger),
+            ..
+        } => (tr_fill("Your desktop granted {}", trigger), p.muted()),
+        DesktopGrantedShortcut { trigger: None, .. } => (
+            tr("Your desktop did not grant this shortcut").to_string(),
+            p.danger(),
+        ),
+    })
+}
+
+fn portal_grant(ui: &Ui, target: ShortcutTarget) -> Option<&DesktopGrantedShortcut> {
     let Some(DesktopShortcuts::Portal(granted)) = ui.shortcuts() else {
         return None;
     };
@@ -492,32 +505,20 @@ pub(super) fn granted(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<(Stri
         ShortcutTarget::PasteLast => "Paste last dictation",
         ShortcutTarget::VoiceAction => "Voice Action",
     };
-    Some(
-        match granted.iter().find(|shortcut| shortcut.name == name)? {
-            DesktopGrantedShortcut {
-                trigger: Some(trigger),
-                ..
-            } => (tr_fill("Your desktop granted {}", trigger), p.muted()),
-            DesktopGrantedShortcut { trigger: None, .. } => (
-                tr("Your desktop did not grant this shortcut").to_string(),
-                p.danger(),
-            ),
-        },
-    )
+    granted.iter().find(|shortcut| shortcut.name == name)
 }
 
-/// The desktop kept one of Hex's shortcuts for itself.
-fn refused_note(ui: &Ui, p: Paint) -> Option<El> {
-    let Some(DesktopShortcuts::Portal(granted)) = ui.shortcuts() else {
-        return None;
-    };
-    granted.iter().any(|shortcut| shortcut.trigger.is_none()).then(|| {
-        note(
-            "refused",
-            tr("Your desktop kept a shortcut for itself. Record another one, or free it in your desktop's keyboard settings (on niri, remove its bind from config.kdl)."),
-            p.danger(),
-        )
-    })
+/// The desktop kept `target`'s shortcut for itself: the note under its row.
+pub(super) fn refused_note(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<El> {
+    portal_grant(ui, target)
+        .is_some_and(|shortcut| shortcut.trigger.is_none())
+        .then(|| {
+            note(
+                "refused",
+                tr("Your desktop kept a shortcut for itself. Record another one, or free it in your desktop's keyboard settings (on niri, remove its bind from config.kdl)."),
+                p.danger(),
+            )
+        })
 }
 
 /// One recordable shortcut beside its recorder, with what a shortcuts
@@ -620,7 +621,7 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let mut rows = Vec::new();
     if ui.records_shortcuts() {
         rows.push(shortcut_row(ui, p, ShortcutTarget::Dictation));
-        rows.extend(refused_note(ui, p));
+        rows.extend(refused_note(ui, p, ShortcutTarget::Dictation));
     }
     let toggle_mode = settings.shortcut_mode == ShortcutMode::Toggle;
     rows.push(setting_row(
@@ -749,7 +750,8 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             ),
         ));
     }
-    if ui.advanced {
+    let pinned = advanced_in_use(settings);
+    if ui.advanced || pinned {
         rows.extend(advanced_rows(ui, p));
     }
     col()
@@ -767,7 +769,7 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
                         .ml(12.0)
                         .grow(1.0),
                 )
-                .child(advanced_toggle(ui, p)),
+                .child(advanced_toggle(ui, p, pinned)),
         )
         .child(super::controls::card(p, "card", rows))
 }
@@ -888,6 +890,7 @@ fn output_section(ui: &Ui, p: Paint) -> El {
     let mut rows = Vec::new();
     if ui.records_shortcuts() {
         rows.push(shortcut_row(ui, p, ShortcutTarget::PasteLast));
+        rows.extend(refused_note(ui, p, ShortcutTarget::PasteLast));
     }
     let audio_labels: Vec<&str> = RecordingAudioBehavior::ALL
         .iter()
@@ -958,24 +961,35 @@ fn output_section(ui: &Ui, p: Paint) -> El {
     section(p, "output", tr("Output"), rows)
 }
 
+/// An advanced setting is off its default, so Advanced stays open to show
+/// it: the microphone released while idle, or Double-tap only where its row
+/// shows.
+fn advanced_in_use(settings: &AppSettings) -> bool {
+    settings.release_microphone_while_idle
+        || (double_tap_only_applies(settings) && settings.double_tap_only)
+}
+
+fn double_tap_only_applies(settings: &AppSettings) -> bool {
+    settings.shortcut_mode == ShortcutMode::Hold
+        && settings.double_tap_lock
+        && settings.dictation_hotkey.key.is_some()
+}
+
 /// The Dictation header's disclosure for the options most people never
-/// change.
-fn advanced_toggle(ui: &Ui, p: Paint) -> El {
+/// change, which show at the end of the card. It stays open while one is in
+/// use. (A row above them at the card's end would Tab straight into them,
+/// but costs the 37 px that keeps General from scrolling at 760.)
+fn advanced_toggle(ui: &Ui, p: Paint, pinned: bool) -> El {
     let c = &p.k.c;
-    row()
+    let open = ui.advanced || pinned;
+    let toggle = row()
         .key("advanced-toggle")
-        .role("button")
         .label(tr("Advanced"))
         .h(18.0)
         .px(6.0)
         .gap(2.0)
         .center_y()
         .radius(p.k.radius.md)
-        .hover(c.hover)
-        .press(c.pressed)
-        .focusable(true)
-        .focus_ring(2.0, 0.0, c.border_focus)
-        .on_press(|ui: &mut Ui| ui.advanced = !ui.advanced)
         .child(
             text(tr("Advanced"))
                 .key("title")
@@ -984,7 +998,7 @@ fn advanced_toggle(ui: &Ui, p: Paint) -> El {
         )
         .child(
             rune::icon(
-                if ui.advanced {
+                if open {
                     p.k.glyph.triangle_down
                 } else {
                     p.k.glyph.triangle_right
@@ -993,7 +1007,22 @@ fn advanced_toggle(ui: &Ui, p: Paint) -> El {
             )
             .key("arrow")
             .color(c.icon_weaker),
-        )
+        );
+    if pinned {
+        return toggle;
+    }
+    toggle
+        .role("button")
+        .hover(c.hover)
+        .press(c.pressed)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, c.border_focus)
+        .on_press(|ui: &mut Ui| {
+            ui.advanced = !ui.advanced;
+            if !ui.advanced {
+                ui.confirm_release = false;
+            }
+        })
 }
 
 /// Advanced dictation rows, shown at the end of the Dictation card: the
@@ -1015,6 +1044,7 @@ fn advanced_rows(ui: &Ui, p: Paint) -> Vec<El> {
             &[tr("Keep ready (fast)"), tr("Release when idle")],
             usize::from(settings.release_microphone_while_idle),
             |ui, index| {
+                ui.advanced = true;
                 let release = index == 1;
                 if release && !ui.settings.release_microphone_while_idle {
                     ui.confirm_release = true;
@@ -1036,10 +1066,7 @@ fn advanced_rows(ui: &Ui, p: Paint) -> Vec<El> {
     if ui.confirm_release {
         rows.push(release_confirmation(ui, p));
     }
-    if settings.shortcut_mode == ShortcutMode::Hold
-        && settings.double_tap_lock
-        && settings.dictation_hotkey.key.is_some()
-    {
+    if double_tap_only_applies(settings) {
         rows.push(toggle_row(
             p,
             "double-tap-only",
@@ -1047,6 +1074,7 @@ fn advanced_rows(ui: &Ui, p: Paint) -> Vec<El> {
             tr("Wait for two complete shortcut taps before recording"),
             settings.double_tap_only,
             |ui: &mut Ui| {
+                ui.advanced = true;
                 let enabled = !ui.settings.double_tap_only;
                 ui.update(|settings| settings.double_tap_only = enabled);
             },

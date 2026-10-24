@@ -793,9 +793,18 @@ impl Default for ExperimentalSettings {
 }
 
 impl ExperimentalSettings {
-    pub fn hex_microphone_available(&self) -> bool {
-        self.hex_microphone || env_hex_experimental_mic()
+    /// [`voice_filter_enabled`] with this setting.
+    pub fn voice_filter_enabled(&self, experiment: bool, driver_installed: bool) -> bool {
+        voice_filter_enabled(self.hex_microphone, experiment, driver_installed)
     }
+}
+
+/// Whether the Voice Filter is on: its pane shows and the listener streams
+/// the Hex Microphone. The setting (or `HEX_EXPERIMENTAL_MIC`), the
+/// `voice-filter` experiment, or an installed driver each turn it on, so a
+/// driver apps already use keeps receiving audio.
+pub fn voice_filter_enabled(setting: bool, experiment: bool, driver_installed: bool) -> bool {
+    setting || env_hex_experimental_mic() || experiment || driver_installed
 }
 
 pub fn env_hex_experimental_mic() -> bool {
@@ -1262,10 +1271,7 @@ impl AppSettings {
             Ordering::Relaxed,
         );
         MEETINGS_ENABLED.store(self.meetings.available(), Ordering::Release);
-        HEX_MICROPHONE_ENABLED.store(
-            self.experimental.hex_microphone_available(),
-            Ordering::Release,
-        );
+        HEX_MICROPHONE_ENABLED.store(self.experimental.hex_microphone, Ordering::Release);
         crate::hex_microphone::sync_from_settings(
             self.experimental.hex_microphone_mode,
             self.experimental.hex_microphone_comfort_noise,
@@ -1619,8 +1625,13 @@ pub fn meetings_enabled() -> bool {
     MEETINGS_ENABLED.load(Ordering::Acquire)
 }
 
+/// [`voice_filter_enabled`] for the running listener.
 pub fn hex_microphone_enabled() -> bool {
-    HEX_MICROPHONE_ENABLED.load(Ordering::Acquire) || env_hex_experimental_mic()
+    voice_filter_enabled(
+        HEX_MICROPHONE_ENABLED.load(Ordering::Acquire),
+        crate::experiments::enabled(crate::experiments::Experiment::VoiceFilter),
+        crate::hex_microphone::driver_bundle_installed(),
+    )
 }
 
 pub fn meeting_notes_enabled() -> bool {
@@ -1843,6 +1854,17 @@ pub(crate) fn migrate_legacy_settings(path: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_setting_the_experiment_or_an_installed_driver_turns_the_voice_filter_on() {
+        if env_hex_experimental_mic() {
+            return;
+        }
+        assert!(!voice_filter_enabled(false, false, false));
+        assert!(voice_filter_enabled(true, false, false));
+        assert!(voice_filter_enabled(false, true, false));
+        assert!(voice_filter_enabled(false, false, true));
+    }
 
     #[test]
     fn missing_fields_receive_defaults() {

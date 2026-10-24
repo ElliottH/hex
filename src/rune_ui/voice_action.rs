@@ -71,38 +71,37 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     }
     content = content.child(card(p, "enable", enable));
     if ui.records_shortcuts() {
-        content = content.child(section(
+        let mut rows = vec![described_row(
             p,
-            "capture",
-            tr("Capture"),
-            vec![described_row(
-                p,
-                "voice-action-shortcut",
-                tr("Shortcut"),
-                Some(
-                    super::settings::granted(ui, p, ShortcutTarget::VoiceAction).unwrap_or_else(
-                        || {
-                            let purpose = if enabled {
-                                tr("Hold to speak; selected text is included automatically")
-                            } else {
-                                tr("Saved for when Voice Action is enabled")
-                            };
-                            (purpose.to_string(), p.muted())
-                        },
-                    ),
-                ),
-                row()
-                    .key("voice-action-shortcut-control")
-                    .gap(8.0)
-                    .center_y()
-                    .children(super::platform_settings::side_selector(
-                        ui,
-                        p,
-                        ShortcutTarget::VoiceAction,
-                    ))
-                    .child(hotkey_control(ui, p, ShortcutTarget::VoiceAction)),
-            )],
+            "voice-action-shortcut",
+            tr("Shortcut"),
+            Some(
+                super::settings::granted(ui, p, ShortcutTarget::VoiceAction).unwrap_or_else(|| {
+                    let purpose = if enabled {
+                        tr("Hold to speak; selected text is included automatically")
+                    } else {
+                        tr("Saved for when Voice Action is enabled")
+                    };
+                    (purpose.to_string(), p.muted())
+                }),
+            ),
+            row()
+                .key("voice-action-shortcut-control")
+                .gap(8.0)
+                .center_y()
+                .children(super::platform_settings::side_selector(
+                    ui,
+                    p,
+                    ShortcutTarget::VoiceAction,
+                ))
+                .child(hotkey_control(ui, p, ShortcutTarget::VoiceAction)),
+        )];
+        rows.extend(super::settings::refused_note(
+            ui,
+            p,
+            ShortcutTarget::VoiceAction,
         ));
+        content = content.child(section(p, "capture", tr("Capture"), rows));
     }
     if enabled {
         let rows = match models::unavailable(ui, p, OpenCodeFeature::VoiceAction) {

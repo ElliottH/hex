@@ -103,6 +103,62 @@ fn a_refused_portal_shortcut_says_how_to_free_it() {
     );
     assert!(shown.iter().any(|text| text.contains("config.kdl")));
     assert!(rt.find("dictation-hotkey").is_some());
+    assert!(rt.find("dictation/card/refused").is_some());
+    assert!(rt.find("output/card/refused").is_none());
+}
+
+#[test]
+fn a_refused_note_sits_with_the_shortcut_the_desktop_kept() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    if let Some(view) = &mut rt.state.view {
+        view.listener.shortcuts = DesktopShortcuts::Portal(vec![
+            DesktopGrantedShortcut {
+                name: "Dictation".into(),
+                trigger: Some("F12".into()),
+            },
+            DesktopGrantedShortcut {
+                name: "Paste last dictation".into(),
+                trigger: None,
+            },
+        ]);
+    }
+    rt.invalidate();
+    rt.frame(0.0);
+    assert!(rt.find("output/card/refused").is_some());
+    assert!(rt.find("dictation/card/refused").is_none());
+}
+
+#[test]
+fn advanced_stays_open_while_in_use_and_collapsing_drops_its_question() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    assert!(rt.find("microphone-mode").is_none());
+    tap(&mut rt, "advanced-toggle");
+    tap(&mut rt, "microphone-mode-control/segment1");
+    assert!(rt.state.confirm_release);
+    tap(&mut rt, "advanced-toggle");
+    assert!(!rt.state.confirm_release, "collapsing drops the question");
+    assert!(rt.find("microphone-mode").is_none());
+
+    rt.state.settings.release_microphone_while_idle = true;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("microphone-mode").is_some(), "in use opens it");
+    tap(&mut rt, "advanced-toggle");
+    assert!(rt.find("microphone-mode").is_some(), "and keeps it open");
+
+    rt.state.settings.release_microphone_while_idle = false;
+    rt.state.settings.double_tap_lock = true;
+    rt.state.settings.double_tap_only = true;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(
+        rt.find("double-tap-only").is_some(),
+        "so does Double-tap only"
+    );
+    rt.state.settings.shortcut_mode = crate::dictation::ShortcutMode::Toggle;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("microphone-mode").is_none(), "but not in Toggle");
 }
 
 #[test]

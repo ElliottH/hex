@@ -428,7 +428,7 @@ impl HexMicrophoneStatus {
     }
 }
 
-fn driver_bundle_installed() -> bool {
+pub fn driver_bundle_installed() -> bool {
     std::path::Path::new(INSTALLED_DRIVER_PATH).exists()
 }
 
@@ -587,6 +587,8 @@ pub fn install_driver_async() {
                     },
                 );
                 set_driver_action_state(state);
+                // An installed driver turns the Voice Filter on by itself.
+                ensure_service_started();
             });
     }
 }
@@ -653,7 +655,7 @@ pub fn status() -> HexMicrophoneStatus {
 }
 
 /// Makes this process the Hex Microphone host, starting the sink whenever
-/// the setting is on. Only the listener hosts it, so CLI commands that load
+/// the Voice Filter is on (`app_settings::hex_microphone_enabled`). Only the listener hosts it, so CLI commands that load
 /// settings never start the pipeline.
 pub fn host_service() {
     SERVICE_HOSTED.store(true, Ordering::Release);

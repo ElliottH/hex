@@ -685,14 +685,17 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
-        // The Voice Filter pane's demo moves every frame while it records or plays.
-        if state.demo.is_none()
-            || crate::hex_microphone::demo_is_busy()
-            || crate::hex_microphone::demo_recompute_is_running()
-            || state
-                .demo
-                .as_ref()
-                .is_some_and(|demo| demo.is_recording || demo.playing.is_some())
+        // The Voice Filter pane's demo moves every frame while it records or
+        // plays; nothing decodes or renders while the Voice Filter is off.
+        let voice_filter = crate::app_settings::hex_microphone_enabled();
+        if voice_filter
+            && (state.demo.is_none()
+                || crate::hex_microphone::demo_is_busy()
+                || crate::hex_microphone::demo_recompute_is_running()
+                || state
+                    .demo
+                    .as_ref()
+                    .is_some_and(|demo| demo.is_recording || demo.playing.is_some()))
         {
             state.demo = Some(crate::hex_microphone::demo_snapshot());
             changed = true;
@@ -735,7 +738,7 @@ impl NativeHost for MacHost {
         changed |= update(&mut state.login_item_checking, self.login_checking);
         changed |= update(
             &mut state.hex_microphone,
-            Some(crate::hex_microphone::status()),
+            voice_filter.then(crate::hex_microphone::status),
         );
         changed |= update(
             &mut state.command_model,

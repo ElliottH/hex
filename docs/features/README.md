@@ -377,20 +377,25 @@ latency measurement.
 ## Adjust Behavior
 
 ```ts
-Settings                                 // settings
-├── Shortcuts (top) -> Dictation, Paste last, Voice Action -> Change shortcut
+General                                  // settings
+├── Dictation card -> Shortcut, Shortcut mode, Double-tap to lock, Speech model
 ├── Microphone -> Automatic or saved device
 │   ├── Automatic -> Compiled preferences, then the macOS default
 │   │   └── Default is a Bluetooth headset -> Built-in mic when present // avoids the call profile
 │   └── Open menu covers the controls beneath it; click elsewhere dismisses
-├── Microphone mode
+├── Advanced ▸ (Dictation header) -> rows at the end of the Dictation card
+│   ├── Open while Release when idle or Double-tap only (Hold) is on
+│   └── Collapse -> drops a pending release confirmation
+├── Microphone mode (Advanced)
 │   ├── Keep ready (fast) -> Open while idle; pre-roll available
 │   └── Release when idle -> Open on press; no pre-roll; startup delay
 │       └── Commands enabled? -> Confirm turning Commands off
+├── Output card -> Paste last shortcut, While dictating, Dictation HUD
 ├── While dictating -> Mute / Pause media / Do nothing
 │   ├── Intentional capture only, not ordinary shortcut chords
 │   └── Pause/resume only players already reported running by macOS
-└── Sound volume -> Immediate feedback setting; zero suppresses tones
+├── Application card -> Sound volume: immediate feedback; zero suppresses tones
+└── Voice Action shortcut -> Voice Action pane; Meetings -> Meetings › Settings
 
 Intentional recording                    // recording.environment
 ├── Acquire native macOS no-idle-sleep assertion
@@ -525,7 +530,8 @@ actual capture and output remain in [Dictation](dictation.md).
 
 ## Record Meetings
 
-[Meetings (beta)](meetings.md) maps the Settings opt-in, call detection and the
+[Meetings (beta)](meetings.md) maps the opt-in (the Meetings pane's card, then
+Meetings › Settings), call detection and the
 focus-free offer, menu-bar recording state, rolling transcription, echo
 suppression, and the Markdown copy in the user's transcript folder.
 
@@ -747,16 +753,17 @@ Linux beta                               // not macOS feature parity
 ├── hex / hex app -> Window in the same process; closing it leaves Hex running
 ├── Recording sounds -> Shortcut press / capture stop / active cancellation
 ├── Shortcuts -> One state machine, three sources        // linux.shortcuts
-│   ├── X11 -> Root-window key grabs; Settings records the chord
+│   ├── X11 -> Root-window key grabs; General records the chord
 │   ├── Wayland + GlobalShortcuts portal -> Desktop grants the triggers
 │   │   ├── General > Change shortcut -> Press chord (Esc cancels)
 │   │   │   └── Saved -> New portal session asks for it as preferred_trigger
 │   │   │       // observed on the niri fork: a new session gets it, a rebind in the same one fails
 │   │   ├── Each row: "Your desktop granted <trigger>" (it may assign another)
-│   │   └── Refused shortcut -> Danger row + how to free it (niri: config.kdl);
+│   │   └── Refused shortcut -> Danger row + how to free it (niri: config.kdl)
+│   │       under that shortcut's own row (Dictation, Output, Voice Action pane);
 │   │       the rest keep working
 │   ├── Wayland without the portal -> Bind `hex` commands in the desktop
-│   │   └── Settings hides shortcut rows and lists the commands
+│   │   └── General hides shortcut rows and lists the commands
 │   └── Listener starting or stopped -> `hex status` reports Unregistered,
 │       never the X11 mode
 ├── hex dictation start|stop|toggle|cancel, hex voice-action start|stop|toggle,
@@ -785,13 +792,14 @@ Linux beta                               // not macOS feature parity
 ```ts
 Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
 ├── Install -> Setup.exe or install-windows.ps1 -> hex.exe + install.json receipt
-├── HEX app -> Settings, tray, HUD; Enabled = shortcut works in every app
+├── HEX app -> General, tray, HUD; Enabled = shortcut works in every app
 ├── Launch again -> Running app shows its window; hidden (login) launch -> no-op
 ├── Ctrl+Space -> Hold or Toggle -> Capture -> Stream (GPU) -> Paste
 ├── Escape -> Cancel; a held modifier alone never ends or cancels a capture
 ├── Paste -> Waits for Shift, Alt, and Win; a held Ctrl is kept and harmless
-├── Update staged (managed install) -> Tray, sidebar, Settings: Restart to update
-├── Newer release (unmanaged install) -> Tray, sidebar, Settings: Download update
+├── Update staged (managed install) -> Tray, sidebar footer: Restart to update
+├── Newer release (unmanaged install) -> Tray, sidebar footer: Download update
+├── Otherwise -> Sidebar footer: Check for updates
 └── Modes, Voice Action, History, Activity, transformations -> as on macOS
 ```
 
@@ -810,10 +818,10 @@ smoke tests on Windows 10 and on ARM64 hardware have not been run.
 
 ```ts
 Linux updates                            // maintain.linux-updates
-├── Direct install (versions/ + install.json receipt) -> release service -> staged -> sidebar Update, Settings: Restart to update
-├── Source install (source-build marker) -> Settings: Updated from your source checkout
-├── pacman (AUR hex-bin: /usr/bin, root-owned) or Nix store -> Settings: Updated by your package manager
-└── Anything else (a downloaded executable) -> Download update link
+├── Direct install (versions/ + install.json receipt) -> release service -> staged -> sidebar footer: Restart to update
+├── Source install (source-build marker) -> Sidebar footer: Updated from your source checkout
+├── pacman (AUR hex-bin: /usr/bin, root-owned) or Nix store -> Sidebar footer: Updated by your package manager
+└── Anything else (a downloaded executable) -> Sidebar footer: Download update
 ```
 
 The install kind comes from `updater/linux.rs`. The 2026-10-23 apollo
@@ -887,7 +895,7 @@ the single-instance socket and systemd lifecycle in
 `hex status` queries the running Hex; `--lines` explicitly reads historical
 observations. `hex app --hidden` and `hex start` start Hex without the window;
 `hex stop` equals `hex quit`. Closing the window does not mean Disable; the
-Settings card's Enable/Disable controls the listener, Quit Hex the process. No
+General's listener card Enable/Disable controls the listener, Quit Hex the process. No
 root daemon or new input grants. The window runs on Rune's app lifetime: it
 opens or focuses with the forwarded activation token and keeps its state
 across close and reopen. Observed in a headless sway on apollo on 2026-10-22
@@ -1031,7 +1039,7 @@ microphone behavior.
 
 ```ts
 macOS debug runtime                      // not release navigation
-├── Meetings -> Always available; release builds need the Settings opt-in
+├── Meetings -> Always available; release builds need the Meetings opt-in (its pane's card or Meetings › Settings)
 └── Activity / HUD Lab / hex dev -> Observation and developer controls
 
 `hex app -- --snap OUT --scene NAME` -> Rendered fixtures    // not proof capture/download/update happened

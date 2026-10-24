@@ -528,7 +528,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   detected call app leaves the microphone, offer `Keep Recording` or
   `Stop & Transcribe`; never stop automatically. An active recording stays
   visible and stoppable from the menu bar without the Settings window.
-- Calendar access is asked for only by Settings' Connect calendar, never at
+- Calendar access is asked for only by Meetings › Settings' Connect calendar, never at
   launch, and only with Meetings on; Meetings off means no EventKit reads and
   no reminders. `meetings.calendar.connected` defaults off. A meeting has other
   attendees or a call link and is not all-day, declined, free, or cancelled.
@@ -652,7 +652,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   revoked, the minimum version before rollout, and a rollout bucket drawn once
   from the OS's secure random source, kept in `<support>/update-bucket`, and
   never sent. Requests carry nothing about the install. Checks run 10 seconds
-  after launch, hourly, and on Check now, backing off on errors; manifests are
+  after launch, hourly, and on the sidebar footer's Check for updates, backing off on errors; manifests are
   not signed, so nothing runs before the download's size and SHA-256 match
   the manifest and, on macOS and Windows, its code signature passes: macOS
   `app/update-requirement.txt` (Developer ID team `5NZ4Q7NXJ4`, `anomaly.hex`,

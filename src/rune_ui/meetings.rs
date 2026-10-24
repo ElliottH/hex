@@ -14,7 +14,7 @@
 use rune::{El, TextEdit, Tx, col, el, row, text};
 use rune_kit::{IconButton, IconButtonVariant, Menu as KitMenu, MenuItem, Placement, TextInput};
 
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, pulsing_dot, segmented};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, pulsing_dot, segmented_tx};
 use super::lists::{
     Tone, detail_header, detail_title, error_panel, group_label, list_row, message, placeholder,
     section_label, small_button, source_list, split, tone_tag,
@@ -516,23 +516,6 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
         ));
         return (Vec::new(), super::scroll_body("scroll", content));
     }
-    let views = [tr("Recordings"), tr("Settings")];
-    let switch = segmented(
-        p,
-        "meetings-view",
-        &views,
-        match ui.meetings.view {
-            View::Recordings => 0,
-            View::Settings => 1,
-        },
-        |ui, index| {
-            ui.meetings.view = if index == 0 {
-                View::Recordings
-            } else {
-                View::Settings
-            };
-        },
-    );
     let action = recording_action(ui, p);
     if ui.meetings.view == View::Settings {
         let content = col()
@@ -541,12 +524,43 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
             .pt(4.0)
             .gap(24.0)
             .children(super::platform_settings::meetings_settings(ui, p, layer));
-        return (
-            vec![switch, action],
-            super::scroll_body("settings-scroll", content),
-        );
+        return (vec![action], super::scroll_body("settings-scroll", content));
     }
-    recordings(ui, p, layer, vec![switch, search(ui, p), action])
+    recordings(ui, p, layer, vec![search(ui, p), action])
+}
+
+/// The header's `Recordings | Settings` switch, beside the title so it stays
+/// put whichever view shows; none while the opt-in card does.
+pub(super) fn view_switch(ui: &Ui, p: Paint) -> Option<El> {
+    if !available(ui) {
+        return None;
+    }
+    let views = [tr("Recordings"), tr("Settings")];
+    let selected = match ui.meetings.view {
+        View::Recordings => 0,
+        View::Settings => 1,
+    };
+    Some(segmented_tx(
+        p,
+        "meetings-view",
+        &views,
+        selected,
+        |ui: &mut Ui, index: usize, tx: &mut Tx| {
+            let view = if index == 0 {
+                View::Recordings
+            } else {
+                View::Settings
+            };
+            if ui.meetings.view != view {
+                tx.instant();
+                ui.flush_drafts();
+                ui.open = None;
+                ui.meetings.view = view;
+                ui.meetings.renaming = None;
+                ui.meetings.delete_armed = None;
+            }
+        },
+    ))
 }
 
 fn search(ui: &Ui, p: Paint) -> El {

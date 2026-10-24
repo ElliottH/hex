@@ -389,13 +389,13 @@ impl Pane {
             Pane::Meetings => caps.meetings,
             Pane::VoiceFilter => {
                 caps.fun
-                    && (ui.platform.voice_filter
-                        || ui.settings.experimental.hex_microphone_available()
-                        || ui
-                            .platform
+                    && ui.settings.experimental.voice_filter_enabled(
+                        ui.platform.voice_filter,
+                        ui.platform
                             .hex_microphone
                             .as_ref()
-                            .is_some_and(|status| status.driver_bundle_installed))
+                            .is_some_and(|status| status.driver_bundle_installed),
+                    )
             }
             Pane::HudLab => caps.hud_lab && ui.platform.developer,
             Pane::Activity => ui.platform.developer,
@@ -620,7 +620,16 @@ impl Ui {
         self.error = None;
         self.settings = candidate;
         self.draft_since = None;
+        self.settings_changed();
         true
+    }
+
+    /// Meetings turned off forgets its view: turning it back on lists the
+    /// recordings.
+    fn settings_changed(&mut self) {
+        if !meetings::available(self) {
+            self.meetings.view = meetings::View::Recordings;
+        }
     }
 
     /// The settings with every text field's current text applied.
@@ -733,6 +742,7 @@ impl Ui {
                 self.vocabulary = vocabulary::VocabularyEditor::new(&service.vocabulary);
             }
             self.settings = service.clone();
+            self.settings_changed();
         }
         self.service_settings = Some(service);
         changed
@@ -926,7 +936,14 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         // Children sit inside the border, so their fills never paint over it.
         .padding(p.hair)
         .clip_soft(0.0)
-        .child(pane_header(p, ui.pane.title(), actions))
+        .child(pane_header(
+            p,
+            ui.pane.title(),
+            (ui.pane == Pane::Meetings)
+                .then(|| meetings::view_switch(ui, p))
+                .flatten(),
+            actions,
+        ))
         .child(body);
     let window = row()
         .key("window")
@@ -974,18 +991,29 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
     let action = match ui.view.as_ref().map(|view| &view.update_status) {
-        Some(DesktopUpdateStatus::ReadyToRestart) => Some(DesktopAction::RestartIntoUpdate),
-        Some(DesktopUpdateStatus::Available) => Some(DesktopAction::OpenUpdate),
+        Some(DesktopUpdateStatus::ReadyToRestart) => {
+            Some((tr("Restart to update"), DesktopAction::RestartIntoUpdate))
+        }
+        Some(DesktopUpdateStatus::Available) => {
+            Some((tr("Download update"), DesktopAction::OpenUpdate))
+        }
         _ => None,
     };
-    let update = action.map(|action| {
-        controls::button(
-            p,
-            "sidebar-update",
-            tr("Update"),
-            controls::ButtonKind::Secondary,
-            move |ui: &mut Ui, _| ui.send(Request::Desktop(action.clone())),
-        )
+    // An available update is a state, not the screen's main action.
+    let update = action.map(|(label, action)| {
+        row()
+            .key("sidebar-update-control")
+            .gap(8.0)
+            .pl(6.0)
+            .center_y()
+            .child(controls::status_dot(p.accent()))
+            .child(controls::button(
+                p,
+                "sidebar-update",
+                label,
+                controls::ButtonKind::Secondary,
+                move |ui: &mut Ui, _| ui.send(Request::Desktop(action.clone())),
+            ))
     });
     title_bar(col())
         .key("sidebar")
@@ -1140,8 +1168,9 @@ fn quit_item(p: Paint) -> El {
         )
 }
 
-/// The title bar of the content panel, with the pane's actions on the right.
-fn pane_header(p: Paint, title: &str, actions: Vec<El>) -> El {
+/// The title bar of the content panel: the title, a view switch that stays
+/// beside it, and the pane's actions on the right.
+fn pane_header(p: Paint, title: &str, switch: Option<El>, actions: Vec<El>) -> El {
     title_bar(row())
         .key("pane-header")
         .h(52.0)
@@ -1153,9 +1182,11 @@ fn pane_header(p: Paint, title: &str, actions: Vec<El>) -> El {
                 .key("pane-title")
                 .font(p.k.ty.body_medium)
                 .color(p.text())
-                .grow(1.0)
+                .shrink()
                 .truncate(),
         )
+        .children(switch.map(|switch| switch.ml(8.0)))
+        .child(el().key("header-spacer").grow(1.0))
         .children(actions)
 }
 
@@ -1333,6 +1364,12 @@ const SCENES: &[Scene] = &[
     ("mac-settings-advanced", |ui| {
         *ui = mac_fixture();
         ui.advanced = true;
+    }),
+    ("mac-update-ready", |ui| {
+        *ui = mac_fixture();
+        if let Some(view) = &mut ui.view {
+            view.update_status = DesktopUpdateStatus::ReadyToRestart;
+        }
     }),
     ("windows-settings", |ui| {
         *ui = fixture(DesktopShortcuts::Registered);

@@ -191,9 +191,23 @@ pub(super) fn segmented(
     selected: usize,
     pick: impl Fn(&mut Ui, usize) + Clone + 'static,
 ) -> El {
+    segmented_tx(p, key, labels, selected, move |ui, index, _| {
+        pick(ui, index)
+    })
+}
+
+/// A [`segmented`] whose pick also gets the transaction, to swap views
+/// without animating.
+pub(super) fn segmented_tx(
+    p: Paint,
+    key: &str,
+    labels: &[&str],
+    selected: usize,
+    pick: impl Fn(&mut Ui, usize, &mut Tx) + Clone + 'static,
+) -> El {
     SegmentedControl::new(labels, Some(selected))
         .fit()
-        .on_pick(move |ui: &mut Ui, index: usize, _: &mut Tx| pick(ui, index))
+        .on_pick(pick)
         .build(p.k)
         .key(key)
         .role("segmented")

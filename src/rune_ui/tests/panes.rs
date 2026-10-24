@@ -173,6 +173,47 @@ fn meetings_switch_between_recordings_and_settings() {
 }
 
 #[test]
+fn the_meetings_switch_stays_put_and_a_swap_drops_pending_edits() {
+    let mut rt = runtime("meetings", true, PANE_SIZE);
+    let switch = |rt: &Runtime<Ui>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("meetings-view"))
+            .map(|e| e.rect)
+            .unwrap()
+    };
+    let recordings = switch(&rt);
+    tap(&mut rt, "meeting-rename");
+    assert!(rt.state.meetings.renaming.is_some());
+    rt.state.meetings.delete_armed = Some("preview-notes".into());
+    tap(&mut rt, "meetings-view/segment1");
+    assert_eq!(switch(&rt), recordings, "the search field never moves it");
+    assert!(rt.state.meetings.renaming.is_none());
+    assert!(rt.state.meetings.delete_armed.is_none());
+
+    tap(&mut rt, "meetings-enabled");
+    assert!(!rt.state.settings.meetings.enabled);
+    assert_eq!(rt.state.meetings.view, meetings::View::Recordings);
+}
+
+#[test]
+fn an_update_is_a_secondary_button_with_a_dot_and_its_own_label() {
+    let mut rt = runtime("mac-update-ready", true, PANE_SIZE);
+    assert!(rt.find("sidebar-update-control/dot").is_some());
+    assert!(texts(&rt).iter().any(|text| text == "Restart to update"));
+    tap(&mut rt, "sidebar-update");
+    assert!(matches!(
+        sent(&rt),
+        [Request::Desktop(DesktopAction::RestartIntoUpdate)]
+    ));
+    if let Some(view) = &mut rt.state.view {
+        view.update_status = DesktopUpdateStatus::Available;
+    }
+    refresh(&mut rt);
+    assert!(texts(&rt).iter().any(|text| text == "Download update"));
+}
+
+#[test]
 fn meetings_off_offers_the_opt_in_and_keeps_the_pane() {
     let mut rt = runtime("meetings-off", true, PANE_SIZE);
     assert!(rt.find("nav-meetings").is_some(), "always in the sidebar");
