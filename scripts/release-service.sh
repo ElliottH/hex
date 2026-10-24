@@ -8,15 +8,19 @@
 #   release-service.sh distribution <kind> <version>  # a package manager now serves <version>
 #
 # RELEASE is the service origin (https://anoma.ly/release or
-# https://dev.anoma.ly/release); HEX_VERSION the version; HEX_RELEASE_CHANNEL
-# the channel (default stable). `publish` writes <dist>/manifest.json, the
-# service's response, after checking every file it serves against the local
-# bytes.
+# https://dev.anoma.ly/release); HEX_VERSION the built version, which names
+# the files; HEX_RELEASE_CHANNEL the channel (default stable) and
+# HEX_RELEASE_VERSION the published version (default HEX_VERSION; staging
+# publishes X.Y.Z-dev.<run> on the dev channel). `publish` writes
+# <dist>/manifest.json after checking every file the service serves against
+# the local bytes. Publishing the channel's current version again succeeds
+# only when the service already has exactly these files, so a rerun is safe.
 set -eu
 
 : "${RELEASE:?Set RELEASE to the release service origin}"
 : "${HEX_VERSION:?Set HEX_VERSION}"
 channel=${HEX_RELEASE_CHANNEL:-stable}
+release_version=${HEX_RELEASE_VERSION:-$HEX_VERSION}
 app=hex
 artifact=desktop
 # One request stays under Cloudflare's 100 MB limit; bigger files go in parts.
@@ -51,16 +55,22 @@ token_config="$temporary/token.curl"
   printf 'header = "Authorization: Bearer %s"\n' "$token" > "$token_config"
 )
 
-# api <curl arguments>: an authenticated request that prints the service's
-# error message on failure.
-api() {
+# request <curl arguments>: an authenticated request; prints the body and
+# sets $status.
+request() {
   status=$(curl -sS --config "$token_config" --retry 3 --retry-all-errors \
     -o "$temporary/response" -w '%{http_code}' "$@") || {
     echo "Request to the release service failed: $*" >&2
     exit 1
   }
+  cat "$temporary/response"
+}
+
+# api <curl arguments>: a request that must succeed.
+api() {
+  request "$@"
   case "$status" in
-    2??) cat "$temporary/response" ;;
+    2??) ;;
     *)
       echo "The release service answered $status: $(cat "$temporary/response")" >&2
       exit 1
@@ -101,6 +111,7 @@ publish() {
   dist=$1
   notes_url=$2
   version=$HEX_VERSION
+  manifest_url="$RELEASE/$app/$artifact/$channel.json"
   # target=file, the names docs/plans/release-service.md pins. A staging
   # run without the macOS build publishes the others.
   pinned='{}'
@@ -123,7 +134,7 @@ publish() {
   test "$(printf '%s' "$pinned" | jq 'length')" -gt 0
   jq -n \
     --arg channel "$channel" \
-    --arg version "$version" \
+    --arg version "$release_version" \
     --arg notes_url "$notes_url" \
     --argjson targets "$pinned" \
     '{channel: $channel, version: $version, notes_url: $notes_url, targets: $targets,
@@ -133,12 +144,28 @@ publish() {
         {kind: "brew", cask: "anomalyco/tap/hex", command: "brew upgrade --cask anomalyco/tap/hex"},
         {kind: "nix", attribute: "github:anomalyco/hex", command: "nix profile upgrade hex"}
       ]}' > "$temporary/release.json"
-  api -H 'content-type: application/json' --data-binary @"$temporary/release.json" \
+  request -H 'content-type: application/json' --data-binary @"$temporary/release.json" \
     "$RELEASE/$app/$artifact/releases" > "$dist/manifest.json"
+  case "$status" in
+    2??) ;;
+    400)
+      # A rerun: the channel already has this version; the checks below
+      # require it to be exactly these files.
+      grep -Fq "$release_version is already the current release" "$dist/manifest.json" || {
+        echo "The release service answered 400: $(cat "$dist/manifest.json")" >&2
+        exit 1
+      }
+      echo "$channel already has $release_version; checking that it is these files." >&2
+      curl -fsS "$manifest_url" -o "$dist/manifest.json"
+      ;;
+    *)
+      echo "The release service answered $status: $(cat "$dist/manifest.json")" >&2
+      exit 1
+      ;;
+  esac
 
   # The service must serve exactly these bytes at the URLs it published.
-  manifest_url="$RELEASE/$app/$artifact/$channel.json"
-  test "$(jq -r '"\(.app) \(.artifact) \(.channel) \(.release.version)"' "$dist/manifest.json")" = "$app $artifact $channel $version"
+  test "$(jq -r '"\(.app) \(.artifact) \(.channel) \(.release.version)"' "$dist/manifest.json")" = "$app $artifact $channel $release_version"
   for target in $(printf '%s' "$pinned" | jq -r 'keys[]'); do
     name=$(printf '%s' "$pinned" | jq -r --arg target "$target" '.[$target].file')
     expected=$(sha256_of "$dist/$name")
@@ -150,8 +177,8 @@ publish() {
     test "$(sha256_of "$temporary/served")" = "$expected"
     echo "$target $url" >&2
   done
-  curl -fsS "$manifest_url" | jq -e --arg version "$version" '.release.version == $version' > /dev/null
-  echo "Published Hex $version to $manifest_url." >&2
+  curl -fsS "$manifest_url" | jq -e --arg version "$release_version" '.release.version == $version' > /dev/null
+  echo "Published Hex $release_version to $manifest_url." >&2
 }
 
 distribution() {

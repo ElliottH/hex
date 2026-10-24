@@ -46,14 +46,17 @@ clients check HTTPS, each file's size and SHA-256, and the OS code signature
 
 ## Channels
 
-- `staging` (the default) is the dry run: the `stable` release goes to the dev
-  service, with a draft prerelease GitHub release tagged `staging-<run-id>`;
+- `staging` (the default) is the dry run: the release goes to the dev
+  service's `dev` channel as `<version>-dev.<run number>` (the service refuses
+  publishing a channel's current version again, and every build's bytes
+  differ), with a draft prerelease GitHub release tagged `staging-<run-id>`;
   the AUR package is built from the published file and installed in a
-  container but not pushed, and the AUR version is recorded on the dev
-  service. The dev service accepts the same version again, so staging runs
-  repeat freely. Point a build at it with
-  `HEX_RELEASE_BASE_URL=https://dev.anoma.ly/release`; the dev site
-  (`https://dev.anoma.ly/hex`) links its files.
+  container but not pushed, and the AUR and Nix versions are recorded on the
+  dev service. Rerunning a failed run republishes nothing: the same version
+  with the same files is accepted as already published. Point a build at the
+  dev service with `HEX_RELEASE_BASE_URL=https://dev.anoma.ly/release`; the
+  dev site (`https://dev.anoma.ly/hex`) links the dev service's `stable`
+  files when it has any.
 - `stable` publishes to `https://anoma.ly/release`, the GitHub release
   `app-v<version>` (kept off "Latest", which the SDK uses), the AUR, and then
   the production site. It needs every platform, Authenticode-signed Windows

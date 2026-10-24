@@ -6,9 +6,11 @@ name: Release
 # by its GitHub OIDC token: repository anomalyco/hex, ref main or app-v*,
 # environment release (anomalyco/release registry/hex.json).
 #
-# channel=staging (the default) is the dry run: the stable release goes to the
-# dev service, https://dev.anoma.ly/release, with a draft GitHub release, and
-# the AUR package is built and installed but not pushed. channel=stable (or an
+# channel=staging (the default) is the dry run: the release goes to the dev
+# service, https://dev.anoma.ly/release, on its dev channel as
+# <version>-dev.<run number> (the service refuses publishing a channel's
+# current version again), with a draft GitHub release, and the AUR package is
+# built and installed but not pushed. channel=stable (or an
 # app-v<version> tag) publishes to https://anoma.ly/release, the GitHub
 # release, the AUR, and the production site.
 #
@@ -50,6 +52,8 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       notes-url: ${{ steps.resolve.outputs.notes-url }}
       release: ${{ steps.resolve.outputs.release }}
+      release-channel: ${{ steps.resolve.outputs.release-channel }}
+      release-version: ${{ steps.resolve.outputs.release-version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -77,10 +81,12 @@ jobs:
             stable)
               service=https://anoma.ly/release tag="app-v$version"
               notes="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
+              release_channel=stable release_version=$version
               ;;
             staging)
               service=https://dev.anoma.ly/release tag="staging-$GITHUB_RUN_ID"
               notes="https://github.com/$GITHUB_REPOSITORY/commit/$sha"
+              release_channel=dev release_version="$version-dev.$GITHUB_RUN_NUMBER"
               ;;
             *) echo "::error::Unknown channel $CHANNEL."; exit 1 ;;
           esac
@@ -91,12 +97,14 @@ jobs:
             echo "service=$service"
             echo "tag=$tag"
             echo "notes-url=$notes"
+            echo "release-channel=$release_channel"
+            echo "release-version=$release_version"
             echo "release=$([ -z "$BREW_VERSION" ] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
           if [ -n "$BREW_VERSION" ]; then
             echo "Recording that Homebrew serves $BREW_VERSION on $service." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "Releasing $version ($CHANNEL) from $sha to $service." >> "$GITHUB_STEP_SUMMARY"
+            echo "Releasing $version ($CHANNEL) from $sha to $service as $release_channel $release_version." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   build:
@@ -199,6 +207,8 @@ jobs:
     env:
       RELEASE: ${{ needs.resolve.outputs.service }}
       HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
+      HEX_RELEASE_VERSION: ${{ needs.resolve.outputs.release-version }}
     outputs:
       linux-url: ${{ steps.publish.outputs.linux-url }}
     steps:
@@ -218,7 +228,7 @@ jobs:
           { echo '### Manifest'; echo '```json'; cat dist/manifest.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the Nix flake
         # The flake builds this commit from source, so it serves the version now.
-        run: scripts/release-service.sh distribution nix "$HEX_VERSION"
+        run: scripts/release-service.sh distribution nix "$HEX_RELEASE_VERSION"
 
   github:
     name: GitHub release
@@ -232,7 +242,7 @@ jobs:
       HEX_RELEASE_COMMIT: ${{ needs.resolve.outputs.sha }}
       HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.channel }}
       HEX_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
-      HEX_RELEASE_NOTES_URL: ${{ needs.resolve.outputs.service }}/hex/desktop/stable.json
+      HEX_RELEASE_NOTES_URL: ${{ needs.resolve.outputs.service }}/hex/desktop/${{ needs.resolve.outputs.release-channel }}.json
       HEX_RELEASE_SOURCE: ${{ github.workspace }}/source
     steps:
       - uses: actions/checkout@v7
@@ -304,11 +314,13 @@ jobs:
     env:
       RELEASE: ${{ needs.resolve.outputs.service }}
       HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
+      HEX_RELEASE_VERSION: ${{ needs.resolve.outputs.release-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: scripts/release-service.sh distribution aur "$HEX_VERSION"
+      - run: scripts/release-service.sh distribution aur "$HEX_RELEASE_VERSION"
 
   record-brew:
     needs: resolve

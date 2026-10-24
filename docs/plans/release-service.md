@@ -21,8 +21,8 @@ https://anoma.ly/release/hex/              production (dev: https://dev.anoma.ly
 ```
 
 - App `hex`, artifact `desktop`. `stable` is the public channel; Release's
-  `staging` runs publish `stable` to the dev service. `beta` and `dev` are
-  registered for later use.
+  `staging` runs publish `<version>-dev.<run number>` on the dev service's
+  `dev` channel. `beta` is registered for later use.
 - Every executable and archive is signed before upload (Developer ID +
   notarization on macOS, Authenticode on Windows); the service stores bytes and
   their size and SHA-256, and manifests are not signed. Linux relies on HTTPS
