@@ -326,6 +326,10 @@ const KEYS: &[Key] = &[
 #[cfg(test)]
 const INTERNAL: &[&str] = &["migrations"];
 
+/// Settings another `hex` command edits instead (`hex vocabulary`).
+#[cfg(test)]
+const OWN_COMMAND: &[&str] = &["vocabulary"];
+
 /// What the OS knows about shortcuts: how a key name resolves on the
 /// active layout, and the rules recording one in Settings applies.
 pub struct ShortcutRules {
@@ -798,10 +802,19 @@ mod tests {
     }
 
     /// Fails when a persisted setting has no `hex settings` key: add one to
-    /// `KEYS` (or to `INTERNAL` if it is Hex's own bookkeeping).
+    /// `KEYS` (or to `INTERNAL` if it is Hex's own bookkeeping, or to
+    /// `OWN_COMMAND` if another `hex` command edits it).
     #[test]
     fn every_persisted_setting_has_a_cli_key() {
-        let json = serde_json::to_value(AppSettings::default()).unwrap();
+        // Lists left empty are left out of the file; fill them so they count.
+        let settings = AppSettings {
+            vocabulary: vec![crate::vocabulary::VocabularyEntry {
+                term: "Rune".into(),
+                sounds_like: vec!["roon".into()],
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_value(settings).unwrap();
         let mut paths = Vec::new();
         leaves(&json, String::new(), &mut paths);
         for path in &paths {
@@ -809,6 +822,7 @@ mod tests {
                 .iter()
                 .map(|key| key.key)
                 .chain(INTERNAL.iter().copied())
+                .chain(OWN_COMMAND.iter().copied())
                 .any(|key| path == key || path.starts_with(&format!("{key}.")));
             assert!(
                 covered,

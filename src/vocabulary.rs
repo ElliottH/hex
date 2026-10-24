@@ -200,6 +200,12 @@ pub fn add(
     }
 }
 
+/// Whether the list has an entry for `term`, in any case.
+pub fn contains(list: &[VocabularyEntry], term: &str) -> bool {
+    let term = clean(term);
+    list.iter().any(|entry| same(&entry.term, &term))
+}
+
 /// Removes the entry for `term`, in any case. Returns whether it was there.
 pub fn remove(list: &mut Vec<VocabularyEntry>, term: &str) -> bool {
     let term = clean(term);
@@ -218,9 +224,7 @@ pub fn add_suggested(list: &mut Vec<VocabularyEntry>) -> usize {
 
 /// Whether every suggested term is already in the list.
 pub fn has_every_suggestion(list: &[VocabularyEntry]) -> bool {
-    SUGGESTED
-        .iter()
-        .all(|term| list.iter().any(|entry| same(&entry.term, term)))
+    SUGGESTED.iter().all(|term| contains(list, term))
 }
 
 #[cfg(test)]

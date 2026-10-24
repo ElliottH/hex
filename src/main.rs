@@ -1027,6 +1027,29 @@ mod tests {
             }))
         ));
         assert!(parse(&["hex", "meetings", "cancel"]).is_err());
+        assert!(matches!(
+            parse(&[
+                "hex",
+                "vocabulary",
+                "add",
+                "abattoir",
+                "--sounds-like",
+                "avatar,a bat war"
+            ]),
+            Ok(Some(Command::Control(ControlCli::Vocabulary {
+                command: crate::control::cli::VocabularyCommand::Add {
+                    sounds_like: Some(_),
+                    ..
+                }
+            })))
+        ));
+        assert!(matches!(
+            parse(&["hex", "vocabulary", "list", "--json"]),
+            Ok(Some(Command::Control(ControlCli::Vocabulary {
+                command: crate::control::cli::VocabularyCommand::List { output }
+            }))) if output.json
+        ));
+        assert!(parse(&["hex", "vocabulary", "remove"]).is_err());
     }
 
     #[test]

@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::{ContextSelector, ContextSnapshot};
 use crate::text_replacements::ReplacementSet;
+use crate::vocabulary::VocabularyEntry;
 
 const PROTOCOL_PROMPT: &str = "You transform dictated speech into replacement text. Return only the text that should be pasted. Do not add an explanation, label, alternative, or Markdown fence.";
 const VOICE_ACTION_PROTOCOL_PROMPT: &str = "You execute a one-off voice instruction. When selected text is provided, transform or use it as instructed. When no text is selected, generate the requested text. Return only the exact paste-ready result without an explanation, label, alternative, or Markdown fence.";
@@ -295,7 +296,7 @@ impl Profiles {
                 transformations: profile.transformations.clone(),
             };
         }
-        let prompt = prompt(profile, &corrected, context);
+        let prompt = prompt(profile, &corrected, context, &crate::vocabulary::entries());
         let (text, observation) = generate_observed(
             &prompt,
             profile.model.as_ref(),
@@ -801,13 +802,40 @@ impl Processed {
     }
 }
 
-fn prompt(profile: &Profile, transcript: &str, context: &ContextSnapshot) -> String {
+fn prompt(
+    profile: &Profile,
+    transcript: &str,
+    context: &ContextSnapshot,
+    vocabulary: &[VocabularyEntry],
+) -> String {
     let application = context.application.as_deref().unwrap_or("unknown");
     let host = context.browser_host().unwrap_or("none");
     format!(
-        "{PROTOCOL_PROMPT}\n\nProfile instructions:\n{}\n\nForeground application: {application}\nBrowser host: {host}\n\nRaw transcript:\n<transcript>\n{transcript}\n</transcript>",
-        profile.prompt
+        "{PROTOCOL_PROMPT}\n\nProfile instructions:\n{}\n\n{}Foreground application: {application}\nBrowser host: {host}\n\nRaw transcript:\n<transcript>\n{transcript}\n</transcript>",
+        profile.prompt,
+        vocabulary_lines(vocabulary)
     )
+}
+
+/// The vocabulary as prompt lines, so a rewrite spells its terms right;
+/// nothing when it is empty (or its experiment is off).
+fn vocabulary_lines(vocabulary: &[VocabularyEntry]) -> String {
+    if vocabulary.is_empty() {
+        return String::new();
+    }
+    let terms = vocabulary
+        .iter()
+        .map(|entry| match entry.sounds_like.as_slice() {
+            [] => entry.term.clone(),
+            spellings => format!(
+                "{} (may be transcribed as {})",
+                entry.term,
+                spellings.join(", ")
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("Vocabulary (spell these exactly when the speaker means them): {terms}\n\n")
 }
 
 fn voice_action_prompt(
@@ -2495,10 +2523,36 @@ mod tests {
             &profile,
             "This is the current transcript.",
             &context("Slack", None),
+            &[],
         );
         assert!(prompt.contains("Rewrite freely."));
         assert!(prompt.contains("Foreground application: Slack"));
         assert!(prompt.contains("This is the current transcript."));
+        assert!(!prompt.contains("Vocabulary"));
+    }
+
+    #[test]
+    fn prompt_names_vocabulary_terms_and_their_mistranscriptions() {
+        let vocabulary = [
+            VocabularyEntry {
+                term: "abattoir".into(),
+                sounds_like: vec!["avatar".into(), "a bat war".into()],
+            },
+            VocabularyEntry {
+                term: "Rune".into(),
+                sounds_like: vec![],
+            },
+        ];
+        let prompt = prompt(
+            &Profile::new("default", "Rewrite freely."),
+            "Ship the avatar change.",
+            &context("Slack", None),
+            &vocabulary,
+        );
+        assert!(prompt.contains(
+            "Vocabulary (spell these exactly when the speaker means them): abattoir (may be \
+             transcribed as avatar, a bat war); Rune\n\nForeground application: Slack"
+        ));
     }
 
     #[test]

@@ -30,6 +30,7 @@ mod picker;
 mod platform;
 mod platform_settings;
 mod settings;
+mod vocabulary;
 mod voice_action;
 
 use std::sync::Arc;
@@ -459,6 +460,7 @@ pub(crate) struct Ui {
     confirm_release: bool,
     capture: Capture,
     hints: TextEdit,
+    vocabulary: vocabulary::VocabularyEditor,
     /// The model the service was last seen preparing, and since when.
     preparing: Option<(TranscriptionModelId, Instant)>,
     /// When a text field last changed without being saved.
@@ -501,6 +503,7 @@ impl Ui {
         ui.models = models::Models::load();
         ui.modes.load_personal_commands();
         ui.platform.developer = crate::DEVELOPER_FEATURES_ENABLED;
+        ui.platform.vocabulary = crate::vocabulary::enabled();
         ui.tour = onboarding::Tour::start(&ui.settings, &ui.platform);
         ui.platform.set_login_item(host::launch_at_login());
         ui
@@ -509,6 +512,7 @@ impl Ui {
     fn with(settings: AppSettings, service: Service) -> Self {
         let hints = TextEdit::new(settings.transcription.recognition_hints.clone());
         let modes = modes::ModesPane::new(&settings);
+        let vocabulary = vocabulary::VocabularyEditor::new(&settings.vocabulary);
         Self {
             settings,
             service,
@@ -522,6 +526,7 @@ impl Ui {
             confirm_release: false,
             capture: Capture::Idle,
             hints,
+            vocabulary,
             preparing: None,
             draft_since: None,
             models: models::Models::default(),
@@ -594,6 +599,9 @@ impl Ui {
             candidate.transcription.recognition_hints = self.hints.text.clone();
         }
         self.modes.project(&mut candidate);
+        if self.platform.vocabulary {
+            candidate.vocabulary = self.vocabulary.project();
+        }
         candidate
     }
 
@@ -687,6 +695,9 @@ impl Ui {
             }
             if service.dictation_processing != self.settings.dictation_processing {
                 self.modes.reload(&service);
+            }
+            if service.vocabulary != self.settings.vocabulary {
+                self.vocabulary = vocabulary::VocabularyEditor::new(&service.vocabulary);
             }
             self.settings = service.clone();
         }
@@ -1193,6 +1204,14 @@ const SCENES: &[Scene] = &[
     }),
     // macOS and Windows surfaces, from preview data (see `platform`).
     ("mac-settings", |ui| *ui = mac_fixture()),
+    ("mac-settings-vocabulary", |ui| {
+        *ui = mac_fixture();
+        vocabulary::fixture(ui, true);
+    }),
+    ("mac-settings-vocabulary-empty", |ui| {
+        *ui = mac_fixture();
+        vocabulary::fixture(ui, false);
+    }),
     ("mac-settings-recording", |ui| {
         *ui = mac_fixture();
         let held = crate::app_settings::HotkeyModifiers {

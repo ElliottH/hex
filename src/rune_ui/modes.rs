@@ -16,7 +16,7 @@ use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, Text
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, card, note, setting_row};
-use super::lists::{list_row, source_list};
+use super::lists::{list_row, remove_button, source_list};
 use super::models::{self, Target};
 use crate::app_settings::{AppSettings, DictationMode};
 use crate::application_catalog::InstalledApplication;
@@ -32,7 +32,6 @@ const FIELD_WIDTH: f32 = 300.0;
 const STATUS_INTERVAL: Duration = Duration::from_secs(1);
 
 static PLUS: &rune::Icon = &rune_theme_opencode::icons::PLUS;
-static CLOSE: &rune::Icon = &rune_theme_opencode::icons::CLOSE;
 static GRIP: rune::Icon = rune::Icon {
     name: "hex-grip",
     view: 16.0,
@@ -611,16 +610,6 @@ fn provision_workspace(ui: &mut Ui) {
 
 // ---------------------------------------------------------------------------
 // View
-
-fn remove_button(p: Paint, size: ButtonSize, press: impl Fn(&mut Ui) + 'static) -> El {
-    IconButton::new(CLOSE)
-        .variant(IconButtonVariant::Ghost)
-        .size(size)
-        .label(tr("Remove"))
-        .on_press(press)
-        .build(p.k)
-        .key("remove")
-}
 
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
     let add = IconButton::new(PLUS)

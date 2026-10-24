@@ -375,6 +375,11 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             desktop_commands(ui, p)
         })
         .child(dictation_section(ui, p, layer))
+        .children(
+            ui.platform
+                .vocabulary
+                .then(|| super::vocabulary::section_view(ui, p)),
+        )
         .child(behavior_section(ui, p))
         .children(os::meetings_section(ui, p, layer))
         .child(application_section(ui, p, layer))

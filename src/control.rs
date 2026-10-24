@@ -12,6 +12,8 @@ use std::sync::mpsc::SyncSender;
 
 use serde::{Deserialize, Serialize};
 
+use crate::vocabulary::{self, VocabularyEntry};
+
 /// The wire version of [`ControlRequest`] and [`ControlResponse`]. A change
 /// that breaks either shape increments it.
 pub const CONTROL_VERSION: u32 = 1;
@@ -107,6 +109,16 @@ pub enum ControlCommand {
         #[serde(default)]
         enabled: Option<bool>,
     },
+    /// The shared vocabulary (the `vocabulary` experiment).
+    VocabularyList,
+    VocabularyAdd {
+        term: String,
+        #[serde(default)]
+        sounds_like: Vec<String>,
+    },
+    VocabularyRemove {
+        term: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -139,6 +151,9 @@ pub enum ControlReply {
     },
     Models {
         models: Vec<ModelInfo>,
+    },
+    Vocabulary {
+        entries: Vec<VocabularyEntry>,
     },
     Error {
         code: String,
@@ -471,6 +486,54 @@ pub fn check_quit(
     }
 }
 
+/// Refuses vocabulary commands while the `vocabulary` experiment is off.
+pub fn check_vocabulary() -> Result<(), ControlError> {
+    if vocabulary::enabled() {
+        return Ok(());
+    }
+    Err(ControlError::new(
+        "feature-off",
+        "the vocabulary is an experiment; turn it on with `hex experiments enable vocabulary` \
+         and restart Hex",
+    ))
+}
+
+/// Carries out `hex vocabulary add|remove` on the saved list. The reply's
+/// `changed` says whether the list needs saving.
+pub fn edit_vocabulary(
+    list: &mut Vec<VocabularyEntry>,
+    command: &ControlCommand,
+) -> Result<ControlReply, ControlError> {
+    let invalid = |message: String| ControlError::new("invalid-value", message);
+    match command {
+        ControlCommand::VocabularyAdd { term, sounds_like } => {
+            let sounds_like: Vec<String> = sounds_like
+                .iter()
+                .flat_map(|spellings| vocabulary::parse_sounds_like(spellings))
+                .collect();
+            let existed = vocabulary::contains(list, term);
+            Ok(
+                match vocabulary::add(list, term, &sounds_like).map_err(invalid)? {
+                    false => ControlReply::unchanged(format!(
+                        "“{}” is already in the vocabulary",
+                        term.trim()
+                    )),
+                    true if existed => {
+                        ControlReply::done(format!("Added spellings to “{}”", term.trim()))
+                    }
+                    true => ControlReply::done(format!("Added “{}”", term.trim())),
+                },
+            )
+        }
+        ControlCommand::VocabularyRemove { term } => Ok(if vocabulary::remove(list, term) {
+            ControlReply::done(format!("Removed “{}”", term.trim()))
+        } else {
+            ControlReply::unchanged(format!("“{}” isn't in the vocabulary", term.trim()))
+        }),
+        _ => Err(ControlError::new("internal", "not a vocabulary edit")),
+    }
+}
+
 /// Process memory footprint on macOS; `None` where unmeasured.
 pub fn memory_footprint() -> Option<u64> {
     #[cfg(target_os = "macos")]
@@ -550,9 +613,63 @@ mod tests {
             ControlCommand::LaunchAtLogin {
                 enabled: Some(true),
             },
+            ControlCommand::VocabularyList,
+            ControlCommand::VocabularyAdd {
+                term: "abattoir".into(),
+                sounds_like: vec!["avatar".into()],
+            },
+            ControlCommand::VocabularyRemove {
+                term: "abattoir".into(),
+            },
         ] {
             round_trip_request(command);
         }
+        let request: ControlRequest =
+            serde_json::from_str(r#"{"version":1,"command":"vocabulary-add","term":"Rune"}"#)
+                .unwrap();
+        assert_eq!(
+            request.command,
+            ControlCommand::VocabularyAdd {
+                term: "Rune".into(),
+                sounds_like: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn vocabulary_edits_report_whether_they_changed_the_list() {
+        let add = |term: &str, sounds_like: &[&str]| ControlCommand::VocabularyAdd {
+            term: term.into(),
+            sounds_like: sounds_like.iter().map(|&text| text.into()).collect(),
+        };
+        let remove = |term: &str| ControlCommand::VocabularyRemove { term: term.into() };
+        let mut list = Vec::new();
+        assert_eq!(
+            edit_vocabulary(&mut list, &add("abattoir", &["avatar, a bat war"])).unwrap(),
+            ControlReply::done("Added “abattoir”")
+        );
+        assert_eq!(list[0].sounds_like, ["avatar", "a bat war"]);
+        assert_eq!(
+            edit_vocabulary(&mut list, &add("Abattoir", &[])).unwrap(),
+            ControlReply::unchanged("“Abattoir” is already in the vocabulary")
+        );
+        assert_eq!(
+            edit_vocabulary(&mut list, &add("abattoir", &["abba toy"])).unwrap(),
+            ControlReply::done("Added spellings to “abattoir”")
+        );
+        assert_eq!(
+            edit_vocabulary(&mut list, &add(" ", &[])).unwrap_err().code,
+            "invalid-value"
+        );
+        assert_eq!(
+            edit_vocabulary(&mut list, &remove("ABATTOIR")).unwrap(),
+            ControlReply::done("Removed “ABATTOIR”")
+        );
+        assert_eq!(
+            edit_vocabulary(&mut list, &remove("abattoir")).unwrap(),
+            ControlReply::unchanged("“abattoir” isn't in the vocabulary")
+        );
+        assert!(list.is_empty());
     }
 
     #[test]
@@ -589,6 +706,12 @@ mod tests {
                 }],
             },
             ControlReply::Models { models: vec![] },
+            ControlReply::Vocabulary {
+                entries: vec![VocabularyEntry {
+                    term: "abattoir".into(),
+                    sounds_like: vec!["avatar".into()],
+                }],
+            },
             ControlReply::error("busy", "Hex is busy"),
         ] {
             let response = ControlResponse::from(reply);

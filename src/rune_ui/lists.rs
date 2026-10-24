@@ -9,6 +9,7 @@ use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot};
 use crate::desktop_i18n::tr;
 
 const LIST_WIDTH: f32 = 320.0;
+static CLOSE: &rune::Icon = &rune_theme_opencode::icons::CLOSE;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Tone {
@@ -326,6 +327,21 @@ pub(super) fn small_button(
         .on_press_tx(press)
         .build(p.k)
         .key(key)
+}
+
+/// The × that removes one item of an editable list.
+pub(super) fn remove_button(
+    p: Paint,
+    size: rune_kit::ButtonSize,
+    press: impl Fn(&mut Ui) + 'static,
+) -> El {
+    rune_kit::IconButton::new(CLOSE)
+        .variant(rune_kit::IconButtonVariant::Ghost)
+        .size(size)
+        .label(tr("Remove"))
+        .on_press(press)
+        .build(p.k)
+        .key("remove")
 }
 
 /// A horizontal slider: the label and value over a track you press or drag.

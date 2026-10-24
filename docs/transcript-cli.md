@@ -93,6 +93,13 @@ runs. `hex history --search` uses the same ranking, with an entry's raw and
 final text counted as one document (so a word in both counts once) and its
 better text as the hit.
 
+With the `vocabulary` experiment on, both searches (and MCP
+`search_transcripts`) also read the saved [vocabulary](features/vocabulary.md)
+from `settings.json` without loading or migrating it. A query word that is a
+one-word vocabulary term also finds its "sounds like" spellings and the term
+split into two adjacent words (0.5, like a prefix), and words that sound like
+it (0.3) unless they are common. Neither ever counts as an exact match.
+
 Debug builds retain `meeting record`, `watch`, `probe`, `transcribe`, and other
 developer commands. Their `meeting list/show` commands use the read-only query
 path too. The plural `meetings` commands are available in release builds.

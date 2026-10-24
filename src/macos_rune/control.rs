@@ -239,7 +239,32 @@ impl Pump {
                 crate::sparkle::check_for_updates();
                 ControlReply::done("Checking for updates; Hex shows what it finds")
             }),
+            ControlCommand::VocabularyList => Some(reply_with(
+                control::check_vocabulary()
+                    .and_then(|()| load())
+                    .map(|settings| ControlReply::Vocabulary {
+                        entries: settings.vocabulary,
+                    }),
+            )),
+            ControlCommand::VocabularyAdd { .. } | ControlCommand::VocabularyRemove { .. } => {
+                Some(reply_with(self.edit_vocabulary(&command)))
+            }
         }
+    }
+
+    /// Saves a vocabulary edit as the window would, then lets the runtime and
+    /// an open window adopt it.
+    fn edit_vocabulary(&mut self, command: &ControlCommand) -> Result<ControlReply, ControlError> {
+        control::check_vocabulary()?;
+        let mut settings = load()?;
+        let reply = control::edit_vocabulary(&mut settings.vocabulary, command)?;
+        if matches!(reply, ControlReply::Done { changed: true, .. }) {
+            settings.save().map_err(|error| {
+                ControlError::new("internal", format!("couldn't save: {error:#}"))
+            })?;
+            let _ = self.runtime.send(Request::ReloadSettings);
+        }
+        Ok(reply)
     }
 
     fn meeting(

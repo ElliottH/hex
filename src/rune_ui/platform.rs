@@ -289,6 +289,9 @@ pub(super) struct PlatformState {
     /// Developer builds: the Activity and HUD Lab panes
     /// (`crate::DEVELOPER_FEATURES_ENABLED` on a native host).
     pub(super) developer: bool,
+    /// The `vocabulary` experiment: the Vocabulary card under Dictation
+    /// (`crate::vocabulary::enabled` on a native host).
+    pub(super) vocabulary: bool,
     /// macOS 27 lists Accessibility as "Device Control and Data Access"
     /// (`permission_guide::list_name`); the permission rows use that name.
     pub(super) accessibility_renamed: bool,
@@ -391,6 +394,7 @@ impl PlatformState {
             calendar: CalendarView::default(),
             relaunch_failed: false,
             developer: false,
+            vocabulary: false,
             accessibility_renamed: false,
             tuning: TunedFilterConfig::default(),
             demo: None,

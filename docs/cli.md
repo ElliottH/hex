@@ -47,6 +47,10 @@ hex
 │   ├── show [settings|models|modes|voice-action|history|commands|meetings]
 │   └── hide                       close the window; Hex stays in the menu bar
 ├── history clear --yes            delete every retained dictation
+├── vocabulary                     needs the `vocabulary` experiment; hidden from --help
+│   ├── list [--json]              every term and its "sounds like" spellings
+│   ├── add <term> [--sounds-like a,b]  add a term, or new spellings to an existing one
+│   └── remove <term>              any case
 ├── experiments list|enable|disable  edit ~/.config/hex/experiments; no running Hex (features/experiments.md)
 ├── check-for-updates              ask Sparkle to check now
 ├── launch-at-login [on|off]       report or change Launch at Login (installed Hex.app only)
@@ -78,6 +82,13 @@ menu bar's Paste Last Dictation does nothing in that case.
 downloads or repairs one (`model install` does). It keeps that model's own
 remembered language and recognition hints, as the menu bar does; `--language`
 overrides only the language, and must be one the model supports.
+
+`vocabulary` edits the [shared vocabulary](features/vocabulary.md) through the
+running Hex, which saves settings and reloads them as a window edit would.
+Terms match in any case; `add` of a term already listed only merges new
+spellings, and replies `changed: false` when there are none. While the
+`vocabulary` experiment is off in the running Hex, every `vocabulary` command
+is refused with `feature-off`.
 
 `quit` and `restart` without `--force` are refused with `busy` when the
 listener doesn't answer whether it's recording; no listener, or one waiting for
@@ -143,6 +154,7 @@ commands-retry
 model-list | model-use {model, language?} | model-install {model, language?} | model-cancel
 window-show {pane?} | window-hide
 history-clear | check-for-updates | launch-at-login {enabled?}
+vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
 ```
 
 Optional fields may be left out. `hex start` and `hex logs` are local and have
@@ -159,6 +171,8 @@ Replies are tagged by `status`:
 {"version": 1, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
   "languages": ["en", "…"], "size": "…", "installed": true, "selected": true,
   "streams": true, "supports_recognition_hints": false}]}
+{"version": 1, "status": "vocabulary", "entries": [{"term": "OpenCode",
+  "sounds_like": ["open code"]}, {"term": "Rune"}]}
 ```
 
 `done.changed` is `false` when the command found things already so ("Already
@@ -216,6 +230,7 @@ shortcut-in-use        another Hex shortcut already uses that binding
 unknown-model          no such model id (`hex model list`)
 not-installed          `model use` on a model that isn't downloaded (`hex model install`)
 feature-off            the command needs an opt-in that is off (Meetings, Voice Action, commands)
+                       or an experiment the running Hex didn't read (vocabulary)
 not-ready              Hex is waiting for setup (permissions or the dictation model)
 meeting-active         quit/restart while a meeting records (pass --force)
 busy                   something is in progress (recording, transcribing, a full queue),

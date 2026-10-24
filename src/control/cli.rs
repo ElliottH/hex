@@ -14,6 +14,7 @@ use super::{
     CONTROL_VERSION, CaptureAction, ControlCommand, ControlReply, ControlRequest, ControlResponse,
     ModelInfo, Pane, StatusReport, settings::SettingValue,
 };
+use crate::vocabulary::VocabularyEntry;
 
 pub const EXIT_REFUSED: u8 = 1;
 pub const EXIT_NOT_RUNNING: u8 = 3;
@@ -110,6 +111,12 @@ pub enum ControlCli {
         #[command(flatten)]
         output: Output,
     },
+    /// List, add, and remove vocabulary terms (the `vocabulary` experiment).
+    #[command(hide = true)]
+    Vocabulary {
+        #[command(subcommand)]
+        command: VocabularyCommand,
+    },
     /// Print Hex's recent log lines; works without Hex running.
     Logs {
         /// Read process.log (Rust and native diagnostics) instead of the
@@ -203,6 +210,31 @@ pub enum WindowCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum VocabularyCommand {
+    /// Every term with its "sounds like" spellings.
+    List {
+        #[command(flatten)]
+        output: Output,
+    },
+    /// Add a term, or more spellings to a term already in the list.
+    Add {
+        term: String,
+        /// Spellings a transcript may show instead, comma-separated
+        /// (`--sounds-like "avatar,a bat war"`).
+        #[arg(long, value_name = "SPELLINGS")]
+        sounds_like: Option<String>,
+        #[command(flatten)]
+        output: Output,
+    },
+    /// Remove a term and its spellings.
+    Remove {
+        term: String,
+        #[command(flatten)]
+        output: Output,
+    },
+}
+
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum Toggle {
     On,
@@ -270,6 +302,23 @@ pub fn run(command: ControlCli) -> u8 {
             },
             output,
         ),
+        ControlCli::Vocabulary { command } => match command {
+            VocabularyCommand::List { output } => send(ControlCommand::VocabularyList, output),
+            VocabularyCommand::Add {
+                term,
+                sounds_like,
+                output,
+            } => send(
+                ControlCommand::VocabularyAdd {
+                    term,
+                    sounds_like: sounds_like.into_iter().collect(),
+                },
+                output,
+            ),
+            VocabularyCommand::Remove { term, output } => {
+                send(ControlCommand::VocabularyRemove { term }, output)
+            }
+        },
         ControlCli::Logs {
             process,
             lines,
@@ -565,6 +614,7 @@ fn print(reply: ControlReply, output: Output) -> u8 {
         ControlReply::Status(report) => print!("{}", human_status(&report)),
         ControlReply::Settings { settings } => print!("{}", human_settings(&settings)),
         ControlReply::Models { models } => print!("{}", human_models(&models)),
+        ControlReply::Vocabulary { entries } => print!("{}", human_vocabulary(&entries)),
         ControlReply::Error { message, .. } => eprintln!("hex: {message}"),
     }
     code
@@ -642,6 +692,19 @@ fn human_models(models: &[ModelInfo]) -> String {
                     "not installed"
                 },
             )
+        })
+        .collect()
+}
+
+fn human_vocabulary(entries: &[VocabularyEntry]) -> String {
+    if entries.is_empty() {
+        return "The vocabulary is empty; `hex vocabulary add <term>` adds one\n".into();
+    }
+    entries
+        .iter()
+        .map(|entry| match entry.sounds_like.as_slice() {
+            [] => format!("{}\n", entry.term),
+            spellings => format!("{}  (sounds like {})\n", entry.term, spellings.join(", ")),
         })
         .collect()
 }
@@ -842,6 +905,25 @@ mod tests {
             setting("a", 0.5.into()),
         ]);
         assert_eq!(listed, "sound_effects  true\na              0.5\n");
+    }
+
+    #[test]
+    fn vocabulary_lists_terms_with_their_spellings() {
+        assert!(human_vocabulary(&[]).starts_with("The vocabulary is empty"));
+        let entries = [
+            VocabularyEntry {
+                term: "abattoir".into(),
+                sounds_like: vec!["avatar".into(), "a bat war".into()],
+            },
+            VocabularyEntry {
+                term: "Rune".into(),
+                sounds_like: vec![],
+            },
+        ];
+        assert_eq!(
+            human_vocabulary(&entries),
+            "abattoir  (sounds like avatar, a bat war)\nRune\n"
+        );
     }
 
     #[test]
