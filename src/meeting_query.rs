@@ -1104,17 +1104,24 @@ fn vocabulary_aliases(
     aliases
 }
 
+/// Consonant sounds a vocabulary term needs before words that merely sound
+/// like it count as hits. Names with fewer (Rune, Dax) match too many words
+/// this way and rely on "sounds like" spellings.
+const SOUND_ALIKE_MIN_CONSONANTS: usize = 2;
+
 /// Whether the corpus stem `candidate` is a likely mis-transcription of the
 /// vocabulary stem `term` (`avatar` for `abattoir`): the same uncapped
-/// Soundex key with at least two consonant sounds, at most half the letters
-/// changed, and not a stopword. Names with fewer consonant sounds (Rune, Dax)
-/// match too many words this way and rely on "sounds like" spellings.
+/// Soundex key with at least [`SOUND_ALIKE_MIN_CONSONANTS`] consonant sounds,
+/// at most half the letters changed, and not a stopword.
 fn sounds_alike(term: &str, candidate: &str) -> bool {
     let length = term.chars().count().max(candidate.chars().count());
     candidate != term
         && candidate.chars().count() >= 4
         && !STOPWORDS.contains(&candidate)
-        && sound_key(term).is_some_and(|key| key.len() >= 3 && sound_key(candidate) == Some(key))
+        // The key is the first letter, then one digit per consonant sound.
+        && sound_key(term).is_some_and(|key| {
+            key.len() > SOUND_ALIKE_MIN_CONSONANTS && sound_key(candidate) == Some(key)
+        })
         && edit_distance(term, candidate, length / 2).is_some()
 }
 

@@ -54,6 +54,15 @@ words, so search finds their mis-transcriptions only through "sounds like"
 spellings. Transcription itself is unchanged: no model boosting or blind text
 replacement.
 
+Provisional defaults, each changed in one place:
+
+```ts
+hex vocabulary listed in --help          // control/cli.rs: add #[command(hide = true)] to hide it
+Prompt wording                           // dictation_processor.rs: vocabulary_lines
+Short-name rule                          // meeting_query.rs: SOUND_ALIKE_MIN_CONSONANTS
+Suggested terms                          // vocabulary.rs: SUGGESTED
+```
+
 Sources: [vocabulary.rs](../../src/vocabulary.rs),
 [rune_ui/vocabulary.rs](../../src/rune_ui/vocabulary.rs),
 [meeting_query.rs](../../src/meeting_query.rs) (`vocabulary_aliases`,
