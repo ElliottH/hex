@@ -26,11 +26,17 @@ const message =
   kind === "transition" ? { type: "action", key: `rune.transition.${arg}`, id } :
   kind === "tree" ? { type: "tree", id } : null;
 const timer = setTimeout(() => { console.error("no answer from the storybook"); process.exit(1); }, 5000);
-const done = (code) => { clearTimeout(timer); ws.close(); process.exit(code); };
+const done = (code) => {
+  clearTimeout(timer);
+  ws.onclose = () => process.exit(code);
+  ws.close();
+  setTimeout(() => process.exit(code), 500);
+};
 ws.onerror = () => { console.error(`no storybook at ws://${address}/ (is scripts/storybook running?)`); process.exit(1); };
 ws.onopen = () => ws.send(JSON.stringify(message ?? { type: "get" }));
 ws.onmessage = (event) => {
   const reply = JSON.parse(event.data);
+  if (reply === null) return; // No frame yet.
   if (reply.type === "error") { console.error(reply.message); done(1); }
   if (message === null && reply.type === "state") {
     const field = (key) => reply.descriptors.find((d) => d.key === key);
