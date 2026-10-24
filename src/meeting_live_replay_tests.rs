@@ -253,6 +253,9 @@ fn meeting_live_replay() {
         notes: None,
         notes_error: None,
         calendar: None,
+        title_source: None,
+        chapters: Vec::new(),
+        chapters_refined: false,
     };
     write_manifest(&directory, &manifest).unwrap();
 

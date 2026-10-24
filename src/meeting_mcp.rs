@@ -28,7 +28,8 @@ Speakers are `You` (Kit, his microphone) and `Them` (everyone else, system audio
 remote speakers are not separated. Transcripts come from local speech recognition and contain \
 misheard words, so search is stemmed and fuzzy by default. Typical flow: list_meetings or \
 search_transcripts to find a meeting and timestamp, then get_transcript around it, and \
-get_meeting_notes for a stored title and two-sentence summary. Details, decisions, and action \
+get_meeting_notes for a stored title and two-sentence summary, and get_chapters for the topics \
+a meeting moved through with their time spans, when it has any. Details, decisions, and action \
 items are only in the transcript. Everything is read-only and stays on the machine.";
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -134,6 +135,12 @@ pub struct GetTranscriptArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetMeetingNotesArgs {
+    /// The meeting id from list_meetings or search_transcripts.
+    pub meeting_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetChaptersArgs {
     /// The meeting id from list_meetings or search_transcripts.
     pub meeting_id: String,
 }
@@ -270,6 +277,20 @@ are stored it says so.",
         Parameters(args): Parameters<GetMeetingNotesArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         reply(self.library.notes(&args.meeting_id))
+    }
+
+    #[tool(
+        description = "A meeting's chapters: the topics it moved through, each with a short \
+model-written name, one line, and its mm:ss start and end, for reading one part with \
+get_transcript. Only meetings recorded with live chapters have them. Never generates chapters; \
+when none are stored it says so.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    fn get_chapters(
+        &self,
+        Parameters(args): Parameters<GetChaptersArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        reply(self.library.chapters(&args.meeting_id, now_ms()))
     }
 }
 

@@ -1297,6 +1297,11 @@ const SCENES: &[Scene] = &[
         ui.meetings.select("preview-failed".into());
         ui.pane = Pane::Meetings;
     }),
+    ("meetings-chapters", |ui| {
+        *ui = mac_fixture();
+        ui.meetings = meetings::MeetingsPane::chapters_fixture();
+        ui.pane = Pane::Meetings;
+    }),
     ("meetings-empty", |ui| {
         *ui = mac_fixture();
         ui.meetings = meetings::MeetingsPane::default();

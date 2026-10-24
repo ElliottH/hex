@@ -2,6 +2,7 @@
 
 use std::io::{self, Read, Write};
 use std::path::Path;
+use std::sync::Arc;
 
 use clap::{Args, Subcommand};
 use color_eyre::eyre::{Result, WrapErr, eyre};
@@ -9,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::history::{HistoryEntry, HistoryKind, HistoryRetention};
 use crate::meeting::query::{
-    Library, ListQuery, Meeting, OffsetRange, SearchQuery, TextHit, TimeRange, TranscriptSource,
-    search_texts,
+    ChapterView, Library, ListQuery, Meeting, OffsetRange, SearchQuery, TextHit, TimeRange,
+    TranscriptSource, search_texts,
 };
 use crate::vocabulary::VocabularyEntry;
 
@@ -99,6 +100,16 @@ pub enum MeetingsCommand {
         /// Only entries starting before this offset: mm:ss, h:mm:ss, or seconds.
         #[arg(long)]
         to: Option<String>,
+        /// Only chapter N (counting from 1), as `hex meetings chapters` lists them.
+        #[arg(long, conflicts_with_all = ["from", "to"])]
+        chapter: Option<usize>,
+    },
+    /// List a meeting's chapters (experiment `live-chapters`), by id, unique
+    /// prefix, or latest.
+    Chapters {
+        id: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Search transcripts and notes with the same stemmed, fuzzy BM25 query as MCP.
     Search {
@@ -355,7 +366,57 @@ fn meeting_json(meeting: &Meeting, range: OffsetRange, now: u64) -> Result<serde
             "from_ms": range.from_ms.unwrap_or_default(), "to_ms": range.to_ms,
         });
     }
+    // Only meetings with chapters carry the field.
+    if !meeting.manifest.chapters.is_empty() {
+        json["chapters"] = chapters_json(meeting, now);
+    }
     Ok(json)
+}
+
+fn chapter_json(view: &ChapterView) -> serde_json::Value {
+    serde_json::json!({
+        "number": view.number, "title": view.chapter.title, "summary": view.chapter.summary,
+        "start_ms": view.chapter.start_ms, "end_ms": view.end_ms,
+    })
+}
+
+fn chapters_json(meeting: &Meeting, now: u64) -> serde_json::Value {
+    meeting
+        .chapter_views(now)
+        .iter()
+        .map(chapter_json)
+        .collect()
+}
+
+/// `show --chapter N --json`: the meeting, its chapter, and only that
+/// chapter's entries.
+fn meeting_chapter_json(meeting: &Meeting, number: usize, now: u64) -> Result<serde_json::Value> {
+    let view = meeting.chapter(number, now)?;
+    let mut json = meeting_json(meeting, OffsetRange::default(), now)?;
+    json["entries"] = serde_json::to_value(&view.entries)?;
+    json["chapter"] = chapter_json(&view);
+    Ok(json)
+}
+
+fn meeting_chapters_json(meeting: &Meeting, now: u64) -> serde_json::Value {
+    serde_json::json!({
+        "version": 1, "meeting": meeting_row(meeting, now),
+        "chapters": chapters_json(meeting, now),
+        "refined": meeting.manifest.chapters_refined,
+    })
+}
+
+fn resolve(library: &Library, id: &str) -> Result<Arc<Meeting>> {
+    if id == "latest" {
+        library
+            .scan()?
+            .meetings
+            .into_iter()
+            .next()
+            .ok_or_else(|| eyre!("No meetings found."))
+    } else {
+        library.meeting(id)
+    }
 }
 
 fn meeting_list_json(
@@ -403,23 +464,40 @@ pub fn meetings(command: &MeetingsCommand) -> Result<()> {
             }
         }
         MeetingsCommand::Show {
-            id, json, from, to, ..
+            id,
+            json,
+            from,
+            to,
+            chapter,
+            ..
         } => {
             let range = OffsetRange::parse(from.as_deref(), to.as_deref())?;
-            let meeting = if id == "latest" {
-                library
-                    .scan()?
-                    .meetings
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| eyre!("No meetings found."))?
-            } else {
-                library.meeting(id)?
-            };
+            let meeting = resolve(&library, id)?;
+            match (chapter, *json) {
+                (Some(number), true) => {
+                    write_json(&mut out, &meeting_chapter_json(&meeting, *number, now)?)
+                }
+                (Some(number), false) => {
+                    write!(
+                        out,
+                        "{}",
+                        library.chapter_markdown(&meeting.id, *number, now)?
+                    )?;
+                    Ok(())
+                }
+                (None, true) => write_json(&mut out, &meeting_json(&meeting, range, now)?),
+                (None, false) => {
+                    write!(out, "{}", library.markdown(&meeting.id, range, now)?)?;
+                    Ok(())
+                }
+            }
+        }
+        MeetingsCommand::Chapters { id, json } => {
+            let meeting = resolve(&library, id)?;
             if *json {
-                write_json(&mut out, &meeting_json(&meeting, range, now)?)
+                write_json(&mut out, &meeting_chapters_json(&meeting, now))
             } else {
-                write!(out, "{}", library.markdown(&meeting.id, range, now)?)?;
+                write!(out, "{}", library.chapters(&meeting.id, now)?)?;
                 Ok(())
             }
         }

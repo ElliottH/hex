@@ -441,6 +441,9 @@ enum MeetingCommand {
         #[arg(long)]
         excerpt_chars: Option<usize>,
     },
+    /// Run live chapter passes and the boundary pass over a transcript
+    /// Markdown file as a recording would, with timings, without saving.
+    Chapters { path: PathBuf },
     /// Replay a meeting folder's tracks and report which microphone lines
     /// echo suppression keeps.
     Echo {
@@ -537,6 +540,7 @@ fn main() -> Result<()> {
                 json: false,
                 from: None,
                 to: None,
+                chapter: None,
             });
         }
         _ => {}
@@ -803,6 +807,13 @@ fn main() -> Result<()> {
                     println!("{error}");
                 }
             }
+            Ok(())
+        }
+        #[cfg(debug_assertions)]
+        Command::Meeting {
+            command: MeetingCommand::Chapters { path },
+        } => {
+            print!("{}", meeting::chapters_file(&path)?);
             Ok(())
         }
         #[cfg(debug_assertions)]

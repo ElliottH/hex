@@ -392,6 +392,24 @@ fn the_overflow_menu_copies_the_summary_and_asks_for_new_notes() {
 }
 
 #[test]
+fn copy_section_copies_one_chapter() {
+    let rt = runtime("meetings", true, PANE_SIZE);
+    assert!(rt.find("chapters").is_none(), "no chapters, no section");
+
+    let mut rt = runtime("meetings-chapters", true, PANE_SIZE);
+    assert!(texts(&rt).iter().any(|text| text == "Chapters"));
+    tap(&mut rt, "chapter1/copy-section");
+    let copied = rt.copy_request.as_deref().unwrap().to_owned();
+    assert!(
+        copied.starts_with("## Gravity well\n\nA pulse and gravity well"),
+        "{copied}"
+    );
+    assert!(copied.contains("Prototype it in WebGPU"), "{copied}");
+    assert!(!copied.contains("Roblox") && !copied.contains("build screen"));
+    assert!(texts(&rt).iter().any(|text| text == "Copied"));
+}
+
+#[test]
 fn active_and_failed_meetings_show_their_state() {
     let rt = runtime("meetings-recording", true, PANE_SIZE);
     let shown = texts(&rt);

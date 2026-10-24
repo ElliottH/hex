@@ -700,10 +700,86 @@ Final title + summary, one call, 11,151-char excerpt     3.4–3.5 s (3 runs)
 Before: map-reduce over 8 chunks, 9 calls, 51-minute call  96 s
 ```
 
+### Live Chapters (experiment `live-chapters`)
+
+Off by default and unsupported: `hex experiments enable live-chapters`, then
+relaunch. Off, nothing below starts, and meetings behave as without it.
+
+```ts
+Recording starts, experiment on                        // meetings.chapters.live
+  -> meeting-chapters thread, utility QoS; checks the rolling transcript every 5 s
+     (nothing read while Apple Intelligence is unavailable or titles are off)
+  -> ≥ 3 min of new meeting time and ≥ 40 new words -> waits (≤30 s) for dictation
+  -> ONE call over only the new lines (≤3,600 chars, newest kept, "[…]" before)
+     ├── Prompt: vocabulary terms (none yet) -> new lines -> "Current chapter: X"
+     └── Answer: a 2–5 word name, one line, and "same topic or not"
+  -> Rust decides, not the model's flag alone
+     ├── First name -> chapter 1 at 00:00
+     ├── Name sharing > half its words with this chapter's last 3 names, or any
+     │   word when the model says "same" -> stays (clears a pending departure)
+     ├── Otherwise a departure; it opens a chapter, dated at its window's first
+     │   line, only when the next pass departs too and the current chapter has
+     │   lasted ≥ 90 s. A second departure naming yet another topic waits for
+     │   its own confirmation
+     └── Refused passage -> counted as read; failure -> retry after 1, 2 … 5 min
+  -> Recorder stores chapters in the manifest -> title, menu bar, pane
+Stop
+  -> A departure still waiting for its second pass opens (≥ 90 s rule applies)
+  -> A pass finishing after Stop is discarded
+After final publication, inside the notes thread       // meetings.chapters.refine
+  -> One call per boundary, all within 30 s: lines (not merged turns) within
+     3 min of the live boundary, "Chapter before/after: name (line)"
+  -> Model lists the L numbers about the chapter after; Rust moves the boundary
+     to the split that disagrees with the fewest labels, only if the labels
+     cover at least half the lines after the live boundary and the new start
+     stays after the previous chapter's
+  -> chapters_refined = true; a failed call keeps its boundary
+Copy section (pane, per chapter; menu bar "Copy Section" while recording)
+  -> "## <name>\n\n<line>\n\n" + that chapter's turns as Markdown
+```
+
+Titles: the manifest records `title_source` (`default`, `call`, `calendar`,
+`user`). Unless it is `user`, the shown title is the base title plus up to three
+of the longest chapters in meeting order, once there are two: "Team sync: image
+storage, motion lint, chat app name" (≤100 chars). A title the user typed,
+including a rename while recording, is never extended. Manifests without the
+field read as `user` when their title is not the default.
+
+Read surfaces: `hex meetings chapters <id> [--json]`, `hex meetings show <id>
+--chapter N`, a `## Chapters` list in `show`, `chapters` in `show --json`
+(JSON stays version 1), and MCP `get_chapters`.
+
+Sources: [meeting_chapters.rs](../../src/meeting_chapters.rs) (worker, decisions,
+boundary pass, title), `GeneratedChapter` / `GeneratedChapterLines` in
+[apple_intelligence.swift](../../src/apple_intelligence.swift), the record loop
+and `TitleSource` in [meeting.rs](../../src/meeting.rs). Checks in
+`meeting::chapters::tests` (fake model): pass plan and back-off, first chapter,
+two-passes-away, minimum length, name overlap and the model's flag, refusals,
+prompt order, pass window, confirming on another topic, Stop opening a waiting
+departure, the boundary pass (one call per boundary, unsupported answers kept,
+partial failures), title building, section Markdown, and the worker;
+`meeting::tests::chapters_extend_every_title_but_one_the_user_typed`;
+`copy_section_copies_one_chapter` (Linux-only Rune tests). The menu bar
+submenu, the recorder writing chapters during a real recording, and the
+`meetings-chapters` scene on a Mac screen are unexercised.
+
+Real model (debug CLI): `hex meeting chapters <file.md>` runs the live passes
+as a recording would, then the boundary pass, without saving.
+
+Observed (2026-10-23, Mac mini, debug build) on a synthetic 15-minute, three
+topic transcript (true changes at 05:32 and 11:02), 5 runs: passes 1.0–2.4 s;
+boundary pass 1.8–3.4 s (2–3 calls, ~1,500 prompt chars each). All runs found
+all three topics; 2 of 5 added a spurious "cdn cache headers" chapter at 03:42.
+The second change landed at 11:02 in 3 runs and one line late (11:24) in 2; the
+first at 05:32 in 2 runs and stayed at the live 06:38 in 3. The model's
+same-topic flag was close to random ("same" for unrelated names, "new" for the
+current one), which is why Rust's name overlap decides.
+
 ### Agent Access (MCP)
 
 The release CLI also supports `hex meetings list`, `show <id|latest>` (with
-`--from`/`--to` offsets), and `search <query>` through this query layer. See the [transcript CLI map](transcript-cli.md)
+`--from`/`--to` offsets or `--chapter N`), `chapters <id>`, and `search <query>`
+through this query layer. See the [transcript CLI map](transcript-cli.md)
 and [versioned JSON contract](../transcript-cli.md).
 
 ```ts
@@ -727,10 +803,14 @@ hex mcp [--meetings-dir <path>]                     // meetings.mcp; release bui
     │   └── start/end, or the same as from/to (own schema fields; not both):
     │       entries overlapping the range; a start not before the end (an
     │       omitted start is 0) or past the meeting's end is an error
-    └── get_meeting_notes(meeting_id)
-        └── stored title + two-sentence summary + "read the transcript for
-            details, decisions, and action items", or an explicit
-            "No Apple Intelligence notes are stored" + get_transcript hint
+    ├── get_meeting_notes(meeting_id)
+    │   └── stored title + two-sentence summary + "read the transcript for
+    │       details, decisions, and action items", or an explicit
+    │       "No Apple Intelligence notes are stored" + get_transcript hint
+    └── get_chapters(meeting_id)                      // experiment live-chapters
+        └── "N. mm:ss–mm:ss · name" + line each, whether boundaries were
+            corrected, a get_transcript start/end hint; or "No chapters are
+            stored" ("No chapters yet" while recording); never generates any
 Resources: hex-meeting://<id> -> Markdown (metadata, notes, transcript)
 ```
 
@@ -878,3 +958,10 @@ Granola import: see [granola-import.md](../plans/granola-import.md).
 - Titles and summaries have not run after a real recording in the app; the CLI
   path exercised the real model, and the provisional-title thread, its manifest
   write, and the menu/pane refresh are unexercised in a live recording.
+- Live chapters (experiment) have not run in a real recording: the worker,
+  manifest writes, title updates, menu bar Copy Section, and the boundary pass
+  after publication ran only in unit tests and the debug CLI over one synthetic
+  transcript. The thresholds (3 min passes, 90 s minimum, name overlap) are
+  tuned on that transcript; the model's same-topic flag is unreliable, and a
+  short detour can still become its own chapter. The boundary pass runs only
+  when meeting notes run, after publication.

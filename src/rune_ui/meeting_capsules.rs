@@ -441,7 +441,9 @@ impl MeetingCapsules {
                 });
             }
             ControllerEvent::Failed { .. } => self.close_recording(),
-            ControllerEvent::OpenMeeting(_) | ControllerEvent::NotesStarted => {}
+            ControllerEvent::OpenMeeting(_)
+            | ControllerEvent::Chapters(_)
+            | ControllerEvent::NotesStarted => {}
         }
     }
 

@@ -412,12 +412,133 @@ fn meeting_show_ranges_filter_json_entries_and_markdown() {
 }
 
 #[test]
+fn meeting_chapters_list_and_select_a_chapter_in_json_and_markdown() {
+    let library = Library::new(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings-chapters"),
+    );
+    let meeting = resolve(&library, "latest").unwrap();
+    assert_eq!(meeting.id, "1790003000000-1005");
+    let chapters = serde_json::json!([
+        {"number": 1, "title": "Image storage",
+         "summary": "Where uploaded images live and how long they are kept.",
+         "start_ms": 0, "end_ms": 180000},
+        {"number": 2, "title": "Motion lint",
+         "summary": "A lint that flags animations which snap instead of easing.",
+         "start_ms": 180000, "end_ms": 390000},
+        {"number": 3, "title": "Chat app name", "summary": "Picking a name for the chat app.",
+         "start_ms": 390000, "end_ms": 540000},
+    ]);
+    let listed = meeting_chapters_json(&meeting, NOW);
+    assert_eq!(listed["version"], 1);
+    assert_eq!(listed["chapters"], chapters);
+    assert_eq!(listed["refined"], true);
+    // A calendar title is extended by the chapters.
+    assert_eq!(
+        listed["meeting"]["title"],
+        "Team sync: Image storage, Motion lint, Chat app name"
+    );
+
+    let shown = meeting_json(&meeting, OffsetRange::default(), NOW).unwrap();
+    assert_eq!(shown["chapters"], chapters);
+    assert_eq!(shown["entries"].as_array().unwrap().len(), 8);
+    assert!(shown.get("chapter").is_none());
+
+    let second = meeting_chapter_json(&meeting, 2, NOW).unwrap();
+    assert_eq!(second["chapter"], chapters[1]);
+    assert_eq!(second["chapters"], chapters);
+    let starts = second["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["start_ms"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(starts, [181000, 240000, 300000]);
+    for missing in [0, 4] {
+        assert_eq!(
+            meeting_chapter_json(&meeting, missing, NOW)
+                .unwrap_err()
+                .to_string(),
+            format!(
+                "Meeting 1790003000000-1005 has chapters 1 to 3; there is no chapter {missing}."
+            )
+        );
+    }
+
+    let section = library.chapter_markdown(&meeting.id, 2, NOW).unwrap();
+    assert!(
+        section.starts_with("# Team sync: Image storage, Motion lint, Chat app name\n"),
+        "{section}"
+    );
+    assert!(
+        section.contains("- Chapter: 2 of 3 · 03:00–06:30\n"),
+        "{section}"
+    );
+    assert!(
+        section.ends_with(
+            "\n## Motion lint\n\nA lint that flags animations which snap instead of easing.\n\n\
+             **You** · 03:01\nNext, the motion lint. It flags animations that snap.\n\n\
+             **Them** · 04:00\nCan it run in CI on every pull request?\n\n\
+             **You** · 05:00\nYes, it reads the recorded traces.\n"
+        ),
+        "{section}"
+    );
+
+    let full = library
+        .markdown(&meeting.id, OffsetRange::default(), NOW)
+        .unwrap();
+    assert!(
+        full.contains(
+            "\n## Chapters\n\n\
+             1. 00:00 · Image storage — Where uploaded images live and how long they are kept.\n\
+             2. 03:00 · Motion lint — A lint that flags animations which snap instead of easing.\n\
+             3. 06:30 · Chat app name — Picking a name for the chat app.\n\n## Transcript\n"
+        ),
+        "{full}"
+    );
+
+    // Meetings without chapters: an empty list, and no field on `show`.
+    let plain = Library::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings"));
+    let roadmap = plain.meeting("1790000500000-1002").unwrap();
+    let listed = meeting_chapters_json(&roadmap, NOW);
+    assert_eq!(listed["chapters"], serde_json::json!([]));
+    assert_eq!(listed["refined"], false);
+    assert!(
+        meeting_json(&roadmap, OffsetRange::default(), NOW)
+            .unwrap()
+            .get("chapters")
+            .is_none()
+    );
+    assert_eq!(
+        meeting_chapter_json(&roadmap, 1, NOW)
+            .unwrap_err()
+            .to_string(),
+        "Meeting 1790000500000-1002 has no chapters."
+    );
+    assert!(
+        !plain
+            .markdown(&roadmap.id, OffsetRange::default(), NOW)
+            .unwrap()
+            .contains("## Chapters")
+    );
+}
+
+#[test]
 fn parses_release_commands_and_rejects_invalid_limits_and_times() {
     for command in [
         vec!["hex", "history"],
         vec!["hex", "meetings", "list", "--json"],
         vec!["hex", "meetings", "show", "latest", "--md"],
         vec!["hex", "meetings", "search", "problems"],
+        vec!["hex", "meetings", "chapters", "latest", "--json"],
+        vec![
+            "hex",
+            "meetings",
+            "show",
+            "latest",
+            "--chapter",
+            "2",
+            "--json",
+        ],
     ] {
         assert!(crate::Cli::try_parse_from(command).is_ok());
     }
@@ -425,6 +546,17 @@ fn parses_release_commands_and_rejects_invalid_limits_and_times() {
         vec!["hex", "history", "--limit", "0"],
         vec!["hex", "history", "--limit", "10001"],
         vec!["hex", "meetings", "show", "latest", "--md", "--json"],
+        vec![
+            "hex",
+            "meetings",
+            "show",
+            "latest",
+            "--chapter",
+            "2",
+            "--from",
+            "1:00",
+        ],
+        vec!["hex", "meetings", "show", "latest", "--chapter", "two"],
     ] {
         assert!(crate::Cli::try_parse_from(command).is_err());
     }

@@ -22,6 +22,8 @@ const FINAL_PENDING_FILE: &str = "final.pending";
 
 #[path = "meeting_capture.rs"]
 mod capture;
+#[path = "meeting_chapters.rs"]
+mod chapters;
 pub use capture::{
     SystemAudioAuthorization, request_system_audio_access, system_audio_authorization,
 };
@@ -33,6 +35,9 @@ mod notes;
 pub mod query;
 #[path = "meeting_transcript.rs"]
 mod transcript;
+#[cfg(debug_assertions)]
+pub use chapters::chapters_file;
+pub use chapters::{Chapter, chapter_entries, section_for_id, section_markdown};
 pub use notes::{MeetingNotes, display_title, notes_in_progress, notes_wanted, spawn_summary};
 #[cfg(debug_assertions)]
 pub use notes::{summarize, summarize_file};
@@ -47,6 +52,24 @@ pub struct MeetingStart {
     pub app: Option<String>,
     /// The calendar event the recording was started for.
     pub calendar: Option<MeetingCalendar>,
+    /// Where `title` came from; ignored without a title.
+    pub title_source: TitleSource,
+}
+
+/// Where a meeting's title came from. Only a title the user typed is never
+/// extended or replaced by generated ones.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleSource {
+    /// The app-and-time title Hex made up.
+    #[default]
+    Default,
+    /// The detected call's own name, such as a browser tab's.
+    Call,
+    /// The calendar event the recording was started for.
+    Calendar,
+    /// Typed by the user when recording started or in a rename.
+    User,
 }
 
 /// The calendar event behind a meeting: its title and the other attendees,
@@ -65,6 +88,8 @@ pub enum RecordingUpdate {
     Started { id: String, title: String },
     /// A provisional title from the transcript so far.
     Retitled { title: String },
+    /// The live chapters so far (experiment `live-chapters`).
+    Chapters(Vec<Chapter>),
     /// Capture stopped; final transcription is running.
     Transcribing,
 }
@@ -169,6 +194,29 @@ pub struct MeetingManifest {
     /// The calendar event the recording was started for, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<MeetingCalendar>,
+    /// Where `title` came from. Older manifests have none: a title other
+    /// than the default one counts as the user's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<TitleSource>,
+    /// Topic chapters in time order (experiment `live-chapters`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chapters: Vec<Chapter>,
+    /// The chapter boundaries were corrected over the whole transcript.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub chapters_refined: bool,
+}
+
+impl MeetingManifest {
+    /// Where `title` came from, inferred for manifests that predate the field.
+    pub fn title_source(&self) -> TitleSource {
+        self.title_source.unwrap_or_else(|| {
+            if self.title == default_title(self.app.as_deref(), self.created_at_ms) {
+                TitleSource::Default
+            } else {
+                TitleSource::User
+            }
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -370,13 +418,17 @@ pub fn record(
     set_owner_only(&meeting_dir, true)?;
     let _active = ActiveMeeting::acquire(&meeting_dir)?;
 
+    let given_title = start.title.filter(|title| !title.trim().is_empty());
+    let title_source = match (&given_title, start.title_source) {
+        (None, _) => TitleSource::Default,
+        // A title without a known source is treated as the user's.
+        (Some(_), TitleSource::Default) => TitleSource::User,
+        (Some(_), source) => source,
+    };
     let mut manifest = MeetingManifest {
         schema_version: 1,
         id,
-        title: start
-            .title
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| default_title(start.app.as_deref(), created_at_ms)),
+        title: given_title.unwrap_or_else(|| default_title(start.app.as_deref(), created_at_ms)),
         status: MeetingStatus::Starting,
         created_at_ms,
         ended_at_ms: None,
@@ -399,6 +451,9 @@ pub fn record(
         notes: None,
         notes_error: None,
         calendar: start.calendar,
+        title_source: Some(title_source),
+        chapters: Vec::new(),
+        chapters_refined: false,
     };
     write_manifest(&meeting_dir, &manifest)?;
 
@@ -453,17 +508,29 @@ pub fn record(
 
         let started = Instant::now();
         let titles = notes::ProvisionalTitles::start(manifest.id.clone());
+        let live_chapters =
+            crate::experiments::enabled(crate::experiments::Experiment::LiveChapters)
+                .then(|| chapters::LiveChapters::start(manifest.id.clone()));
         println!("Recording '{}' (Ctrl-C to stop)", manifest.title);
-        while !shutdown.load(Ordering::Relaxed) && !writer.is_finished() {
+        let take_updates = |manifest: &mut MeetingManifest| {
             if let Some(title) = titles.take() {
-                record_provisional_title(&meeting_dir, &mut manifest, title, updates.as_ref());
+                record_provisional_title(&meeting_dir, manifest, title, updates.as_ref());
             }
+            if let Some(chapters) = live_chapters.as_ref().and_then(|live| live.take()) {
+                record_chapters(&meeting_dir, manifest, chapters, updates.as_ref());
+            }
+        };
+        while !shutdown.load(Ordering::Relaxed) && !writer.is_finished() {
+            take_updates(&mut manifest);
             thread::sleep(Duration::from_millis(100));
         }
-        if let Some(title) = titles.take() {
-            record_provisional_title(&meeting_dir, &mut manifest, title, updates.as_ref());
+        take_updates(&mut manifest);
+        if let Some(chapters) = live_chapters.as_ref().and_then(|live| live.finish()) {
+            record_chapters(&meeting_dir, &mut manifest, chapters, updates.as_ref());
         }
         drop(titles);
+        drop(live_chapters);
+        keep_rename(&meeting_dir, &mut manifest);
         drop(system_capture);
         drop(microphone_capture);
         drop(sender);
@@ -529,6 +596,7 @@ fn record_provisional_title(
     title: String,
     updates: Option<&SyncSender<RecordingUpdate>>,
 ) {
+    keep_rename(directory, manifest);
     manifest.provisional_title = Some(title);
     if let Err(error) = write_manifest(directory, manifest) {
         tracing::warn!(%error, meeting = manifest.id, "could not record provisional meeting title");
@@ -538,6 +606,47 @@ fn record_provisional_title(
         let _ = updates.try_send(RecordingUpdate::Retitled {
             title: display_title(manifest),
         });
+    }
+}
+
+fn record_chapters(
+    directory: &Path,
+    manifest: &mut MeetingManifest,
+    chapters: Vec<Chapter>,
+    updates: Option<&SyncSender<RecordingUpdate>>,
+) {
+    keep_rename(directory, manifest);
+    let previous_title = display_title(manifest);
+    manifest.chapters = chapters;
+    if let Err(error) = write_manifest(directory, manifest) {
+        tracing::warn!(%error, meeting = manifest.id, "could not record meeting chapters");
+        return;
+    }
+    if let Some(updates) = updates {
+        let _ = updates.try_send(RecordingUpdate::Chapters(manifest.chapters.clone()));
+        let title = display_title(manifest);
+        if title != previous_title {
+            let _ = updates.try_send(RecordingUpdate::Retitled { title });
+        }
+    }
+}
+
+/// Keeps a rename made while recording (experiment `live-chapters`).
+fn keep_rename(directory: &Path, manifest: &mut MeetingManifest) {
+    if crate::experiments::enabled(crate::experiments::Experiment::LiveChapters) {
+        adopt_rename(directory, manifest);
+    }
+}
+
+/// The recorder rewrites the manifest from memory, so it adopts a user
+/// title written meanwhile.
+fn adopt_rename(directory: &Path, manifest: &mut MeetingManifest) {
+    if let Ok(stored) = read_manifest(directory)
+        && stored.title_source() == TitleSource::User
+        && (stored.title != manifest.title || manifest.title_source() != TitleSource::User)
+    {
+        manifest.title = stored.title;
+        manifest.title_source = Some(TitleSource::User);
     }
 }
 
@@ -1125,6 +1234,7 @@ fn rename_meeting(directory: &Path, title: &str) -> Result<MeetingManifest> {
     let mut manifest = read_manifest(directory)?;
     let previous = display_title(&manifest);
     manifest.title = title;
+    manifest.title_source = Some(TitleSource::User);
     let next = display_title(&manifest);
     let mut markdown_error = None;
     if previous != next

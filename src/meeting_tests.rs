@@ -159,6 +159,9 @@ fn capture_failures_are_persisted_instead_of_looking_interrupted() {
         notes: None,
         notes_error: None,
         calendar: None,
+        title_source: None,
+        chapters: Vec::new(),
+        chapters_refined: false,
     };
     write_manifest(&directory, &manifest).unwrap();
 
@@ -200,6 +203,9 @@ fn mid_meeting_capture_loss_proceeds_to_transcription_when_audio_was_recorded() 
         notes: None,
         notes_error: None,
         calendar: None,
+        title_source: None,
+        chapters: Vec::new(),
+        chapters_refined: false,
     };
     let (sender, receiver) = mpsc::sync_channel(4);
 
@@ -342,6 +348,77 @@ fn renaming_updates_the_manifest_and_an_unedited_markdown_heading() {
         "# My own heading\n\nNotes.\n"
     );
     assert!(rename_meeting(&directory, "   ").is_err());
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn chapters_extend_every_title_but_one_the_user_typed() {
+    let chapters = vec![
+        Chapter {
+            title: "Image storage".into(),
+            summary: String::new(),
+            start_ms: 0,
+        },
+        Chapter {
+            title: "Motion lint".into(),
+            summary: String::new(),
+            start_ms: 200_000,
+        },
+        Chapter {
+            title: "Chat app name".into(),
+            summary: String::new(),
+            start_ms: 500_000,
+        },
+    ];
+    let (base, directory) = finished_meeting("chapter-title", "Team sync");
+    let mut manifest = read_manifest(&directory).unwrap();
+    manifest.duration_ms = Some(700_000);
+    manifest.chapters = chapters;
+    // Older manifests have no source: a title other than the default is
+    // the user's, so chapters leave it alone.
+    assert_eq!(manifest.title_source, None);
+    assert_eq!(manifest.title_source(), TitleSource::User);
+    assert_eq!(display_title(&manifest), "Team sync");
+
+    for source in [TitleSource::Call, TitleSource::Calendar] {
+        manifest.title_source = Some(source);
+        assert_eq!(
+            display_title(&manifest),
+            "Team sync: Image storage, Motion lint, Chat app name"
+        );
+    }
+    let default = default_title(None, manifest.created_at_ms);
+    manifest.title = default.clone();
+    manifest.title_source = None;
+    assert_eq!(manifest.title_source(), TitleSource::Default);
+    assert_eq!(
+        display_title(&manifest),
+        format!("{default}: Image storage, Motion lint, Chat app name")
+    );
+    manifest.provisional_title = Some("Launch prep".into());
+    assert_eq!(
+        display_title(&manifest),
+        "Launch prep: Image storage, Motion lint, Chat app name"
+    );
+    write_manifest(&directory, &manifest).unwrap();
+
+    // A rename is the user's, and stays theirs while the recorder, holding
+    // its own copy of the manifest, records more chapters.
+    let renamed = rename_meeting(&directory, "Budget").unwrap();
+    assert_eq!(renamed.title_source, Some(TitleSource::User));
+    assert_eq!(display_title(&read_manifest(&directory).unwrap()), "Budget");
+    adopt_rename(&directory, &mut manifest);
+    assert_eq!(manifest.title, "Budget");
+    assert_eq!(manifest.title_source(), TitleSource::User);
+    assert_eq!(display_title(&manifest), "Budget");
+
+    // A generated title on disk is not adopted.
+    let mut generated = read_manifest(&directory).unwrap();
+    generated.title = "Calendar name".into();
+    generated.title_source = Some(TitleSource::Calendar);
+    write_manifest(&directory, &generated).unwrap();
+    adopt_rename(&directory, &mut manifest);
+    assert_eq!(manifest.title, "Budget");
     fs::remove_dir_all(base).unwrap();
 }
 

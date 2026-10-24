@@ -768,3 +768,49 @@ fn sound_alikes_need_two_consonant_sounds_and_few_changes() {
     assert_eq!(soundex("dax").as_deref(), Some("d200"));
     assert_eq!(soundex("moonshine").as_deref(), Some("m525"));
 }
+
+#[test]
+fn chapters_list_spans_and_lines_and_say_when_there_are_none() {
+    let chaptered = Library::new(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/meetings-chapters"),
+    );
+    let text = chaptered.chapters("1790003000000-1005", NOW).unwrap();
+    assert!(
+        text.starts_with(
+            "1790003000000-1005 \"Team sync: Image storage, Motion lint, Chat app name\""
+        ),
+        "{text}"
+    );
+    assert!(
+        text.ends_with(
+            "\n3 chapters, boundaries corrected over the whole transcript:\n\
+             1. 00:00–03:00 · Image storage\n   Where uploaded images live and how long they are kept.\n\
+             2. 03:00–06:30 · Motion lint\n   A lint that flags animations which snap instead of easing.\n\
+             3. 06:30–09:00 · Chat app name\n   Picking a name for the chat app.\n\
+             \nModel-written names that may be wrong. Read a chapter with get_transcript (start and \
+             end as shown) or `hex meetings show 1790003000000-1005 --chapter N`.\n"
+        ),
+        "{text}"
+    );
+    let meeting = chaptered.meeting("1790003000000-1005").unwrap();
+    let views = meeting.chapter_views(NOW);
+    assert_eq!(
+        views
+            .iter()
+            .map(|view| (view.number, view.end_ms, view.entries.len()))
+            .collect::<Vec<_>>(),
+        [(1, 180_000, 3), (2, 390_000, 3), (3, 540_000, 2)]
+    );
+    assert!(
+        views[2]
+            .markdown()
+            .starts_with("## Chat app name\n\nPicking a name")
+    );
+
+    let none = library().chapters(WEEKLY, NOW).unwrap();
+    assert!(
+        none.contains("No chapters are stored for this meeting."),
+        "{none}"
+    );
+    assert!(chaptered.chapters("missing", NOW).is_err());
+}

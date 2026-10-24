@@ -63,6 +63,8 @@ pub(crate) enum ControllerEvent {
     Retitled {
         title: String,
     },
+    /// The recording's live chapters so far (experiment `live-chapters`).
+    Chapters(Vec<meeting::Chapter>),
     OpenMeeting(String),
     Transcribing,
     CallEnded {
@@ -94,7 +96,13 @@ struct ActiveRecording {
 pub enum MeetingMenuState {
     Idle,
     Starting,
-    Recording { started: Instant, title: String },
+    Recording {
+        started: Instant,
+        id: String,
+        title: String,
+        /// Live chapters, for Copy Section (experiment `live-chapters`).
+        chapters: Vec<meeting::Chapter>,
+    },
     Transcribing,
 }
 
@@ -349,6 +357,7 @@ fn calendar_start(meeting: &CalendarMeeting) -> Start {
             title: Some(meeting.display_title()),
             app: provider.map(|provider| provider.label().to_string()),
             calendar: Some(calendar_context(meeting)),
+            title_source: meeting::TitleSource::Calendar,
         },
         title: meeting.display_title(),
         application: provider
@@ -495,6 +504,7 @@ impl Reminders {
                 && candidate.source == crate::meeting_detection::MeetingSource::Manual)
             {
                 start.meeting.title = Some(meeting.display_title());
+                start.meeting.title_source = meeting::TitleSource::Calendar;
                 start.title = meeting.display_title();
             }
         }
@@ -578,6 +588,9 @@ fn poll_recording(
                 meeting::RecordingUpdate::Retitled { title } => {
                     active.title = title.clone();
                     let _ = events.send(ControllerEvent::Retitled { title });
+                }
+                meeting::RecordingUpdate::Chapters(chapters) => {
+                    let _ = events.send(ControllerEvent::Chapters(chapters));
                 }
                 meeting::RecordingUpdate::Transcribing => {
                     if !active.stop.swap(true, Ordering::Relaxed) {

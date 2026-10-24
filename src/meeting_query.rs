@@ -20,8 +20,9 @@ use unicode_normalization::char::is_combining_mark;
 
 use super::transcript::{RollingLine, RollingView};
 use super::{
-    MeetingManifest, MeetingSource, MeetingStatus, TranscriptEntry, coalesce_transcript,
-    display_title, format_duration, notes_markdown, recovered_status, transcript_markdown,
+    Chapter, MeetingManifest, MeetingSource, MeetingStatus, TranscriptEntry, chapter_entries,
+    coalesce_transcript, display_title, format_duration, notes_markdown, recovered_status,
+    section_markdown, transcript_markdown,
 };
 use crate::vocabulary::VocabularyEntry;
 
@@ -98,6 +99,40 @@ impl Meeting {
             .collect())
     }
 
+    /// Chapter `number` (counting from 1), where it ends, and its entries.
+    pub fn chapter(&self, number: usize, now_ms: u64) -> Result<ChapterView<'_>> {
+        let chapters = &self.manifest.chapters;
+        if chapters.is_empty() {
+            return Err(eyre!("Meeting {} has no chapters.", self.id));
+        }
+        let index = number
+            .checked_sub(1)
+            .filter(|index| *index < chapters.len())
+            .ok_or_else(|| {
+                eyre!(
+                    "Meeting {} has chapters 1 to {}; there is no chapter {number}.",
+                    self.id,
+                    chapters.len()
+                )
+            })?;
+        Ok(ChapterView {
+            number,
+            chapter: &chapters[index],
+            end_ms: chapters
+                .get(index + 1)
+                .map_or_else(|| self.duration_ms(now_ms), |next| next.start_ms)
+                .max(chapters[index].start_ms),
+            entries: chapter_entries(&self.entries, chapters, index),
+        })
+    }
+
+    /// Every chapter, in order.
+    pub fn chapter_views(&self, now_ms: u64) -> Vec<ChapterView<'_>> {
+        (1..=self.manifest.chapters.len())
+            .filter_map(|number| self.chapter(number, now_ms).ok())
+            .collect()
+    }
+
     fn status_label(&self) -> String {
         let status = status_name(self.status);
         if self.in_progress {
@@ -121,6 +156,30 @@ impl Meeting {
             self.title(),
             iso_local(self.start_ms())
         )
+    }
+}
+
+/// One chapter of a meeting with the entries that start inside it.
+pub struct ChapterView<'a> {
+    /// Counting from 1.
+    pub number: usize,
+    pub chapter: &'a Chapter,
+    pub end_ms: u64,
+    pub entries: Vec<TranscriptEntry>,
+}
+
+impl ChapterView<'_> {
+    fn span(&self) -> String {
+        format!(
+            "{}–{}",
+            format_duration(self.chapter.start_ms),
+            format_duration(self.end_ms)
+        )
+    }
+
+    /// `## title`, its one line, and its turns, for copying one section.
+    pub fn markdown(&self) -> String {
+        section_markdown(self.chapter, &self.entries)
     }
 }
 
@@ -477,28 +536,29 @@ with get_transcript or search_transcripts for details, decisions, and action ite
             .into_iter()
             .cloned()
             .collect::<Vec<_>>();
-        let mut output = format!("# {}\n\n", meeting.title());
-        let _ = writeln!(output, "- Meeting: {}", meeting.id);
-        let _ = writeln!(output, "- Started: {}", iso_local(meeting.start_ms()));
-        let _ = writeln!(
-            output,
-            "- Duration: {}",
-            format_duration(meeting.duration_ms(now_ms))
-        );
-        if let Some(app) = &meeting.manifest.app {
-            let _ = writeln!(output, "- App: {app}");
-        }
-        let _ = writeln!(
-            output,
-            "- Status: {} · {}",
-            meeting.status_label(),
-            meeting.source.label()
-        );
+        let mut output = markdown_header(&meeting, now_ms);
         if range.is_bounded() {
             let _ = writeln!(output, "- Range: {}", range.describe());
         }
         if let Some(notes) = &meeting.manifest.notes {
             let _ = write!(output, "\n{}\n", notes_markdown(notes));
+        }
+        let chapters = meeting.chapter_views(now_ms);
+        if !chapters.is_empty() {
+            output.push_str("\n## Chapters\n\n");
+            for view in &chapters {
+                let _ = write!(
+                    output,
+                    "{}. {} · {}",
+                    view.number,
+                    format_duration(view.chapter.start_ms),
+                    view.chapter.title
+                );
+                if !view.chapter.summary.is_empty() {
+                    let _ = write!(output, " — {}", view.chapter.summary);
+                }
+                output.push('\n');
+            }
         }
         let transcript = if entries.is_empty() && range.is_bounded() {
             "No transcript entries in this range.".into()
@@ -508,6 +568,97 @@ with get_transcript or search_transcripts for details, decisions, and action ite
         let _ = write!(output, "\n## Transcript\n\n{transcript}\n");
         Ok(output)
     }
+
+    /// One chapter as Markdown: the meeting's metadata, then the chapter's
+    /// name, line, and turns.
+    pub fn chapter_markdown(&self, id: &str, number: usize, now_ms: u64) -> Result<String> {
+        let meeting = self.meeting(id)?;
+        let view = meeting.chapter(number, now_ms)?;
+        let mut output = markdown_header(&meeting, now_ms);
+        let _ = writeln!(
+            output,
+            "- Chapter: {} of {} · {}",
+            view.number,
+            meeting.manifest.chapters.len(),
+            view.span()
+        );
+        let _ = write!(output, "\n{}\n", view.markdown());
+        Ok(output)
+    }
+
+    /// A meeting's chapters with their spans and lines.
+    pub fn chapters(&self, id: &str, now_ms: u64) -> Result<String> {
+        let meeting = self.meeting(id)?;
+        let mut output = String::new();
+        let _ = writeln!(output, "{}", meeting.heading());
+        let chapters = meeting.chapter_views(now_ms);
+        if chapters.is_empty() {
+            let _ = writeln!(
+                output,
+                "{}",
+                if meeting.in_progress {
+                    "No chapters yet. Chapters appear every few minutes while a meeting records \
+with live chapters on."
+                } else {
+                    "No chapters are stored for this meeting. This read-only reader never \
+generates them; read the meeting with get_transcript or `hex meetings show`."
+                }
+            );
+            return Ok(output);
+        }
+        let _ = writeln!(
+            output,
+            "{} chapters, {}:",
+            chapters.len(),
+            if meeting.manifest.chapters_refined {
+                "boundaries corrected over the whole transcript"
+            } else if meeting.in_progress {
+                "named live while recording"
+            } else {
+                "named live while recording; boundaries not corrected"
+            }
+        );
+        for view in &chapters {
+            let _ = writeln!(
+                output,
+                "{}. {} · {}",
+                view.number,
+                view.span(),
+                view.chapter.title
+            );
+            if !view.chapter.summary.is_empty() {
+                let _ = writeln!(output, "   {}", view.chapter.summary);
+            }
+        }
+        let _ = writeln!(
+            output,
+            "\nModel-written names that may be wrong. Read a chapter with get_transcript (start \
+and end as shown) or `hex meetings show {} --chapter N`.",
+            meeting.id
+        );
+        Ok(output)
+    }
+}
+
+fn markdown_header(meeting: &Meeting, now_ms: u64) -> String {
+    let mut output = format!("# {}\n\n", meeting.title());
+    let _ = writeln!(output, "- Meeting: {}", meeting.id);
+    let _ = writeln!(output, "- Started: {}", iso_local(meeting.start_ms()));
+    let _ = writeln!(
+        output,
+        "- Duration: {}",
+        format_duration(meeting.duration_ms(now_ms))
+    );
+    if let Some(app) = &meeting.manifest.app {
+        let _ = writeln!(output, "- App: {app}");
+    }
+    let _ = writeln!(
+        output,
+        "- Status: {} · {}",
+        meeting.status_label(),
+        meeting.source.label()
+    );
+    output
 }
 
 fn write_skipped(output: &mut String, skipped: &[Skipped]) {

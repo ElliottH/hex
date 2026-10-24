@@ -75,6 +75,7 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
     assert_eq!(
         names,
         [
+            "get_chapters",
             "get_meeting_notes",
             "get_transcript",
             "list_meetings",
@@ -177,6 +178,19 @@ fn mcp_server_initializes_lists_tools_and_answers_calls_over_stdio() {
     );
     let result = receive(5);
     assert_eq!(result["result"]["isError"], true, "{result}");
+
+    send(
+        json!({"jsonrpc": "2.0", "id": 51, "method": "tools/call", "params": {
+            "name": "get_chapters",
+            "arguments": {"meeting_id": "1790000000000-1001"}
+        }}),
+    );
+    let result = receive(51);
+    let text = result["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("No chapters are stored for this meeting."),
+        "{text}"
+    );
 
     send(
         json!({"jsonrpc": "2.0", "id": 6, "method": "resources/read", "params": {

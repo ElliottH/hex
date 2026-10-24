@@ -292,6 +292,8 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Copy new", ["Kopiuj nowe", "复制新内容", "新しい分をコピー", "Neues kopieren", "Copiar lo nuevo"]),
     ("Copy new ({})", ["Kopiuj nowe ({})", "复制新内容（{}）", "新しい分をコピー（{}）", "Neues kopieren ({})", "Copiar lo nuevo ({})"]),
     ("Copy all", ["Kopiuj wszystko", "全部复制", "すべてコピー", "Alles kopieren", "Copiar todo"]),
+    ("Copy section", ["Kopiuj sekcję", "复制本节", "このセクションをコピー", "Abschnitt kopieren", "Copiar sección"]),
+    ("Chapters", ["Rozdziały", "章节", "チャプター", "Kapitel", "Capítulos"]),
     ("Delete", ["Usuń", "删除", "削除", "Löschen", "Eliminar"]),
     ("Remove", ["Usuń", "移除", "削除", "Entfernen", "Quitar"]),
     ("Dictation", ["Dyktowanie", "听写", "音声入力", "Diktat", "Dictado"]),

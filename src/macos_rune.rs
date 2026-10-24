@@ -820,6 +820,18 @@ impl Pump {
                     tracing::warn!(%error, "could not copy last meeting transcript");
                 }
             }
+            StatusItemAction::CopyChapter(index) => {
+                let MeetingMenuState::Recording { id, .. } = &self.meeting_state else {
+                    return;
+                };
+                let copied = crate::meeting::section_for_id(id, index).and_then(|markdown| {
+                    arboard::Clipboard::new()?.set_text(markdown)?;
+                    Ok(())
+                });
+                if let Err(error) = copied {
+                    tracing::warn!(%error, "could not copy a meeting section");
+                }
+            }
             StatusItemAction::OpenMeetings => show(&self.window, Destination::Meetings(None)),
             StatusItemAction::Quit => {
                 self.runtime_cancel();
@@ -835,11 +847,21 @@ impl Pump {
             | ControllerEvent::Reminder { .. }
             | ControllerEvent::ReminderWithdrawn { .. } => {}
             ControllerEvent::Starting => self.meeting_state = MeetingMenuState::Starting,
-            ControllerEvent::RecordingStarted { title, .. } => {
+            ControllerEvent::RecordingStarted { id, title, .. } => {
                 self.meeting_state = MeetingMenuState::Recording {
                     started: Instant::now(),
+                    id,
                     title,
+                    chapters: Vec::new(),
                 };
+            }
+            ControllerEvent::Chapters(chapters) => {
+                if let MeetingMenuState::Recording {
+                    chapters: shown, ..
+                } = &mut self.meeting_state
+                {
+                    *shown = chapters;
+                }
             }
             ControllerEvent::Retitled { title } => {
                 if let MeetingMenuState::Recording { title: shown, .. } = &mut self.meeting_state {

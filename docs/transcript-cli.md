@@ -12,6 +12,8 @@ hex meetings list --since 7d --json
 hex meetings show latest --md
 hex meetings show 1790000500000-1002 --json
 hex meetings show 1790000500000-1002 --from 113:03 --to 120:43 --md
+hex meetings chapters latest --json
+hex meetings show 1790003000000-1005 --chapter 2
 hex meetings search 'release schedule'
 ```
 
@@ -72,6 +74,16 @@ now fails with "so far". The MCP `get_transcript` tool takes the same range as
 `start`/`end` or, as separate schema fields, `from`/`to`; giving both names for
 one bound is an error.
 
+`meetings chapters` lists the chapters a meeting recorded with the
+`live-chapters` experiment: number, `mm:ss–mm:ss` span, model-written name, and
+one line, and whether the boundaries were corrected after Stop. It takes the
+same IDs as `show`. A meeting without chapters says so (text) or returns an empty
+`chapters` list (JSON); nothing is generated. `show --chapter N` returns only
+chapter N's entries (counting from 1), with a `## <name>` section in Markdown
+and `chapter` in JSON; it cannot be combined with `--from`/`--to`, and a number
+outside the list is an error. Plain `show` Markdown adds a `## Chapters` list
+when there are any.
+
 `meetings search QUERY` uses the MCP query's stemmed, fuzzy BM25 ranking over
 transcripts and stored notes. Quoted phrases constrain the search. `--since`,
 `--until`, and `--limit` (default 10, maximum 50) are supported; output is text.
@@ -110,8 +122,9 @@ Every JSON response has integer `version: 1`. Consumers should ignore unknown
 fields; incompatible field changes require a new version. All `*_ms` fields are
 integer milliseconds. Absolute timestamps use Unix time. Nullable fields are
 present as `null`, except `raw_text`, which is omitted without `--raw`,
-`score` and `snippet`, which are omitted without `--search`, and `range`, which
-is omitted without `--from` or `--to`.
+`score` and `snippet`, which are omitted without `--search`, `range`, which
+is omitted without `--from` or `--to`, `chapters`, which is omitted when a
+meeting has none, and `chapter`, which is omitted without `--chapter`.
 JSON goes to stdout; errors go to stderr with a nonzero exit status. Empty
 results are successful responses. `truncated` reports the query's output limit,
 not data already expired or evicted from the store.
@@ -156,12 +169,27 @@ type MeetingShow = {
   meeting: Meeting
   notes: { title: string; summary: string; generated_at_ms: number } | null
   range?: { from_ms: number; to_ms: number | null } // only with --from or --to
-  entries: { // with a range, only the entries overlapping it
+  chapters?: Chapter[] // only when the meeting has chapters
+  chapter?: Chapter // only with --chapter
+  entries: { // with a range or chapter, only the entries in it
     source: "microphone" | "system" // You / Them; remote speakers aren't separated
     start_ms: number // relative to the meeting start
     end_ms: number
     text: string
   }[]
+}
+type Chapter = {
+  number: number // counting from 1
+  title: string // model-written
+  summary: string // one line; may be empty
+  start_ms: number // relative to the meeting start
+  end_ms: number // the next chapter's start, or the meeting's end (now while recording)
+}
+type MeetingChapters = {
+  version: 1
+  meeting: Meeting
+  chapters: Chapter[] // empty when none are stored
+  refined: boolean // boundaries corrected over the whole transcript after Stop
 }
 ```
 

@@ -286,6 +286,11 @@ substitute for source inspection or a second roadmap.
   post-publication call over a bounded transcript excerpt for the final title
   and a two-sentence summary, with deadline, manifest storage, and
   marker-delimited in-place Markdown updates.
+- `meeting_chapters`: live chapters (experiment `live-chapters`): one
+  on-device pass per ~3 minutes of rolling transcript while recording, with
+  Rust deciding topic changes, the per-boundary fix-up after publication,
+  chapter-extended titles that never touch a user-typed one, and section
+  Markdown for Copy section.
 - `meeting_query`: read-only meeting queries for agents (`meeting::query`):
   lock-aware listing, in-memory BM25 full-text search with stemming and fuzzy
   matching, transcript paging, stored notes, and Markdown rendering. It never

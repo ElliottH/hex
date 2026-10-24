@@ -641,7 +641,7 @@ fn meeting_report(state: &MeetingMenuState) -> MeetingReport {
             state: "starting".into(),
             ..Default::default()
         },
-        MeetingMenuState::Recording { started, title } => MeetingReport {
+        MeetingMenuState::Recording { started, title, .. } => MeetingReport {
             state: "recording".into(),
             title: Some(title.clone()),
             elapsed_seconds: Some(started.elapsed().as_secs()),

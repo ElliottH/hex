@@ -10,7 +10,7 @@ reports `unsupported` ("not supported on this OS yet; use the Hex window"); the
 Linux CLI keeps its own `dictation`, `voice-action`, `paste-last`, `status`,
 `quit`, and `restart` over the Linux service socket (see `docs/linux.md`).
 
-The read-only `hex history` and `hex meetings list|show|search` commands, and
+The read-only `hex history` and `hex meetings list|show|chapters|search` commands, and
 `hex mcp`, are separate and unchanged; see `docs/transcript-cli.md`.
 
 ## Commands

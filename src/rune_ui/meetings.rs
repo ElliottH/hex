@@ -55,6 +55,15 @@ pub(super) struct Turn {
     pub(super) pause_before_ms: Option<u64>,
 }
 
+/// One topic of a meeting (experiment `live-chapters`), from `start_ms` to
+/// the next chapter's start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Chapter {
+    pub(super) title: String,
+    pub(super) summary: String,
+    pub(super) start_ms: u64,
+}
+
 // Only the macOS host reports the states fixtures do not show.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +92,7 @@ pub(super) struct Meeting {
     pub(super) notes_error: Option<String>,
     pub(super) live_error: Option<String>,
     pub(super) transcript: Transcript,
+    pub(super) chapters: Vec<Chapter>,
 }
 
 impl Meeting {
@@ -91,6 +101,28 @@ impl Meeting {
             Transcript::Loaded(turns) => turns,
             Transcript::Unavailable(_) => &[],
         }
+    }
+
+    /// Chapter `index` as Markdown: its name, its line, and the turns that
+    /// start inside it, as `meeting::section_markdown`.
+    fn section_markdown(&self, index: usize) -> Option<String> {
+        let chapter = self.chapters.get(index)?;
+        let end = self.chapters.get(index + 1).map(|next| next.start_ms);
+        let turns = self
+            .turns()
+            .iter()
+            .filter(|turn| {
+                turn.start_ms >= chapter.start_ms && end.is_none_or(|end| turn.start_ms < end)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut markdown = format!("## {}\n\n", chapter.title.trim());
+        if !chapter.summary.trim().is_empty() {
+            markdown.push_str(chapter.summary.trim());
+            markdown.push_str("\n\n");
+        }
+        markdown.push_str(&transcript_markdown(&turns));
+        Some(markdown.trim_end().to_string())
     }
 
     fn searchable(&self) -> String {
@@ -122,7 +154,7 @@ pub(super) struct MeetingsPane {
     pub(super) delete_armed: Option<String>,
     action_error: Option<String>,
     /// What was last copied, for the button's "Copied".
-    copied: Option<(String, &'static str)>,
+    copied: Option<(String, String)>,
     pub(super) start_pending: bool,
     pub(super) stop_pending: bool,
 }
@@ -285,6 +317,7 @@ impl MeetingsPane {
                 notes_error: None,
                 live_error: None,
                 transcript: Transcript::Loaded(Vec::new()),
+                chapters: Vec::new(),
             };
         let mut live = meeting(
             "preview-live",
@@ -335,6 +368,38 @@ impl MeetingsPane {
             selected: Some("preview-notes".into()),
             ..Self::default()
         }
+    }
+
+    /// The fixture with live chapters (experiment `live-chapters`) on the
+    /// meeting with notes, its title extended by them.
+    pub(super) fn chapters_fixture() -> Self {
+        let mut pane = Self::fixture();
+        let chapter = |title: &str, summary: &str, seconds: u64| Chapter {
+            title: title.into(),
+            summary: summary.into(),
+            start_ms: seconds * 1_000,
+        };
+        if let Some(notes) = pane.meetings.iter_mut().find(|m| m.id == "preview-notes") {
+            notes.title = "Arcade launch plan: One login, Gravity well, Build screen".into();
+            notes.chapters = vec![
+                chapter(
+                    "One login",
+                    "One login for every Arcade game, twenty to thirty games in a couple of months.",
+                    0,
+                ),
+                chapter(
+                    "Gravity well",
+                    "A pulse and gravity well for transitions, prototyped in WebGPU.",
+                    31,
+                ),
+                chapter(
+                    "Build screen",
+                    "The build screen needs a written proposal.",
+                    95,
+                ),
+            ];
+        }
+        pane
     }
 }
 
@@ -400,9 +465,9 @@ fn trash(ui: &mut Ui, id: String) {
     }
 }
 
-fn copy(ui: &mut Ui, tx: &mut Tx, id: String, what: &'static str, text: String) {
+fn copy(ui: &mut Ui, tx: &mut Tx, id: String, what: impl Into<String>, text: String) {
     tx.copy(text);
-    ui.meetings.copied = Some((id, what));
+    ui.meetings.copied = Some((id, what.into()));
 }
 
 /// The status tag; `Ready` only in the detail header, so the list stays
@@ -514,7 +579,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
             let copied = pane
                 .copied
                 .as_ref()
-                .is_some_and(|(copied, what)| copied == &meeting.id && *what == "row");
+                .is_some_and(|(copied, what)| copied == &meeting.id && what == "row");
             // A pointer shortcut: keys move between rows, and the detail
             // has its own Copy.
             trailing.push(
@@ -592,7 +657,7 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
     let copied = |what: &str| {
         pane.copied
             .as_ref()
-            .is_some_and(|(id, copied)| id == &meeting.id && *copied == what)
+            .is_some_and(|(id, copied)| id == &meeting.id && copied == what)
     };
     let armed = pane.delete_armed.as_deref() == Some(meeting.id.as_str());
     let renaming = pane.renaming.as_deref() == Some(meeting.id.as_str());
@@ -762,6 +827,9 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
                 .color(p.faint()),
         );
     }
+    if !meeting.chapters.is_empty() {
+        body = body.child(chapters(p, meeting, &copied));
+    }
     let transcript_label = match meeting.status {
         Status::Starting | Status::Recording if !pane.stop_pending => tr("Live transcript"),
         Status::Starting | Status::Recording | Status::Transcribing => tr("Draft transcript"),
@@ -788,6 +856,68 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
         .child(super::scroll_body("meeting-transcript", body))
 }
 
+/// The meeting's chapters, each with its start, name, line, and Copy
+/// section.
+fn chapters(p: Paint, meeting: &Meeting, copied: &dyn Fn(&str) -> bool) -> El {
+    let mut list = col()
+        .key("chapters")
+        .gap(10.0)
+        .pb(16.0)
+        .child(section_label(p, "chapters-label", tr("Chapters")));
+    for (index, chapter) in meeting.chapters.iter().enumerate() {
+        let what = format!("chapter{index}");
+        let id = meeting.id.clone();
+        let mut words = col().key("words").gap(2.0).grow(1.0).shrink().child(
+            text(chapter.title.clone())
+                .key("title")
+                .font(p.k.ty.body_medium)
+                .color(p.text())
+                .wrap(),
+        );
+        if !chapter.summary.trim().is_empty() {
+            words = words.child(
+                text(chapter.summary.trim())
+                    .key("summary")
+                    .font(DESCRIPTION)
+                    .color(p.muted())
+                    .wrap(),
+            );
+        }
+        list = list.child(
+            row()
+                .key(format!("chapter{index}"))
+                .gap(12.0)
+                .child(
+                    text(clock_offset(chapter.start_ms))
+                        .key("clock")
+                        .font(p.k.ty.mono)
+                        .color(p.faint())
+                        .pt(1.0),
+                )
+                .child(words)
+                .child(small_button(
+                    p,
+                    "copy-section",
+                    if copied(&what) {
+                        tr("Copied")
+                    } else {
+                        tr("Copy section")
+                    },
+                    move |ui: &mut Ui, tx: &mut Tx| {
+                        if let Some(markdown) = ui
+                            .meetings
+                            .meeting(&id)
+                            .and_then(|meeting| meeting.section_markdown(index))
+                        {
+                            copy(ui, tx, id.clone(), what.clone(), markdown);
+                        }
+                    },
+                )),
+        );
+    }
+    list
+}
+
 /// Less common actions behind the ellipsis, Delete last.
 fn overflow(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> Option<El> {
     let active = meeting.status.is_active();
@@ -804,7 +934,7 @@ fn overflow(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> Option
             .meetings
             .copied
             .as_ref()
-            .is_some_and(|(copied, what)| copied == &meeting.id && *what == "notes");
+            .is_some_and(|(copied, what)| copied == &meeting.id && what == "notes");
         // Stays open so "Copied" confirms the copy.
         menu = menu.item(
             MenuItem::new(if copied {

@@ -101,6 +101,11 @@ impl MeetingCandidate {
             title: self.named.then(|| self.title.clone()),
             app: self.app_label(),
             calendar: None,
+            title_source: if self.source == MeetingSource::Manual {
+                crate::meeting::TitleSource::User
+            } else {
+                crate::meeting::TitleSource::Call
+            },
         }
     }
 

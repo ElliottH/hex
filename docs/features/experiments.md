@@ -30,13 +30,15 @@ hex experiments                          // experiments.cli; macOS, Windows, Lin
 The known experiments are compiled into
 [experiments.rs](../../src/experiments.rs):
 
-- `live-chapters`: chapter a meeting's transcript live while it records.
+- `live-chapters`: chapter a meeting's transcript live while it records
+  (macOS, Apple Intelligence; see
+  [Live Chapters](meetings.md#live-chapters-experiment-live-chapters)). The
+  gate is where the work starts: the recorder's chapter worker, recording
+  chapters in the manifest, and the boundary pass after Stop.
 - `vocabulary`: a shared list of names and their likely mis-transcriptions,
   for rewriting and search ([Vocabulary](vocabulary.md)). It adds a Settings
   card and the `hex vocabulary` commands, an exception to "nothing in the
   window shows them" that appears only while it is on.
-
-`live-chapters` doesn't exist yet, so turning it on changes nothing today.
 
 `hex experiments` reads and edits only the sources; it runs before process
 logging, the instance lock, the GUI, or permissions, and never talks to a

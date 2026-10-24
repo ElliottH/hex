@@ -1034,6 +1034,15 @@ fn pane_meeting(meeting: &crate::meeting::query::Meeting, now_ms: u64) -> Meetin
         notes_error: manifest.notes_error.clone(),
         live_error: manifest.live_transcription_error.clone(),
         transcript,
+        chapters: manifest
+            .chapters
+            .iter()
+            .map(|chapter| super::meetings::Chapter {
+                title: chapter.title.clone(),
+                summary: chapter.summary.clone(),
+                start_ms: chapter.start_ms,
+            })
+            .collect(),
     }
 }
 

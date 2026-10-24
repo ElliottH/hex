@@ -382,8 +382,17 @@ impl MeetingNotes {
 
 /// The title shown for a meeting. A meeting with a default app-and-time
 /// title shows its generated title, else its provisional title; a named or
-/// renamed meeting keeps its name.
+/// renamed meeting keeps its name. Chapters extend any title but one the
+/// user typed.
 pub fn display_title(manifest: &MeetingManifest) -> String {
+    let base = base_title(manifest);
+    if manifest.chapters.is_empty() || manifest.title_source() == super::TitleSource::User {
+        return base;
+    }
+    super::chapters::titled(&base, &manifest.chapters, manifest.duration_ms)
+}
+
+fn base_title(manifest: &MeetingManifest) -> String {
     if manifest.title != super::default_title(manifest.app.as_deref(), manifest.created_at_ms) {
         return manifest.title.clone();
     }
@@ -739,7 +748,7 @@ pub fn notes_wanted() -> bool {
 
 /// Yields to dictation for at most `DICTATION_WAIT`. Returns false when
 /// `stop` was set meanwhile.
-fn wait_for_dictation(stop: &AtomicBool) -> bool {
+pub(super) fn wait_for_dictation(stop: &AtomicBool) -> bool {
     let started = Instant::now();
     while crate::parakeet::dictation_busy() && started.elapsed() < DICTATION_WAIT {
         if stop.load(Ordering::Relaxed) {
@@ -771,8 +780,11 @@ fn summarize_claimed(id: &str, _claim: InProgress) -> Result<MeetingManifest> {
         return Err(eyre!("only completed meetings can be summarized"));
     }
     let entries = super::read_ndjson(&directory.join("transcript.ndjson"))?;
-    let started = Instant::now();
     let never = AtomicBool::new(false);
+    if crate::experiments::enabled(crate::experiments::Experiment::LiveChapters) {
+        super::chapters::refine_meeting(&directory, &entries, &never);
+    }
+    let started = Instant::now();
     let result = summarize_with_calendar(
         &entries,
         manifest.calendar.as_ref(),
