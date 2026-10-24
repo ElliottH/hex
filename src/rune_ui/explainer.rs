@@ -23,6 +23,13 @@ const PADDING: f32 = 18.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_GAP: f32 = 10.0;
 const KEYCAP_WIDTH: f32 = 28.0;
+const KEY_HEIGHT: f32 = 26.0;
+/// How far the face stands above its base: the lip showing below it.
+const KEY_DEPTH: f32 = 2.5;
+/// A press sinks the face most of the way, leaving a hairline of lip.
+const KEY_TRAVEL: f32 = 2.0;
+/// Seconds for the face to sink; it rises on the controls' spring.
+const KEY_PRESS: f32 = 0.07;
 const VISUAL_GAP: f32 = 10.0;
 /// The lanes' drawing width with a one-glyph keycap; a wider keycap
 /// stretches the drawing a little.
@@ -376,30 +383,49 @@ fn visual(
         )
 }
 
-/// The shortcut's key, pressed while the script holds it.
+/// The shortcut's key, pressed while the script holds it: a face on a base
+/// whose lip shows below it. A press sinks the face into the lip; the key's
+/// bounds never change.
 fn keycap(p: Paint, label: &str, down: bool) -> El {
     let c = &p.k.c;
-    let cap = row()
+    let face_height = KEY_HEIGHT - KEY_DEPTH;
+    // Each change springs with the spring of the state it heads to: in
+    // fast, back up on the controls' spring.
+    let spring = if down {
+        p.k.motion.control.with_duration(KEY_PRESS)
+    } else {
+        p.k.motion.control
+    };
+    let base = el()
+        .key("base")
+        .role("none")
+        .absolute(0.0, KEY_DEPTH)
+        .w_full()
+        .h(face_height)
+        .radius(p.k.radius.md)
+        .fill(c.border_base);
+    let face = row()
         .key("cap")
         .min_w(KEYCAP_WIDTH)
-        .h(24.0)
+        .h(face_height)
         .px(6.0)
         .center()
         .radius(p.k.radius.md)
-        .fill(if down { c.layer_02 } else { c.bg_base })
+        .mt(if down { KEY_TRAVEL } else { 0.0 })
+        .fill(if down {
+            c.bg_base.mix(c.black, 0.05)
+        } else {
+            c.bg_base
+        })
         .border(p.hair, c.border_weak)
+        .motion(spring)
         .child(
             text(label.to_string())
                 .key("label")
                 .font(DESCRIPTION)
                 .color(if down { p.text() } else { p.muted() }),
         );
-    let cap = if down {
-        cap.mt(2.0)
-    } else {
-        cap.shadow(2.0, 0.0, c.border_base)
-    };
-    col().key("keycap").h(26.0).child(cap)
+    col().key("keycap").h(KEY_HEIGHT).child(base).child(face)
 }
 
 /// Opaque lane colours over the panel, so overlapping pieces never darken.
