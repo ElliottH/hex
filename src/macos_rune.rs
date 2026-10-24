@@ -11,9 +11,10 @@
 //! - The listener (`recognition::listen`), the meeting controller, and the
 //!   local API keep their own threads.
 //!
-//! Closing the window hides it; Quit (menu bar, ⌘Q, `hex` local API shutdown
-//! or Ctrl-C) ends the loop, then stops and joins everything and ends the
-//! process with `_exit` ([`crate::process_exit`]). AppKit's own terminate
+//! Closing the window hides it; Quit (menu bar, ⌘Q, `hex quit`, `hex restart`
+//! and the onboarding relaunch after scheduling the new copy, or Ctrl-C) ends
+//! the loop, then stops and joins everything and ends the process with
+//! `_exit` ([`crate::process_exit`]). AppKit's own terminate
 //! (the quit Apple event, logout, Sparkle) does the same from its
 //! will-terminate notification.
 //!

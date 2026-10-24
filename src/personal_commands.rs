@@ -1803,15 +1803,16 @@ fn reload(
 }
 
 fn start_candidate(generation: u64, launch: &HostLaunch<'_>) -> Result<Candidate> {
-    let mut child = Command::new(launch.bun)
-        .arg(launch.host_entrypoint)
-        .arg(launch.config)
-        .current_dir(launch.workspace)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .wrap_err("could not start personal command host")?;
+    let mut child = spawn_host(
+        Command::new(launch.bun)
+            .arg(launch.host_entrypoint)
+            .arg(launch.config)
+            .current_dir(launch.workspace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit()),
+    )
+    .wrap_err("could not start personal command host")?;
     let Some(input) = child.stdin.take() else {
         kill_and_wait(&mut child);
         return Err(eyre!("host stdin unavailable"));
@@ -2563,8 +2564,38 @@ fn writer_queue_error(error: TrySendError<HostInput>) -> &'static str {
     }
 }
 
+/// Bun hosts not yet reaped. Quitting ends Hex with `_exit` without waiting
+/// for a host worker that misses its shutdown deadline, so
+/// [`kill_live_hosts`] stops whichever hosts are still running then.
+static LIVE_HOSTS: Mutex<std::collections::BTreeSet<u32>> =
+    Mutex::new(std::collections::BTreeSet::new());
+
+fn live_hosts() -> std::sync::MutexGuard<'static, std::collections::BTreeSet<u32>> {
+    LIVE_HOSTS.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn spawn_host(command: &mut Command) -> std::io::Result<Child> {
+    let mut hosts = live_hosts();
+    let child = command.spawn()?;
+    hosts.insert(child.id());
+    Ok(child)
+}
+
+/// Kills every Bun host still running. A registered host is never reaped
+/// before it leaves the set, so its pid cannot have been reused.
+#[cfg(unix)]
+pub fn kill_live_hosts() {
+    for &pid in live_hosts().iter() {
+        if let Ok(pid) = libc::pid_t::try_from(pid) {
+            // SAFETY: `kill` takes plain integers and has no memory effects.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
 fn kill_and_wait(child: &mut Child) {
     let _ = child.kill();
+    live_hosts().remove(&child.id());
     let _ = child.wait();
 }
 
@@ -3851,6 +3882,18 @@ mod tests {
             .unwrap();
         kill_and_wait(&mut child);
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quitting_kills_hosts_whose_worker_never_stopped_them() {
+        use std::os::unix::process::ExitStatusExt;
+        let mut child = spawn_host(Command::new("/bin/sh").args(["-c", "sleep 30"])).unwrap();
+        kill_live_hosts();
+        let status = child.wait().unwrap();
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+        kill_and_wait(&mut child);
+        assert!(!live_hosts().contains(&child.id()));
     }
 
     fn spawn_config_wait(

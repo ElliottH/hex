@@ -313,10 +313,12 @@ substitute for source inspection or a second roadmap.
   behind `experiments::enabled` and `hex experiments`.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
-- `process_exit`: how the macOS app ends. Every quit path (menu, local API,
-  Ctrl-C, and AppKit's terminate) stops and joins Hex's workers, bounded by a
-  deadline, then calls `_exit`, so C++ static destructors (ggml's Metal
-  device, Moonshine's transcriber map) never run under live threads.
+- `process_exit`: how the macOS app ends. Every quit path (menu, `hex quit`
+  and `hex restart`, Ctrl-C, and AppKit's terminate) stops and joins Hex's
+  workers, bounded by a 5 s deadline, kills any personal-command host left,
+  then calls `_exit`, so C++ static destructors (ggml's Metal device,
+  Moonshine's transcriber map) never run under live threads. A restart
+  schedules its relaunch first; the new copy waits for the old pid to exit.
 - `feedback`: bounded volume-controlled mode, capture, cancellation, and
   failure tones.
 
