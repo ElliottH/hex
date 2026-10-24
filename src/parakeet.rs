@@ -1056,16 +1056,7 @@ impl Parakeet {
         }
         let path = model_path(definition)?;
         let mut parakeet = Self::load_from(&path, true, Some(selection))?;
-        let prewarm_started = Instant::now();
-        let mut silence = Vec::new();
-        pad_for_parakeet(&mut silence);
-        parakeet
-            .transcribe(&silence)
-            .wrap_err("could not prewarm transcription model")?;
-        tracing::info!(
-            prewarm_ms = prewarm_started.elapsed().as_millis(),
-            "prewarmed transcription model"
-        );
+        parakeet.prewarm()?;
         let stream_run = parakeet.stream_run_options();
         let architecture = match definition.runtime {
             crate::transcription_models::ModelRuntime::Gguf(artifact) => artifact.architecture,
@@ -1209,6 +1200,23 @@ impl Parakeet {
             ),
             stream: None,
         })
+    }
+
+    /// Runs a short silent inference. ggml keeps the Metal weights resident
+    /// for only three minutes after a run; then macOS may compress or swap
+    /// them out, and the next run pays to bring them back. A prewarm pays that
+    /// before the audio arrives.
+    pub(crate) fn prewarm(&mut self) -> Result<()> {
+        let started = Instant::now();
+        let mut silence = Vec::new();
+        pad_for_parakeet(&mut silence);
+        self.transcribe(&silence)
+            .wrap_err("could not prewarm transcription model")?;
+        tracing::info!(
+            prewarm_ms = started.elapsed().as_millis(),
+            "prewarmed transcription model"
+        );
+        Ok(())
     }
 
     pub(crate) fn name(&self) -> &str {

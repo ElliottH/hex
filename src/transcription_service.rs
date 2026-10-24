@@ -328,17 +328,28 @@ fn check_canceled(canceled: &AtomicBool) -> std::result::Result<(), Transcriptio
     }
 }
 
+/// Loads `selection`, or prewarms it when it is already loaded, so a host can
+/// prepare when it starts recording and its clips skip the idle restore.
 fn prepare(
     active: &mut WarmTranscriber,
     selection: &TranscriptionSelection,
     canceled: &Arc<AtomicBool>,
 ) -> std::result::Result<(), TranscriptionServiceError> {
-    if with_shared_model(selection, canceled, |_| ())?.is_some() {
+    if let Some(prewarmed) = with_shared_model(selection, canceled, Transcriber::prewarm)? {
         *active = WarmTranscriber::default();
-        return Ok(());
+        return prewarmed.map_err(|error| TranscriptionServiceError::Model(error.to_string()));
     }
     check_canceled(canceled)?;
-    load(active, selection).map(drop)
+    let loaded = active
+        .active()
+        .is_some_and(|model| model.matches_selection(selection));
+    let model = load(active, selection)?;
+    if loaded {
+        model
+            .prewarm()
+            .map_err(|error| TranscriptionServiceError::Model(error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn load<'a>(

@@ -60,6 +60,15 @@ impl Transcriber {
         }
     }
 
+    /// Brings an idle GGUF model's weights back before audio arrives (see
+    /// [`Parakeet::prewarm`]). Apple Speech has no weights of Hex's to warm.
+    pub fn prewarm(&mut self) -> Result<()> {
+        match self {
+            Self::Gguf(model) => model.prewarm(),
+            Self::AppleSpeech(_) => Ok(()),
+        }
+    }
+
     /// Transcribe normalized 16 kHz audio. Backend padding is applied once here,
     /// before GGUF chunking or any voice-control retranscription.
     pub fn transcribe(&mut self, mut samples: Vec<f32>) -> Result<String> {

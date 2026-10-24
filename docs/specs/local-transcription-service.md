@@ -209,6 +209,14 @@ only verified replacement files, and preserves the previous warm runtime if
 candidate loading fails. A verified download can remain installed after a load
 failure; artifact publication and runtime activation are separate steps.
 
+Preparing a model that is already loaded, including the desktop app's
+dictation model, reruns the prewarm: a one-second silent inference that, in
+the app, yields to dictation like meeting chunks. ggml keeps the Metal weights
+resident for three minutes after a run; then macOS may compress or swap them,
+and the next transcription pays to restore them. A host that records its own
+audio can prepare when recording starts, so the restore happens while it
+records rather than after.
+
 ### Ready Transcriber
 
 SDK `0.3.0` adds a model-bound operation to both entrypoints:
