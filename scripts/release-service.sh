@@ -78,6 +78,13 @@ api() {
   esac
 }
 
+# The package managers that mirror Hex, each as the service lists it.
+distributions='[
+  {"kind": "aur", "package": "hex-bin", "command": "yay -Syu hex-bin"},
+  {"kind": "brew", "cask": "anomalyco/tap/hex", "command": "brew upgrade --cask anomalyco/tap/hex"},
+  {"kind": "nix", "attribute": "github:anomalyco/hex", "command": "nix profile upgrade hex"}
+]'
+
 sha256_of() {
   sha256sum < "$1" | awk '{ print $1 }'
 }
@@ -137,13 +144,9 @@ publish() {
     --arg version "$release_version" \
     --arg notes_url "$notes_url" \
     --argjson targets "$pinned" \
+    --argjson distributions "$distributions" \
     '{channel: $channel, version: $version, notes_url: $notes_url, targets: $targets,
-      distributions: [
-        {kind: "direct"},
-        {kind: "aur", package: "hex-bin", command: "yay -Syu hex-bin"},
-        {kind: "brew", cask: "anomalyco/tap/hex", command: "brew upgrade --cask anomalyco/tap/hex"},
-        {kind: "nix", attribute: "github:anomalyco/hex", command: "nix profile upgrade hex"}
-      ]}' > "$temporary/release.json"
+      distributions: ([{kind: "direct"}] + $distributions)}' > "$temporary/release.json"
   request -H 'content-type: application/json' --data-binary @"$temporary/release.json" \
     "$RELEASE/$app/$artifact/releases" > "$dist/manifest.json"
   case "$status" in
@@ -184,7 +187,10 @@ publish() {
 distribution() {
   kind=$1
   version=$2
-  jq -n --arg kind "$kind" --arg version "$version" '{kind: $kind, version: $version}' > "$temporary/distribution.json"
+  # The whole entry, so recording a version never drops its command.
+  printf '%s' "$distributions" | jq -e --arg kind "$kind" --arg version "$version" \
+    'map(select(.kind == $kind))[0] // error("unknown distribution \($kind)") | . + {version: $version}' \
+    > "$temporary/distribution.json"
   api -H 'content-type: application/json' --data-binary @"$temporary/distribution.json" \
     "$RELEASE/$app/$artifact/$channel/distribution" \
     | jq -e --arg kind "$kind" --arg version "$version" \
