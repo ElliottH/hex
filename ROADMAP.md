@@ -42,6 +42,31 @@ the DMG from a clean macOS account, including every TCC permission, model
 installation, and source-free launch. Preserve the stable bundle identity that
 owns Microphone, Accessibility, Input Monitoring, and Automation permissions.
 
+## Fold Scrawl Into Hex
+
+Hex becomes the one app for dictation, screen captures, and feedback to
+OpenCode sessions (Kit, 2026-10-24). Scrawl's code moves into this repository.
+Separate keys stay at first: dictation, `⌥⇧S` capture, and an experimental Send
+key that routes speech to a session. The Scrawl app is retired after the
+release freeze with an informational pointer update; nothing is deleted or
+force-replaced. Until then, every step lands dormant behind an experiment.
+
+1. One session router, shared with Scrawl's `scrawl router` CLI: signed pages
+   and site rules first, then a Jev choice; a confident send waits behind a
+   short undoable toast, an unsure one opens a one-key picker, and a low one
+   goes to a fallback session. Hex's `send-to-session` experiment calls it and
+   logs only ids, scores, and the model.
+2. Scrawl's capture engine (recording, keyframes, bundles, delivery, iPhone
+   ingest) becomes a UI-free workspace crate here, with history preserved.
+3. Hex hosts captures behind an experiment: its microphone timeline, input tap,
+   and Parakeet (with word timestamps) drive the engine, and the capsule is
+   rebuilt in Rune. Hex refuses the capture shortcut while Scrawl runs.
+4. One window and onboarding: a Captures pane, merged permissions, iPhone and
+   ScrawlKit ingest, retention, export, `hex capture`, and a one-time read-only
+   import of Scrawl's settings. Captures stay in Scrawl's folder.
+5. After the freeze: ship, point Scrawl's last update and cask at Hex, and
+   redirect its site.
+
 ## Finish Settings And First-Run Health
 
 Later, split features from settings into two windows (Kit, 2026-10-24; deferred
