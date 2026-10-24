@@ -135,15 +135,26 @@ impl DictationProtocol {
         self.stop.iter().chain(&self.send).chain(&self.cancel)
     }
 
-    pub fn control_suffix_word_count(&self, words: &[String]) -> Option<usize> {
+    /// The control phrase that ends `words`, and how many words it takes.
+    pub fn control_suffix_words(&self, words: &[String]) -> Option<(DictationControl, usize)> {
         let words = words.iter().map(|word| normalize(word)).collect::<Vec<_>>();
-        self.control_phrases().find_map(|phrase| {
-            let control = spoken_words(phrase)
+        self.controls().find_map(|(phrase, control)| {
+            let phrase = spoken_words(phrase)
                 .into_iter()
                 .map(|word| word.normalized)
                 .collect::<Vec<_>>();
-            words.ends_with(&control).then_some(control.len())
+            words.ends_with(&phrase).then_some((control, phrase.len()))
         })
+    }
+
+    fn controls(&self) -> impl Iterator<Item = (&String, DictationControl)> {
+        [
+            (&self.stop, DictationControl::Stop),
+            (&self.send, DictationControl::Send),
+            (&self.cancel, DictationControl::Cancel),
+        ]
+        .into_iter()
+        .flat_map(|(phrases, control)| phrases.iter().map(move |phrase| (phrase, control)))
     }
 
     pub fn start_prefix(&self, text: &str) -> Option<usize> {
@@ -220,6 +231,21 @@ pub enum DictationControl {
     Stop,
     Send,
     Cancel,
+}
+
+/// A voice-delimited transcript without its control phrase, and the control
+/// it ended with.
+pub struct VoiceTranscript {
+    pub text: String,
+    pub control: Option<DictationControl>,
+}
+
+impl VoiceTranscript {
+    /// `text` as transcribed, still carrying any control phrase.
+    pub fn heard(text: String, protocol: &DictationProtocol) -> Self {
+        let control = protocol.control_suffix(&text).map(|(control, _)| control);
+        Self { text, control }
+    }
 }
 
 #[derive(Default)]
@@ -1648,13 +1674,21 @@ mod tests {
         );
         assert!(protocol.control_suffix("Essay stop").is_none());
         assert_eq!(
-            protocol.control_suffix_word_count(&[
+            protocol.control_suffix_words(&[
                 "Meet".into(),
                 "me".into(),
                 "Say,".into(),
                 "stop.".into(),
             ]),
-            Some(2)
+            Some((DictationControl::Stop, 2))
+        );
+        assert_eq!(
+            DictationProtocol::default().control_suffix_words(&[
+                "Hello".into(),
+                "dictate".into(),
+                "cancel.".into(),
+            ]),
+            Some((DictationControl::Cancel, 2))
         );
     }
 

@@ -163,28 +163,39 @@ It finishes a hands-free capture when the speaker seems done, so a locked
 capture needs no finishing press.
 
 ```ts
-Hands-free capture records                         // dictate.smart-turn
-  // double-tap LOCKED, Toggle, `hex dictation start` (it locks), or the
-  // spoken start phrase; never Hold, Voice Action, API capture, or meetings
-  -> 16 kHz, 20 ms frames, the meeting pause detector's speech rule
-  -> First hands-free capture -> Download and verify the pinned model
-       // models/smart-turn-v3.2-cpu.onnx in Application Support, size + SHA-256
-  ├── Under 200 ms of speech so far -> Pauses don't count
-  ├── Silence reaches the check point (300 ms)
-  │     -> Worker scores the last 8 s           // off the audio loop; newest pause wins
-  │     ├── P >= threshold (0.7) -> Finish as a locked finishing press
-  │     │     // hotkey: same release tail, transcription, paste, tones
-  │     │     // spoken start: as the stop phrase, without the phrase
-  │     └── P < threshold -> Keep listening
-  ├── Silence reaches the fallback (2 s) -> Finish the same way
-  ├── Speech resumes, or the capture ends or changes -> Late answer ignored
-  ├── Escape -> Cancel as usual
-  └── Download, runtime, or model fails -> Logged; dictation as if it were off
+Shortcut or spoken-start dictation records         // dictate.smart-turn
+  // only double-tap LOCKED, Toggle after its release, `hex dictation start`
+  // (it locks), or the spoken start phrase may stop; never Hold, Voice
+  // Action, edit, API capture, or meetings
+  -> First such capture -> Find the ONNX Runtime library, then download and
+       verify the pinned model           // models/smart-turn-v3.2-cpu.onnx, size + SHA-256
+  ├── Model not ready yet -> Nothing is followed; no check, no fallback
+  └── Model ready -> 16 kHz, 20 ms frames, the meeting pause detector's speech rule
+        // shortcut: from the press, so speech while the key is down counts
+        // spoken start: only audio after the start phrase ends
+        ├── Under 200 ms of speech so far -> Pauses don't count
+        ├── Not hands-free yet (key still down) -> Speech counts, pauses don't
+        │     // the silence clock starts again at the lock
+        ├── Silence reaches the check point (300 ms)
+        │     -> Worker scores the last 8 s     // off the audio loop; newest pause wins
+        │     ├── P >= threshold (0.7) -> Finish as a locked finishing press
+        │     │     // hotkey: same release tail, transcription, paste, tones;
+        │     │     // shortcut presses during the tail are ignored
+        │     │     // spoken start: as the stop phrase; a control phrase at
+        │     │     // the end of the transcript still applies, so
+        │     │     // "dictate cancel" cancels and "dictate send" sends
+        │     ├── P < threshold -> Keep listening
+        │     └── P not a finite number -> `failed`; keep listening
+        ├── Silence reaches the fallback (2 s) -> Finish the same way
+        ├── Speech resumes, or the capture ends or changes -> Late answer ignored
+        ├── Escape or shortcut press queued -> Handled first; the stop waits
+        └── Download, runtime, or model fails -> Logged; dictation as if it were off
 ```
 
 `HEX_SMART_TURN_CHECK_MS`, `HEX_SMART_TURN_THRESHOLD`, and
 `HEX_SMART_TURN_FALLBACK_MS` override the defaults at launch (invalid values
-are logged and ignored; the fallback is never shorter than the check). A
+are logged and ignored; the fallback is at least 500 ms after the check, so
+the model is always asked first). A
 patient preset is `1500`, `0.8`, `3000`. Every check writes one `smart_turn`
 event to `live.ndjson` with the probability, silence, decision (`stop`,
 `continue`, `fallback`, `stale`, `failed`), and inference time, never text.
@@ -197,14 +208,22 @@ synthetic signal), `checks_once_per_pause_after_speech`,
 `silence_alone_never_checks_or_stops`,
 `a_confident_answer_stops_and_a_doubtful_one_waits_for_the_fallback`,
 `answers_about_an_earlier_pause_are_stale`,
+`the_model_is_always_asked_before_the_fallback`,
 `stops_a_hands_free_capture_when_the_model_hears_the_end`,
 `an_answer_for_an_ended_or_newer_capture_does_nothing`,
-`a_failed_load_leaves_dictation_alone`, and `off_by_default_nothing_loads`,
-all with a scripted predictor. The ignored
+`an_ended_capture_drops_its_waiting_check`,
+`nothing_is_followed_or_stopped_before_the_model_is_ready`,
+`a_failed_load_leaves_dictation_alone`,
+`speech_while_held_counts_but_only_a_hands_free_capture_stops`,
+`listening_starts_after_the_start_phrase`,
+`a_non_finite_probability_fails_the_check`,
+`non_finite_samples_read_as_silence`, and `off_reads_and_loads_nothing`,
+all with a scripted predictor; `a_spoken_control_decides_a_smart_turn_voice_target`
+in [parakeet.rs](../../src/parakeet.rs). The ignored
 `real_model_matches_python_on_the_reference_signal` downloads the model and
 matched Python onnxruntime 1.23.2 (P 0.8643) on 2026-10-24. Not covered: the
-recognition-loop wiring, a physical microphone, or whether the defaults suit
-real speech.
+recognition-loop wiring (queued input, the release tail, spoken controls end
+to end), a physical microphone, or whether the defaults suit real speech.
 
 ### Warm And Cold Capture
 

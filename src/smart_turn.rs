@@ -11,8 +11,10 @@
 
 use std::collections::VecDeque;
 use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
@@ -22,6 +24,7 @@ use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use fs2::FileExt;
 use realfft::RealFftPlanner;
 
+use crate::audio::CaptureInstant;
 use crate::dictation::StreamingResampler;
 use crate::events::{SmartTurnDecision, VoiceEvent};
 use crate::experiments::{self, Experiment};
@@ -33,6 +36,8 @@ const FRAME: Duration = Duration::from_millis(20);
 /// Speech heard before pauses count, so the shortcut's own click never arms
 /// the fallback before someone talks.
 const MIN_SPEECH: Duration = Duration::from_millis(200);
+/// How much longer than the check point the fallback waits, at least.
+const MIN_FALLBACK_LEAD: Duration = Duration::from_millis(500);
 const MEL_BINS: usize = 80;
 const MEL_FRAMES: usize = WINDOW_SAMPLES / HOP;
 const N_FFT: usize = 400;
@@ -87,7 +92,8 @@ impl Settings {
                 _ => tracing::warn!(value, "ignoring invalid HEX_SMART_TURN_THRESHOLD"),
             }
         }
-        settings.fallback = settings.fallback.max(settings.check);
+        // The model always gets a turn before the plain-silence stop.
+        settings.fallback = settings.fallback.max(settings.check + MIN_FALLBACK_LEAD);
         settings
     }
 }
@@ -110,7 +116,11 @@ pub fn log_mel(audio: &[f32]) -> Vec<f32> {
     let tail = &audio[audio.len().saturating_sub(WINDOW_SAMPLES)..];
     let mut signal = vec![0.0_f64; WINDOW_SAMPLES];
     for (target, sample) in signal[WINDOW_SAMPLES - tail.len()..].iter_mut().zip(tail) {
-        *target = f64::from(*sample);
+        *target = if sample.is_finite() {
+            f64::from(*sample)
+        } else {
+            0.0
+        };
     }
     let mean = signal.iter().sum::<f64>() / WINDOW_SAMPLES as f64;
     let variance = signal.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / WINDOW_SAMPLES as f64;
@@ -250,6 +260,9 @@ struct Turn {
     pause: u64,
     checked: bool,
     stopped: bool,
+    /// Whether a pause may end this capture yet: speech while a shortcut
+    /// is still held counts, but only a hands-free capture stops.
+    armed: bool,
 }
 
 impl Turn {
@@ -265,6 +278,7 @@ impl Turn {
             pause: 0,
             checked: false,
             stopped: false,
+            armed: true,
         }
     }
 
@@ -308,6 +322,9 @@ impl Turn {
             self.pause += 1;
             self.checked = false;
         }
+        if !self.armed {
+            return None;
+        }
         let silence = self.silence();
         if silence >= self.settings.fallback {
             self.stopped = true;
@@ -322,6 +339,16 @@ impl Turn {
             }));
         }
         None
+    }
+
+    /// Silence before the capture became hands-free never counts toward a
+    /// stop: the clock starts again at the lock.
+    fn set_armed(&mut self, armed: bool) {
+        if armed && !self.armed {
+            self.silent_frames = 0;
+            self.checked = false;
+        }
+        self.armed = armed;
     }
 
     /// The verdict on an answer about `pause`.
@@ -342,7 +369,9 @@ pub trait Predictor {
     fn predict(&mut self, features: &[f32]) -> Result<f32>;
 }
 
-type Loader = Box<dyn FnOnce() -> Result<Box<dyn Predictor>> + Send>;
+/// Loads the predictor on the worker thread. It returns early with an error
+/// once the flag says the worker closed.
+type Loader = Box<dyn FnOnce(&AtomicBool) -> Result<Box<dyn Predictor>> + Send>;
 
 struct Request {
     capture: u64,
@@ -352,6 +381,7 @@ struct Request {
 }
 
 enum Answer {
+    Ready,
     Unavailable(String),
     Predicted {
         capture: u64,
@@ -368,50 +398,79 @@ struct Slot {
     closed: bool,
 }
 
+#[derive(Default)]
+struct Shared {
+    slot: Mutex<Slot>,
+    ready: Condvar,
+    closed: AtomicBool,
+}
+
+impl Shared {
+    fn slot(&self) -> std::sync::MutexGuard<'_, Slot> {
+        self.slot.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
 /// The inference thread: one pending request, replaced by newer ones.
 struct Worker {
-    shared: Arc<(Mutex<Slot>, Condvar)>,
+    shared: Arc<Shared>,
     answers: Receiver<Answer>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Worker {
     fn spawn(loader: Loader) -> Result<Self> {
-        let shared = Arc::new((Mutex::new(Slot::default()), Condvar::new()));
+        let shared = Arc::new(Shared::default());
         let (sender, answers) = mpsc::channel();
         let thread_shared = shared.clone();
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("smart-turn".into())
             .spawn(move || serve(loader, &thread_shared, &sender))?;
-        Ok(Self { shared, answers })
+        Ok(Self {
+            shared,
+            answers,
+            thread: Some(thread),
+        })
     }
 
     fn submit(&self, request: Request) {
-        let (slot, ready) = &*self.shared;
-        slot.lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .request = Some(request);
-        ready.notify_one();
+        self.shared.slot().request = Some(request);
+        self.shared.ready.notify_one();
+    }
+
+    fn clear(&self) {
+        self.shared.slot().request = None;
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        let (slot, ready) = &*self.shared;
-        slot.lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .closed = true;
-        ready.notify_one();
+        self.shared.closed.store(true, Ordering::Release);
+        {
+            let mut slot = self.shared.slot();
+            slot.request = None;
+            slot.closed = true;
+        }
+        self.shared.ready.notify_one();
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            tracing::error!("Smart Turn worker panicked");
+        }
     }
 }
 
-fn serve(loader: Loader, shared: &(Mutex<Slot>, Condvar), answers: &Sender<Answer>) {
+fn serve(loader: Loader, shared: &Shared, answers: &Sender<Answer>) {
     let started = Instant::now();
-    let mut predictor = match loader() {
+    let mut predictor = match loader(&shared.closed) {
         Ok(predictor) => {
             tracing::info!(
                 load_ms = started.elapsed().as_millis() as u64,
                 "Smart Turn model ready"
             );
+            if answers.send(Answer::Ready).is_err() {
+                return;
+            }
             predictor
         }
         Err(error) => {
@@ -419,10 +478,9 @@ fn serve(loader: Loader, shared: &(Mutex<Slot>, Condvar), answers: &Sender<Answe
             return;
         }
     };
-    let (slot, ready) = shared;
     loop {
         let request = {
-            let mut slot = slot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut slot = shared.slot();
             loop {
                 if slot.closed {
                     return;
@@ -430,13 +488,23 @@ fn serve(loader: Loader, shared: &(Mutex<Slot>, Condvar), answers: &Sender<Answe
                 if let Some(request) = slot.request.take() {
                     break request;
                 }
-                slot = ready.wait(slot).unwrap_or_else(|error| error.into_inner());
+                slot = shared
+                    .ready
+                    .wait(slot)
+                    .unwrap_or_else(|error| error.into_inner());
             }
         };
         let started = Instant::now();
         let result = predictor
             .predict(&log_mel(&request.audio))
-            .map_err(|error| format!("{error:#}"));
+            .map_err(|error| format!("{error:#}"))
+            .and_then(|probability| {
+                if probability.is_finite() {
+                    Ok(probability)
+                } else {
+                    Err(format!("Smart Turn returned {probability}"))
+                }
+            });
         let answer = Answer::Predicted {
             capture: request.capture,
             pause: request.pause,
@@ -460,14 +528,6 @@ pub struct Report {
 }
 
 impl Report {
-    /// Whether the capture should finish now.
-    pub fn stops(&self) -> bool {
-        matches!(
-            self.decision,
-            SmartTurnDecision::Stop | SmartTurnDecision::Fallback
-        )
-    }
-
     pub fn event(&self, timestamp_ms: u64) -> VoiceEvent {
         VoiceEvent::SmartTurn {
             timestamp_ms,
@@ -479,18 +539,34 @@ impl Report {
     }
 }
 
+/// The capture Smart Turn follows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Capture {
+    /// The audio owner's capture generation.
+    pub generation: u64,
+    /// Audio captured before this instant is ignored: the end of a spoken
+    /// start phrase, so its tail and queued earlier audio never count.
+    pub listen_from: Option<CaptureInstant>,
+    /// Whether a pause may end the capture now (it records hands-free).
+    pub armed: bool,
+}
+
 struct Session {
     capture: u64,
     turn: Turn,
+    /// Audio before this instant was ignored or already heard.
+    heard_through: Option<CaptureInstant>,
     resampler: Option<(u32, Option<StreamingResampler>)>,
+    stop: bool,
 }
 
-/// Smart Turn for the recognition loop: tracks the active hands-free
-/// capture, feeds its audio, and reports checks and stop decisions.
+/// Smart Turn for the recognition loop: tracks the active capture, feeds
+/// its audio, and reports checks and stop decisions.
 pub struct SmartTurn {
     settings: Settings,
     loader: Option<Loader>,
     worker: Option<Worker>,
+    ready: bool,
     unavailable: bool,
     session: Option<Session>,
     reports: Vec<Report>,
@@ -498,42 +574,52 @@ pub struct SmartTurn {
 
 impl SmartTurn {
     /// `None` unless the `smart-turn` experiment is on. Nothing downloads,
-    /// loads, or runs until the first hands-free capture.
+    /// loads, or runs until the first capture.
     pub fn start(project_root: &Path) -> Option<Self> {
-        let project_root = project_root.to_path_buf();
-        Self::start_if(experiments::enabled(Experiment::SmartTurn), settings(), {
-            Box::new(move || load_onnx(&project_root))
-        })
+        Self::start_if(
+            experiments::enabled(Experiment::SmartTurn),
+            settings,
+            || {
+                let project_root = project_root.to_path_buf();
+                Box::new(move |closed| load_onnx(&project_root, closed))
+            },
+        )
     }
 
-    fn start_if(enabled: bool, settings: Settings, loader: Loader) -> Option<Self> {
-        enabled.then(|| {
-            tracing::info!(?settings, "Smart Turn experiment is on");
-            Self {
-                settings,
-                loader: Some(loader),
-                worker: None,
-                unavailable: false,
-                session: None,
-                reports: Vec::new(),
-            }
-        })
+    /// Reads nothing and allocates nothing while the experiment is off.
+    fn start_if(
+        enabled: bool,
+        settings: impl FnOnce() -> Settings,
+        loader: impl FnOnce() -> Loader,
+    ) -> Option<Self> {
+        enabled.then(|| Self::new(settings(), loader()))
     }
 
-    /// Follows the hands-free capture: `Some` with its capture generation
-    /// while one records, `None` otherwise.
-    pub fn track(&mut self, capture: Option<u64>) {
+    fn new(settings: Settings, loader: Loader) -> Self {
+        tracing::info!(?settings, "Smart Turn experiment is on");
+        Self {
+            settings,
+            loader: Some(loader),
+            worker: None,
+            ready: false,
+            unavailable: false,
+            session: None,
+            reports: Vec::new(),
+        }
+    }
+
+    /// Follows the capture that records now, or `None` when none does. The
+    /// first capture starts loading the model; captures are followed only
+    /// once it is ready, so nothing stops a capture before the model can.
+    pub fn track(&mut self, capture: Option<Capture>) {
         let Some(capture) = capture.filter(|_| !self.unavailable) else {
-            self.session = None;
+            if self.session.take().is_some()
+                && let Some(worker) = &self.worker
+            {
+                worker.clear();
+            }
             return;
         };
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.capture == capture)
-        {
-            return;
-        }
         if let Some(loader) = self.loader.take() {
             match Worker::spawn(loader) {
                 Ok(worker) => self.worker = Some(worker),
@@ -544,16 +630,52 @@ impl SmartTurn {
                 }
             }
         }
-        self.session = Some(Session {
-            capture,
-            turn: Turn::new(self.settings),
-            resampler: None,
-        });
+        if !self.ready {
+            return;
+        }
+        match &mut self.session {
+            Some(session) if session.capture == capture.generation => {
+                session.turn.set_armed(capture.armed);
+            }
+            _ => {
+                if let Some(worker) = &self.worker {
+                    worker.clear();
+                }
+                let mut turn = Turn::new(self.settings);
+                turn.set_armed(capture.armed);
+                self.session = Some(Session {
+                    capture: capture.generation,
+                    turn,
+                    heard_through: capture.listen_from,
+                    resampler: None,
+                    stop: false,
+                });
+            }
+        }
     }
 
-    /// Feeds the tracked capture's microphone audio.
-    pub fn push(&mut self, samples: &[f32], sample_rate: u32) {
+    /// Feeds microphone audio that began at `captured_from`. Audio before
+    /// the capture's listening point, or already heard, is skipped.
+    pub fn push(&mut self, samples: &[f32], sample_rate: u32, captured_from: CaptureInstant) {
         let Some(session) = &mut self.session else {
+            return;
+        };
+        let skip = session.heard_through.map_or(0, |heard| {
+            let early = heard
+                .checked_duration_since(captured_from)
+                .unwrap_or_default();
+            (early.as_secs_f64() * f64::from(sample_rate)).round() as usize
+        });
+        let captured_through = captured_from.checked_add(crate::audio::duration_for_frames(
+            samples.len(),
+            sample_rate,
+        ));
+        if let Some(through) = captured_through
+            && session.heard_through.is_none_or(|heard| through > heard)
+        {
+            session.heard_through = Some(through);
+        }
+        let Some(samples) = samples.get(skip..).filter(|samples| !samples.is_empty()) else {
             return;
         };
         if session
@@ -594,12 +716,15 @@ impl SmartTurn {
                         });
                     }
                 }
-                Step::Fallback { silence } => self.reports.push(Report {
-                    probability: None,
-                    silence_ms: silence.as_millis() as u64,
-                    decision: SmartTurnDecision::Fallback,
-                    inference_ms: None,
-                }),
+                Step::Fallback { silence } => {
+                    session.stop = true;
+                    self.reports.push(Report {
+                        probability: None,
+                        silence_ms: silence.as_millis() as u64,
+                        decision: SmartTurnDecision::Fallback,
+                        inference_ms: None,
+                    });
+                }
             }
         }
     }
@@ -612,6 +737,7 @@ impl SmartTurn {
             .and_then(|worker| worker.answers.try_recv().ok())
         {
             match answer {
+                Answer::Ready => self.ready = true,
                 Answer::Unavailable(error) => {
                     tracing::error!(%error, "Smart Turn is unavailable; dictation continues without it");
                     self.unavailable = true;
@@ -630,7 +756,9 @@ impl SmartTurn {
                             Some(probability),
                             match &mut self.session {
                                 Some(session) if session.capture == capture => {
-                                    session.turn.decide(pause, probability)
+                                    let decision = session.turn.decide(pause, probability);
+                                    session.stop |= decision == SmartTurnDecision::Stop;
+                                    decision
                                 }
                                 _ => SmartTurnDecision::Stale,
                             },
@@ -650,6 +778,15 @@ impl SmartTurn {
             }
         }
         std::mem::take(&mut self.reports)
+    }
+
+    /// Whether the followed capture should finish now. The request stays
+    /// until taken or the capture ends, so a caller that must first handle
+    /// queued input can take it on a later turn.
+    pub fn take_stop(&mut self) -> bool {
+        self.session
+            .as_mut()
+            .is_some_and(|session| std::mem::take(&mut session.stop))
     }
 }
 
@@ -678,9 +815,10 @@ impl Predictor for OnnxPredictor {
     }
 }
 
-fn load_onnx(project_root: &Path) -> Result<Box<dyn Predictor>> {
-    let model = install_model()?;
+fn load_onnx(project_root: &Path, closed: &AtomicBool) -> Result<Box<dyn Predictor>> {
+    // Without the runtime the model is useless, so it isn't downloaded.
     init_runtime(&find_runtime(project_root)?)?;
+    let model = install_model(closed)?;
     let builder_error = |error: ort::Error<ort::session::builder::SessionBuilder>| eyre!("{error}");
     let session = ort::session::Session::builder()
         .map_err(|error| eyre!("{error}"))?
@@ -740,8 +878,8 @@ fn find_runtime(project_root: &Path) -> Result<PathBuf> {
 }
 
 /// The pinned model in Application Support, downloaded and verified on
-/// first use.
-fn install_model() -> Result<PathBuf> {
+/// first use. The download stops once `closed` is set.
+fn install_model(closed: &AtomicBool) -> Result<PathBuf> {
     let directory = crate::transcription_models::models_dir()?;
     fs::create_dir_all(&directory)?;
     let lock = File::create(directory.join(".smart-turn.lock"))?;
@@ -755,7 +893,7 @@ fn install_model() -> Result<PathBuf> {
         fs::remove_file(&partial)?;
     }
     tracing::info!("downloading the Smart Turn model");
-    let output = Command::new("/usr/bin/curl")
+    let mut child = Command::new("/usr/bin/curl")
         .args([
             "--fail",
             "--location",
@@ -773,13 +911,30 @@ fn install_model() -> Result<PathBuf> {
         ])
         .arg(&partial)
         .arg(MODEL_URL)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
         .wrap_err("could not start the Smart Turn model download")?;
-    if !output.status.success() {
+    let status = loop {
+        if closed.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("Smart Turn closed during the model download");
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    if !status.success() {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = child.stderr.take() {
+            let _ = pipe.read_to_string(&mut stderr);
+        }
         bail!(
-            "could not download the Smart Turn model ({}): {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            "could not download the Smart Turn model ({status}): {}",
+            stderr.trim()
         );
     }
     if let Err(error) = verify_model(&partial) {
@@ -807,7 +962,6 @@ fn verify_model(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::pause_segmenter::tests::utterance;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// The reference signal `ref.py` fed `WhisperFeatureExtractor`: 2.5 s of
     /// a modulated 220 Hz tone plus 1250 Hz, then 0.5 s of a faint 50 Hz hum.
@@ -971,120 +1125,310 @@ mod tests {
         assert_eq!(turn.decide(second.pause, 0.99), SmartTurnDecision::Stop);
     }
 
+    #[test]
+    fn the_model_is_always_asked_before_the_fallback() {
+        let settings = Settings::from_lookup(|name| {
+            match name {
+                "HEX_SMART_TURN_CHECK_MS" => Some("1500"),
+                "HEX_SMART_TURN_FALLBACK_MS" => Some("1000"),
+                _ => None,
+            }
+            .map(Into::into)
+        });
+        assert_eq!(settings.fallback, Duration::from_millis(2_000));
+        let mut turn = Turn::new(settings);
+        let steps = turn.push(&utterance(&[(1_000, 2_000)], -70.0));
+        assert_eq!(steps.len(), 2, "{steps:?}");
+        assert!(matches!(&steps[0], Step::Check(check) if check.silence == settings.check));
+        assert_eq!(
+            steps[1],
+            Step::Fallback {
+                silence: Duration::from_millis(2_000)
+            }
+        );
+    }
+
     /// Answers each request with the next scripted probability, only once
     /// the test opens the gate.
     struct Scripted {
         gate: Receiver<f32>,
-        saw_features: Arc<AtomicBool>,
+        asked: Arc<AtomicBool>,
     }
 
     impl Predictor for Scripted {
         fn predict(&mut self, features: &[f32]) -> Result<f32> {
-            self.saw_features
-                .store(features.len() == MEL_BINS * MEL_FRAMES, Ordering::SeqCst);
+            assert_eq!(features.len(), MEL_BINS * MEL_FRAMES);
+            self.asked.store(true, Ordering::SeqCst);
             Ok(self.gate.recv()?)
         }
     }
 
-    fn scripted() -> (SmartTurn, Sender<f32>, Arc<AtomicBool>) {
-        let (gate, receiver) = mpsc::channel();
-        let saw_features = Arc::new(AtomicBool::new(false));
-        let predictor = Scripted {
-            gate: receiver,
-            saw_features: saw_features.clone(),
-        };
-        let smart_turn = SmartTurn::start_if(
-            true,
-            Settings::DEFAULT,
-            Box::new(move || Ok(Box::new(predictor) as Box<dyn Predictor>)),
-        )
-        .unwrap();
-        (smart_turn, gate, saw_features)
+    struct Harness {
+        // Dropped first, so a worker waiting on the gate can exit.
+        gate: Sender<f32>,
+        smart_turn: SmartTurn,
+        asked: Arc<AtomicBool>,
+        /// Where the next fed audio begins.
+        at: CaptureInstant,
     }
 
-    fn wait_for_reports(smart_turn: &mut SmartTurn) -> Vec<Report> {
+    const START: CaptureInstant = CaptureInstant::from_nanos(10_000_000_000);
+
+    fn capture(generation: u64) -> Capture {
+        Capture {
+            generation,
+            listen_from: None,
+            armed: true,
+        }
+    }
+
+    /// A Smart Turn whose model loads once `loaded` receives a result.
+    fn gated(loaded: Receiver<Result<()>>) -> Harness {
+        let (gate, receiver) = mpsc::channel();
+        let asked = Arc::new(AtomicBool::new(false));
+        let predictor = Scripted {
+            gate: receiver,
+            asked: asked.clone(),
+        };
+        let smart_turn = SmartTurn::new(
+            Settings::DEFAULT,
+            Box::new(move |_: &AtomicBool| {
+                loaded.recv()??;
+                Ok(Box::new(predictor) as Box<dyn Predictor>)
+            }),
+        );
+        Harness {
+            smart_turn,
+            gate,
+            asked,
+            at: START,
+        }
+    }
+
+    fn scripted() -> Harness {
+        let (load, loaded) = mpsc::channel();
+        load.send(Ok(())).unwrap();
+        gated(loaded)
+    }
+
+    fn eventually(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let reports = smart_turn.poll();
-            if !reports.is_empty() || Instant::now() > deadline {
-                return reports;
-            }
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
             thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    impl Harness {
+        /// Tracks `capture` until the model is ready and a session follows it.
+        fn follow(&mut self, capture: Capture) {
+            let smart_turn = &mut self.smart_turn;
+            eventually("the model", || {
+                smart_turn.track(Some(capture));
+                assert!(smart_turn.poll().is_empty());
+                smart_turn.session.is_some()
+            });
+        }
+
+        /// Feeds `audio` at `rate` in 10 ms chunks, continuing the timeline.
+        fn feed(&mut self, audio: &[f32], rate: u32) {
+            for chunk in audio.chunks(rate as usize / 100) {
+                self.smart_turn.push(chunk, rate, self.at);
+                self.at = self
+                    .at
+                    .checked_add(crate::audio::duration_for_frames(chunk.len(), rate))
+                    .unwrap();
+            }
+        }
+
+        fn wait_until_asked(&self) {
+            eventually("a check", || self.asked.swap(false, Ordering::SeqCst));
+        }
+
+        fn reports(&mut self) -> Vec<Report> {
+            let mut reports = Vec::new();
+            let smart_turn = &mut self.smart_turn;
+            eventually("a report", || {
+                reports = smart_turn.poll();
+                !reports.is_empty()
+            });
+            reports
         }
     }
 
     #[test]
     fn stops_a_hands_free_capture_when_the_model_hears_the_end() {
-        let (mut smart_turn, gate, saw_features) = scripted();
-        smart_turn.track(Some(7));
+        let mut harness = scripted();
+        harness.follow(capture(7));
         // 48 kHz microphone audio is resampled before the speech rule.
         let audio = utterance(&[(1_500, 400)], -70.0)
             .into_iter()
             .flat_map(|sample| [sample; 3])
             .collect::<Vec<_>>();
-        for chunk in audio.chunks(480) {
-            smart_turn.push(chunk, 48_000);
-        }
-        gate.send(0.9).unwrap();
-        let reports = wait_for_reports(&mut smart_turn);
+        harness.feed(&audio, 48_000);
+        harness.gate.send(0.9).unwrap();
+        let reports = harness.reports();
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].decision, SmartTurnDecision::Stop);
         assert_eq!(reports[0].probability, Some(0.9));
         assert_eq!(reports[0].silence_ms, 300);
-        assert!(reports[0].stops());
-        assert!(saw_features.load(Ordering::SeqCst));
+        assert!(harness.smart_turn.take_stop());
+        assert!(!harness.smart_turn.take_stop());
     }
 
     #[test]
     fn an_answer_for_an_ended_or_newer_capture_does_nothing() {
-        let (mut smart_turn, gate, _) = scripted();
-        smart_turn.track(Some(1));
-        smart_turn.push(&utterance(&[(1_000, 300)], -70.0), 16_000);
+        let mut harness = scripted();
+        harness.follow(capture(1));
+        harness.feed(&utterance(&[(1_000, 300)], -70.0), 16_000);
+        harness.wait_until_asked();
         // The capture ends and a new one starts before the answer.
-        smart_turn.track(None);
-        smart_turn.track(Some(2));
-        gate.send(0.99).unwrap();
-        let reports = wait_for_reports(&mut smart_turn);
+        harness.smart_turn.track(None);
+        harness.smart_turn.track(Some(capture(2)));
+        harness.gate.send(0.99).unwrap();
+        let reports = harness.reports();
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].decision, SmartTurnDecision::Stale);
-        assert!(!reports[0].stops());
+        assert!(!harness.smart_turn.take_stop());
+    }
+
+    #[test]
+    fn an_ended_capture_drops_its_waiting_check() {
+        let mut harness = scripted();
+        harness.follow(capture(1));
+        harness.feed(&utterance(&[(1_000, 300)], -70.0), 16_000);
+        harness.wait_until_asked();
+        // A second pause waits behind the first, then the capture ends.
+        harness.feed(&utterance(&[(500, 300)], -70.0), 16_000);
+        harness.smart_turn.track(None);
+        harness.gate.send(0.99).unwrap();
+        harness.gate.send(0.99).unwrap();
+        assert_eq!(harness.reports().len(), 1);
+        thread::sleep(Duration::from_millis(100));
+        assert!(harness.smart_turn.poll().is_empty());
+        assert!(!harness.asked.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn nothing_is_followed_or_stopped_before_the_model_is_ready() {
+        let (load, loaded) = mpsc::channel();
+        let mut harness = gated(loaded);
+        harness.smart_turn.track(Some(capture(1)));
+        // Speech and a long pause while the model downloads.
+        harness.feed(&utterance(&[(1_000, 3_000)], -70.0), 16_000);
+        assert!(harness.smart_turn.poll().is_empty());
+        assert!(harness.smart_turn.session.is_none());
+        assert!(!harness.smart_turn.take_stop());
+        load.send(Ok(())).unwrap();
+        harness.follow(capture(1));
+        harness.feed(&utterance(&[(1_000, 300)], -70.0), 16_000);
+        harness.wait_until_asked();
     }
 
     #[test]
     fn a_failed_load_leaves_dictation_alone() {
-        let mut smart_turn = SmartTurn::start_if(
-            true,
-            Settings::DEFAULT,
-            Box::new(|| Err(eyre!("no runtime"))),
-        )
-        .unwrap();
-        smart_turn.track(Some(1));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !smart_turn.unavailable && Instant::now() < deadline {
+        let (load, loaded) = mpsc::channel();
+        let mut harness = gated(loaded);
+        harness.smart_turn.track(Some(capture(1)));
+        harness.feed(&utterance(&[(1_000, 3_000)], -70.0), 16_000);
+        load.send(Err(eyre!("no runtime"))).unwrap();
+        let smart_turn = &mut harness.smart_turn;
+        eventually("the failure", || {
             assert!(smart_turn.poll().is_empty());
-            thread::sleep(Duration::from_millis(5));
-        }
-        assert!(smart_turn.unavailable);
+            smart_turn.unavailable
+        });
         // No fallback either: dictation behaves as if the experiment were off.
-        smart_turn.track(Some(1));
-        smart_turn.push(&utterance(&[(1_000, 3_000)], -70.0), 16_000);
-        assert!(smart_turn.poll().is_empty());
+        harness.smart_turn.track(Some(capture(1)));
+        harness.feed(&utterance(&[(1_000, 3_000)], -70.0), 16_000);
+        assert!(harness.smart_turn.poll().is_empty());
+        assert!(!harness.smart_turn.take_stop());
+        assert!(harness.smart_turn.worker.is_none());
     }
 
     #[test]
-    fn off_by_default_nothing_loads() {
-        let loaded = Arc::new(AtomicBool::new(false));
-        let flag = loaded.clone();
+    fn speech_while_held_counts_but_only_a_hands_free_capture_stops() {
+        let mut harness = scripted();
+        let mut held = capture(1);
+        held.armed = false;
+        harness.follow(held);
+        // Speech and a long pause while the shortcut is still down.
+        harness.feed(&utterance(&[(1_000, 2_500)], -70.0), 16_000);
+        assert!(harness.smart_turn.poll().is_empty());
+        assert!(!harness.smart_turn.take_stop());
+        assert!(!harness.asked.load(Ordering::SeqCst));
+        // Locked: the speech already heard counts, the silence starts over.
+        harness.smart_turn.track(Some(capture(1)));
+        let mut seed = 4;
+        let quiet = crate::pause_segmenter::tests::noise(280, -70.0, &mut seed);
+        harness.feed(&quiet, 16_000);
+        thread::sleep(Duration::from_millis(50));
+        assert!(!harness.asked.load(Ordering::SeqCst));
+        harness.feed(
+            &crate::pause_segmenter::tests::noise(20, -70.0, &mut seed),
+            16_000,
+        );
+        harness.wait_until_asked();
+        harness.gate.send(0.9).unwrap();
+        assert_eq!(harness.reports()[0].decision, SmartTurnDecision::Stop);
+        assert!(harness.smart_turn.take_stop());
+    }
+
+    #[test]
+    fn listening_starts_after_the_start_phrase() {
+        let mut harness = scripted();
+        harness.follow(Capture {
+            listen_from: START.checked_add(Duration::from_millis(1_505)),
+            ..capture(1)
+        });
+        // The start phrase and the pause after it come before the listening
+        // point, so neither counts.
+        harness.feed(&utterance(&[(1_000, 3_000)], -70.0), 16_000);
+        thread::sleep(Duration::from_millis(50));
+        assert!(harness.smart_turn.poll().is_empty());
+        assert!(!harness.asked.load(Ordering::SeqCst));
+        assert!(!harness.smart_turn.take_stop());
+        // Replayed audio is already heard.
+        let replay = harness.at;
+        harness.at = START;
+        harness.feed(&utterance(&[(1_000, 3_000)], -70.0), 16_000);
+        assert_eq!(harness.at, replay);
+        assert!(harness.smart_turn.poll().is_empty());
+        // Listening began mid-frame, so frames straddle the speech's end.
+        harness.feed(&utterance(&[(1_000, 400)], -70.0), 16_000);
+        harness.wait_until_asked();
+    }
+
+    #[test]
+    fn a_non_finite_probability_fails_the_check() {
+        let mut harness = scripted();
+        harness.follow(capture(1));
+        harness.feed(&utterance(&[(1_000, 300)], -70.0), 16_000);
+        harness.gate.send(f32::NAN).unwrap();
+        let reports = harness.reports();
+        assert_eq!(reports[0].decision, SmartTurnDecision::Failed);
+        assert_eq!(reports[0].probability, None);
+        assert!(!harness.smart_turn.take_stop());
+    }
+
+    #[test]
+    fn non_finite_samples_read_as_silence() {
+        let mut audio = reference_signal();
+        let clean = log_mel(&audio);
+        audio[100] = f32::NAN;
+        audio[200] = f32::INFINITY;
+        let features = log_mel(&audio);
+        assert!(features.iter().all(|value| value.is_finite()));
+        assert_eq!(features.len(), clean.len());
+    }
+
+    #[test]
+    fn off_reads_and_loads_nothing() {
         let smart_turn = SmartTurn::start_if(
             false,
-            Settings::DEFAULT,
-            Box::new(move || {
-                flag.store(true, Ordering::SeqCst);
-                Err(eyre!("unused"))
-            }),
+            || panic!("read settings while off"),
+            || panic!("built a loader while off"),
         );
         assert!(smart_turn.is_none());
-        assert!(!loaded.load(Ordering::SeqCst));
     }
 
     /// Runs the real model on the reference signal. Needs the ONNX Runtime
@@ -1094,7 +1438,7 @@ mod tests {
     fn real_model_matches_python_on_the_reference_signal() {
         let root = std::env::var_os("HEX_PROJECT_ROOT")
             .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
-        let mut predictor = load_onnx(&root).unwrap();
+        let mut predictor = load_onnx(&root, &AtomicBool::new(false)).unwrap();
         let probability = predictor.predict(&log_mel(&reference_signal())).unwrap();
         // Python onnxruntime 1.23.2 with every graph optimization, on the same
         // features: 0.8642676472663879. The quantized model's score moves with

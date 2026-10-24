@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::{Once, OnceLock};
 use std::thread;
 use std::time::Instant;
 
@@ -14,7 +14,9 @@ use transcribe_cpp::{
 };
 
 use crate::context::ContextSnapshot;
-use crate::dictation::{DictationClip, DictationProtocol, pad_for_parakeet};
+use crate::dictation::{
+    DictationClip, DictationControl, DictationProtocol, VoiceTranscript, pad_for_parakeet,
+};
 use crate::dictation_processor::ProcessingObservation;
 use crate::gguf_session::OfflineGgufSession;
 use crate::history::{History, HistoryDraft, HistoryKind};
@@ -53,6 +55,11 @@ pub enum WorkerEvent {
         stage: DictationJobStage,
     },
     Cancelled {
+        job_id: DictationJobId,
+    },
+    /// A Smart Turn voice capture ended with a spoken cancel phrase, so its
+    /// job was cancelled; `Cancelled` follows from the output worker.
+    SpokenCancel {
         job_id: DictationJobId,
     },
     Pasted {
@@ -99,6 +106,9 @@ struct InferenceJob {
     prepare_ms: u128,
     target: TranscriptionTarget,
     protocol: Option<Arc<DictationProtocol>>,
+    /// Whether a control phrase at the end of the transcript decides the
+    /// target, as Moonshine would have had it finished the capture.
+    obeys_spoken_control: bool,
     context: ContextSnapshot,
 }
 
@@ -161,6 +171,8 @@ impl OutputJob {
 struct JobControl {
     cancelled: AtomicBool,
     output_started: Mutex<bool>,
+    /// The control phrase a voice transcript ended with.
+    spoken: OnceLock<DictationControl>,
 }
 
 impl JobControl {
@@ -334,9 +346,38 @@ impl DictationWorker {
     /// before any later capture begins one; the job then waits in order.
     pub fn transcribe(
         &self,
+        clip: DictationClip,
+        target: TranscriptionTarget,
+        protocol: Option<Arc<DictationProtocol>>,
+        context: ContextSnapshot,
+    ) -> Result<DictationJobId, &'static str> {
+        self.submit(clip, target, protocol, false, context)
+    }
+
+    /// A voice capture Smart Turn finished before any control phrase was
+    /// recognized: one at the end of the transcript still applies, so
+    /// "dictate cancel" cancels and "dictate send" sends.
+    pub fn transcribe_voice_turn(
+        &self,
+        clip: DictationClip,
+        protocol: Arc<DictationProtocol>,
+        context: ContextSnapshot,
+    ) -> Result<DictationJobId, &'static str> {
+        self.submit(
+            clip,
+            TranscriptionTarget::Paste,
+            Some(protocol),
+            true,
+            context,
+        )
+    }
+
+    fn submit(
+        &self,
         mut clip: DictationClip,
         target: TranscriptionTarget,
         protocol: Option<Arc<DictationProtocol>>,
+        obeys_spoken_control: bool,
         context: ContextSnapshot,
     ) -> Result<DictationJobId, &'static str> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -367,7 +408,16 @@ impl DictationWorker {
                     .activate(&selection)
                     .map_err(|error| error.to_string())?;
                 match protocol.as_deref() {
-                    Some(protocol) => transcriber.transcribe_voice(samples, protocol),
+                    Some(protocol) => {
+                        transcriber
+                            .transcribe_voice(samples, protocol)
+                            .map(|transcript| {
+                                if let Some(spoken) = transcript.control {
+                                    let _ = control.spoken.set(spoken);
+                                }
+                                transcript.text
+                            })
+                    }
                     None => transcriber.transcribe(samples),
                 }
                 .map_err(|error| error.to_string())
@@ -385,6 +435,7 @@ impl DictationWorker {
             prepare_ms,
             target,
             protocol,
+            obeys_spoken_control,
             context,
         })
         .map(|()| {
@@ -525,7 +576,9 @@ fn run_output_worker(
                 WorkerEvent::Pasted { .. } => {
                     state.pending_pastes = state.pending_pastes.saturating_sub(1);
                 }
-                WorkerEvent::ModelFailed(_) | WorkerEvent::Stage { .. } => {}
+                WorkerEvent::ModelFailed(_)
+                | WorkerEvent::Stage { .. }
+                | WorkerEvent::SpokenCancel { .. } => {}
             }
             drop(state);
             if events.send(event).is_err() {
@@ -680,10 +733,22 @@ fn run_inference_worker(
             let _ = output.send(OutputJob::Cancelled { job_id: job.job_id });
             continue;
         }
+        let spoken = job
+            .obeys_spoken_control
+            .then(|| job.control.spoken.get().copied())
+            .flatten()
+            .filter(|_| result.is_ok());
+        let Some(target) = spoken_target(job.target, spoken) else {
+            if job.control.cancel() {
+                let _ = events.send(WorkerEvent::SpokenCancel { job_id: job.job_id });
+            }
+            let _ = output.send(OutputJob::Cancelled { job_id: job.job_id });
+            continue;
+        };
         match result {
             Ok(text)
                 if matches!(
-                    job.target,
+                    target,
                     TranscriptionTarget::Paste
                         | TranscriptionTarget::Send
                         | TranscriptionTarget::VoiceAction
@@ -693,7 +758,7 @@ fn run_inference_worker(
                     .send(ProcessorJob {
                         job_id: job.job_id,
                         control: job.control,
-                        target: job.target,
+                        target,
                         text,
                         context: job.context,
                         timings,
@@ -716,7 +781,7 @@ fn run_inference_worker(
                     .send(OutputJob::Completed {
                         job_id: job.job_id,
                         control: job.control,
-                        target: job.target,
+                        target,
                         result: Box::new(result),
                     })
                     .is_err()
@@ -725,6 +790,19 @@ fn run_inference_worker(
                 }
             }
         }
+    }
+}
+
+/// Where a transcript goes once its spoken control phrase applies, or
+/// `None` when the phrase cancelled it.
+fn spoken_target(
+    target: TranscriptionTarget,
+    spoken: Option<DictationControl>,
+) -> Option<TranscriptionTarget> {
+    match spoken {
+        None | Some(DictationControl::Stop) => Some(target),
+        Some(DictationControl::Send) => Some(TranscriptionTarget::Send),
+        Some(DictationControl::Cancel) => None,
     }
 }
 
@@ -1157,12 +1235,12 @@ impl Parakeet {
         &mut self,
         samples: &[f32],
         protocol: &DictationProtocol,
-    ) -> Result<String> {
+    ) -> Result<VoiceTranscript> {
         if self
             .max_audio_samples
             .is_some_and(|maximum| samples.len() > maximum)
         {
-            return self.transcribe(samples);
+            return Ok(VoiceTranscript::heard(self.transcribe(samples)?, protocol));
         }
         let transcript = self.transcribe_segments(samples)?;
         let words = transcript
@@ -1170,21 +1248,27 @@ impl Parakeet {
             .iter()
             .map(|word| word.text.clone())
             .collect::<Vec<_>>();
-        let Some(control_words) = protocol.control_suffix_word_count(&words) else {
-            return Ok(transcript.text);
+        let Some((control, control_words)) = protocol.control_suffix_words(&words) else {
+            return Ok(VoiceTranscript::heard(transcript.text, protocol));
         };
-        let control = &transcript.words[transcript.words.len() - control_words];
-        let cut = (control.t0_ms.max(0) as usize * TRANSCRIPTION_SAMPLES_PER_MS).min(samples.len());
+        let first = &transcript.words[transcript.words.len() - control_words];
+        let cut = (first.t0_ms.max(0) as usize * TRANSCRIPTION_SAMPLES_PER_MS).min(samples.len());
         if cut == 0 || cut == samples.len() {
-            return Ok(transcript.text);
+            return Ok(VoiceTranscript {
+                text: transcript.text,
+                control: Some(control),
+            });
         }
         let mut content = samples[..cut].to_vec();
         pad_for_parakeet(&mut content);
         tracing::debug!(
-            control_start_ms = control.t0_ms,
+            control_start_ms = first.t0_ms,
             "retranscribing voice dictation without control audio"
         );
-        self.transcribe(&content)
+        Ok(VoiceTranscript {
+            text: self.transcribe(&content)?,
+            control: Some(control),
+        })
     }
 
     pub fn transcribe_segments(&mut self, samples: &[f32]) -> Result<Transcript> {
@@ -1338,6 +1422,33 @@ mod tests {
                 "{name}: {text}"
             );
         }
+    }
+
+    #[test]
+    fn a_spoken_control_decides_a_smart_turn_voice_target() {
+        let paste = TranscriptionTarget::Paste;
+        assert!(matches!(
+            spoken_target(paste, None),
+            Some(TranscriptionTarget::Paste)
+        ));
+        assert!(matches!(
+            spoken_target(paste, Some(DictationControl::Stop)),
+            Some(TranscriptionTarget::Paste)
+        ));
+        assert!(matches!(
+            spoken_target(paste, Some(DictationControl::Send)),
+            Some(TranscriptionTarget::Send)
+        ));
+        assert!(spoken_target(paste, Some(DictationControl::Cancel)).is_none());
+        let protocol = DictationProtocol::default();
+        let heard = VoiceTranscript::heard("Hello world, dictate cancel.".into(), &protocol);
+        assert_eq!(heard.control, Some(DictationControl::Cancel));
+        let heard = VoiceTranscript::heard("Hello world dictate send".into(), &protocol);
+        assert_eq!(heard.control, Some(DictationControl::Send));
+        assert_eq!(
+            VoiceTranscript::heard("Hello world".into(), &protocol).control,
+            None
+        );
     }
 
     #[test]
@@ -1827,7 +1938,7 @@ mod tests {
                 transcript.text
             );
 
-            let clipped = model.transcribe_voice(&samples, &protocol).unwrap();
+            let clipped = model.transcribe_voice(&samples, &protocol).unwrap().text;
             let prepared = strip_transcript_protocol(&clipped, Some(&protocol));
             println!("  clipped: {:?} -> {:?}", clipped, prepared);
             assert_eq!(prepared, expected);

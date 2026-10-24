@@ -39,8 +39,10 @@ The known experiments are compiled into
 - `smart-turn`: finish hands-free dictation when Pipecat's Smart Turn model
   hears the end of a turn (macOS; see
   [Smart Turn](dictation.md#smart-turn-auto-stop-experiment-smart-turn)). The
-  gate is where the work starts: the recognition loop builds no tracker, so
-  nothing downloads, loads, or runs while it is off.
+  gate is where the work starts: the recognition loop builds no tracker and
+  reads no settings, so nothing downloads, loads, or runs while it is off.
+  Until the model is ready, and if it fails, dictation behaves as if it were
+  off.
 - `vocabulary`: a shared list of names and their likely mis-transcriptions,
   for rewriting and search ([Vocabulary](vocabulary.md)). It adds a Settings
   card and the `hex vocabulary` commands, which appear only while it is on.
