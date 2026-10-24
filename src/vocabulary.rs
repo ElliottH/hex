@@ -200,6 +200,29 @@ pub fn add(
     }
 }
 
+/// Like [`add`], but keeps what fits instead of refusing: a long term is cut
+/// to its first 64 characters, and a long spelling or one past the 16th is
+/// left out. A full list still takes no new term. Returns whether anything
+/// was cut or left out.
+pub fn add_clamped(list: &mut Vec<VocabularyEntry>, term: &str, sounds_like: &[String]) -> bool {
+    let mut term = clean(term);
+    let mut clamped = false;
+    if term.chars().count() > MAX_TERM_CHARS {
+        term = clean(&term.chars().take(MAX_TERM_CHARS).collect::<String>());
+        clamped = true;
+    }
+    if term.is_empty() {
+        return clamped;
+    }
+    if add(list, &term, &[]).is_err() {
+        return true;
+    }
+    for spelling in sounds_like {
+        clamped |= add(list, &term, std::slice::from_ref(spelling)).is_err();
+    }
+    clamped
+}
+
 /// Whether the list has an entry for `term`, in any case.
 pub fn contains(list: &[VocabularyEntry], term: &str) -> bool {
     let term = clean(term);
@@ -251,6 +274,24 @@ mod tests {
         assert!(add(&mut list, "   ", &[]).is_err());
         assert!(add(&mut list, &"x".repeat(65), &[]).is_err());
         assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn clamped_adds_keep_the_term_and_the_spellings_that_fit() {
+        let spellings: Vec<String> = (0..20).map(|index| format!("spelling {index}")).collect();
+        let mut list = Vec::new();
+        let mut with_long = spellings[..2].to_vec();
+        with_long.push("y".repeat(65));
+        assert!(add_clamped(&mut list, "Abattoir", &with_long));
+        assert_eq!(list, [entry("Abattoir", &["spelling 0", "spelling 1"])]);
+        assert!(add_clamped(&mut list, "abattoir", &spellings));
+        assert_eq!(list[0].sounds_like, spellings[..MAX_SOUNDS_LIKE]);
+
+        assert!(add_clamped(&mut list, &"x".repeat(70), &["ex".into()]));
+        assert_eq!(list[1], entry(&"x".repeat(MAX_TERM_CHARS), &["ex"]));
+        assert!(!add_clamped(&mut list, "Rune", &["roon".into()]));
+        assert!(!add_clamped(&mut list, "  ", &[]));
+        assert_eq!(list.len(), 3);
     }
 
     #[test]

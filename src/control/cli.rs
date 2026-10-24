@@ -111,8 +111,7 @@ pub enum ControlCli {
         #[command(flatten)]
         output: Output,
     },
-    /// List, add, and remove vocabulary terms (the `vocabulary` experiment).
-    #[command(hide = true)]
+    /// Experiment: list, add, and remove vocabulary terms (`hex experiments enable vocabulary`).
     Vocabulary {
         #[command(subcommand)]
         command: VocabularyCommand,

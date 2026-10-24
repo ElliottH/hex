@@ -3,7 +3,8 @@
 One shared list of names Hex should know (people, projects, products), each
 with optional "sounds like" spellings a transcript may show instead. It is the
 `vocabulary` [experiment](experiments.md): with it off, nothing reads the list,
-no UI or CLI offers it, and Hex behaves as before. macOS only for now.
+no Settings card shows it, `hex vocabulary` (listed in `--help` as an
+experiment) is refused, and Hex behaves as before. macOS only for now.
 
 ```ts
 Turn it on                               // vocabulary.gate
@@ -17,9 +18,11 @@ Settings › Vocabulary › Names and terms  // vocabulary.settings; after Dicta
 ├── Add suggested -> Adds vocabulary::SUGGESTED terms not already listed
 │   └── Every suggestion present -> Button hidden     // never added without a click
 ├── Empty -> "No terms yet."
-└── Edits -> Debounced drafts, like Modes' corrections -> settings.json `vocabulary`
+├── Edits -> Debounced drafts, like Modes' corrections -> settings.json `vocabulary`
+└── Past the limits -> Keep the term (cut to 64 characters) and the spellings
+    that fit; inline danger note    // never drops the term
 
-hex vocabulary                           // vocabulary.cli; hidden from --help
+hex vocabulary                           // vocabulary.cli; marked as an experiment in --help
 ├── list [--json]
 ├── add <term> [--sounds-like a,b] -> New term, or new spellings merged into it
 │   └── Already there, nothing new -> changed: false
@@ -58,7 +61,7 @@ Sources: [vocabulary.rs](../../src/vocabulary.rs),
 (`vocabulary_lines`), and [control.rs](../../src/control.rs)
 (`check_vocabulary`, `edit_vocabulary`).
 
-Checks: `vocabulary::tests` (dedupe and merge, case-insensitive removal,
+Checks: `vocabulary::tests` (dedupe and merge, clamping, case-insensitive removal,
 suggestions, comma splitting, reading the saved list without settings);
 `vocabulary_round_trips_and_stays_out_of_files_without_one` in
 [app_settings.rs](../../src/app_settings.rs);
@@ -71,7 +74,8 @@ suggestions, comma splitting, reading the saved list without settings);
 `vocabulary_edits_report_whether_they_changed_the_list` and the request round
 trip in control.rs; `vocabulary_lists_terms_with_their_spellings` in
 [control/cli.rs](../../src/control/cli.rs);
-`rows_project_to_cleaned_merged_entries` in
+`rows_project_to_cleaned_merged_entries` and
+`rows_past_the_limits_keep_their_term_and_what_fits` in
 [rune_ui/vocabulary.rs](../../src/rune_ui/vocabulary.rs). Scenes:
 `mac-settings-vocabulary`, `mac-settings-vocabulary-empty`. Passed on macOS on
 2026-10-23. Not yet observed: the card edited in a running Hex, a CLI edit

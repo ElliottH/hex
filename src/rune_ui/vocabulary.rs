@@ -38,15 +38,25 @@ impl VocabularyEditor {
     /// The rows as saved entries: blank terms are left out and repeated
     /// terms merge, as `hex vocabulary add` does.
     pub(super) fn project(&self) -> Vec<VocabularyEntry> {
+        self.projection().0
+    }
+
+    /// Whether saving cuts or leaves out text that doesn't fit the limits.
+    fn clamped(&self) -> bool {
+        self.projection().1
+    }
+
+    fn projection(&self) -> (Vec<VocabularyEntry>, bool) {
         let mut entries = Vec::new();
+        let mut clamped = false;
         for (term, sounds_like) in &self.rows {
-            let _ = vocabulary::add(
+            clamped |= vocabulary::add_clamped(
                 &mut entries,
                 &term.text,
                 &vocabulary::parse_sounds_like(&sounds_like.text),
             );
         }
-        entries
+        (entries, clamped)
     }
 }
 
@@ -138,6 +148,13 @@ pub(super) fn section_view(ui: &Ui, p: Paint) -> El {
                 })),
         );
     }
+    if ui.vocabulary.clamped() {
+        rows.push(note(
+            "limits",
+            tr("Up to 16 spellings per term are saved, and 64 characters per term or spelling."),
+            p.danger(),
+        ));
+    }
     section(p, "vocabulary", tr("Vocabulary"), rows)
 }
 
@@ -199,5 +216,25 @@ mod tests {
                 },
             ]
         );
+        assert!(!editor.clamped());
+    }
+
+    #[test]
+    fn rows_past_the_limits_keep_their_term_and_what_fits() {
+        let spellings: Vec<String> = (0..17).map(|index| format!("spelling {index}")).collect();
+        let mut editor = VocabularyEditor::new(&[]);
+        editor.rows.push((
+            TextEdit::new("abattoir"),
+            TextEdit::new(format!("{}, {}", spellings.join(", "), "y".repeat(65))),
+        ));
+        editor
+            .rows
+            .push((TextEdit::new("Rune"), TextEdit::new("roon")));
+        let entries = editor.project();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].term, "abattoir");
+        assert_eq!(entries[0].sounds_like, spellings[..16]);
+        assert_eq!(entries[1].sounds_like, ["roon"]);
+        assert!(editor.clamped());
     }
 }

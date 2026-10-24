@@ -47,7 +47,7 @@ hex
 │   ├── show [settings|models|modes|voice-action|history|commands|meetings]
 │   └── hide                       close the window; Hex stays in the menu bar
 ├── history clear --yes            delete every retained dictation
-├── vocabulary                     needs the `vocabulary` experiment; hidden from --help
+├── vocabulary                     needs the `vocabulary` experiment (marked so in --help)
 │   ├── list [--json]              every term and its "sounds like" spellings
 │   ├── add <term> [--sounds-like a,b]  add a term, or new spellings to an existing one
 │   └── remove <term>              any case
