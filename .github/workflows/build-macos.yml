@@ -55,10 +55,14 @@ jobs:
       - name: Check the version
         run: |
           actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [ "$actual" != "$HEX_VERSION" ]; then
-            echo "::error::$(git rev-parse --short HEAD) is version $actual, not $HEX_VERSION."
-            exit 1
-          fi
+          # Staging publishes a prerelease of it, which release-app.sh stamps in.
+          case "$HEX_VERSION" in
+            "$actual" | "$actual"-dev.[0-9]* | "$actual"-beta.[0-9]*) ;;
+            *)
+              echo "::error::$(git rev-parse --short HEAD) is version $actual, not $HEX_VERSION or a prerelease of it."
+              exit 1
+              ;;
+          esac
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

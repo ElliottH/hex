@@ -19,13 +19,17 @@ case "$version" in
     ;;
 esac
 printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-(dev|beta)\.[0-9]+$'
-sed -i.orig "0,/^version = \"$current\"/s//version = \"$version\"/" "$root/Cargo.toml"
+# awk, not sed's GNU-only 0,/re/ address: this also runs on the macOS runner.
+awk -v current="$current" -v version="$version" '
+  !done && $0 == "version = \"" current "\"" { $0 = "version = \"" version "\""; done = 1 }
+  { print }
+' "$root/Cargo.toml" > "$root/Cargo.toml.next"
+mv "$root/Cargo.toml.next" "$root/Cargo.toml"
 awk -v current="$current" -v version="$version" '
   /^name = "voice-control"$/ { package = 1 }
   package && $0 == "version = \"" current "\"" { $0 = "version = \"" version "\""; package = 0 }
   { print }
 ' "$root/Cargo.lock" > "$root/Cargo.lock.next"
 mv "$root/Cargo.lock.next" "$root/Cargo.lock"
-rm -f "$root/Cargo.toml.orig"
 grep -q "^version = \"$version\"" "$root/Cargo.toml"
 echo "Building Hex as $version." >&2

@@ -33,6 +33,8 @@ if [ "${GITHUB_ACTIONS:-}" != true ]; then
   fi
 fi
 
+# Staging builds publish a prerelease (X.Y.Z-dev.N); the binary must report it.
+"$root/scripts/set-crate-version.sh" "$root" "$version"
 export HEX_VERSION="$version" HEX_BUILD_NUMBER="$build_number"
 bundle=$("$root/scripts/build-app.sh")
 "$root/scripts/validate-app.sh" "$bundle" Hex.app "$version" "$build_number" >/dev/null
