@@ -7,13 +7,13 @@ use std::time::{Duration, Instant};
 use rune::{El, Key, KeyEvent, Tx, col, row, text};
 
 use super::controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, icon_button, keycaps, note,
-    pulsing_dot, section, segmented, select, setting_row, sheet_button, status_dot, text_field,
-    toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, icon_button, keycaps,
+    link_row, note, pulsing_dot, section, segmented, select, setting_row, sheet_button,
+    status_dot, text_field, toggle_row,
 };
-use super::host;
 use super::lists::{Tone, tone_tag};
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
+use super::{explainer, host};
 use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
     RecordingAudioBehavior,
@@ -625,11 +625,11 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         rows.extend(refused_note(ui, p, ShortcutTarget::Dictation));
     }
     let toggle_mode = settings.shortcut_mode == ShortcutMode::Toggle;
-    rows.push(setting_row(
+    rows.push(link_row(
         p,
         "shortcut-mode",
         tr("Shortcut mode"),
-        None,
+        explainer::link(p),
         segmented(
             p,
             "shortcut-mode-control",
@@ -654,15 +654,7 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             tr("Double-tap to lock"),
             None,
             settings.double_tap_lock,
-            |ui: &mut Ui| {
-                let enabled = !ui.settings.double_tap_lock;
-                ui.update(|settings| {
-                    settings.double_tap_lock = enabled;
-                    if !enabled {
-                        settings.double_tap_only = false;
-                    }
-                });
-            },
+            explainer::flip_lock,
         ));
     }
     let selection = &settings.transcription;

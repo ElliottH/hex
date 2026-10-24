@@ -120,6 +120,28 @@ the Windows build was compiled and tested locally (2026-10-19); macOS relies on
 CI. The Linux state machine and X11 grab tests ran on 2026-10-22 (the grabs on
 an isolated Xwayland display). No physical keyboard check yet.
 
+```ts
+General > Shortcut mode > How it works                // dictate.shortcut-explainer
+  -> Modal: Hold and Toggle cards, each a keycap over two lanes
+     (key above, recording below) drawn on one looping playhead
+  ├── Pick a card (click, Enter, Space) -> Saves Shortcut mode
+  ├── Hold -> Double-tap to lock row: switch + striped hands-free lane
+  ├── Toggle -> No lock row
+  ├── Tab -> Hold, Toggle, lock switch, Close; focus stays inside
+  ├── Close, Escape, or a press outside -> Closes; focus returns to the link
+  └── Reduce Motion -> The finished frame, no loop
+```
+
+The lanes are Rune shapes redrawn from the window's poll clock while the modal
+is open (`src/rune_ui/explainer.rs`). Checks:
+`how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside`,
+`explainer_cards_pick_the_shortcut_mode`, and
+`the_explainer_loops_on_the_poll_clock` in
+[tests/panes.rs](../../src/rune_ui/tests/panes.rs), plus the
+`shortcut-explainer` and `shortcut-explainer-toggle` goldens (frozen at
+1.8 s into the loop). The animation itself has been seen only in headless
+frames, not on a real window.
+
 On Linux, `hex dictation start` and `stop` bypass Hold, Toggle, and the
 double-tap rules: start records unless something already records, stop
 finishes, and `toggle` does whichever applies. Bound to a key's press and

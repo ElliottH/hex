@@ -382,6 +382,7 @@ latency measurement.
 ```ts
 General                                  // settings
 ├── Dictation card -> Shortcut, Shortcut mode, Double-tap to lock, Speech model
+│   └── Shortcut mode > How it works -> Hold/Toggle explainer modal (dictation.md)
 ├── Microphone -> Automatic or saved device
 │   ├── Automatic -> Compiled preferences, then the macOS default
 │   │   └── Default is a Bluetooth headset -> Built-in mic when present // avoids the call profile

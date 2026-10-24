@@ -12,6 +12,7 @@
 mod activity;
 mod commands;
 mod controls;
+mod explainer;
 mod fun;
 mod history;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
@@ -169,6 +170,7 @@ fn on_close(ui: &mut Ui, _: &mut Tx) {
     settings::cancel_capture(ui);
     ui.open = None;
     picker::close(ui);
+    explainer::close(ui);
     if let Service::Live(backend) = &mut ui.service {
         backend.closed();
     }
@@ -500,6 +502,7 @@ pub(crate) struct Ui {
     history: history::HistoryPane,
     modes: modes::ModesPane,
     picker: picker::Picker,
+    explainer: explainer::Explainer,
     tour: Option<onboarding::Tour>,
     /// The OS's capabilities and the OS-only state its panes show.
     platform: platform::PlatformState,
@@ -567,6 +570,7 @@ impl Ui {
             history: history::HistoryPane::default(),
             modes,
             picker: picker::Picker::default(),
+            explainer: explainer::Explainer::default(),
             tour: None,
             platform: platform::PlatformState::new(platform::Capabilities::current()),
             host: platform::PlatformHost::None,
@@ -796,8 +800,8 @@ impl Ui {
 }
 
 /// Shortcut recording takes every key; Command-1 through 9 open the
-/// sidebar's panes in order; otherwise Escape closes the picker or the open
-/// menu.
+/// sidebar's panes in order; otherwise Escape closes the shortcut explainer,
+/// the picker, or the open menu.
 fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if settings::on_key(ui, event, tx) {
         return true;
@@ -805,6 +809,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if let rune::Key::Command(digit @ '1'..='9') = event.key
         && !event.mods.alt
         && ui.picker.language.is_none()
+        && !ui.explainer.open
         && ui.tour.is_none()
     {
         let index = digit as usize - '1' as usize;
@@ -820,7 +825,10 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if event.key != rune::Key::Escape {
         return false;
     }
-    if ui.picker.language.is_some() {
+    if ui.explainer.open {
+        explainer::close(ui);
+        true
+    } else if ui.picker.language.is_some() {
         picker::close(ui);
         true
     } else if ui.open.is_some() {
@@ -920,6 +928,8 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     changed |= onboarding::poll(ui);
+    let visible = ui.window.as_ref().is_none_or(rune::AppHandle::is_visible);
+    changed |= explainer::poll(ui, clock, visible, tx);
     changed | settings::advance_capture(ui)
 }
 
@@ -970,6 +980,9 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .child(sidebar(ui, p))
         .child(panel);
     if let Some(modal) = picker::modal(ui, p) {
+        layer.extend(modal);
+    }
+    if let Some(modal) = explainer::modal(ui, p, cx.system_reduced_motion()) {
         layer.extend(modal);
     }
     if let Some(tour) = onboarding::overlay(ui, p) {
@@ -1340,6 +1353,22 @@ const SCENES: &[Scene] = &[
     ("picker-downloading", |ui| {
         *ui = portal_fixture();
         picker::fixture(ui, Some(TranscriptionModelId::CohereTranscribe));
+    }),
+    ("shortcut-explainer", |ui| {
+        *ui = mac_fixture();
+        ui.settings.double_tap_lock = true;
+        explainer::fixture(ui, Some(explainer::SNAPSHOT_MS));
+    }),
+    ("shortcut-explainer-toggle", |ui| {
+        *ui = mac_fixture();
+        ui.settings.shortcut_mode = crate::dictation::ShortcutMode::Toggle;
+        explainer::fixture(ui, Some(explainer::SNAPSHOT_MS));
+    }),
+    // Loops, for `--frames` clips.
+    ("shortcut-explainer-motion", |ui| {
+        *ui = mac_fixture();
+        ui.settings.double_tap_lock = true;
+        explainer::fixture(ui, None);
     }),
     ("onboarding", |ui| {
         *ui = portal_fixture();

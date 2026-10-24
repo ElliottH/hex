@@ -56,7 +56,7 @@ These live in [`rune_ui/controls.rs`](../src/rune_ui/controls.rs) and
 | Job | Piece |
 |---|---|
 | Settings card, titled card | `card`, `section` |
-| Settings row (title, description, control) | `setting_row`, `described_row`, `toggle_row`; a row that toggles shows `row_switch` |
+| Settings row (title, description, control) | `setting_row`, `described_row`, `link_row` (a one-line link under the title, at the plain row height), `toggle_row`; a row that toggles shows `row_switch` |
 | A few exclusive choices / a dropdown | `segmented`, `select` |
 | A value whose choices open in a sheet, not a menu | `sheet_button` (the value and a trailing chevron) |
 | Main, other, and destructive actions | `button(…, ButtonKind::{Primary, Secondary, Danger}, …)`; inside a row: `small_button`; icon only (with an accessible label): `icon_button` |

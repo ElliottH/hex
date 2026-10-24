@@ -362,6 +362,80 @@ fn double_tap_to_lock_shows_only_for_hold() {
 }
 
 #[test]
+fn how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    tab_to(&mut rt, "shortcut-help");
+    key(&mut rt, Key::Enter, Mods::default());
+    settle(&mut rt);
+    assert!(rt.state.explainer.open);
+    tab_to(&mut rt, "mode-hold");
+    let stops = ["mode-toggle", "double-tap", "close-explainer", "mode-hold"];
+    for stop in stops {
+        key(&mut rt, Key::Tab, Mods::default());
+        assert!(
+            focused(&rt).ends_with(stop),
+            "Tab reached {} instead of {stop}",
+            focused(&rt)
+        );
+    }
+    key(&mut rt, Key::Escape, Mods::default());
+    settle(&mut rt);
+    assert!(!rt.state.explainer.open);
+    assert!(
+        focused(&rt).ends_with("shortcut-help"),
+        "focus went to {}",
+        focused(&rt)
+    );
+}
+
+#[test]
+fn explainer_cards_pick_the_shortcut_mode() {
+    let mut rt = runtime("shortcut-explainer", true, PANE_SIZE);
+    let mode = |rt: &Runtime<Ui>| rt.state.settings.shortcut_mode;
+    assert_eq!(mode(&rt), crate::dictation::ShortcutMode::Hold);
+    assert!(
+        rt.find("shortcut-explainer/explainer-body/double-tap")
+            .is_some()
+    );
+    tab_to(&mut rt, "mode-toggle");
+    key(&mut rt, Key::Text(" ".into()), Mods::default());
+    settle(&mut rt);
+    assert_eq!(mode(&rt), crate::dictation::ShortcutMode::Toggle);
+    assert_eq!(saved(&rt), 1);
+    assert!(
+        rt.find("shortcut-explainer/explainer-body/double-tap")
+            .is_none(),
+        "Double-tap to lock is Hold's"
+    );
+    tap(&mut rt, "mode-hold");
+    assert_eq!(mode(&rt), crate::dictation::ShortcutMode::Hold);
+    tap(&mut rt, "shortcut-explainer/explainer-body/double-tap");
+    assert!(!rt.state.settings.double_tap_lock);
+    tap(&mut rt, "close-explainer");
+    assert!(!rt.state.explainer.open);
+}
+
+#[test]
+fn the_explainer_loops_on_the_poll_clock() {
+    let mut rt = runtime("shortcut-explainer-motion", true, PANE_SIZE);
+    let pressed = |rt: &Runtime<Ui>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.path.ends_with("mode-hold/visual/keycap/cap"))
+            .map(|e| e.target[1])
+            .unwrap()
+    };
+    let up = pressed(&rt);
+    // Hold presses from 0.4 s to 2.4 s into the loop.
+    rt.frame(1.0);
+    assert!(pressed(&rt) > up, "the keycap goes down while held");
+    rt.frame(2.0);
+    assert_eq!(pressed(&rt), up, "and comes back up");
+    let held = runtime("shortcut-explainer", true, PANE_SIZE);
+    assert_eq!(held.state.explainer.time(), explainer::SNAPSHOT_MS);
+}
+
+#[test]
 fn a_failed_command_model_offers_retry_and_turning_commands_off() {
     let mut rt = runtime("mac-commands-unavailable", true, PANE_SIZE);
     assert!(
@@ -836,6 +910,8 @@ fn platform_goldens() {
             "meetings-recording",
             "mac-onboarding-setup",
             "mac-onboarding-landed",
+            "shortcut-explainer",
+            "shortcut-explainer-toggle",
         ] {
             check_golden(scene, dark, PANE_SIZE);
         }

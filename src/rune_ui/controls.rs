@@ -128,7 +128,31 @@ pub(super) fn described_row(
     description: Option<(String, Color)>,
     control: El,
 ) -> El {
-    let height = if description.is_some() {
+    let description = description.map(|(copy, color)| {
+        text(copy)
+            .key("description")
+            .font(DESCRIPTION)
+            .color(color)
+            .wrap()
+    });
+    copy_row(p, key, title, description, control, false)
+}
+
+/// A [`setting_row`] with a one-line link under its title, as tight as a
+/// row without one so General still fits the window.
+pub(super) fn link_row(p: Paint, key: &str, title: &str, link: El, control: El) -> El {
+    copy_row(p, key, title, Some(link), control, true)
+}
+
+fn copy_row(
+    p: Paint,
+    key: &str,
+    title: &str,
+    description: Option<El>,
+    control: El,
+    compact: bool,
+) -> El {
+    let height = if description.is_some() && !compact {
         ROW_HEIGHT_DESCRIBED
     } else {
         ROW_HEIGHT
@@ -137,7 +161,7 @@ pub(super) fn described_row(
         .key(key)
         .min_h(height)
         .px(12.0)
-        .py(8.0)
+        .py(if compact { 4.0 } else { 8.0 })
         .gaps(8.0, 24.0)
         .center_y()
         .justify_between()
@@ -150,15 +174,9 @@ pub(super) fn described_row(
                 .w(COPY_MIN_WIDTH)
                 .min_w(COPY_MIN_WIDTH)
                 .grow(1.0)
-                .gap(2.0)
+                .gap(if compact { 0.0 } else { 2.0 })
                 .child(text(title).key("label").font(p.k.ty.ui).color(p.text()))
-                .children(description.map(|(copy, color)| {
-                    text(copy)
-                        .key("description")
-                        .font(DESCRIPTION)
-                        .color(color)
-                        .wrap()
-                })),
+                .children(description),
         )
         .child(control)
 }
