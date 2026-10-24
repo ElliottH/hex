@@ -379,7 +379,7 @@ pub(crate) fn run(
             if pending == 0
                 && let Some(next) = model.take_ready()
             {
-                engine = TranscriptionEngine::start(next)?;
+                std::mem::replace(&mut engine, TranscriptionEngine::start(next)?).retire();
             }
         }
         if let Some(hotkey) = &hotkey
@@ -908,7 +908,7 @@ mod tests {
             .sum();
         assert!(matches!(
             received.first(),
-            Some(Command::Begin { stream: 1 })
+            Some(Command::Begin { stream: 1, .. })
         ));
         assert!(matches!(
             received.last(),

@@ -323,7 +323,7 @@ pub fn run(
             && pending == 0
             && let Some(next) = model.take_ready()
         {
-            engine = TranscriptionEngine::start(next)?;
+            std::mem::replace(&mut engine, TranscriptionEngine::start(next)?).retire();
         }
         if let Ok(error) = hotkey.errors.try_recv() {
             return Err(eyre!("Windows hotkey monitor stopped: {error}"));

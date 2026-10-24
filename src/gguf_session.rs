@@ -3,6 +3,7 @@
 //! every live stream) so retained scheduler scratch never outlives the
 //! inference that sized it.
 
+use std::cell::RefCell;
 use std::path::Path;
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
@@ -16,6 +17,32 @@ use crate::transcription_models::{
 /// during launch. With a 1 s probe, a new build's first dictation compiled
 /// them in its finish step and took 3-4 s on an RTX 5070 Ti.
 const STREAM_PREWARM_SAMPLES: usize = 8 * 16_000;
+
+thread_local! {
+    static JOB_CANCEL: RefCell<Option<transcribe_cpp::CancelToken>> = const { RefCell::new(None) };
+}
+
+/// Runs `work` with `cancel` installed on every offline run it makes on this
+/// thread, so cancelling one engine job aborts its model between decode steps
+/// and between chunks. The engine's offline closures reach the session through
+/// model types that know nothing of jobs.
+pub(crate) fn with_job_cancel<R>(
+    cancel: &transcribe_cpp::CancelToken,
+    work: impl FnOnce() -> R,
+) -> R {
+    struct Restore(Option<transcribe_cpp::CancelToken>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            JOB_CANCEL.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(JOB_CANCEL.with(|slot| slot.borrow_mut().replace(cancel.clone())));
+    work()
+}
+
+pub(crate) fn job_cancel() -> Option<transcribe_cpp::CancelToken> {
+    JOB_CANCEL.with(|slot| slot.borrow().clone())
+}
 
 pub(crate) fn validate_gguf_artifact(
     path: &Path,
@@ -194,6 +221,9 @@ impl OfflineGgufSession {
             Some(session) => session,
             None => self.model.session_with(&self.options)?,
         };
+        if let Some(cancel) = job_cancel() {
+            session.set_cancel_token(&cancel);
+        }
         let result = session.run(samples, options);
         drop(session);
         match self.model.session_with(&self.options) {
@@ -224,6 +254,9 @@ impl OfflineGgufSession {
         };
         let mut output = Vec::new();
         for samples in samples.chunks(max_samples) {
+            if job_cancel().is_some_and(|cancel| cancel.is_cancelled()) {
+                return Err(eyre!("transcription was cancelled"));
+            }
             let mut chunk = samples.to_vec();
             crate::dictation::pad_for_parakeet(&mut chunk);
             let transcript = self.run(&chunk, options).wrap_err("transcription failed")?;
@@ -247,5 +280,28 @@ mod tests {
         assert_eq!(session_options(DeviceType::Igpu).n_threads, 1);
         assert_eq!(session_options(DeviceType::Cpu).n_threads, 0);
         assert_eq!(session_options(DeviceType::Accel).n_threads, 0);
+    }
+
+    #[test]
+    fn a_job_cancel_token_is_installed_only_inside_its_scope() {
+        let outer = transcribe_cpp::CancelToken::new();
+        let inner = transcribe_cpp::CancelToken::new();
+        assert!(job_cancel().is_none());
+        with_job_cancel(&outer, || {
+            with_job_cancel(&inner, || {
+                inner.cancel();
+                assert!(job_cancel().unwrap().is_cancelled());
+            });
+            assert!(
+                !job_cancel().unwrap().is_cancelled(),
+                "the outer job is restored"
+            );
+        });
+        assert!(job_cancel().is_none());
+        let _ = std::panic::catch_unwind(|| with_job_cancel(&outer, || panic!("run failed")));
+        assert!(
+            job_cancel().is_none(),
+            "a panicking run still uninstalls its token"
+        );
     }
 }
