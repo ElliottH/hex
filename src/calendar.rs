@@ -55,6 +55,34 @@ impl CalendarAccess {
     }
 }
 
+/// macOS's answer to Connect calendar.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AccessAnswer {
+    /// EventKit's completion said yes.
+    pub granted: bool,
+    /// EventKit's status read right after the answer. It can still say
+    /// "not determined" in the process that asked, until Hex relaunches.
+    pub status: CalendarAccess,
+    /// The request's error, such as a missing usage description.
+    pub error: Option<String>,
+}
+
+impl AccessAnswer {
+    /// The access the answer leaves: a grant is full access whatever the
+    /// stale status says, and a refusal without an error is a denial even
+    /// while the status still says "not determined".
+    pub fn access(&self) -> CalendarAccess {
+        match (self.granted, self.status) {
+            (true, _) | (false, CalendarAccess::FullAccess) => CalendarAccess::FullAccess,
+            (false, CalendarAccess::NotDetermined) if self.error.is_some() => {
+                CalendarAccess::NotDetermined
+            }
+            (false, CalendarAccess::NotDetermined) => CalendarAccess::Denied,
+            (false, status) => status,
+        }
+    }
+}
+
 /// One calendar the user can include or leave out.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct CalendarInfo {
@@ -457,14 +485,14 @@ mod native {
     use color_eyre::eyre::{Result, eyre};
 
     use super::{
-        CalendarAccess, CalendarEvent, CalendarInfo, CalendarMeeting, CalendarSnapshot,
-        LATE_GRACE_MS, LOOKAHEAD_MS,
+        AccessAnswer, CalendarAccess, CalendarEvent, CalendarInfo, CalendarMeeting,
+        CalendarSnapshot, LATE_GRACE_MS, LOOKAHEAD_MS,
     };
     use crate::app_settings::CalendarSettings;
 
     unsafe extern "C" {
         fn hex_calendar_authorization() -> i32;
-        fn hex_calendar_request_access() -> i32;
+        fn hex_calendar_request_access(granted: *mut bool, error: *mut *mut c_char) -> i32;
         fn hex_calendar_change_count() -> u64;
         fn hex_calendar_calendars() -> *mut c_char;
         fn hex_calendar_events(from_ms: f64, to_ms: f64, limit: i32) -> *mut c_char;
@@ -478,9 +506,28 @@ mod native {
 
     /// Shows the macOS prompt when access was never decided. Blocks until
     /// the user answers, so call it off the main thread.
-    pub fn request_access() -> CalendarAccess {
-        // SAFETY: Blocks on EventKit's completion handler; no arguments.
-        CalendarAccess::from_code(unsafe { hex_calendar_request_access() })
+    pub fn request_access() -> AccessAnswer {
+        let mut granted = false;
+        let mut error: *mut c_char = std::ptr::null_mut();
+        // SAFETY: Blocks on EventKit's completion handler and writes both
+        // out-pointers, which outlive the call.
+        let status = CalendarAccess::from_code(unsafe {
+            hex_calendar_request_access(&mut granted, &mut error)
+        });
+        let error = (!error.is_null()).then(|| {
+            // SAFETY: The bridge returned a valid C string it allocated.
+            let message = unsafe { CStr::from_ptr(error) }
+                .to_string_lossy()
+                .into_owned();
+            // SAFETY: Freed once, by the allocator that made it.
+            unsafe { hex_calendar_free_string(error) };
+            message
+        });
+        AccessAnswer {
+            granted,
+            status,
+            error,
+        }
     }
 
     /// Bumps whenever the calendar database changes.
@@ -566,6 +613,35 @@ mod tests {
     use super::*;
 
     const MINUTE: i64 = 60_000;
+
+    fn answer(granted: bool, status: CalendarAccess, error: Option<&str>) -> AccessAnswer {
+        AccessAnswer {
+            granted,
+            status,
+            error: error.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn a_grant_is_full_access_even_while_the_status_is_stale() {
+        use CalendarAccess::*;
+        assert_eq!(answer(true, NotDetermined, None).access(), FullAccess);
+        assert_eq!(answer(true, FullAccess, None).access(), FullAccess);
+    }
+
+    #[test]
+    fn a_refusal_is_a_denial_unless_the_request_failed() {
+        use CalendarAccess::*;
+        assert_eq!(answer(false, NotDetermined, None).access(), Denied);
+        assert_eq!(answer(false, Denied, None).access(), Denied);
+        assert_eq!(answer(false, Restricted, None).access(), Restricted);
+        assert_eq!(answer(false, WriteOnly, None).access(), WriteOnly);
+        assert_eq!(
+            answer(false, NotDetermined, Some("no usage description")).access(),
+            NotDetermined
+        );
+        assert!(answer(false, NotDetermined, None).access().blocked());
+    }
 
     fn event(title: &str) -> CalendarEvent {
         CalendarEvent {

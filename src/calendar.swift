@@ -10,6 +10,10 @@ private let changeLock = NSLock()
 private let storeLock = NSLock()
 private var changes: UInt64 = 0
 private var observer: NSObjectProtocol?
+/// This process's request was granted. EventKit's class-level status can
+/// keep answering from before the prompt (still not determined) until Hex
+/// relaunches, so the answer itself is the evidence.
+private var grantedHere = false
 
 /// Notes beyond this are cut: call links sit near the top of invitations,
 /// and Rust parses the text on every poll.
@@ -70,34 +74,60 @@ private func startObserving() {
     }
 }
 
+/// EventKit's status, unless it still reports "not determined" after this
+/// process was granted access. A later refusal in System Settings wins.
+private func currentStatus() -> EKAuthorizationStatus {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    changeLock.lock()
+    defer { changeLock.unlock() }
+    return status == .notDetermined && grantedHere ? .fullAccess : status
+}
+
 @_cdecl("hex_calendar_authorization")
 public func hexCalendarAuthorization() -> Int32 {
-    statusCode(EKEventStore.authorizationStatus(for: .event))
+    statusCode(currentStatus())
+}
+
+private final class AccessAnswer: @unchecked Sendable {
+    var granted = false
+    var error: Error?
 }
 
 /// Shows the system prompt when access was never decided; blocks the calling
-/// (background) thread until the user answers. Returns the resulting status.
+/// (background) thread until the user answers. Returns EventKit's status
+/// afterwards and stores whether the request was granted, and any error's
+/// description (owned; free it with `hex_calendar_free_string`).
 @_cdecl("hex_calendar_request_access")
-public func hexCalendarRequestAccess() -> Int32 {
+public func hexCalendarRequestAccess(
+    _ granted: UnsafeMutablePointer<Bool>,
+    _ error: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+) -> Int32 {
     let semaphore = DispatchSemaphore(value: 0)
-    store.requestFullAccessToEvents { _, _ in
+    let answer = AccessAnswer()
+    store.requestFullAccessToEvents { allowed, failure in
+        answer.granted = allowed
+        answer.error = failure
         semaphore.signal()
     }
     semaphore.wait()
-    let status = EKEventStore.authorizationStatus(for: .event)
-    if status == .fullAccess {
+    granted.pointee = answer.granted
+    error.pointee = answer.error.map { strdup($0.localizedDescription) } ?? nil
+    if answer.granted {
+        changeLock.lock()
+        grantedHere = true
+        changeLock.unlock()
         storeLock.lock()
         store.reset()
         storeLock.unlock()
         startObserving()
     }
-    return statusCode(status)
+    return statusCode(EKEventStore.authorizationStatus(for: .event))
 }
 
 /// Counts EventKit store changes since the first call with access.
 @_cdecl("hex_calendar_change_count")
 public func hexCalendarChangeCount() -> UInt64 {
-    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return 0 }
+    guard currentStatus() == .fullAccess else { return 0 }
     startObserving()
     changeLock.lock()
     defer { changeLock.unlock() }
@@ -106,7 +136,7 @@ public func hexCalendarChangeCount() -> UInt64 {
 
 @_cdecl("hex_calendar_calendars")
 public func hexCalendarCalendars() -> UnsafeMutablePointer<CChar>? {
-    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+    guard currentStatus() == .fullAccess else { return nil }
     storeLock.lock()
     defer { storeLock.unlock() }
     let calendars = store.calendars(for: .event).map {
@@ -122,7 +152,7 @@ public func hexCalendarCalendars() -> UnsafeMutablePointer<CChar>? {
 /// Events overlapping the window, soonest first, at most `limit`.
 @_cdecl("hex_calendar_events")
 public func hexCalendarEvents(_ fromMs: Double, _ toMs: Double, _ limit: Int32) -> UnsafeMutablePointer<CChar>? {
-    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return nil }
+    guard currentStatus() == .fullAccess else { return nil }
     storeLock.lock()
     defer { storeLock.unlock() }
     let predicate = store.predicateForEvents(

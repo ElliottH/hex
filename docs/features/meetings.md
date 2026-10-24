@@ -148,6 +148,8 @@ Mac with a GPU.
 Meetings > Settings > Calendar                       // meetings.calendar (macOS)
 ├── Connect calendar -> macOS full-access prompt, on this click only
 │   ├── Granted -> meetings.calendar.connected = true; reminders on, 1 min lead
+│   │   └── trusts the prompt's answer: macOS keeps reporting "not determined"
+│   │       to the asking process until it relaunches
 │   └── Denied / Restricted / write-only -> "Calendar access is off"
 │       └── Open settings -> Privacy & Security › Calendars
 └── Connected
@@ -233,7 +235,15 @@ Checks: `meetings_need_other_people_or_a_call_link`,
 `the_reminder_counts_down_to_the_start`); and the Linux pane tests
 `the_calendar_asks_for_access_only_when_connect_is_pressed`,
 `a_connected_calendar_saves_reminders_and_lists_meetings`, and
-`denied_calendar_access_links_to_privacy_settings`. Scenes:
+`denied_calendar_access_links_to_privacy_settings`; the answer checks
+`a_grant_is_full_access_even_while_the_status_is_stale` and
+`a_refusal_is_a_denial_unless_the_request_failed` in
+[calendar.rs](../../src/calendar.rs), and
+`a_granted_calendar_is_saved_connected_and_stays_connected`,
+`a_failed_save_shows_its_error`, `a_denied_calendar_is_not_saved_and_stays_blocked`,
+and `a_failed_request_keeps_connect_and_shows_the_error` in
+[macos_host.rs](../../src/rune_ui/macos_host.rs). Each step of Connect calendar
+logs a `calendar:` line to `process.log`. Scenes:
 `meetings-settings` (disconnected), `meetings-calendar`, and
 `meetings-calendar-denied`.
 
