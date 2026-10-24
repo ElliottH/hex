@@ -64,10 +64,8 @@ force-replaced. Until then, every step lands dormant behind an experiment.
 4. One window and onboarding: a Captures pane, merged permissions, iPhone and
    ScrawlKit ingest, retention, export, `hex capture`, and a one-time read-only
    import of Scrawl's settings. Captures stay in Scrawl's folder.
-5. After the freeze: ship captures in Hex. Scrawl's final update shows a
-   popover saying its features moved to Hex, with a Download Hex button;
-   dismissing it keeps Scrawl working. Then move the cask to Hex and redirect
-   Scrawl's site.
+5. After the freeze: ship, point Scrawl's last update and cask at Hex, and
+   redirect its site.
 
 ## Finish Settings And First-Run Health
 
