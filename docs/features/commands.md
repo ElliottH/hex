@@ -129,13 +129,13 @@ is discoverability, not proof that its scope is active or its action succeeded.
 
 ```ts
 Create config / hex commands init                      // commands.personal-config
-  -> Managed Bun workspace + @hex/commands SDK
+  -> Managed Bun workspace + @hex/commands SDK -> Bun install
   -> ~/.config/hex/hex.config.ts                         // trusted executable user code
+     // published last, atomically, so its appearance means installed
 
 No config at launch -> Not configured; poll for hex.config.ts
   // the workspace folder may not exist yet; no restart needed
 Config appears + workspace settles -> Prepare and start host as at launch
-  // waits up to 10 s for an in-progress SDK install to finish first
 
 Running watcher sees config edit -> Validate candidate
 ├── Valid -> Replace active registry and catalog
@@ -152,7 +152,9 @@ in [personal_commands.rs](../../src/personal_commands.rs), plus
 `invalid_candidate_does_not_mutate_base_registry`,
 `wake_sleep_ids_and_phrases_are_reserved`,
 `unconfigured_host_starts_when_config_appears_without_restart`,
-`unconfigured_host_wait_stops_on_shutdown`.
+`unconfigured_host_wait_stops_on_shutdown`,
+`initialization_publishes_config_only_after_install`,
+`deactivation_forgets_the_removed_host`.
 These cover provisioning/registration fixtures and the not-configured wait, not
 a live editor-to-reload path or a real host start after the config appears.
 

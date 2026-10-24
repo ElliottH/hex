@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -23,9 +24,9 @@ use crate::keys::{Key, Modifiers};
 const MAX_FRAME_BYTES: usize = 256 * 1024;
 const MAX_INPUT_FRAME_BYTES: usize = 64 * 1024;
 const HOST_START_TIMEOUT: Duration = Duration::from_secs(5);
+const CONFIG_FILE: &str = "hex.config.ts";
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(350);
-const SDK_INSTALL_GRACE: Duration = Duration::from_secs(10);
 const MAX_COMMANDS: usize = 512;
 const MAX_TRANSFORMATIONS: usize = 128;
 const MAX_TRANSFORMATIONS_PER_INVOCATION: usize = 32;
@@ -324,28 +325,48 @@ fn validate_transformations(
 pub fn initialize_workspace() -> Result<PathBuf> {
     let workspace = crate::app_paths::personal_commands_workspace()?;
     let sdk = crate::app_paths::personal_commands_sdk()?;
-    let workspace_changed = initialize_workspace_at(&workspace, &sdk)?;
     let bun = find_bun().ok_or_else(|| eyre!("Bun is required to install personal commands"))?;
-    if workspace_changed {
-        remove_installed_managed_sdk(&workspace)?;
-    }
-    install_workspace_dependencies(&workspace, &bun)?;
+    initialize_workspace_at(&workspace, &sdk, |workspace_changed| {
+        if workspace_changed {
+            remove_installed_managed_sdk(&workspace)?;
+        }
+        install_workspace_dependencies(&workspace, &bun)
+    })?;
     Ok(workspace)
 }
 
 /// Whether the personal command workspace has a config to host.
 pub fn workspace_configured() -> bool {
     crate::app_paths::personal_commands_workspace()
-        .is_ok_and(|workspace| workspace.join("hex.config.ts").is_file())
+        .is_ok_and(|workspace| workspace.join(CONFIG_FILE).is_file())
 }
 
-pub fn initialize_workspace_at(workspace: &Path, sdk: &Path) -> Result<bool> {
+/// Provisions the workspace, runs `install` with whether the managed SDK
+/// changed, and only then publishes a missing `hex.config.ts`. A running Hex
+/// starts its host when the config appears, so it must mean the workspace is
+/// installed.
+pub fn initialize_workspace_at(
+    workspace: &Path,
+    sdk: &Path,
+    install: impl FnOnce(bool) -> Result<()>,
+) -> Result<bool> {
     let template = sdk.join("workspace-template");
     if !template.is_dir() {
         return Err(eyre!("personal command SDK resources are incomplete"));
     }
     let workspace_changed = refresh_managed_sdk_at(workspace, sdk)?;
-    copy_directory(&template, workspace, false)?;
+    copy_directory(&template, workspace, false, Some(OsStr::new(CONFIG_FILE)))?;
+    install(workspace_changed)?;
+    let config = workspace.join(CONFIG_FILE);
+    if !config.exists() {
+        // The staged name ends in .tmp so the workspace watcher ignores it.
+        let staged = workspace.join(format!(".{CONFIG_FILE}.{}.tmp", std::process::id()));
+        fs::copy(template.join(CONFIG_FILE), &staged)?;
+        if let Err(error) = fs::rename(&staged, &config) {
+            let _ = fs::remove_file(&staged);
+            return Err(error.into());
+        }
+    }
     Ok(workspace_changed)
 }
 
@@ -523,7 +544,7 @@ fn refresh_managed_sdk_at(workspace: &Path, sdk: &Path) -> Result<bool> {
     }
     fs::create_dir(&staged_sdk)?;
     fs::copy(sdk.join("package.json"), staged_sdk.join("package.json"))?;
-    copy_directory(&sdk.join(code), &staged_sdk.join(code), true)?;
+    copy_directory(&sdk.join(code), &staged_sdk.join(code), true, None)?;
     if code == "src" {
         write_source_sdk_manifest(&staged_sdk.join("package.json"))?;
     }
@@ -641,7 +662,12 @@ fn remove_installed_managed_sdk(workspace: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_directory(source: &Path, destination: &Path, overwrite: bool) -> Result<()> {
+fn copy_directory(
+    source: &Path,
+    destination: &Path,
+    overwrite: bool,
+    skip: Option<&OsStr>,
+) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -649,9 +675,12 @@ fn copy_directory(source: &Path, destination: &Path, overwrite: bool) -> Result<
         if file_type.is_symlink() {
             return Err(eyre!("SDK resources must not contain symlinks"));
         }
+        if skip == Some(entry.file_name().as_os_str()) {
+            continue;
+        }
         let target = destination.join(entry.file_name());
         if file_type.is_dir() {
-            copy_directory(&entry.path(), &target, overwrite)?;
+            copy_directory(&entry.path(), &target, overwrite, None)?;
         } else if file_type.is_file() && (overwrite || !target.exists()) {
             fs::copy(entry.path(), target)?;
         }
@@ -1292,7 +1321,7 @@ fn run_worker(
     // Generations keep counting across configure/unconfigure cycles so a stale
     // invocation can never reach a newer host.
     let mut generation = 0;
-    loop {
+    while !stop.load(Ordering::Acquire) {
         let paths = match prepare_host() {
             Ok(Some(paths)) => paths,
             Ok(None) => {
@@ -1304,7 +1333,9 @@ fn run_worker(
                 let Ok(workspace) = crate::app_paths::personal_commands_workspace() else {
                     return;
                 };
-                if !wait_for_config(&workspace, &requests, &outcomes, &stop) {
+                if !wait_for_config(&workspace, &requests, &outcomes, &stop)
+                    || stop.load(Ordering::Acquire)
+                {
                     return;
                 }
                 tracing::info!("personal command config appeared; starting the host");
@@ -1337,11 +1368,28 @@ fn run_worker(
             HostExit::Stopped => return,
             HostExit::Unconfigured => {
                 tracing::info!("personal command config was removed; waiting for a new one");
-                *active.write().expect("command registry poisoned") =
-                    Arc::new(RuntimeSnapshot::native(base.clone()));
+                deactivate(&mut status, &active, &base, &transformations);
+                persist_status(&status);
             }
         }
     }
+}
+
+/// Forgets everything the last host registered, so neither the registry nor
+/// the persisted status describes a host that no longer runs.
+fn deactivate(
+    status: &mut StatusSnapshot,
+    active: &RwLock<Arc<RuntimeSnapshot>>,
+    base: &CommandConfig,
+    transformations: &TransformationClient,
+) {
+    transformations.clear();
+    *active.write().expect("command registry poisoned") =
+        Arc::new(RuntimeSnapshot::native(base.clone()));
+    *status = StatusSnapshot {
+        host_state: HostState::NotConfigured,
+        ..StatusSnapshot::default()
+    };
 }
 
 enum HostExit {
@@ -1398,6 +1446,8 @@ fn run_host(
     ) {
         restart_backoff.host_started(Instant::now());
         generations.hosts.insert(host.generation, host);
+    } else {
+        restart_backoff.host_failed(Instant::now());
     }
     let mut next_invocation = 0_u64;
     let mut exit = HostExit::Stopped;
@@ -1638,15 +1688,15 @@ fn reject_request(request: Request, outcomes: &SyncSender<ActionOutcome>) {
 
 /// Waits while personal commands are not configured for `hex.config.ts` to
 /// appear in `workspace`, which may not exist yet. Returns `false` on shutdown.
-/// The workspace must settle first, and a missing managed SDK gets a grace
-/// period so `hex commands init` can finish its own install.
+/// `hex commands init` publishes the config only after its install finishes,
+/// so the config's appearance means the workspace is ready once it settles.
 fn wait_for_config(
     workspace: &Path,
     requests: &Receiver<Request>,
     outcomes: &SyncSender<ActionOutcome>,
     stop: &AtomicBool,
 ) -> bool {
-    let config = workspace.join("hex.config.ts");
+    let config = workspace.join(CONFIG_FILE);
     let mut fingerprint = None;
     let mut settled_since = Instant::now();
     while !stop.load(Ordering::Acquire) {
@@ -1668,10 +1718,7 @@ fn wait_for_config(
             settled_since = Instant::now();
             continue;
         }
-        let settled = settled_since.elapsed();
-        if settled >= RELOAD_DEBOUNCE
-            && (managed_host_entrypoint(workspace).is_file() || settled >= SDK_INSTALL_GRACE)
-        {
+        if settled_since.elapsed() >= RELOAD_DEBOUNCE {
             return true;
         }
     }
@@ -1682,7 +1729,7 @@ fn wait_for_config(
 /// means no `hex.config.ts` exists, so personal commands are not configured.
 fn prepare_host() -> Result<Option<HostPaths>> {
     let workspace = crate::app_paths::personal_commands_workspace()?;
-    let config = workspace.join("hex.config.ts");
+    let config = workspace.join(CONFIG_FILE);
     if !config.is_file() {
         return Ok(None);
     }
@@ -3849,6 +3896,68 @@ mod tests {
     }
 
     #[test]
+    fn initialization_publishes_config_only_after_install() {
+        let (workspace, sdk) = workspace_upgrade_fixture();
+        let config = workspace.join(CONFIG_FILE);
+        let installed = initialize_workspace_at(&workspace, &sdk, |_| {
+            assert!(workspace.join("package.json").is_file());
+            assert!(!config.exists());
+            Ok(())
+        });
+        assert!(installed.is_ok());
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            fs::read_to_string(sdk.join("workspace-template").join(CONFIG_FILE)).unwrap()
+        );
+
+        fs::remove_file(&config).unwrap();
+        let failed = initialize_workspace_at(&workspace, &sdk, |_| Err(eyre!("install failed")));
+        assert!(failed.is_err());
+        assert!(!config.exists());
+        assert!(
+            fs::read_dir(&workspace)
+                .unwrap()
+                .flatten()
+                .all(|entry| { !entry.file_name().to_string_lossy().ends_with(".tmp") })
+        );
+        fs::remove_dir_all(workspace.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn deactivation_forgets_the_removed_host() {
+        let base = CommandConfig::new();
+        let mut runtime = RuntimeSnapshot::native(base.clone());
+        runtime.generation = 3;
+        let active = RwLock::new(Arc::new(runtime));
+        let transformations = TransformationClient::default();
+        let mut status = StatusSnapshot {
+            active_generation: Some(3),
+            catalog: vec![StatusCommand {
+                id: "open-notes".into(),
+                phrases: vec!["open notes".into()],
+                group: "Personal".into(),
+                description: String::new(),
+                context: StatusContext::Global,
+                execution: StatusExecution::Handler,
+            }],
+            host_state: HostState::Active,
+            last_reload_error: Some("old".into()),
+            ..StatusSnapshot::default()
+        };
+
+        deactivate(&mut status, &active, &base, &transformations);
+
+        assert_eq!(
+            status,
+            StatusSnapshot {
+                host_state: HostState::NotConfigured,
+                ..StatusSnapshot::default()
+            }
+        );
+        assert_eq!(active.read().unwrap().generation, 0);
+    }
+
+    #[test]
     fn unconfigured_host_wait_stops_on_shutdown() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3885,7 +3994,7 @@ mod tests {
             }
             fs::write(workspace.join("package.json"), manifest.to_string()).unwrap();
             fs::write(workspace.join("hex.config.ts"), "// user config\n").unwrap();
-            assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+            assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
             manifest["dependencies"]["effect"] = required.into();
             let bytes = fs::read(workspace.join("package.json")).unwrap();
             assert_eq!(
@@ -3896,7 +4005,7 @@ mod tests {
                 fs::read_to_string(workspace.join("hex.config.ts")).unwrap(),
                 "// user config\n"
             );
-            assert!(!initialize_workspace_at(&workspace, &sdk).unwrap());
+            assert!(!initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
             assert_eq!(fs::read(workspace.join("package.json")).unwrap(), bytes);
         }
         fs::remove_dir_all(workspace.parent().unwrap()).unwrap();
@@ -3905,7 +4014,7 @@ mod tests {
     #[test]
     fn unchanged_sdk_with_stale_effect_requires_install_on_startup() {
         let (workspace, sdk) = workspace_upgrade_fixture();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         let sdk_before = directory_manifest(&workspace.join(".hex-sdk")).unwrap();
         fs::write(
             workspace.join("package.json"),
@@ -3961,7 +4070,7 @@ mod tests {
     #[test]
     fn workspace_effect_conflicts_leave_manifest_config_and_sdk_untouched() {
         let (workspace, sdk) = workspace_upgrade_fixture();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         fs::write(sdk.join("dist/bin.js"), "// new SDK\n").unwrap();
         let before = directory_manifest(&workspace.join(".hex-sdk")).unwrap();
         for invalid in [
@@ -3971,7 +4080,7 @@ mod tests {
             r#"{"devDependencies":[]}"#,
         ] {
             fs::write(workspace.join("package.json"), invalid).unwrap();
-            assert!(initialize_workspace_at(&workspace, &sdk).is_err());
+            assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).is_err());
             assert_eq!(
                 fs::read_to_string(workspace.join("package.json")).unwrap(),
                 invalid
@@ -4025,7 +4134,7 @@ mod tests {
     #[test]
     fn workspace_rejects_indirect_effect_selectors_but_preserves_scoped_packages() {
         let (workspace, sdk) = workspace_upgrade_fixture();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         fs::write(sdk.join("dist/bin.js"), "// new SDK\n").unwrap();
         let before = directory_manifest(&workspace.join(".hex-sdk")).unwrap();
         for section in ["overrides", "resolutions"] {
@@ -4041,7 +4150,7 @@ mod tests {
                 manifest[section] = selectors;
                 let original = manifest.to_string();
                 fs::write(workspace.join("package.json"), &original).unwrap();
-                let error = initialize_workspace_at(&workspace, &sdk)
+                let error = initialize_workspace_at(&workspace, &sdk, |_| Ok(()))
                     .unwrap_err()
                     .to_string();
                 assert!(
@@ -4070,7 +4179,7 @@ mod tests {
             "overrides": unrelated, "resolutions": unrelated
         });
         fs::write(workspace.join("package.json"), manifest.to_string()).unwrap();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         manifest["dependencies"]["effect"] = "4.0.0-rc.999".into();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(
@@ -4090,7 +4199,7 @@ mod tests {
     #[test]
     fn workspace_only_rejects_manifest_symlinks_that_need_migration() {
         let (workspace, sdk) = workspace_upgrade_fixture();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         fs::write(sdk.join("dist/bin.js"), "// new SDK\n").unwrap();
         let before = directory_manifest(&workspace.join(".hex-sdk")).unwrap();
         let path = workspace.join("package.json");
@@ -4104,7 +4213,7 @@ mod tests {
                 fs::remove_file(&target).unwrap();
             }
             std::os::unix::fs::symlink(&target, &path).unwrap();
-            let error = initialize_workspace_at(&workspace, &sdk)
+            let error = initialize_workspace_at(&workspace, &sdk, |_| Ok(()))
                 .unwrap_err()
                 .to_string();
             assert!(error.contains("is a symlink"), "{error}");
@@ -4127,8 +4236,8 @@ mod tests {
         let current = r#"{"dependencies":{"effect":"4.0.0-rc.999"}}"#;
         fs::write(&target, current).unwrap();
         std::os::unix::fs::symlink(&target, &path).unwrap();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
-        assert!(!initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
+        assert!(!initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         assert_eq!(fs::read_link(&path).unwrap(), target);
         assert_eq!(fs::read_to_string(&target).unwrap(), current);
         assert_eq!(
@@ -4160,7 +4269,7 @@ mod tests {
     #[test]
     fn workspace_effect_write_failure_is_retryable_after_sdk_refresh() {
         let (workspace, sdk) = workspace_upgrade_fixture();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         fs::write(sdk.join("dist/bin.js"), "// new SDK\n").unwrap();
         let path = workspace.join("package.json");
         let original = r#"{"dependencies":{"effect":"4.0.0-beta.97"}}"#;
@@ -4218,7 +4327,7 @@ mod tests {
     #[test]
     fn invalid_sdk_effect_requirement_does_not_mutate_workspace() {
         let (workspace, sdk) = workspace_upgrade_fixture();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         let before = directory_manifest(&workspace).unwrap();
         for invalid in [
             "{",
@@ -4281,7 +4390,7 @@ mod tests {
             _ => ("src/bin.ts", "src/index.ts"),
         };
 
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         assert!(workspace.join(".hex-sdk").join(bin).is_file());
         assert!(workspace.join("package.json").is_file());
         assert!(workspace.join("tsconfig.json").is_file());
@@ -4292,13 +4401,13 @@ mod tests {
                 .is_file()
         );
         fs::write(workspace.join("hex.config.ts"), "// user config\n").unwrap();
-        assert!(!initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(!initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         assert_eq!(
             fs::read_to_string(workspace.join("hex.config.ts")).unwrap(),
             "// user config\n"
         );
         fs::write(workspace.join(".hex-sdk").join(index), "stale SDK\n").unwrap();
-        assert!(initialize_workspace_at(&workspace, &sdk).unwrap());
+        assert!(initialize_workspace_at(&workspace, &sdk, |_| Ok(())).unwrap());
         assert_eq!(
             fs::read(workspace.join(".hex-sdk").join(index)).unwrap(),
             fs::read(sdk.join(index)).unwrap()
