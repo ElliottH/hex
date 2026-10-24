@@ -113,7 +113,13 @@ substitute for source inspection or a second roadmap.
   service loads its own, released after a long clip when the engine holds it.
 - `local_api`: authenticated loopback discovery or direct-child endpoint
   handoff, bounded HTTP parsing, model preparation progress, and raw
-  transcription routes.
+  transcription routes, plus the always-on authenticated `POST /control`.
+- `control`: the release `hex` control surface: the versioned
+  `ControlRequest`/`ControlReply` protocol, the settings registry behind
+  `hex settings` (one dotted key per persisted setting, with the window's
+  rules), and the CLI client (`control::cli`). `macos_rune::control` is the
+  one host that carries the commands out on macOS; Linux and Windows report
+  "not supported on this OS" for now. Contract: `docs/cli.md`.
 - `sdk/typescript`: Promise and Effect v4 host wrappers for direct-child
   lifecycle, authenticated model preparation, and host-audio transcription.
 - `developer_control`: the typed debug-only command/reply protocol the local
@@ -553,6 +559,19 @@ CoreAudio formats, AppleScript details, or event serialization.
   GUI, or permission setup; never writes, recovers, or indexes on disk inside
   the meetings folder; runs no model; and makes no network request. Stdout
   carries only MCP messages.
+- `hex` control commands (`status`, `quit`, `dictation`, `meetings record`,
+  `settings set`, `model use`, `window show`, …) are release-available and
+  drive only the one running Hex through the owner-only discovery file and
+  bearer-authenticated `POST /control` (64 KiB request, 1 MiB reply, 10 s
+  in-app deadline). They dispatch before folder migration, process logging,
+  or the instance lock, and never launch Hex; only `hex start` and
+  `hex restart` open it. Every command is carried out by the app's own paths
+  (the menu bar's meeting request, the window's settings save followed by
+  `ReloadSettings`, the shortcut state machine), so CLI-started recordings
+  look and stop exactly like the UI's and opt-ins stay explicit settings.
+  Commands are idempotent (`changed: false`). `settings::every_persisted_setting_has_a_cli_key`
+  fails when a persisted setting has no `hex settings` key; a protocol change
+  that breaks either shape increments `CONTROL_VERSION` and `docs/cli.md`.
 - Meeting echo is judged on one timeline built from WAV sample positions, never
   from packet arrival. A `You` line or rolling entry is judged only once the
   system audio that could explain it has arrived (bounded when the system track
@@ -698,7 +717,8 @@ direct `npm publish`, after the bootstrap release.
 ./scripts/setup-parakeet.sh
 bun run --cwd sdk/commands build
 cargo run -- listen
-cargo run -- status
+cargo run -- status --json   # asks the running Hex (docs/cli.md)
+cargo run -- dev dashboard   # debug recognition TUI
 cargo run -- meeting record --title "Design sync"
 cargo run -- meeting probe
 cargo run -- mcp --meetings-dir tests/fixtures/meetings
@@ -882,7 +902,7 @@ static runtime in `.cargo/config.toml` keeps the Visual C++ Redistributable
 unnecessary; the release workflow asserts neither Windows executable imports it.
 
 Use `termctrl` to verify TUI changes at both wide and narrow dimensions. The
-dashboard keys are `1` for commands, `2` for the activity log, `3` for meetings,
+`hex dev dashboard` keys are `1` for commands, `2` for the activity log, `3` for meetings,
 Tab to cycle, and `q`/Escape to quit.
 
 ## Diagnostics

@@ -39,6 +39,21 @@ pub struct HistoryArgs {
     json: bool,
     #[arg(long)]
     oldest_first: bool,
+    #[command(subcommand)]
+    pub action: Option<HistoryAction>,
+}
+
+/// History changes, carried out by the running Hex (`crate::control`).
+#[derive(Subcommand, Debug)]
+pub enum HistoryAction {
+    /// Delete every retained dictation.
+    Clear {
+        /// Confirm deleting the history.
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        output: crate::control::cli::Output,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -93,6 +108,26 @@ pub enum MeetingsCommand {
         until: Option<String>,
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..=50))]
         limit: u32,
+    },
+    /// Start recording a meeting in the running Hex, visibly, as the menu
+    /// bar's Record Meeting does (needs meetings.enabled).
+    Record {
+        /// The meeting's title (default: the calendar event's, or a
+        /// provisional one).
+        #[arg(long)]
+        title: Option<String>,
+        #[command(flatten)]
+        output: crate::control::cli::Output,
+    },
+    /// Stop the recording meeting and transcribe it (Stop & Transcribe).
+    Stop {
+        #[command(flatten)]
+        output: crate::control::cli::Output,
+    },
+    /// Copy the last meeting's transcript to the clipboard.
+    CopyLast {
+        #[command(flatten)]
+        output: crate::control::cli::Output,
     },
 }
 
@@ -402,6 +437,10 @@ pub fn meetings(command: &MeetingsCommand) -> Result<()> {
             )?;
             Ok(())
         }
+        // `main` sends these to the running Hex.
+        MeetingsCommand::Record { .. }
+        | MeetingsCommand::Stop { .. }
+        | MeetingsCommand::CopyLast { .. } => Err(eyre!("this command needs the running Hex")),
     }
 }
 

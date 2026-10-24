@@ -882,6 +882,19 @@ impl DictationHotkey {
         was_recording.then_some(HotkeyAction::Cancel)
     }
 
+    /// Locks an idle machine without a press, as a `hex dictation start`
+    /// does: the next shortcut press finishes it and Escape cancels it, the
+    /// same as a double-tap lock. Returns false while a press is in flight.
+    pub fn lock(&mut self) -> bool {
+        if !matches!(self.state, State::Idle { .. }) && !self.state.is_pending_gesture() {
+            return false;
+        }
+        self.state = State::Locked;
+        self.pressed_keys.clear();
+        self.stale_keys_neutral_since = None;
+        true
+    }
+
     pub fn disarm_pending_gesture(&mut self) {
         if !self.is_recording() {
             if matches!(self.state, State::Idle { .. }) || self.state.is_pending_gesture() {
@@ -2373,6 +2386,23 @@ mod tests {
             |_| panic!("keys must not be polled"),
         );
         assert!(hotkey.is_recording());
+    }
+
+    #[test]
+    fn programmatic_lock_finishes_on_the_next_press() {
+        let now = capture_time();
+        let mut hotkey = test_hotkey(false, now);
+        assert!(hotkey.lock());
+        assert!(hotkey.is_recording());
+        let option = InputEvent::Flags(OPTION_KEY_MASK);
+        let press = now + Duration::from_millis(500);
+        assert_eq!(hotkey.process(option, press), Some(HotkeyAction::Finish));
+        assert!(!hotkey.is_recording());
+
+        // A held shortcut is not interrupted by a programmatic lock.
+        let mut held = test_hotkey(false, now);
+        assert_eq!(held.process(option, now), Some(HotkeyAction::Start));
+        assert!(!held.lock());
     }
 
     #[test]

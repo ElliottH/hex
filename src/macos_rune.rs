@@ -51,6 +51,8 @@ use crate::transcription_models::{
 };
 use crate::transcription_preparation::TranscriptionPreparation;
 
+mod control;
+
 /// How often the runtime refreshes while nothing is asked.
 const RUNTIME_TICK: Duration = Duration::from_millis(250);
 /// The main-loop timer: the HUD follows the pointer and channels drain.
@@ -220,12 +222,14 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     let event_path = listener.event_path.clone();
     let event_log = crate::events::EventLog::create(&event_path)?;
     let (developer_sender, developer_receiver) = mpsc::sync_channel(8);
+    let (control_sender, control_receiver) = mpsc::sync_channel(8);
     let (recognition_controls, recognition_control_receiver) = mpsc::sync_channel(8);
     let mut local_api = crate::local_api::LocalApi::start(
         event_log.clone(),
         crate::local_api::LocalApiOptions {
             developer_control: crate::DEVELOPER_FEATURES_ENABLED.then(|| developer_sender.clone()),
             dictation_control: Some(recognition_controls.clone()),
+            control: Some(control_sender),
         },
     )?;
     let (controller_events_sender, controller_events) = mpsc::sync_channel(32);
@@ -367,6 +371,8 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         status_actions: None,
         controller_events,
         developer_calls: developer_receiver,
+        control_calls: control_receiver,
+        meeting_waiters: Vec::new(),
         meeting_state: MeetingMenuState::Idle,
         meeting_menu_at: Instant::now(),
         model_menu_at: Instant::now(),
@@ -566,6 +572,8 @@ struct Pump {
     status_actions: Option<Receiver<StatusItemAction>>,
     controller_events: Receiver<ControllerEvent>,
     developer_calls: Receiver<crate::developer_control::DeveloperCall>,
+    control_calls: Receiver<crate::control::ControlCall>,
+    meeting_waiters: Vec<control::MeetingWaiter>,
     meeting_state: MeetingMenuState,
     meeting_menu_at: Instant,
     model_menu_at: Instant,
@@ -679,6 +687,9 @@ impl Pump {
             let reply = self.developer(call.command, indicator);
             let _ = call.reply.send(reply);
         }
+        while let Ok(call) = self.control_calls.try_recv() {
+            self.control(call);
+        }
         while let Some(action) = self
             .status_actions
             .as_ref()
@@ -687,9 +698,11 @@ impl Pump {
             self.status_action(action);
         }
         while let Ok(event) = self.controller_events.try_recv() {
+            self.settle_meeting_waiters(Some(&event));
             self.controller_event(event);
             self.meeting_menu_at = Instant::now();
         }
+        self.settle_meeting_waiters(None);
         if self.status_actions.is_none() {
             return;
         }

@@ -10,6 +10,7 @@ use color_eyre::Result;
 use crate::audio::CaptureInstant;
 use crate::commands::{Action, ActionExecutor, ActionOutcome, CommandConfig, Decision, Mode};
 use crate::context::{ContextMonitor, ContextSnapshot};
+use crate::control::{CaptureAction, CaptureKind, CaptureSnapshot, ControlReply};
 use crate::dictation::{
     ControlStability, DictationControl, DictationProtocol, Finish, MINIMUM_HOLD_DURATION,
     POST_RELEASE_TAIL,
@@ -99,6 +100,17 @@ enum FinishResult {
 pub enum RecognitionControl {
     PasteLast,
     RetryCommands,
+    /// `hex dictation` and `hex voice-action`: drives the shortcut machine
+    /// as a press would, so the shortcut and Escape still finish or cancel.
+    Capture {
+        voice_action: bool,
+        action: CaptureAction,
+        reply: SyncSender<ControlReply>,
+    },
+    /// What is recording, for `hex status`.
+    CaptureStatus {
+        reply: SyncSender<CaptureSnapshot>,
+    },
     StartDictation {
         source: String,
         owner_token: String,
@@ -448,6 +460,75 @@ pub fn listen(
                         )?;
                     }
                     RecognitionControl::PasteLast => {}
+                    RecognitionControl::CaptureStatus { reply } => {
+                        let recording = if programmatic.is_some() {
+                            Some(CaptureKind::Service)
+                        } else if voice.is_some() {
+                            Some(CaptureKind::Voice)
+                        } else if hotkeys.edit_recording() || edit_context.is_some() {
+                            Some(CaptureKind::VoiceAction)
+                        } else if hotkeys.dictation.is_recording() {
+                            Some(CaptureKind::Dictation)
+                        } else {
+                            None
+                        };
+                        let _ = reply.send(CaptureSnapshot {
+                            recording,
+                            pending_jobs: dictation_worker.pending_count(),
+                        });
+                    }
+                    RecognitionControl::Capture {
+                        voice_action,
+                        action,
+                        reply,
+                    } => {
+                        let release_while_idle = microphone_policy.release_while_idle;
+                        let other_recording = programmatic.is_some()
+                            || voice.is_some()
+                            || if voice_action {
+                                hotkeys.dictation.is_recording()
+                            } else {
+                                hotkeys.edit_recording()
+                                    || edit_context.is_some()
+                                    || edit_pending_since.is_some()
+                            };
+                        let suspended =
+                            crate::app_settings::hotkey_capture_active() || input.is_recovering();
+                        let outcome = if voice_action {
+                            control_voice_action(
+                                action,
+                                other_recording,
+                                suspended,
+                                &mut hotkeys,
+                                &mut edit_pending_since,
+                                &mut edit_context,
+                                &mut recognizer,
+                                &input,
+                                &dictation_worker,
+                                mode,
+                                &context,
+                                &mut events,
+                                indicator.as_ref(),
+                                release_while_idle,
+                            )?
+                        } else {
+                            control_dictation(
+                                action,
+                                other_recording,
+                                suspended,
+                                &mut hotkeys,
+                                &mut recognizer,
+                                &input,
+                                &dictation_worker,
+                                mode,
+                                &context,
+                                &mut events,
+                                indicator.as_ref(),
+                                release_while_idle,
+                            )?
+                        };
+                        let _ = reply.send(outcome);
+                    }
                     RecognitionControl::StartDictation {
                         source,
                         owner_token,
@@ -879,15 +960,8 @@ pub fn listen(
             }
             if !hotkeys.any_recording()
                 && input_event.is_escape_down()
-                && let Some(job_id) = dictation_worker.cancel_latest()
+                && cancel_latest_job(&dictation_worker, &mut events, indicator.as_ref())?
             {
-                feedback::play(Tone::Cancel);
-                events.dictation(DictationPhase::Cancelled, "")?;
-                if let Some(indicator) = &indicator {
-                    indicator.send(DictationIndicatorEvent::JobCancelled {
-                        job_id: job_id.value(),
-                    });
-                }
                 continue;
             }
             let edit_action = hotkeys
@@ -1634,6 +1708,278 @@ fn handle_hotkey_action(
         }
     }?;
     Ok(true)
+}
+
+/// Cancels the newest unfinished dictation, as Escape does while idle.
+fn cancel_latest_job(
+    worker: &DictationWorker,
+    events: &mut EventLog,
+    indicator: Option<&DictationIndicatorSender>,
+) -> Result<bool> {
+    let Some(job_id) = worker.cancel_latest() else {
+        return Ok(false);
+    };
+    feedback::play(Tone::Cancel);
+    events.dictation(DictationPhase::Cancelled, "")?;
+    if let Some(indicator) = indicator {
+        indicator.send(DictationIndicatorEvent::JobCancelled {
+            job_id: job_id.value(),
+        });
+    }
+    Ok(true)
+}
+
+/// Why a control can't start a capture now, if it can't.
+fn capture_refusal(other_recording: bool, suspended: bool) -> Option<ControlReply> {
+    if other_recording {
+        Some(ControlReply::error(
+            "busy",
+            "another recording is in progress; finish or cancel it first",
+        ))
+    } else if suspended {
+        Some(ControlReply::error(
+            "busy",
+            "Hex is recording a shortcut in Settings or reopening the microphone; try again",
+        ))
+    } else {
+        None
+    }
+}
+
+/// `hex dictation`: a start locks the shortcut machine as a double tap
+/// does, so the next press or `stop` finishes it and Escape cancels it.
+#[allow(clippy::too_many_arguments)]
+fn control_dictation(
+    action: CaptureAction,
+    other_recording: bool,
+    suspended: bool,
+    hotkeys: &mut Hotkeys,
+    recognizer: &mut Option<Moonshine>,
+    input: &DictationAudio,
+    worker: &DictationWorker,
+    mode: Mode,
+    context: &ContextSnapshot,
+    events: &mut EventLog,
+    indicator: Option<&DictationIndicatorSender>,
+    release_while_idle: bool,
+) -> Result<ControlReply> {
+    let recording = hotkeys.dictation.is_recording();
+    let device = input.device_name();
+    let action = match action {
+        CaptureAction::Toggle if recording => CaptureAction::Stop,
+        CaptureAction::Toggle => CaptureAction::Start,
+        action => action,
+    };
+    Ok(match action {
+        CaptureAction::Start if recording => {
+            ControlReply::unchanged("Dictation is already recording")
+        }
+        CaptureAction::Start => {
+            if let Some(refusal) = capture_refusal(other_recording, suspended) {
+                return Ok(refusal);
+            }
+            if !hotkeys.dictation.lock() {
+                return Ok(ControlReply::error(
+                    "busy",
+                    "the dictation shortcut is held; release it and try again",
+                ));
+            }
+            let accepted = handle_hotkey_action(
+                HotkeyAction::Start,
+                capture_boundary(input, release_while_idle),
+                recognizer,
+                input,
+                worker,
+                mode,
+                context,
+                &device,
+                events,
+                indicator,
+                release_while_idle,
+            )?;
+            if accepted {
+                ControlReply::done(
+                    "Recording; `hex dictation stop` or the shortcut finishes, Escape cancels",
+                )
+            } else {
+                hotkeys.dictation.suspend();
+                ControlReply::error("busy", "the microphone is busy; try again")
+            }
+        }
+        CaptureAction::Stop if !recording => ControlReply::unchanged("Dictation isn't recording"),
+        CaptureAction::Stop => {
+            hotkeys.dictation.suspend();
+            handle_hotkey_action(
+                HotkeyAction::Finish,
+                capture_boundary(input, release_while_idle),
+                recognizer,
+                input,
+                worker,
+                mode,
+                context,
+                &device,
+                events,
+                indicator,
+                release_while_idle,
+            )?;
+            ControlReply::done("Finished recording; Hex pastes the text when it's ready")
+        }
+        CaptureAction::Cancel if recording => {
+            hotkeys.dictation.suspend();
+            handle_hotkey_action(
+                HotkeyAction::Cancel,
+                input.captured_through(),
+                recognizer,
+                input,
+                worker,
+                mode,
+                context,
+                &device,
+                events,
+                indicator,
+                release_while_idle,
+            )?;
+            ControlReply::done("Cancelled the recording")
+        }
+        CaptureAction::Cancel | CaptureAction::Toggle => {
+            if cancel_latest_job(worker, events, indicator)? {
+                ControlReply::done("Cancelled the newest unfinished dictation")
+            } else {
+                ControlReply::unchanged("Nothing to cancel")
+            }
+        }
+    })
+}
+
+/// `hex voice-action`, only while Voice Action is on.
+#[allow(clippy::too_many_arguments)]
+fn control_voice_action(
+    action: CaptureAction,
+    other_recording: bool,
+    suspended: bool,
+    hotkeys: &mut Hotkeys,
+    edit_pending_since: &mut Option<CaptureInstant>,
+    edit_context: &mut Option<ContextSnapshot>,
+    recognizer: &mut Option<Moonshine>,
+    input: &DictationAudio,
+    worker: &DictationWorker,
+    mode: Mode,
+    context: &ContextSnapshot,
+    events: &mut EventLog,
+    indicator: Option<&DictationIndicatorSender>,
+    release_while_idle: bool,
+) -> Result<ControlReply> {
+    let Some(edit) = hotkeys.edit.as_mut() else {
+        return Ok(ControlReply::error(
+            "feature-off",
+            "Voice Action is off; turn it on with `hex settings set voice_action.enabled on`",
+        ));
+    };
+    let recording = edit.is_recording() || edit_context.is_some();
+    let device = input.device_name();
+    let action = match action {
+        CaptureAction::Toggle if recording => CaptureAction::Stop,
+        CaptureAction::Toggle => CaptureAction::Start,
+        action => action,
+    };
+    let end = |action: HotkeyAction,
+               hotkeys: &mut Hotkeys,
+               edit_pending_since: &mut Option<CaptureInstant>,
+               edit_context: &mut Option<ContextSnapshot>,
+               recognizer: &mut Option<Moonshine>,
+               events: &mut EventLog|
+     -> Result<bool> {
+        hotkeys.suspend_edit();
+        *edit_pending_since = None;
+        handle_edit_hotkey_action(
+            action,
+            capture_boundary(input, release_while_idle),
+            edit_context,
+            recognizer,
+            input,
+            worker,
+            mode,
+            context,
+            &device,
+            events,
+            indicator,
+        )
+    };
+    Ok(match action {
+        CaptureAction::Start if recording => {
+            ControlReply::unchanged("Voice Action is already recording")
+        }
+        CaptureAction::Start => {
+            if let Some(refusal) = capture_refusal(other_recording, suspended) {
+                return Ok(refusal);
+            }
+            if !edit.lock() {
+                return Ok(ControlReply::error(
+                    "busy",
+                    "the Voice Action shortcut is held; release it and try again",
+                ));
+            }
+            *edit_pending_since = None;
+            let accepted = handle_edit_hotkey_action(
+                HotkeyAction::Start,
+                capture_boundary(input, release_while_idle),
+                edit_context,
+                recognizer,
+                input,
+                worker,
+                mode,
+                context,
+                &device,
+                events,
+                indicator,
+            )?;
+            if accepted {
+                ControlReply::done(
+                    "Recording an instruction; `hex voice-action stop` or the shortcut finishes, \
+                     Escape cancels",
+                )
+            } else {
+                hotkeys.suspend_edit();
+                ControlReply::error(
+                    "unavailable",
+                    "Voice Action couldn't start; it needs OpenCode (`opencode2`) and a free \
+                     microphone",
+                )
+            }
+        }
+        CaptureAction::Stop if !recording => {
+            ControlReply::unchanged("Voice Action isn't recording")
+        }
+        CaptureAction::Stop => {
+            end(
+                HotkeyAction::Finish,
+                hotkeys,
+                edit_pending_since,
+                edit_context,
+                recognizer,
+                events,
+            )?;
+            ControlReply::done("Finished the instruction; Hex pastes the result when it's ready")
+        }
+        CaptureAction::Cancel if recording => {
+            end(
+                HotkeyAction::Cancel,
+                hotkeys,
+                edit_pending_since,
+                edit_context,
+                recognizer,
+                events,
+            )?;
+            ControlReply::done("Cancelled Voice Action")
+        }
+        CaptureAction::Cancel | CaptureAction::Toggle => {
+            if cancel_latest_job(worker, events, indicator)? {
+                ControlReply::done("Cancelled the newest unfinished dictation")
+            } else {
+                ControlReply::unchanged("Nothing to cancel")
+            }
+        }
+    })
 }
 
 fn voice_action_context_snapshot(fallback: &ContextSnapshot) -> ContextSnapshot {

@@ -78,6 +78,11 @@ enum Command {
         #[command(subcommand)]
         command: ModelCommand,
     },
+    /// Read and change settings (macOS only for now; use the Hex window).
+    Settings {
+        #[command(subcommand)]
+        command: crate::control::cli::SettingsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -227,6 +232,9 @@ pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
                 Ok(())
             }
         },
+        Command::Settings { command } => {
+            crate::control::cli::finish(crate::control::cli::settings(command))
+        }
     })();
     match result {
         // A keybinding or script wants one line, not a report.

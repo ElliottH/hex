@@ -22,8 +22,9 @@ hex listen -> Use saved command opt-in               // never beside another lis
 The catalog and config controls remain reachable while Commands is off. Sources:
 [rune_ui/commands.rs](../../src/rune_ui/commands.rs), CLI routes in
 [main.rs](../../src/main.rs), and workspace paths in
-[app_paths.rs](../../src/app_paths.rs). Debug-only `hex dev commands on|off`
-changes the running app's opt-in; it is not a release CLI route.
+[app_paths.rs](../../src/app_paths.rs). The release
+`hex commands enable|disable|retry` ([control CLI](control-cli.md)) changes the
+running app's opt-in like the window; debug `hex dev commands on|off` remains.
 
 ## Sub-features
 

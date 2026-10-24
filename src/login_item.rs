@@ -43,6 +43,16 @@ fn set_enabled(enabled: bool) -> Result<LoginItemStatus> {
     status()
 }
 
+/// Reads, or turns on or off, the login item right away. ServiceManagement
+/// can block: call it off the main thread.
+#[cfg(target_os = "macos")]
+pub fn set_now(enabled: Option<bool>) -> Result<LoginItemStatus> {
+    objc2::rc::autoreleasepool(|_| match enabled {
+        Some(enabled) => set_enabled(enabled),
+        None => status(),
+    })
+}
+
 #[cfg(target_os = "macos")]
 fn open_settings() {
     // SAFETY: This asks macOS to open its Login Items settings pane.

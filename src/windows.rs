@@ -69,6 +69,11 @@ enum Command {
         #[command(subcommand)]
         command: ModelCommand,
     },
+    /// Read and change settings (macOS only for now; use the Hex window).
+    Settings {
+        #[command(subcommand)]
+        command: crate::control::cli::SettingsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -140,6 +145,9 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         hidden: false,
         rune_args: Vec::new(),
     });
+    if let Command::Settings { command } = command {
+        crate::control::cli::finish(crate::control::cli::settings(command));
+    }
     let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
     let event_path = log_dir.join("live.ndjson");
@@ -204,6 +212,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         }
         Command::Status { lines } => print_status(&event_path, lines),
         Command::Model { command } => run_model_command(command, shutdown),
+        Command::Settings { .. } => unreachable!("handled before logging"),
     }
 }
 

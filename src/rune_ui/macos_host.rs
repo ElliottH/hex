@@ -373,6 +373,54 @@ fn hotkey_key(code: u16, characters: Option<&str>) -> Result<HotkeyKey, &'static
     }
 }
 
+/// The key a typed name records, with the label recording it would show.
+pub(super) fn hotkey_key_named(name: &str) -> Result<HotkeyKey, &'static str> {
+    let normalized: String = name
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    let code = match normalized.as_str() {
+        "space" => Some(49),
+        "tab" => Some(48),
+        "return" | "enter" => Some(36),
+        "delete" | "backspace" => Some(51),
+        "up" => Some(126),
+        "down" => Some(125),
+        "left" => Some(123),
+        "right" => Some(124),
+        "pageup" => Some(116),
+        "pagedown" => Some(121),
+        "home" => Some(115),
+        "end" => Some(119),
+        "forwarddelete" => Some(117),
+        "help" => Some(114),
+        function => function
+            .strip_prefix('f')
+            .and_then(|number| number.parse::<u8>().ok())
+            .and_then(|number| {
+                const CODES: [u16; 20] = [
+                    122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64,
+                    79, 80, 90,
+                ];
+                CODES.get(usize::from(number).checked_sub(1)?).copied()
+            }),
+    };
+    if let Some(code) = code {
+        return hotkey_key(code, None);
+    }
+    let mut characters = name.chars();
+    match (characters.next(), characters.next()) {
+        (Some(character), None) => {
+            let character = character.to_lowercase().next().unwrap_or(character);
+            let code =
+                crate::keyboard::key_code_for(character).map_err(|_| tr("Unsupported key"))?;
+            hotkey_key(code, Some(&character.to_string()))
+        }
+        _ => Err(tr("Unsupported key")),
+    }
+}
+
 /// macOS accepts every binding the capture can produce.
 pub(super) fn validate_hotkey(_: ShortcutTarget, _: &HotkeyBinding) -> Result<(), &'static str> {
     Ok(())

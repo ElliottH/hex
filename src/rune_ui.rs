@@ -209,6 +209,34 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
     }
 }
 
+/// The pane the window shows, by its `hex window show` name.
+#[cfg(target_os = "macos")]
+pub(crate) fn current_pane(ui: &Ui) -> &'static str {
+    ui.pane.key().trim_start_matches("nav-")
+}
+
+/// The OS's rules for a shortcut, the ones Settings applies when recording
+/// one; shared with `hex settings set`.
+#[cfg(target_os = "macos")]
+pub(crate) fn shortcut_rule(
+    slot: crate::app_settings::HotkeySlot,
+    binding: &HotkeyBinding,
+) -> Result<(), &'static str> {
+    use crate::app_settings::HotkeySlot;
+    let target = match slot {
+        HotkeySlot::Dictation => ShortcutTarget::Dictation,
+        HotkeySlot::VoiceAction => ShortcutTarget::VoiceAction,
+        HotkeySlot::PasteLast => ShortcutTarget::PasteLast,
+    };
+    host::validate_hotkey(target, binding)
+}
+
+/// The key `name` names on the active keyboard layout ("v", "space", "f5").
+#[cfg(target_os = "macos")]
+pub(crate) fn hotkey_key_named(name: &str) -> Result<HotkeyKey, &'static str> {
+    host::hotkey_key_named(name)
+}
+
 /// A capsule's "Never offer" or "Always record" choice, kept in the window's
 /// live settings so its next save doesn't drop it.
 #[cfg(target_os = "macos")]
@@ -801,6 +829,13 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
         }
         if let Some(settings) = settings {
             changed |= ui.adopt(settings);
+            // A pane the adopted settings hide (Meetings turned off from
+            // `hex settings`) leaves for Settings.
+            if !ui.pane.shown(ui) {
+                ui.pane = Pane::Settings;
+                ui.open = None;
+                changed = true;
+            }
         }
     }
     let preparing = ui

@@ -20,6 +20,8 @@ mod commands;
 mod config;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod context;
+#[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
+mod control;
 #[cfg(all(debug_assertions, target_os = "macos"))]
 mod dashboard;
 mod desktop_activity;
@@ -197,7 +199,17 @@ use color_eyre::eyre::eyre;
 
 #[cfg(target_os = "macos")]
 #[derive(Parser)]
-#[command(version, about = "Local, observable voice control")]
+#[command(
+    name = "hex",
+    version,
+    about = "Local, observable voice control",
+    long_about = "Local, observable voice control.\n\n\
+        Control commands (status, dictation, meetings record, settings, model, window, …) drive \
+        the one running Hex over its owner-only local API and never launch it, except `start` \
+        and `restart`. Every one takes --json for a versioned reply (docs/cli.md). Exit codes: \
+        0 done or nothing to change, 1 refused or failed, 2 usage, 3 Hex isn't running.",
+    after_help = "Run `hex <command> --help` for details, or `hex settings list` for every setting."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -209,9 +221,14 @@ pub(crate) const DEVELOPER_FEATURES_ENABLED: bool = cfg!(debug_assertions);
 #[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum Command {
-    /// Read retained dictation history without starting the app.
+    #[command(flatten)]
+    Control(control::cli::ControlCli),
+    /// Read retained dictation history without starting the app, or clear
+    /// it in the running Hex (`hex history clear --yes`).
+    #[command(args_conflicts_with_subcommands = true)]
     History(transcript_cli::HistoryArgs),
-    /// Read and search recorded meetings without starting the app.
+    /// Read and search recorded meetings without starting the app; record
+    /// and stop them in the running Hex.
     Meetings {
         #[command(subcommand)]
         command: transcript_cli::MeetingsCommand,
@@ -238,7 +255,8 @@ enum Command {
         #[arg(long)]
         meetings_dir: Option<PathBuf>,
     },
-    /// Manage the personal command workspace.
+    /// Turn voice commands on or off, and manage the personal command
+    /// workspace.
     Commands {
         #[command(subcommand)]
         command: CommandsCommand,
@@ -250,9 +268,6 @@ enum Command {
         #[arg(long)]
         embedded: bool,
     },
-    #[cfg(debug_assertions)]
-    /// Show the developer recognition dashboard.
-    Status,
     /// Inspect and control the running desktop app or offline audio tools.
     Dev {
         #[command(subcommand)]
@@ -309,6 +324,24 @@ enum TranscriptionBenchmarkBackend {
 enum CommandsCommand {
     /// Create or refresh ~/.config/hex and install its pinned dependencies.
     Init,
+    /// Turn voice commands on in the running Hex.
+    Enable {
+        /// Also turn off release_microphone_while_idle, which commands exclude.
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        output: control::cli::Output,
+    },
+    /// Turn voice commands off in the running Hex.
+    Disable {
+        #[command(flatten)]
+        output: control::cli::Output,
+    },
+    /// Load the command model again after it failed.
+    Retry {
+        #[command(flatten)]
+        output: control::cli::Output,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -317,6 +350,9 @@ enum DevCommand {
     #[cfg(debug_assertions)]
     /// Inspect the running app and window state.
     Status,
+    #[cfg(debug_assertions)]
+    /// Show the developer recognition dashboard.
+    Dashboard,
     #[cfg(debug_assertions)]
     /// Drive a deterministic HUD state.
     Hud {
@@ -426,9 +462,59 @@ fn main() -> Result<()> {
     if let Some(Command::Mcp { meetings_dir }) = &cli.command {
         return run_mcp(meetings_dir.clone());
     }
+    // Control commands talk to the running Hex; like the read commands, they
+    // touch no data folder, log, or lock of their own.
+    let cli = match cli.command {
+        Some(Command::Control(command)) => control::cli::finish(control::cli::run(command)),
+        Some(Command::History(transcript_cli::HistoryArgs {
+            action: Some(transcript_cli::HistoryAction::Clear { yes, output }),
+            ..
+        })) => control::cli::finish(control::cli::clear_history(yes, output)),
+        Some(Command::Commands { command }) => match command {
+            CommandsCommand::Enable { yes, output } => {
+                control::cli::finish(control::cli::commands(
+                    control::cli::CommandsAction::Enable { confirm: yes },
+                    output,
+                ))
+            }
+            CommandsCommand::Disable { output } => control::cli::finish(control::cli::commands(
+                control::cli::CommandsAction::Disable,
+                output,
+            )),
+            CommandsCommand::Retry { output } => control::cli::finish(control::cli::commands(
+                control::cli::CommandsAction::Retry,
+                output,
+            )),
+            CommandsCommand::Init => Cli {
+                command: Some(Command::Commands { command }),
+            },
+        },
+        command => Cli { command },
+    };
     match &cli.command {
         Some(Command::History(args)) => return transcript_cli::history(args),
-        Some(Command::Meetings { command }) => return transcript_cli::meetings(command),
+        Some(Command::Meetings { command }) => {
+            use transcript_cli::MeetingsCommand;
+            let control = match command {
+                MeetingsCommand::Record { title, output } => Some((
+                    control::ControlCommand::MeetingRecord {
+                        title: title.clone(),
+                    },
+                    *output,
+                )),
+                MeetingsCommand::Stop { output } => {
+                    Some((control::ControlCommand::MeetingStop, *output))
+                }
+                MeetingsCommand::CopyLast { output } => {
+                    Some((control::ControlCommand::MeetingCopyLast, *output))
+                }
+                _ => None,
+            };
+            if let Some((command, output)) = control {
+                control::cli::finish(control::cli::send(command, output));
+            }
+            return transcript_cli::meetings(command);
+        }
         #[cfg(debug_assertions)]
         Some(Command::Meeting {
             command: MeetingCommand::List,
@@ -584,7 +670,16 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Mcp { .. } | Command::History(_) | Command::Meetings { .. } => {
+        Command::Mcp { .. }
+        | Command::History(_)
+        | Command::Meetings { .. }
+        | Command::Control(_)
+        | Command::Commands {
+            command:
+                CommandsCommand::Enable { .. }
+                | CommandsCommand::Disable { .. }
+                | CommandsCommand::Retry { .. },
+        } => {
             unreachable!("handled before startup")
         }
         Command::Commands {
@@ -594,13 +689,14 @@ fn main() -> Result<()> {
             println!("{}", workspace.display());
             Ok(())
         }
-        #[cfg(debug_assertions)]
-        Command::Status => dashboard::run(event_path, config::voice_control()),
         Command::Dev { command } => {
             #[cfg(debug_assertions)]
             {
                 use developer_control::{DeveloperCommand, DeveloperReply};
                 let command = match command {
+                    DevCommand::Dashboard => {
+                        return dashboard::run(event_path, config::voice_control());
+                    }
                     DevCommand::Status => DeveloperCommand::Status,
                     DevCommand::Hud { state } => DeveloperCommand::Hud { state },
                     DevCommand::Show { pane } => DeveloperCommand::ShowPane { pane },
@@ -866,6 +962,59 @@ mod tests {
         }
         assert!(Cli::try_parse_from(["hex", "dev", "show", "hudlab"]).is_err());
         assert!(Cli::try_parse_from(["hex", "dev", "hud", "recording"]).is_ok());
+    }
+
+    #[test]
+    fn control_commands_parse_beside_the_read_commands() {
+        use super::{CommandsCommand, control::cli::ControlCli, transcript_cli};
+        use clap::CommandFactory;
+
+        Cli::command().debug_assert();
+        let parse = |arguments: &[&str]| Cli::try_parse_from(arguments).map(|cli| cli.command);
+        assert!(matches!(
+            parse(&["hex", "status", "--json"]),
+            Ok(Some(Command::Control(ControlCli::Status { output }))) if output.json
+        ));
+        assert!(matches!(
+            parse(&["hex", "dictation", "toggle"]),
+            Ok(Some(Command::Control(ControlCli::Dictation { .. })))
+        ));
+        assert!(matches!(
+            parse(&["hex", "settings", "set", "commands_enabled", "on", "--yes"]),
+            Ok(Some(Command::Control(ControlCli::Settings { .. })))
+        ));
+        assert!(matches!(
+            parse(&["hex", "window", "show", "voice-action"]),
+            Ok(Some(Command::Control(ControlCli::Window { .. })))
+        ));
+        assert!(matches!(
+            parse(&["hex", "history", "clear", "--yes"]),
+            Ok(Some(Command::History(transcript_cli::HistoryArgs {
+                action: Some(transcript_cli::HistoryAction::Clear { yes: true, .. }),
+                ..
+            })))
+        ));
+        assert!(matches!(
+            parse(&["hex", "history", "--json"]),
+            Ok(Some(Command::History(transcript_cli::HistoryArgs {
+                action: None,
+                ..
+            })))
+        ));
+        assert!(parse(&["hex", "history", "--limit", "5", "clear", "--yes"]).is_err());
+        assert!(matches!(
+            parse(&["hex", "meetings", "record", "--title", "Design sync"]),
+            Ok(Some(Command::Meetings {
+                command: transcript_cli::MeetingsCommand::Record { title: Some(_), .. }
+            }))
+        ));
+        assert!(matches!(
+            parse(&["hex", "commands", "enable", "--yes"]),
+            Ok(Some(Command::Commands {
+                command: CommandsCommand::Enable { yes: true, .. }
+            }))
+        ));
+        assert!(parse(&["hex", "meetings", "cancel"]).is_err());
     }
 
     #[test]

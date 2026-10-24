@@ -27,7 +27,8 @@ HEX                                      // macOS release
 [Dictation](dictation.md), [Voice Commands](commands.md),
 [Voice Action](voice-action.md), [Meetings](meetings.md), and [Recovery](recovery.md)
 have detailed maps.
-Agents can [read retained transcripts](transcript-cli.md) with the release CLI.
+Agents can [read retained transcripts](transcript-cli.md) and
+[control the running app](control-cli.md) with the release CLI.
 The other capabilities stay here until they need their own verification recipe.
 
 ## Get Ready
