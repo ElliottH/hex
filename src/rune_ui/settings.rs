@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use rune::{El, Key, KeyEvent, Tx, col, row, text};
 
 use super::controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, icon_button, keycaps,
-    link_row, note, pulsing_dot, section, segmented, select, setting_row, sheet_button,
-    status_dot, text_field, toggle_row,
+    ButtonKind, CardRow, Choice, DESCRIPTION, Paint, button, described_row, folding,
+    icon_button, keycaps, link_row, note, pulsing_dot, section, segmented, select, setting_row,
+    sheet_button, status_dot, text_field, toggle_row,
 };
 use super::lists::{Tone, tone_tag};
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
@@ -619,44 +619,50 @@ fn command_row(p: Paint, key: &str, title: &str, description: &str, commands: &[
 /// The shortcut and how it triggers, the speech model, and the microphone.
 fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
     let settings = &ui.settings;
-    let mut rows = Vec::new();
+    let mut rows: Vec<CardRow> = Vec::new();
     if ui.records_shortcuts() {
-        rows.push(shortcut_row(ui, p, ShortcutTarget::Dictation));
-        rows.extend(refused_note(ui, p, ShortcutTarget::Dictation));
+        rows.push(shortcut_row(ui, p, ShortcutTarget::Dictation).into());
+        rows.extend(refused_note(ui, p, ShortcutTarget::Dictation).map(CardRow::from));
     }
     let toggle_mode = settings.shortcut_mode == ShortcutMode::Toggle;
-    rows.push(link_row(
-        p,
-        "shortcut-mode",
-        tr("Shortcut mode"),
-        explainer::link(p),
-        segmented(
+    rows.push(
+        link_row(
             p,
-            "shortcut-mode-control",
-            &[tr("Hold"), tr("Toggle")],
-            usize::from(toggle_mode),
-            |ui, index| {
-                let mode = if index == 1 {
-                    ShortcutMode::Toggle
-                } else {
-                    ShortcutMode::Hold
-                };
-                if ui.settings.shortcut_mode != mode {
-                    ui.update(|settings| settings.shortcut_mode = mode);
-                }
-            },
-        ),
+            "shortcut-mode",
+            tr("Shortcut mode"),
+            explainer::link(p),
+            segmented(
+                p,
+                "shortcut-mode-control",
+                &[tr("Hold"), tr("Toggle")],
+                usize::from(toggle_mode),
+                |ui, index| {
+                    let mode = if index == 1 {
+                        ShortcutMode::Toggle
+                    } else {
+                        ShortcutMode::Hold
+                    };
+                    if ui.settings.shortcut_mode != mode {
+                        ui.update(|settings| settings.shortcut_mode = mode);
+                    }
+                },
+            ),
+        )
+        .into(),
+    );
+    rows.push(folding(
+        "double-tap-fold",
+        (!toggle_mode).then(|| {
+            toggle_row(
+                p,
+                "double-tap",
+                tr("Double-tap to lock"),
+                None,
+                settings.double_tap_lock,
+                explainer::flip_lock,
+            )
+        }),
     ));
-    if !toggle_mode {
-        rows.push(toggle_row(
-            p,
-            "double-tap",
-            tr("Double-tap to lock"),
-            None,
-            settings.double_tap_lock,
-            explainer::flip_lock,
-        ));
-    }
     let selection = &settings.transcription;
     let model = transcription_models::definition(selection.model);
     let label = format!(
@@ -665,15 +671,18 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         model.name
     );
     let language = selection.language.clone();
-    rows.push(described_row(
-        p,
-        "transcription",
-        tr("Speech model"),
-        transcription_status(ui, p),
-        sheet_button(p, "transcription-control", &label, move |ui: &mut Ui| {
-            super::picker::open(ui, language.clone())
-        }),
-    ));
+    rows.push(
+        described_row(
+            p,
+            "transcription",
+            tr("Speech model"),
+            transcription_status(ui, p),
+            sheet_button(p, "transcription-control", &label, move |ui: &mut Ui| {
+                super::picker::open(ui, language.clone())
+            }),
+        )
+        .into(),
+    );
     let microphone = settings
         .microphone
         .clone()
@@ -700,47 +709,62 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             }
         }));
     }
-    rows.push(setting_row(
-        p,
-        "microphone",
-        tr("Microphone"),
-        None,
-        select(
+    rows.push(
+        setting_row(
             p,
-            "microphone-control",
-            &microphone,
-            ui.open == Some(Menu::Microphone),
-            devices,
-            |ui: &mut Ui| toggle_menu(ui, Menu::Microphone),
-            layer,
-        ),
-    ));
-    if let (Some(Menu::Microphone), Err(error)) = (ui.open, &ui.microphones) {
-        rows.push(note("devices-error", error, p.danger()));
-    }
-    if model.supports_recognition_hints {
-        rows.push(setting_row(
-            p,
-            "hints",
-            tr("Recognition hints"),
-            Some(tr("Names and terms to prime the speech model")),
-            text_field(
+            "microphone",
+            tr("Microphone"),
+            None,
+            select(
                 p,
-                "hints-field",
-                &ui.hints,
-                tr("Names and terms Whisper should expect, e.g. OpenCode, Effect…"),
-                |ui: &mut Ui| &mut ui.hints,
-                |ui: &mut Ui, _| {
-                    let hints = ui.hints.text.clone();
-                    ui.update(|settings| settings.transcription.recognition_hints = hints);
-                },
+                "microphone-control",
+                &microphone,
+                ui.open == Some(Menu::Microphone),
+                devices,
+                |ui: &mut Ui| toggle_menu(ui, Menu::Microphone),
+                layer,
             ),
-        ));
+        )
+        .into(),
+    );
+    rows.push(folding(
+        "devices-error-fold",
+        match (ui.open, &ui.microphones) {
+            (Some(Menu::Microphone), Err(error)) => Some(note("devices-error", error, p.danger())),
+            _ => None,
+        },
+    ));
+    if model.supports_recognition_hints {
+        rows.push(
+            setting_row(
+                p,
+                "hints",
+                tr("Recognition hints"),
+                Some(tr("Names and terms to prime the speech model")),
+                text_field(
+                    p,
+                    "hints-field",
+                    &ui.hints,
+                    tr("Names and terms Whisper should expect, e.g. OpenCode, Effect…"),
+                    |ui: &mut Ui| &mut ui.hints,
+                    |ui: &mut Ui, _| {
+                        let hints = ui.hints.text.clone();
+                        ui.update(|settings| settings.transcription.recognition_hints = hints);
+                    },
+                ),
+            )
+            .into(),
+        );
     }
     let pinned = advanced_in_use(settings);
-    if ui.advanced || pinned {
-        rows.extend(advanced_rows(ui, p));
-    }
+    rows.push(folding(
+        "advanced-fold",
+        if ui.advanced || pinned {
+            advanced_rows(ui, p)
+        } else {
+            Vec::new()
+        },
+    ));
     col()
         .key("dictation")
         .gap(6.0)
@@ -1014,60 +1038,66 @@ fn advanced_toggle(ui: &Ui, p: Paint, pinned: bool) -> El {
 
 /// Advanced dictation rows, shown at the end of the Dictation card: the
 /// microphone's idle release and Double-tap only.
-fn advanced_rows(ui: &Ui, p: Paint) -> Vec<El> {
+fn advanced_rows(ui: &Ui, p: Paint) -> Vec<CardRow> {
     let settings = &ui.settings;
-    let mut rows = vec![setting_row(
-        p,
-        "microphone-mode",
-        tr("Microphone mode"),
-        Some(if settings.release_microphone_while_idle {
-            tr("Opens only while holding the shortcut. Disables pre-roll and commands.")
-        } else {
-            tr("Keeps the microphone open for instant start and pre-roll")
-        }),
-        segmented(
+    vec![
+        setting_row(
             p,
-            "microphone-mode-control",
-            &[tr("Keep ready (fast)"), tr("Release when idle")],
-            usize::from(settings.release_microphone_while_idle),
-            |ui, index| {
-                ui.advanced = true;
-                let release = index == 1;
-                if release && !ui.settings.release_microphone_while_idle {
-                    ui.confirm_release = true;
-                    return;
-                }
-                ui.confirm_release = false;
-                if ui.settings.release_microphone_while_idle != release {
-                    let mut candidate = ui.drafted();
-                    match candidate.set_release_microphone_while_idle(release) {
-                        Ok(()) => {
-                            ui.commit(candidate);
-                        }
-                        Err(error) => ui.error = Some(format!("{error:#}")),
+            "microphone-mode",
+            tr("Microphone mode"),
+            Some(if settings.release_microphone_while_idle {
+                tr("Opens only while holding the shortcut. Disables pre-roll and commands.")
+            } else {
+                tr("Keeps the microphone open for instant start and pre-roll")
+            }),
+            segmented(
+                p,
+                "microphone-mode-control",
+                &[tr("Keep ready (fast)"), tr("Release when idle")],
+                usize::from(settings.release_microphone_while_idle),
+                |ui, index| {
+                    ui.advanced = true;
+                    let release = index == 1;
+                    if release && !ui.settings.release_microphone_while_idle {
+                        ui.confirm_release = true;
+                        return;
                     }
-                }
-            },
+                    ui.confirm_release = false;
+                    if ui.settings.release_microphone_while_idle != release {
+                        let mut candidate = ui.drafted();
+                        match candidate.set_release_microphone_while_idle(release) {
+                            Ok(()) => {
+                                ui.commit(candidate);
+                            }
+                            Err(error) => ui.error = Some(format!("{error:#}")),
+                        }
+                    }
+                },
+            ),
+        )
+        .into(),
+        folding(
+            "release-confirmation-fold",
+            ui.confirm_release.then(|| release_confirmation(ui, p)),
         ),
-    )];
-    if ui.confirm_release {
-        rows.push(release_confirmation(ui, p));
-    }
-    if double_tap_only_applies(settings) {
-        rows.push(toggle_row(
-            p,
-            "double-tap-only",
-            tr("Double-tap only"),
-            tr("Wait for two complete shortcut taps before recording"),
-            settings.double_tap_only,
-            |ui: &mut Ui| {
-                ui.advanced = true;
-                let enabled = !ui.settings.double_tap_only;
-                ui.update(|settings| settings.double_tap_only = enabled);
-            },
-        ));
-    }
-    rows
+        folding(
+            "double-tap-only-fold",
+            double_tap_only_applies(settings).then(|| {
+                toggle_row(
+                    p,
+                    "double-tap-only",
+                    tr("Double-tap only"),
+                    tr("Wait for two complete shortcut taps before recording"),
+                    settings.double_tap_only,
+                    |ui: &mut Ui| {
+                        ui.advanced = true;
+                        let enabled = !ui.settings.double_tap_only;
+                        ui.update(|settings| settings.double_tap_only = enabled);
+                    },
+                )
+            }),
+        ),
+    ]
 }
 
 fn release_confirmation(ui: &Ui, p: Paint) -> El {

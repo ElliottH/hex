@@ -58,8 +58,37 @@ impl Paint {
     }
 }
 
+/// A row of a [`card`]: always there, or a slot of rows that folds away.
+pub(super) enum CardRow {
+    Shown(Box<El>),
+    /// The slot stays in the card and clips its rows, so they close under
+    /// the rows below as those slide up, rather than fading over them, and
+    /// the separator above folds with them.
+    Folding {
+        key: &'static str,
+        rows: Vec<CardRow>,
+    },
+}
+
+impl From<El> for CardRow {
+    fn from(row: El) -> Self {
+        CardRow::Shown(Box::new(row))
+    }
+}
+
+/// A [`CardRow::Folding`] slot keyed `key`, open while it holds rows.
+pub(super) fn folding<R: Into<CardRow>>(
+    key: &'static str,
+    rows: impl IntoIterator<Item = R>,
+) -> CardRow {
+    CardRow::Folding {
+        key,
+        rows: rows.into_iter().map(Into::into).collect(),
+    }
+}
+
 /// A titled card of rows with hairline separators between them.
-pub(super) fn section(p: Paint, key: &str, title: &str, rows: Vec<El>) -> El {
+pub(super) fn section(p: Paint, key: &str, title: &str, rows: Vec<impl Into<CardRow>>) -> El {
     col()
         .key(key)
         .gap(8.0)
@@ -74,9 +103,8 @@ pub(super) fn section(p: Paint, key: &str, title: &str, rows: Vec<El>) -> El {
 }
 
 /// A raised card of rows with hairline separators between them.
-pub(super) fn card(p: Paint, key: &str, rows: Vec<El>) -> El {
+pub(super) fn card(p: Paint, key: &str, rows: Vec<impl Into<CardRow>>) -> El {
     let c = &p.k.c;
-    let count = rows.len();
     let mut card = col()
         .key(key)
         .padding(4.0)
@@ -85,17 +113,49 @@ pub(super) fn card(p: Paint, key: &str, rows: Vec<El>) -> El {
     for shadow in &p.k.elevation.raised {
         card = card.box_shadow(*shadow);
     }
-    for (index, row) in rows.into_iter().enumerate() {
-        card = card.child(row);
-        if index + 1 < count {
-            card = card.child(separator(p, index));
-        }
-    }
-    card
+    card.children(stack(p, rows.into_iter().map(Into::into).collect()))
 }
 
-fn separator(p: Paint, index: usize) -> El {
-    el().key(format!("sep{index}"))
+/// `rows` as a card's children, a separator between each pair.
+fn stack(p: Paint, rows: Vec<CardRow>) -> Vec<El> {
+    let mut children = Vec::new();
+    for (index, row) in rows.into_iter().enumerate() {
+        match row {
+            CardRow::Shown(row) => {
+                children.extend((index > 0).then(|| separator(p, format!("sep{}", index - 1))));
+                children.push(*row);
+            }
+            CardRow::Folding { key, rows } => {
+                let lead =
+                    (index > 0 && !rows.is_empty()).then(|| separator(p, "sep-above".into()));
+                let rows = lead.into_iter().chain(stack(p, rows));
+                children.push(
+                    col()
+                        .key(key)
+                        .clip_soft(0.0)
+                        .children(rows.map(|row| row.transition(folds()))),
+                );
+            }
+        }
+    }
+    children
+}
+
+/// How a folding slot's rows come and go. The slot's clip does most of the
+/// work, so they fade only partway, and leave on a slower spring than the
+/// slot closes on, so no sliver of them pops away.
+fn folds() -> Transition {
+    let mut transition = Transition::opacity().springs(SpringPair::new(
+        rune::Spring::new(0.3, 0.0),
+        rune::Spring::new(0.45, 0.0),
+    ));
+    transition.insertion.opacity = 0.4;
+    transition.removal.opacity = 0.4;
+    transition
+}
+
+fn separator(p: Paint, key: String) -> El {
+    el().key(key)
         .h(p.hair)
         .ml(12.0)
         .mr(12.0)

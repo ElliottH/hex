@@ -382,7 +382,9 @@ latency measurement.
 ```ts
 General                                  // settings
 ├── Dictation card -> Shortcut, Shortcut mode, Double-tap to lock, Speech model
-│   └── Shortcut mode > How it works -> Hold/Toggle explainer modal (dictation.md)
+│   ├── Shortcut mode > How it works -> Hold/Toggle explainer modal (dictation.md)
+│   └── A row that hides or shows (Double-tap to lock, Advanced, a microphone error)
+│       -> Folds under a clip as the rows below slide over it; no fade in place
 ├── Microphone -> Automatic or saved device
 │   ├── Automatic -> Compiled preferences, then the macOS default
 │   │   └── Default is a Bluetooth headset -> Built-in mic when present // avoids the call profile
@@ -1109,7 +1111,7 @@ best-effort deletion is not guaranteed deletion.
 
 `dev.rune-ui` lives in [rune_ui.rs](../../src/rune_ui.rs) and its pane modules;
 its tests drive the Rune runtime headlessly (navigation; General rows per
-shortcut source, fitting the default window with Advanced collapsed, saves through the host, Quit Hex, microphone-release
+shortcut source, fitting the default window with Advanced collapsed, Double-tap to lock folding under the rows below, saves through the host, Quit Hex, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
 clear, copy; Modes add/delete, corrections, transformations (drag reorder saves once

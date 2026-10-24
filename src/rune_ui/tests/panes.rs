@@ -1253,3 +1253,45 @@ fn experiment_goldens() {
     check_golden("mac-activity", false, PANE_SIZE);
     check_golden("mac-settings-sides", true, PANE_SIZE);
 }
+
+#[test]
+fn double_tap_to_lock_folds_away_under_the_rows_below() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    let element = |rt: &Runtime<Ui>, key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .unwrap_or_else(|| panic!("no element {key}"))
+    };
+    let edge = |rt: &Runtime<Ui>| {
+        let slot = element(rt, "double-tap-fold").rect;
+        slot[1] + slot[3]
+    };
+    let separator = element(&rt, "transcription").rect[1] - edge(&rt);
+    for segment in ["segment1", "segment0"] {
+        let (x, y) = rt
+            .find(&format!("shortcut-mode-control/{segment}"))
+            .unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        for _ in 0..30 {
+            rt.frame(1.0 / 60.0);
+            let bottom = edge(&rt);
+            let below = element(&rt, "transcription").rect[1];
+            assert!(
+                (below - bottom - separator).abs() < 0.01,
+                "the speech model row rides the slot's edge: {below} vs {bottom}"
+            );
+            if let Some(row) = rt.elements().into_iter().find(|e| {
+                e.key.as_deref() == Some("double-tap") && e.opacity > 0.0 && e.visible[3] > 0.0
+            }) {
+                let shown = row.visible[1] + row.visible[3];
+                assert!(
+                    shown <= bottom + 0.01,
+                    "the row shows {shown} past its slot's edge {bottom}"
+                );
+            }
+        }
+        settle(&mut rt);
+    }
+}
