@@ -1108,6 +1108,47 @@ mod tests {
             drop(engine);
             drop(stream);
         }
+
+        /// Quitting frees the model by dropping the engine; that must finish
+        /// work in flight and end the thread that owns the model before
+        /// returning, or ggml's Metal teardown at exit sees a live buffer.
+        #[test]
+        fn dropping_the_engine_ends_the_thread_that_owns_the_model_first() {
+            struct ThreadExit(Arc<AtomicBool>);
+            impl Drop for ThreadExit {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            thread_local! {
+                static EXIT: std::cell::RefCell<Option<ThreadExit>> =
+                    const { std::cell::RefCell::new(None) };
+            }
+
+            let engine = TranscriptionEngine::start(Model::default()).unwrap();
+            let exited = Arc::new(AtomicBool::new(false));
+            let finished = Arc::new(AtomicBool::new(false));
+            let (started, running) = mpsc::channel();
+            let (on_exit, done) = (exited.clone(), finished.clone());
+            engine
+                .run(move |_| {
+                    EXIT.with(|slot| *slot.borrow_mut() = Some(ThreadExit(on_exit)));
+                    started.send(()).unwrap();
+                    thread::sleep(Duration::from_millis(50));
+                    done.store(true, Ordering::SeqCst);
+                })
+                .unwrap();
+            running.recv().unwrap();
+            drop(engine);
+            assert!(
+                finished.load(Ordering::SeqCst),
+                "work in flight was abandoned"
+            );
+            assert!(
+                exited.load(Ordering::SeqCst),
+                "the engine thread outlived the engine"
+            );
+        }
     }
 
     #[test]

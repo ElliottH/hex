@@ -12,7 +12,10 @@
 //!   local API keep their own threads.
 //!
 //! Closing the window hides it; Quit (menu bar, ⌘Q, `hex` local API shutdown
-//! or Ctrl-C) ends the loop, then stops and joins everything.
+//! or Ctrl-C) ends the loop, then stops and joins everything and ends the
+//! process with `_exit` ([`crate::process_exit`]). AppKit's own terminate
+//! (the quit Apple event, logout, Sparkle) does the same from its
+//! will-terminate notification.
 //!
 //! The meeting capsules (offer, call ended, ready, recording) are Rune
 //! overlays (`rune_ui::meeting_capsules`): non-activating panels fed from
@@ -380,29 +383,39 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         model_menu_at: Instant::now(),
         show_dock_icon: settings.show_dock_icon,
     };
+    // Quit ends the loop and finishes below; AppKit's own terminate (the quit
+    // Apple event, logout, Sparkle) would `exit` from inside it, so its
+    // will-terminate notification finishes there instead.
+    DRAIN.set(move || {
+        shutdown.store(true, Ordering::Relaxed);
+        drop(requests);
+        local_api.shutdown();
+        // The listener owns Moonshine and the transcription engine; joining
+        // it frees both after their last use.
+        for (name, worker) in [
+            ("recognition", recognition),
+            ("meeting controller", controller),
+            ("runtime", runtime),
+        ] {
+            if worker.join().is_err() {
+                tracing::error!("{name} worker panicked during shutdown");
+            }
+        }
+    });
     // Runs first on the main thread once the loop (and NSApp) is live.
     window.update(move |_, _| start_main_thread(pump));
     app.run();
 
-    shutdown.store(true, Ordering::Relaxed);
     PUMP.with(|slot| {
         if let Some(state) = slot.borrow_mut().take() {
             state.timer.invalidate();
         }
     });
-    drop(requests);
-    local_api.shutdown();
-    for (name, worker) in [
-        ("recognition", recognition),
-        ("meeting controller", controller),
-        ("runtime", runtime),
-    ] {
-        if worker.join().is_err() {
-            tracing::error!("{name} worker panicked during shutdown");
-        }
-    }
-    Ok(())
+    crate::process_exit::finish(&DRAIN)
 }
+
+/// Stops and joins the runtime, listener, meeting controller, and local API.
+static DRAIN: crate::process_exit::Drain = crate::process_exit::Drain::new();
 
 // ---------------------------------------------------------------------------
 // Runtime thread
@@ -629,6 +642,13 @@ fn start_main_thread(mut pump: Pump) {
             andSelector: sel!(handleReopen:withReplyEvent:),
             forEventClass: CORE_EVENT_CLASS,
             andEventID: REOPEN_APPLICATION,
+        ];
+        let _: () = msg_send![
+            &*objc2_foundation::NSNotificationCenter::defaultCenter(),
+            addObserver: &*target,
+            selector: sel!(applicationWillTerminate:),
+            name: objc2_app_kit::NSApplicationWillTerminateNotification,
+            object: std::ptr::null::<AnyObject>(),
         ];
     }
     let block = RcBlock::new(|_: std::ptr::NonNull<NSTimer>| {
@@ -942,6 +962,12 @@ objc2::define_class!(
         #[unsafe(method(handleReopen:withReplyEvent:))]
         fn handle_reopen(&self, _event: Option<&AnyObject>, _reply: Option<&AnyObject>) {
             with_window(|window| show(window, Destination::Settings));
+        }
+
+        /// `-[NSApplication terminate:]` calls `exit` right after this.
+        #[unsafe(method(applicationWillTerminate:))]
+        fn application_will_terminate(&self, _notification: Option<&AnyObject>) {
+            crate::process_exit::finish(&DRAIN);
         }
     }
 );

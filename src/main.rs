@@ -126,6 +126,8 @@ mod permission_guide;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod personal_commands;
 #[cfg(target_os = "macos")]
+mod process_exit;
+#[cfg(target_os = "macos")]
 mod recognition;
 #[cfg(target_os = "macos")]
 mod recording_environment;
