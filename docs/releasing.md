@@ -81,8 +81,9 @@ docs/publishing.md) from a job with the same OIDC identity.
    `brew-version: <version>` and `channel: stable`.
 5. Bump the README version link. The site reads the release from the service
    when it deploys.
-6. First release on the service only: publish the informational appcast item
-   for 2.3.1 Macs (below).
+6. First release on the service only: set the informational item's version in
+   `packaging/macos/legacy-appcast.xml` (a 2.4.0 / build 20400 placeholder) to
+   the release, push it, and publish it for 2.3.1 Macs (below).
 
 The first Anomaly-signed macOS release also changes the bundle ID to
 `anomaly.hex` (docs/plans/macos-signing.md). Its notes must tell Mac users
@@ -150,6 +151,10 @@ app (new updater, and on macOS a new bundle ID), so:
   is prepared with the macOS client work; upload it with the Legacy appcast
   workflow (`.github/workflows/legacy-appcast.yml`, dispatch from `main`),
   which replaces only `appcast.xml`.
+- **Windows signer:** the updater accepts only a Valid Authenticode signature
+  whose signer is `AUTHENTICODE_SIGNER` in `src/updater/windows.rs` (OpenCode's
+  Artifact Signing subject). Check the first Azure-signed Hex build's subject
+  against it before a stable release; unsigned builds never update.
 - **Linux and Windows:** the feeds stay at 2.3.1; the site and README tell
   users to reinstall. `HEX_RELEASE_SIGNING_KEY` (the old ed25519 feed key,
   public key in 2.3.1's `src/self_update.rs`) stays in the `release`
