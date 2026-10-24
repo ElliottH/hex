@@ -48,9 +48,7 @@ Later, split features from settings into two windows (Kit, 2026-10-24; deferred
 in favour of the one-window feature-owned panes): the Hex window keeps what you
 use, History and Meetings recordings, and a separate Settings window (⌘, and
 the menu bar's Settings…) holds General, Modes, Voice Action, Commands,
-Meetings settings, and Experiments. Next to it, the shortcut-mode explainer
-(Hold and Toggle cards with key and recording lanes; Double-tap to lock only
-under Hold), prototyped in `~/code/home/artifacts/2026-10-24-hex-trigger-mode/`.
+Meetings settings, and Experiments.
 
 Microphone selection, idle-safe live switching, unavailable-device fallback,
 sound-effect volume, application/browser-host processing modes, and the native
