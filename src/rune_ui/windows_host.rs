@@ -23,7 +23,6 @@ pub(super) use crate::windows_rune::{Request, ShortcutTarget};
 /// The window saves a recorded shortcut; the runtime restarts the listener.
 pub(super) const HOST_SAVES_SHORTCUTS: bool = false;
 pub(super) const RECORDS_KEY_EVENTS: bool = false;
-pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 /// Windows pastes with Ctrl+V everywhere.
 pub(super) const TERMINAL_PASTE: bool = false;
 /// The window offers Quit Hex beside the tray's.
@@ -108,7 +107,7 @@ impl Backend {
                 listener: published.listener.clone(),
                 operation_error: published.operation_error.clone(),
                 transcription: published.transcription.clone(),
-                update_status: published.update_status,
+                update_status: published.update_status.clone(),
                 editing: false,
             },
             settings: published.settings.clone(),

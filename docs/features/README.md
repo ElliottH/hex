@@ -37,7 +37,7 @@ The other capabilities stay here until they need their own verification recipe.
 
 Install the signed macOS app with `brew install --cask anomalyco/tap/hex` or the
 [manual DMG](../../README.md#install-hex). The cask uses a versioned, checksum-pinned
-DMG, requires Apple silicon/macOS 15+, and keeps Sparkle updates enabled. It does
+DMG, requires Apple silicon/macOS 15+, and leaves updates to Hex's own updater. It does
 not require Bun or OpenCode, launch the app automatically, migrate the legacy
 Swift app, or forcibly replace an existing app destination. Homebrew uninstall
 leaves runtime settings, models, and retained data intact.
@@ -100,8 +100,7 @@ Sources: [website](../../site/src/Download.tsx), [installer](../../packaging/win
 [mirror publisher](../../scripts/publish-app-mirror.sh),
 [macOS release publisher](../../scripts/release-app.sh),
 [Linux installer](../../scripts/install-linux-release.sh), and
-[Linux updater](../../src/linux_updater.rs). The macOS publisher verifies the
-downloaded R2 artifacts and GitHub mirror before publishing the appcast.
+[updater](../../src/updater.rs).
 Model transfer failures in [transcription_models.rs](../../src/transcription_models.rs)
 and [moonshine.rs](../../src/moonshine.rs) explain the source host, retry, and
 separate prerequisites. These messages do not diagnose a particular firewall
@@ -583,7 +582,7 @@ Menu bar and Settings                    // maintenance
 ├── Icon -> 18 pt monochrome Hex mark template (recording variant + elapsed time)
 ├── Settings / Paste Last -> Reachable with Dock icon hidden
 ├── Launch at Login -> macOS owns registration state
-├── Check for Updates -> Signed packaged-app Sparkle lifecycle
+├── Check for Updates -> The updater (maintain.updates)
 └── Quit -> Orderly shutdown
 ```
 
@@ -673,39 +672,46 @@ The release Settings preview built and launched, but window screenshot capture
 failed; no visual or installed-app startup verification is claimed.
 
 ```ts
-Sparkle finds an update                  // maintain.updates
-├── At launch, manual check, or user away -> Sparkle's dialog, in focus
-├── Scheduled check while the user works -> No dialog behind other windows
-│   └── Sidebar Update, Settings Update, Menu bar > Update Available… -> Dialog
-├── Remind Me Later -> Update stays offered
-└── Skip This Version -> Offer withdrawn until a manual check
+Hex checks the release service            // maintain.updates
+├── 10 s after launch, hourly, and Check now -> anoma.ly/release/hex/desktop/<channel>.json
+├── Protocol client rules (shared vectors) -> newer, required (minimum), revoked, or none
+│   └── Rollout -> device-local bucket in <support>/update-bucket, never sent
+├── Direct install -> download (resumable) -> size + SHA-256 -> code signature -> stage
+│   ├── macOS -> unpack beside Hex.app -> Developer ID 5NZ4Q7NXJ4, anomaly.hex, notarized
+│   ├── Windows -> Authenticode valid, signer AUTHENTICODE_SIGNER -> new version directory
+│   ├── Linux -> SHA-256 only -> new version directory, `current` switched
+│   └── Sidebar Update, Settings, menu bar / tray: Restart to update
+│       └── macOS -> renamex_np swap (also at quit) -> relaunch -> old bundle removed at launch
+├── macOS location not replaceable (read-only, translocated, root-owned) -> Download update (DMG)
+├── Package manager (pacman, Nix) -> its command, once it serves the newer version
+├── Source build, test build -> never checks
+└── Failure -> keep the running version, back off, Check now retries
 
-Remind Me Later -> Dismiss this offer -> Manual update -> Reopen the offer
-
-DisableUpdates = true at launch          // maintain.managed-updates
-├── Sparkle never loads -> No background or manual checks, downloads, or installs
-├── App menu -> Check for Updates omitted
-└── Menu bar -> Disabled "Updates Managed by Your Organization"
+DisableUpdates at launch                 // maintain.managed-updates
+├── No checks, downloads, or installs; Settings: Managed by your organization
+├── macOS app menu -> Check for Updates omitted
+└── macOS menu bar -> Disabled "Updates Managed by Your Organization"
 ```
 
-Administrators set the `DisableUpdates` Boolean in the `anomaly.hex`
-domain, normally through a configuration profile
-([#100](https://github.com/anomalyco/hex/issues/100)). HEX reads the effective
-`NSUserDefaults` value once at launch, so a forced profile value wins over a local
-one and a change applies after relaunch. Speech-model downloads are unaffected.
-Releases through 2.3.1 read `com.kitlangton.hex2`; there is no fallback to it, so
-profiles must name `anomaly.hex`.
-No automated check covers it; the read is a single preference lookup in
-[sparkle.rs](../../src/sparkle.rs).
+Administrators set `DisableUpdates` on macOS as a Boolean in the `anomaly.hex`
+defaults domain, normally through a configuration profile
+([#100](https://github.com/anomalyco/hex/issues/100)), and on Windows as a
+non-zero DWORD under `SOFTWARE\Policies\Anomaly\Hex` in HKLM or HKCU. Hex
+reads it once at launch, so a forced value wins and a change applies after
+relaunch. Speech-model downloads are unaffected. Releases through 2.3.1 read
+`com.kitlangton.hex2`; there is no fallback to it, so profiles must name
+`anomaly.hex`.
 
-The Rune sidebar's Update button asks the host to show Sparkle's dialog; no
-Rune test clicks the sidebar Update yet. [sparkle.rs](../../src/sparkle.rs)
-implements Sparkle's gentle reminders: a scheduled update is shown by Sparkle
-only when it proposes immediate focus; otherwise the update status turns on the
-Update buttons and the menu-bar title, which bring the waiting dialog forward.
-`native_delegate_completion_allows_retry_and_preserves_results` drives the
-delegate methods through `objc_msgSend` without Sparkle; the native gentle
-reminder path has not been observed with a real update.
+[updater.rs](../../src/updater.rs) owns the worker and the shared status the
+window, menu bar, and tray show; `updater/protocol.rs` passes the release
+service's shared test vectors (`tests/fixtures/release-protocol`), and the
+per-OS modules have tests for activation, the macOS bundle swap and
+signature checks (ad-hoc fixtures against the real requirement), the rollout
+bucket, receipts, and Windows Authenticode (a Microsoft-signed system file).
+Not yet observed: a real update on any OS from the release service, the macOS
+swap and relaunch of a Developer ID build, a Windows update of a signed build.
+Manifests are unsigned; on Linux a compromised HTTPS origin could serve any
+executable with a matching manifest, which Linux code signing cannot catch.
 
 **Fixed in 2.1.13:** older releases through 2.1.12 used app-global dispatch from
 inside the sidebar click, losing the action while the active window was borrowed.
@@ -723,7 +729,7 @@ stated limits when using it as evidence.
 
 [Recovery](recovery.md) separates supported recovery from known defects.
 [login_item.rs](../../src/login_item.rs), [status_item.rs](../../src/status_item.rs),
-[sparkle.rs](../../src/sparkle.rs), the
+[updater.rs](../../src/updater.rs), the
 [identity test](../../scripts/test-app-identity.sh), and
 [app validation](../../scripts/validate-app.sh) are maintenance evidence starting
 points. Preview badges do not prove installed-app login registration or a signed
@@ -775,7 +781,7 @@ Linux beta                               // not macOS feature parity
 
 ```ts
 Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
-├── Install -> install-windows.ps1 -> per-architecture signed feed -> hex.exe
+├── Install -> Setup.exe or install-windows.ps1 -> hex.exe + install.json receipt
 ├── HEX app -> Settings, tray, HUD; Enabled = shortcut works in every app
 ├── Launch again -> Running app shows its window; hidden (login) launch -> no-op
 ├── Ctrl+Space -> Hold or Toggle -> Capture -> Stream (GPU) -> Paste
@@ -786,9 +792,8 @@ Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
 └── Modes, Voice Action, History, Activity, transformations -> as on macOS
 ```
 
-Windows update checks run 10 s after launch, every 6 h, and on Check now
-([windows_updater.rs](../../src/windows_updater.rs)). CI test builds never
-check. The tray item and tooltip
+Windows updates follow `maintain.updates` ([updater.rs](../../src/updater.rs),
+`updater/windows.rs`). CI test builds never check. The tray item and tooltip
 ([windows_rune.rs](../../src/windows_rune.rs)) follow the published update
 state. They pass the cross-compiled Clippy check, but no one has clicked them
 on a real Windows PC. Releases are Authenticode-signed once Azure Artifact
@@ -802,17 +807,15 @@ smoke tests on Windows 10 and on ARM64 hardware have not been run.
 
 ```ts
 Linux updates                            // maintain.linux-updates
-├── Direct install (user-local versions/) -> signed feed -> staged -> sidebar Update, Settings: Restart to update
+├── Direct install (versions/ + install.json receipt) -> release service -> staged -> sidebar Update, Settings: Restart to update
 ├── Source install (source-build marker) -> Settings: Updated from your source checkout
 ├── pacman (AUR hex-bin: /usr/bin, root-owned) or Nix store -> Settings: Updated by your package manager
-└── Anything else (a downloaded executable) -> no update row
+└── Anything else (a downloaded executable) -> Download update link
 ```
 
-The install kind comes from `linux_updater::install()`. Observed 2026-10-23 on
-apollo in headless sway: a 2.3.0 build in an isolated direct-install layout,
-pointed with `HEX_RELEASE_BASE_URL` at a staging release, staged 2.3.1 and
-showed the sidebar Update button. Clicking it (a unit restart) was not tested
-there, nor the package-manager row; see [releasing](../releasing.md).
+The install kind comes from `updater/linux.rs`. The 2026-10-23 apollo
+observation (a staged update and the sidebar button) predates the release
+service and is not evidence for it.
 
 No Linux voice Commands or meetings. `hex listen` instead prints Moonshine
 transcripts. Wayland shortcuts need either the desktop's GlobalShortcuts portal
@@ -849,7 +852,7 @@ observed: X11 with Hex, niri, KWin, Mutter.
 See the [Linux guide](../linux.md), [linux_app.rs](../../src/linux_app.rs),
 [linux_portal.rs](../../src/linux_portal.rs), and
 [Linux CI](../../.github/workflows/check-linux.yml) for existing checks.
-The [direct installer/updater](../../src/linux_updater.rs) and
+The [direct installer/updater](../../src/updater/linux.rs) and
 [installer tests](../../scripts/test-install-linux-release.sh) do not establish
 a published, supported-host-validated signed release. [Nix](../nix.md) owns its
 package updates; HEX updates only managed direct installs.
@@ -1045,7 +1048,7 @@ Linux `hex` -> the Linux window on Rune, in the Hex process // dev.rune-ui
     the full tour
 macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── rune::App on the main thread: accessory, windowless unless setup/onboarding/Dock icon open it
-├── Same AppKit loop: status item, Sparkle, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
+├── Same AppKit loop: status item, updater, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
 ├── Runtime thread: model preparation (menu bar: installed only), starts the listener once setup is ready
 ├── Listener, meeting controller, local API: their own threads
 ├── macos_host: AppKit event monitor records chords (Option, Fn); NativeHost does permissions,

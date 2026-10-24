@@ -11,8 +11,6 @@ expected_name=$2
 version=$3
 build_number=$4
 team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Developer signing team}
-feed_url=${HEX_EXPECTED_APP_FEED_URL:-https://anoma.ly/hex/files/appcast.xml}
-sparkle_key=mIek27lttJe8cIBqVZFhh6reRKjpTx1h9ZY9OKWPtuM=
 plist="$bundle/Contents/Info.plist"
 
 fail() {
@@ -33,9 +31,9 @@ plist_value() {
 [ "$(plist_value CFBundleShortVersionString)" = "$version" ] || fail "wrong version"
 [ "$(plist_value CFBundleVersion)" = "$build_number" ] || fail "wrong build number"
 [ "$(plist_value LSMinimumSystemVersion)" = 15.0 ] || fail "wrong minimum macOS"
-[ "$(plist_value SUFeedURL)" = "$feed_url" ] || fail "wrong Sparkle feed"
-[ "$(plist_value SUPublicEDKey)" = "$sparkle_key" ] || fail "wrong Sparkle public key"
-[ "$(plist_value SUVerifyUpdateBeforeExtraction)" = true ] || fail "update verification is disabled"
+# Hex updates itself through the Anomaly release service; Sparkle is gone.
+! plist_value SUFeedURL >/dev/null 2>&1 || fail "a Sparkle feed is still configured"
+[ ! -e "$bundle/Contents/Frameworks/Sparkle.framework" ] || fail "Sparkle.framework is still bundled"
 [ "$(plist_value LSUIElement)" = true ] || fail "menu-bar application policy is disabled"
 [ -x "$bundle/Contents/MacOS/hex" ] || fail "packaged executable is missing"
 [ "$(lipo -archs "$bundle/Contents/MacOS/hex")" = arm64 ] || fail "packaged executable is not arm64-only"

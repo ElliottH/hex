@@ -87,8 +87,6 @@ mod linux_rune_hud;
 mod linux_service;
 #[cfg(target_os = "linux")]
 mod linux_session;
-#[cfg(target_os = "linux")]
-mod linux_updater;
 #[cfg(target_os = "macos")]
 mod local_api;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -132,10 +130,6 @@ mod recognition;
 #[cfg(target_os = "macos")]
 mod recording_environment;
 mod rune_ui;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-mod self_update;
-#[cfg(target_os = "macos")]
-mod sparkle;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod spoken_text;
 #[cfg(target_os = "macos")]
@@ -157,6 +151,7 @@ mod transcription_models;
 mod transcription_preparation;
 #[cfg(target_os = "macos")]
 mod transcription_service;
+mod updater;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod vocabulary;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
@@ -183,8 +178,6 @@ mod windows_paste;
 mod windows_rune;
 #[cfg(target_os = "windows")]
 mod windows_rune_hud;
-#[cfg(target_os = "windows")]
-mod windows_updater;
 
 #[cfg(target_os = "macos")]
 use std::fs;

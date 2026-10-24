@@ -63,8 +63,7 @@ When a plan disagrees with `AGENTS.md` about shipped behavior, update the plan.
 
 ## Releases
 
-`releases/` contains version-specific Markdown inputs for signed Sparkle updates
-and draft release notes. `../release-notes/` contains legacy inputs from versions
+`releases/` contains version-specific release notes and drafts. `../release-notes/` contains legacy inputs from versions
 2.0.0 through 2.0.9. Published notes and the SDK changelog describe their release,
 not current behavior; preserve them as historical records. A draft note is not
 evidence that its release has been published.

@@ -123,7 +123,7 @@ no instance, otherwise    -> become the instance in this process (custom data ro
 - Because winit owns `NSApplicationDelegate`, Hex registers an
   `NSAppleEventManager` handler for `kAEReopenApplication` to answer Dock and
   Finder reopen events.
-- An initial `AppHandle::update` closure on the main thread installs Sparkle,
+- An initial `AppHandle::update` closure on the main thread starts the updater,
   `NSStatusItem` (`status_item.rs`), the Hex/File/Window main menu (omitting an
   Edit menu so ⌘C/⌘V reach Rune text fields), the reopen handler, and the
   native Metal HUD (`dictation_indicator.rs`). A 16 ms `NSTimer` in common

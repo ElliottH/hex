@@ -45,8 +45,6 @@ use crate::onboarding::{Input, Observation, PermissionAction, PermissionKind, Pe
 /// The window saves a recorded shortcut; the listener follows `settings.json`.
 pub(super) const HOST_SAVES_SHORTCUTS: bool = false;
 pub(super) const RECORDS_KEY_EVENTS: bool = false;
-/// Sparkle offers "Check now".
-pub(super) const MANUAL_UPDATE_CHECK: bool = true;
 pub(super) const TERMINAL_PASTE: bool = false;
 /// Quit Hex lives in the menu bar and the app menu (⌘Q).
 pub(super) const QUIT_IN_WINDOW: bool = false;
@@ -83,8 +81,8 @@ impl Backend {
         }
     }
 
-    /// Runs on the main thread (Rune's handlers), where Sparkle and the
-    /// event monitor live.
+    /// Runs on the main thread (Rune's handlers), where the event monitor
+    /// lives.
     pub(super) fn send(&mut self, request: Request) -> Result<()> {
         match request {
             Request::CaptureShortcutFor(_) => {
@@ -96,13 +94,10 @@ impl Backend {
                 Ok(())
             }
             Request::Desktop(
-                DesktopAction::CheckForUpdates
+                action @ (DesktopAction::CheckForUpdates
                 | DesktopAction::OpenUpdate
-                | DesktopAction::RestartIntoUpdate,
-            ) => {
-                crate::sparkle::check_for_updates();
-                Ok(())
-            }
+                | DesktopAction::RestartIntoUpdate),
+            ) => crate::macos_rune::update_action(&action),
             request => match &self.runtime {
                 Some(runtime) => runtime.send(request),
                 None => Err(eyre!("Hex's runtime is not running")),
@@ -141,7 +136,7 @@ impl Backend {
                 listener: published.listener.clone(),
                 operation_error: None,
                 transcription: published.transcription.clone(),
-                update_status: published.update_status,
+                update_status: published.update_status.clone(),
                 editing: false,
             },
             settings: published.settings.clone(),

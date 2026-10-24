@@ -27,7 +27,8 @@ pub enum StatusItemAction {
     StopMeeting,
     CopyLastMeetingTranscript,
     OpenMeetings,
-    CheckForUpdates,
+    /// The update item: check, download, or restart into an update.
+    Update,
     Quit,
 }
 
@@ -100,7 +101,7 @@ objc2::define_class!(
             let _ = self
                 .ivars()
                 .actions
-                .try_send(StatusItemAction::CheckForUpdates);
+                .try_send(StatusItemAction::Update);
         }
 
         #[unsafe(method(quit:))]
@@ -129,7 +130,7 @@ struct StatusItemController {
     meeting_separator: Retained<NSMenuItem>,
     meeting_button: RefCell<(String, bool)>,
     update: Option<Retained<NSMenuItem>>,
-    update_available: Cell<bool>,
+    update_title: Cell<&'static str>,
     _menu: Retained<NSMenu>,
     _target: Retained<StatusItemTarget>,
     model_items: Vec<(TranscriptionModelId, Retained<NSMenuItem>)>,
@@ -236,15 +237,15 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
     model_error.setHidden(true);
     add_item(&models, &target, "Manage Models…", sel!(openModels:), mtm);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    let update = if crate::sparkle::updates_managed() {
+    let update = if crate::updater::managed_by_policy() {
         // An item without an action is shown disabled.
-        menu.addItem(&plain_item(crate::sparkle::MANAGED_UPDATES_LABEL, mtm));
+        menu.addItem(&plain_item(crate::updater::MANAGED_LABEL, mtm));
         None
     } else {
         Some(add_item(
             &menu,
             &target,
-            update_title(false),
+            update_title(&crate::desktop_host::DesktopUpdateStatus::Checking),
             sel!(checkForUpdates:),
             mtm,
         ))
@@ -280,7 +281,7 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
             meeting_separator,
             meeting_button: RefCell::new((String::new(), false)),
             update,
-            update_available: Cell::new(false),
+            update_title: Cell::new("Check for Updates…"),
             _menu: menu,
             _target: target,
             model_items,
@@ -465,26 +466,28 @@ fn menu_title(title: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
-fn update_title(available: bool) -> &'static str {
-    if available {
-        "Update Available…"
-    } else {
-        "Check for Updates…"
+fn update_title(status: &crate::desktop_host::DesktopUpdateStatus) -> &'static str {
+    use crate::desktop_host::DesktopUpdateStatus;
+    match status {
+        DesktopUpdateStatus::ReadyToRestart => "Restart to Update",
+        DesktopUpdateStatus::Available => "Download Update…",
+        _ => "Check for Updates…",
     }
 }
 
-/// Points the update item at a release Sparkle found, so a scheduled update
-/// it did not bring forward stays reachable from the menu bar.
-pub fn update_software(available: bool) {
+/// Retitles the update item after the updater's status, so an update ready
+/// or available stays reachable from the menu bar.
+pub fn update_software(status: &crate::desktop_host::DesktopUpdateStatus) {
+    let title = update_title(status);
     STATUS_ITEM.with(|controller| {
         let controller = controller.borrow();
         let Some(controller) = controller.as_ref() else {
             return;
         };
         if let Some(item) = &controller.update
-            && controller.update_available.replace(available) != available
+            && controller.update_title.replace(title) != title
         {
-            item.setTitle(&NSString::from_str(update_title(available)));
+            item.setTitle(&NSString::from_str(title));
         }
     });
 }

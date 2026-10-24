@@ -14,7 +14,7 @@ its runtime through a host module:
 
 ```text
 src/rune_ui/macos_host.rs    the menu-bar runtime: permissions, Meetings,
-                             Commands, Sparkle, Dock icon, chord capture
+                             Commands, updater, Dock icon, chord capture
 src/rune_ui/windows_host.rs  the tray runtime: listener host, updater,
                              keyboard-state shortcut capture, Launch at login
 src/rune_ui/linux_host.rs    the in-process Linux host: shortcut capture,

@@ -278,9 +278,9 @@ fn run_runtime(
                 wake();
             }
         }
-        if tray_update != Some(published.update_status) {
-            tray_update = Some(published.update_status);
-            let status = published.update_status;
+        if tray_update.as_ref() != Some(&published.update_status) {
+            tray_update = Some(published.update_status.clone());
+            let status = published.update_status.clone();
             tray.update(move |_, _| show_update_in_tray(status));
         }
     }
@@ -380,7 +380,10 @@ fn create_tray(window: rune::AppHandle<Ui>) -> Result<Tray> {
         "show" => menu_window.open(),
         "update" => {
             let Some(runtime) = runtime() else { return };
-            let action = match runtime.published().map(|published| published.update_status) {
+            let action = match runtime
+                .published()
+                .map(|published| published.update_status.clone())
+            {
                 Some(DesktopUpdateStatus::ReadyToRestart) => DesktopAction::RestartIntoUpdate,
                 Some(DesktopUpdateStatus::Available) => DesktopAction::OpenUpdate,
                 _ => return,

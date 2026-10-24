@@ -66,3 +66,27 @@ e.g. `https://dev.anoma.ly/release`, for dry runs.
 stay frozen at 2.3.1 in the `hex-production-files` bucket. At the first
 release on the service, the appcast gains one informational item pointing at
 https://anoma.ly/hex (see `docs/releasing.md`).
+
+## Client
+
+`src/updater.rs` (all three OSes) polls `<origin>/hex/desktop/<channel>.json`
+10 seconds after launch, hourly, and on Check now, with `If-None-Match`, and
+decides with the protocol's client rules (`updater/protocol.rs`, which passes
+the service's `test-vectors/` copied to `tests/fixtures/release-protocol`).
+
+```ts
+install method              distribution   channel           acts on install
+macOS writable Hex.app      direct         stable            unzip beside it, codesign -R app/update-requirement.txt, swap at restart/quit
+macOS read-only/translocated direct        stable            Download update → macos-arm64-dmg URL
+Linux versions/ + receipt   direct         receipt's         copy into versions/<v>, switch current
+Linux pacman / Nix          aur / nix      stable            show the distribution's command
+Windows versions/ + receipt direct         receipt's         Authenticode (AUTHENTICODE_SIGNER), versions\<v>, current-version
+source and test builds      (never check)
+anything else               unknown        stable            Download update → notes_url
+```
+
+Target URLs resolve against the manifest URL (RFC 3986), so the service must
+write `../files/<sha256>/<name>`; `files/…` would resolve under
+`desktop/`. Downloads resume into `<support>/updates/<sha256>/` and are
+checked against `size` and `sha256` before any other use. The rollout bucket
+is `<support>/update-bucket`.

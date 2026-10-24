@@ -55,21 +55,29 @@ pub(crate) struct DesktopGrantedShortcut {
     pub(crate) trigger: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DesktopUpdateStatus {
+    /// A test build, which never updates.
     Unavailable,
+    /// An administrator turned updates off (`DisableUpdates`).
+    Managed,
     Checking,
     Current,
     Failed,
-    /// A newer release exists that this install cannot apply itself (a
-    /// Windows source build); the window links to its download.
+    Downloading,
+    /// A newer release exists that this install cannot apply itself; the
+    /// window links to its download.
     Available,
     ReadyToRestart,
-    /// Installed from a source checkout, which updates it; the release feed
-    /// never replaces it.
+    /// Installed from a source checkout, which updates it; the release
+    /// service never replaces it.
     SourceBuild,
     /// Installed by a package manager (pacman, Nix), which updates it.
     PackageManager,
+    /// The package manager that installed Hex serves a newer version.
+    PackageUpdate {
+        command: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -84,10 +92,10 @@ pub(crate) struct DesktopShortcut {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DesktopAction {
-    /// Checks the update feed now (Windows' "Check now").
+    /// Checks for an update now ("Check now").
     CheckForUpdates,
     ClearError,
-    /// Opens the release an unmanaged install cannot apply itself.
+    /// Opens the download an install cannot apply itself.
     OpenUpdate,
     RestartIntoUpdate,
     SetDictationShortcut(DesktopShortcut),

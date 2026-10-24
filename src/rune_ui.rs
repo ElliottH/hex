@@ -933,7 +933,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
-    let action = match ui.view.as_ref().map(|view| view.update_status) {
+    let action = match ui.view.as_ref().map(|view| &view.update_status) {
         Some(DesktopUpdateStatus::ReadyToRestart) => Some(DesktopAction::RestartIntoUpdate),
         Some(DesktopUpdateStatus::Available) => Some(DesktopAction::OpenUpdate),
         _ => None,

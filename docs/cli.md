@@ -52,7 +52,7 @@ hex
 │   ├── add <term> [--sounds-like a,b]  add a term, or new spellings to an existing one
 │   └── remove <term>              any case
 ├── experiments list|enable|disable  edit ~/.config/hex/experiments; no running Hex (features/experiments.md)
-├── check-for-updates              ask Sparkle to check now
+├── check-for-updates              check for an update now
 ├── launch-at-login [on|off]       report or change Launch at Login (installed Hex.app only)
 └── logs [--process] [-n N] [-f]   tail live.ndjson (or process.log); no running Hex needed
 ```

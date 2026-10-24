@@ -50,8 +50,6 @@ pub(super) struct Capabilities {
     /// The window sees dictation events, so the tour can end with a
     /// practice dictation into its own field.
     pub(super) practice_dictation: bool,
-    /// Sparkle offers a manual "Check now".
-    pub(super) manual_update_check: bool,
     /// The Fun pane: tuning and trying the Hex Microphone (macOS, while
     /// its experiment is on).
     pub(super) fun: bool,
@@ -74,7 +72,6 @@ impl Capabilities {
         terminal_paste: true,
         hex_microphone: false,
         practice_dictation: false,
-        manual_update_check: false,
         fun: false,
         hud_lab: false,
         modifier_sides: false,
@@ -92,7 +89,6 @@ impl Capabilities {
         terminal_paste: false,
         hex_microphone: true,
         practice_dictation: true,
-        manual_update_check: true,
         fun: true,
         hud_lab: true,
         modifier_sides: true,
@@ -110,7 +106,6 @@ impl Capabilities {
         terminal_paste: false,
         hex_microphone: false,
         practice_dictation: false,
-        manual_update_check: true,
         fun: false,
         hud_lab: false,
         modifier_sides: false,
@@ -127,7 +122,6 @@ impl Capabilities {
         };
         Self {
             terminal_paste: super::host::TERMINAL_PASTE,
-            manual_update_check: super::host::MANUAL_UPDATE_CHECK,
             ..os
         }
     }

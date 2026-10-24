@@ -168,7 +168,6 @@ substitute for source inspection or a second roadmap.
 - `onboarding`, `permission_guide`: required permission health, the native
   floating System Settings guide, selected dictation-model installation, the
   release startup gate, and opt-in command-model setup.
-- `sparkle`: packaged-app-only Sparkle lifecycle and manual update checks.
 - `hex_microphone`, `voice_filter`: the experimental macOS CoreAudio virtual
   microphone (`Hex Microphone`), lock-free capture-to-sink ring buffer,
   real-time voice-filter DSP presets, and the offline WAV renderer behind
@@ -204,14 +203,17 @@ substitute for source inspection or a second roadmap.
   on X11, at the top or bottom. The listener reports through `LinuxIndicator`
   and never waits on it; it shows once the window's app runs, whether or not
   the window is open. Linux has no tray icon.
-- `self_update`: the signed-feed core the Linux and Windows updaters share:
-  ed25519 feed verification, per-target manifest validation, bounded HTTPS
-  downloads, and size and checksum verification.
-- `linux_updater`: signed direct-install updates, atomic version activation,
-  and restart handoff for user-local Linux installs.
+- `updater`: the in-app updater on every OS, a client of the Anomaly release
+  service (`docs/plans/release-service.md`). `updater/protocol` is the
+  protocol's strict SemVer, lenient manifest parsing, and client rules (the
+  service's shared test vectors in `tests/fixtures/release-protocol`);
+  `updater/transport` is curl with `If-None-Match` and resumable,
+  size- and SHA-256-checked downloads; `updater/{linux,macos,windows}` detect
+  the install method, verify (OS code signature on macOS and Windows), stage,
+  and restart into an update.
 - `windows`, `windows_app`, `windows_rune`, `windows_dictation`,
   `windows_input`, `windows_paste`, `windows_migration`, `windows_rune_hud`,
-  `desktop_indicator_model`, `desktop_indicator_shader`, `windows_updater`,
+  `desktop_indicator_model`, `desktop_indicator_shader`,
   `windows_context`, `windows_audio_control`, `windows_login_item`: the Windows
   beta CLI, the runtime host (`WindowsDesktopHost`: listener, model
   preparation, OpenCode catalog, transformations, updater) and single-instance
@@ -220,7 +222,7 @@ substitute for source inspection or a second roadmap.
   low-level keyboard hook, clipboard paste, the one-time
   `windows-settings.json` migration, the HUD (`desktop_indicator_model` springs
   and `desktop_indicator_shader` CPU fragment shader drawn into a Rune
-  overlay), signed self-update, UI Automation context, audio ducking, and the
+  overlay), UI Automation context, audio ducking, and the
   login item.
 - `dictation_modes`: the mode runtime the Windows and Linux listeners share:
   mode selection by application and website, then global replacements, mode
@@ -259,7 +261,7 @@ substitute for source inspection or a second roadmap.
   Dictation, meeting recording state and Stop & Transcribe, update checks, and
   orderly application shutdown.
 - `macos_rune`: the macOS app as one menu-bar process on
-  `rune::App`: the status item, Sparkle, main menu, Dock reopen Apple event,
+  `rune::App`: the status item, the updater, main menu, Dock reopen Apple event,
   and HUD on the main AppKit loop, and a runtime thread for model
   preparation and the window's state. `rune_ui/macos_host.rs` is the
   window's host and the panes' `NativeHost`.
@@ -639,12 +641,32 @@ CoreAudio formats, AppleScript details, or event serialization.
   single-instance process on Linux (`linux_app`, socket + lock in the data
   root, Rune overlay HUD). Closing the window never stops the runtime, listener,
   HUD, or accepted work.
-- Public app updates are Developer ID signed, notarized, stapled, EdDSA signed,
-  published artifact-first/feed-last, and installed through Sparkle.
-- Linux direct-install updates accept only a strictly newer signed stable
-  x86_64 manifest, verify exact size and SHA-256 from a content-addressed
-  artifact, and atomically switch the user-local `current` version. Never
-  overwrite development, root, or package-manager-owned binaries.
+- Updates follow the release protocol's client rules exactly (the shared
+  vectors must pass): a strictly newer version unless the running one is
+  revoked, the minimum version before rollout, and a rollout bucket drawn once
+  from the OS's secure random source, kept in `<support>/update-bucket`, and
+  never sent. Requests carry nothing about the install. Checks run 10 seconds
+  after launch, hourly, and on Check now, backing off on errors; manifests are
+  not signed, so nothing runs before the download's size and SHA-256 match
+  the manifest and, on macOS and Windows, its code signature passes: macOS
+  `app/update-requirement.txt` (Developer ID team `5NZ4Q7NXJ4`, `anomaly.hex`,
+  notarized), Windows a valid Authenticode signature whose signer is
+  `AUTHENTICODE_SIGNER`. Linux relies on HTTPS and the SHA-256 alone.
+- Only direct installs replace themselves: Linux and Windows with our
+  installer's receipt (`install.json` in the user-owned data root, which also
+  names the channel) and the version layout, macOS a `Hex.app` this user can
+  rename in a writable, non-translocated folder. A read-only macOS location
+  shows Download update (the DMG); package-managed installs (pacman, Nix) show
+  their manager's command once it serves the newer version; source and test
+  builds never check; `DisableUpdates` (macOS `anomaly.hex` defaults domain,
+  Windows `SOFTWARE\Policies\Anomaly\Hex` in HKLM or HKCU) turns checks off.
+  Never escalate privileges, and never overwrite development, root, or
+  package-manager-owned files.
+- A staged update waits for Restart to update. Linux and Windows activate a
+  new version directory and switch `current`/`current-version` atomically at
+  staging; macOS unpacks beside the bundle and swaps it in with
+  `renamex_np(RENAME_SWAP)` at restart or quit, and the new version removes
+  the old bundle at launch.
 - The Wayland beta requires compatible clipboard, virtual-keyboard, and
   layer-shell protocols. Shortcuts come from the GlobalShortcuts portal when the
   desktop offers it; otherwise the user binds the `hex dictation`,
@@ -840,14 +862,12 @@ The move to Anomaly's team (`5NZ4Q7NXJ4`) is planned in
 `docs/plans/macos-signing.md`; the manual `macOS signed build` workflow signs
 and notarizes an unpublished candidate once the Apple secrets are in the
 `release` environment.
-The manual DMG contains `Hex.app`; the signed Sparkle ZIP preserves `HEX.app`
-as its archive root so existing Rust 2.0.x installations can discover the update
-despite the new bundle ID. Both artifacts contain the same signed, stapled app.
-Sparkle compares `CFBundleVersion`, not source changes or signing timestamps.
-Public releases must advance beyond distributed beta builds as well as the feed;
-the older local Rust 2.1.0 beta already used build 20100. Do not reuse a released
-version/build for changed code. Validate updates from both the public 2.0.x app
-and the older 2.1.0 beta when changing update identity or packaging.
+`scripts/release-app.sh prepare` leaves `Hex-<version>-macos-arm64.dmg` and
+`Hex-<version>-macos-arm64.zip` (root `Hex.app`, the updater's archive); both
+contain the same signed, stapled app. Do not reuse a released version for
+changed code. Macs on 2.3.1 or earlier (Sparkle, `com.kitlangton.hex2`) get
+one informational appcast item, `packaging/macos/legacy-appcast.xml`, that
+links to the new app; they never auto-update into it.
 There is no Swift migration: never import Swift preferences or data, adopt its
 bundle identifier, publish Rust artifacts to its S3 feed, or automatically quit,
 delete, or replace the Swift app. Prefer a website-only informational item in

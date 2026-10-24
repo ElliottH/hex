@@ -13,7 +13,7 @@ use crate::control::{
     ControlReply, ControlResponse, FeatureReport, ListenerReport, MeetingReport, ModelReport, Pane,
     PermissionReport, StatusReport, WindowReport, settings,
 };
-use crate::desktop_host::DesktopUpdateStatus;
+use crate::desktop_host::{DesktopAction, DesktopUpdateStatus};
 use crate::meeting::MeetingRequest;
 use crate::meeting_watcher::{ControllerEvent, MeetingMenuState};
 use crate::onboarding::PermissionState;
@@ -228,16 +228,17 @@ impl Pump {
                 background(reply, move || launch_at_login(enabled));
                 None
             }
-            ControlCommand::CheckForUpdates => Some(if crate::sparkle::updates_managed() {
-                ControlReply::error("unsupported", "updates are managed by your organization")
-            } else if crate::sparkle::status() == crate::sparkle::UpdateStatus::Unavailable {
-                ControlReply::error(
-                    "unavailable",
-                    "this Hex can't update itself (a development build, or Sparkle failed to load)",
-                )
-            } else {
-                crate::sparkle::check_for_updates();
-                ControlReply::done("Checking for updates; Hex shows what it finds")
+            ControlCommand::CheckForUpdates => Some(match crate::macos_rune::update_status() {
+                DesktopUpdateStatus::Managed => {
+                    ControlReply::error("unsupported", "updates are managed by your organization")
+                }
+                DesktopUpdateStatus::Unavailable | DesktopUpdateStatus::SourceBuild => {
+                    ControlReply::error("unavailable", "this Hex build doesn't update itself")
+                }
+                _ => match crate::macos_rune::update_action(&DesktopAction::CheckForUpdates) {
+                    Ok(()) => ControlReply::done("Checking for updates; Hex shows what it finds"),
+                    Err(error) => ControlReply::error("unavailable", format!("{error:#}")),
+                },
             }),
             ControlCommand::VocabularyList => Some(reply_with(
                 control::check_vocabulary()
@@ -742,9 +743,13 @@ fn status(
             pane: open.then(|| current_pane(window)).flatten(),
         },
         update: match published.update_status {
-            DesktopUpdateStatus::Checking => "checking",
-            DesktopUpdateStatus::Available | DesktopUpdateStatus::ReadyToRestart => "available",
-            DesktopUpdateStatus::Unavailable | DesktopUpdateStatus::Failed => "unavailable",
+            DesktopUpdateStatus::Checking | DesktopUpdateStatus::Downloading => "checking",
+            DesktopUpdateStatus::Available
+            | DesktopUpdateStatus::ReadyToRestart
+            | DesktopUpdateStatus::PackageUpdate { .. } => "available",
+            DesktopUpdateStatus::Unavailable
+            | DesktopUpdateStatus::Managed
+            | DesktopUpdateStatus::Failed => "unavailable",
             DesktopUpdateStatus::Current
             | DesktopUpdateStatus::SourceBuild
             | DesktopUpdateStatus::PackageManager => "current",

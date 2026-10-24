@@ -40,7 +40,7 @@ Agent or terminal                                  // control.cli; macOS release
 ├── hex window show [pane] | hide
 │   └── meetings pane with Meetings off -> feature-off
 ├── hex history clear --yes -> without --yes refused before Hex is asked
-├── hex check-for-updates -> Sparkle's manual check
+├── hex check-for-updates -> The updater checks now
 ├── hex launch-at-login [on|off] -> SMAppService; changes need Hex.app
 └── hex logs [--process] [-n N] [-f] -> local tail; works with Hex stopped
 ```

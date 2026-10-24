@@ -126,7 +126,7 @@ Before cutting the first release with the Rune front end:
   floating window geometry and override-redirect HUD.
 - **macOS:** visual inspection of the window, traffic-light inset, and
   `El::window_drag` on a real display; menu-bar status item, Dock reopen, and
-  Sparkle update dialog; AppKit modifier-only/Fn shortcut capture; native Metal
+  the update swap and relaunch; AppKit modifier-only/Fn shortcut capture; native Metal
   dictation HUD (`dictation_indicator.rs`) and interactive Rune meeting
   capsules (`meeting_capsules.rs`); choosing a file or folder in `NSOpenPanel`
   from Modes and Meetings inside the real app (a Pro harness checked the

@@ -1154,25 +1154,28 @@ fn software_update(ui: &Ui, p: Paint) -> Option<El> {
             .font(DESCRIPTION)
             .color(p.muted())
     };
-    let manual = ui.platform.caps.manual_update_check;
-    Some(match ui.view.as_ref()?.update_status {
+    Some(match &ui.view.as_ref()?.update_status {
         DesktopUpdateStatus::Unavailable => return None,
+        DesktopUpdateStatus::Managed => status(tr("Managed by your organization")),
         DesktopUpdateStatus::Checking => status(tr("Checking")),
-        DesktopUpdateStatus::Current | DesktopUpdateStatus::Failed if manual => button(
+        DesktopUpdateStatus::Downloading => status(tr("Downloading update")),
+        DesktopUpdateStatus::Current | DesktopUpdateStatus::Failed => button(
             p,
             "check-for-updates",
             tr("Check now"),
             ButtonKind::Secondary,
             |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::CheckForUpdates)),
         ),
-        DesktopUpdateStatus::Current => status(tr("Up to date")),
-        DesktopUpdateStatus::Failed => status(tr("Check failed; retrying later")),
         DesktopUpdateStatus::SourceBuild => status(tr("Updated from your source checkout")),
         DesktopUpdateStatus::PackageManager => status(tr("Updated by your package manager")),
+        DesktopUpdateStatus::PackageUpdate { command } => text(command)
+            .key("update-command")
+            .font(DESCRIPTION)
+            .color(p.muted()),
         DesktopUpdateStatus::Available => button(
             p,
             "open-update",
-            tr("Update"),
+            tr("Download update"),
             ButtonKind::Secondary,
             |ui: &mut Ui, _| ui.send(Request::Desktop(DesktopAction::OpenUpdate)),
         ),

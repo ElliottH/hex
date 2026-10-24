@@ -1,11 +1,10 @@
 name: macOS signed build
 
-# Builds the release-identity Hex.app (anomaly.hex, Sparkle embedded),
-# signs it with Anomaly's Developer ID, notarizes and staples the app and its
-# DMG, validates it, and uploads the DMG as this run's artifact. Nothing is
-# published and no appcast is signed. Without the Apple secrets in the
-# release environment the build is skipped; the unsigned test builds remain
-# the fallback. See docs/plans/macos-signing.md.
+# Builds the release-identity Hex.app (anomaly.hex), signs it with Anomaly's
+# Developer ID, notarizes and staples the app and its DMG, validates it, and
+# uploads the DMG as this run's artifact. Nothing is published. Without the
+# Apple secrets in the release environment the build is skipped; the
+# unsigned test builds remain the fallback. See docs/plans/macos-signing.md.
 on:
   workflow_dispatch:
 

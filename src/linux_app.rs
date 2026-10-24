@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -21,15 +21,13 @@ use crate::app_settings::{AppSettings, HotkeyBinding};
 use crate::desktop_activity::DesktopActivity;
 use crate::desktop_host::{
     DesktopAction, DesktopListenerSnapshot, DesktopShortcut, DesktopSnapshot,
-    DesktopTranscriptionSnapshot, DesktopUpdateStatus,
+    DesktopTranscriptionSnapshot,
 };
 use crate::events::EventReader;
 use crate::linux_dictation::ListenerUpdate;
 use crate::linux_input::{LinuxHotkey, ShortcutCommand};
 use crate::linux_service::{self, Activation, Control, Published, ShortcutRoute, Status};
-use crate::linux_updater::{Install, InstalledUpdate};
 
-const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const REFRESH_INTERVAL: Duration = Duration::from_millis(20);
 /// Left by "Update" so the restarted process shows the window again; a
 /// crash restart finds none and stays in the background.
@@ -126,23 +124,11 @@ struct LinuxDesktopHost {
     prepared_transcriber: Option<crate::local_transcriber::LocalTranscriber>,
     transcription_preparation: Option<TranscriptionPreparation>,
     transcription_error: Option<String>,
-    update: UpdateState,
+    updater: crate::updater::Updater,
     output: crate::linux_dictation::DictationOutput,
     /// Hosts the personal transformations workspace while a mode uses one.
     personal_commands: Option<crate::personal_commands::PersonalCommands>,
     personal_commands_checked_at: Instant,
-}
-
-enum UpdateState {
-    Unmanaged,
-    /// Built from a checkout: updates come from that checkout.
-    SourceBuild,
-    /// Installed by a package manager (pacman, Nix), which updates it.
-    PackageManager,
-    Checking(Receiver<Result<Option<InstalledUpdate>, String>>),
-    Failed(Instant),
-    Waiting(Instant),
-    Ready(InstalledUpdate),
 }
 
 /// What the window shows of the host.
@@ -318,16 +304,15 @@ pub(crate) fn run(
         ),
     };
     crate::linux_dictation::initialize_feedback(&settings);
-    let update = match crate::linux_updater::install() {
-        Install::Release => UpdateState::Checking(start_update_check()),
-        Install::Source => UpdateState::SourceBuild,
-        Install::Package => UpdateState::PackageManager,
-        Install::Unmanaged => UpdateState::Unmanaged,
-    };
     // Before any thread can load a model or the window can create its GPU.
     crate::local_transcriber::initialize_backends();
     let enable_on_launch = settings.enable_on_launch;
-    let mut host = LinuxDesktopHost::new(event_path, settings, error, update);
+    let mut host = LinuxDesktopHost::new(
+        event_path,
+        settings,
+        error,
+        crate::updater::Updater::start(),
+    );
     if enable_on_launch {
         host.start();
     }
@@ -448,7 +433,7 @@ impl LinuxDesktopHost {
         event_path: PathBuf,
         settings: AppSettings,
         error: Option<String>,
-        update: UpdateState,
+        updater: crate::updater::Updater,
     ) -> Self {
         let mut event_reader = EventReader::open(&event_path);
         let mut activity = DesktopActivity::default();
@@ -478,7 +463,7 @@ impl LinuxDesktopHost {
             prepared_transcriber: None,
             transcription_preparation: None,
             transcription_error: None,
-            update,
+            updater,
             output,
             personal_commands: None,
             personal_commands_checked_at: Instant::now(),
@@ -601,31 +586,6 @@ impl LinuxDesktopHost {
             self.personal_commands_checked_at = Instant::now();
             self.refresh_personal_commands();
         }
-        if matches!(&self.update, UpdateState::Waiting(at) | UpdateState::Failed(at) if Instant::now() >= *at)
-        {
-            self.update = UpdateState::Checking(start_update_check());
-        }
-        let update_result = match &self.update {
-            UpdateState::Checking(receiver) => match receiver.try_recv() {
-                Ok(result) => Some(result),
-                Err(TryRecvError::Disconnected) => {
-                    Some(Err("update worker stopped unexpectedly".into()))
-                }
-                Err(TryRecvError::Empty) => None,
-            },
-            _ => None,
-        };
-        if let Some(result) = update_result {
-            self.update = match result {
-                Ok(Some(executable)) => UpdateState::Ready(executable),
-                Ok(None) => UpdateState::Waiting(Instant::now() + UPDATE_INTERVAL),
-                Err(error) => {
-                    tracing::warn!(%error, "Linux update check failed");
-                    UpdateState::Failed(Instant::now() + UPDATE_INTERVAL)
-                }
-            };
-        }
-
         let mut start_listener = false;
         if let Some(preparation) = self
             .transcription_preparation
@@ -862,16 +822,6 @@ impl LinuxDesktopHost {
         }
     }
 
-    fn restart_into_update(&self) -> Result<()> {
-        let UpdateState::Ready(update) = &self.update else {
-            return Err(color_eyre::eyre::eyre!("no installed update is ready"));
-        };
-        if let Some(marker) = reopen_marker() {
-            let _ = std::fs::write(marker, b"");
-        }
-        crate::linux_updater::relaunch(update)
-    }
-
     fn choose_transcription(
         &mut self,
         model: crate::transcription_models::TranscriptionModelId,
@@ -960,17 +910,9 @@ fn save_with(change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     Ok(settings)
 }
 
-fn start_update_check() -> Receiver<Result<Option<InstalledUpdate>, String>> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let result = crate::linux_updater::install_latest().map_err(|error| format!("{error:#}"));
-        let _ = sender.send(result);
-    });
-    receiver
-}
-
 impl Drop for LinuxDesktopHost {
     fn drop(&mut self) {
+        self.updater.stop();
         self.stop();
         self.cancel_transcription_preparation();
     }
@@ -986,15 +928,7 @@ impl LinuxDesktopHost {
     }
 
     fn snapshot(&self) -> DesktopSnapshot {
-        let update_status = match &self.update {
-            UpdateState::Unmanaged => DesktopUpdateStatus::Unavailable,
-            UpdateState::SourceBuild => DesktopUpdateStatus::SourceBuild,
-            UpdateState::PackageManager => DesktopUpdateStatus::PackageManager,
-            UpdateState::Checking(_) => DesktopUpdateStatus::Checking,
-            UpdateState::Failed(_) => DesktopUpdateStatus::Failed,
-            UpdateState::Waiting(_) => DesktopUpdateStatus::Current,
-            UpdateState::Ready(_) => DesktopUpdateStatus::ReadyToRestart,
-        };
+        let update_status = self.updater.status();
         DesktopSnapshot {
             activity: self.activity.clone(),
             listener: DesktopListenerSnapshot {
@@ -1061,8 +995,15 @@ impl LinuxDesktopHost {
                 self.settings_error = None;
                 self.dismissed_failure_at = self.activity.last_failure.as_ref().map(|(at, _)| *at);
             }
-            DesktopAction::RestartIntoUpdate => {
-                if let Err(error) = self.restart_into_update() {
+            DesktopAction::CheckForUpdates
+            | DesktopAction::OpenUpdate
+            | DesktopAction::RestartIntoUpdate => {
+                if matches!(action, DesktopAction::RestartIntoUpdate)
+                    && let Some(marker) = reopen_marker()
+                {
+                    let _ = std::fs::write(marker, b"");
+                }
+                if let Err(error) = self.updater.act(&action) {
                     self.error = Some(format!("Could not restart Hex: {error:#}"));
                     return Err(error);
                 }
@@ -1076,8 +1017,6 @@ impl LinuxDesktopHost {
                 self.start();
             }
             DesktopAction::StopListening => self.stop(),
-            // Linux checks on its own schedule and applies what it finds.
-            DesktopAction::CheckForUpdates | DesktopAction::OpenUpdate => {}
         }
         Ok(())
     }
@@ -1099,8 +1038,12 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut host =
-            LinuxDesktopHost::new(PathBuf::new(), settings, None, UpdateState::Unmanaged);
+        let mut host = LinuxDesktopHost::new(
+            PathBuf::new(),
+            settings,
+            None,
+            crate::updater::Updater::idle(),
+        );
         if running {
             host.listener = Some(Listener {
                 worker: std::thread::spawn(|| Ok(())),
@@ -1131,7 +1074,7 @@ mod tests {
             // cannot open the microphone where the real model is installed.
             host_for_edit(false).settings.clone(),
             Some("Could not load Linux settings: invalid JSON".into()),
-            UpdateState::Unmanaged,
+            crate::updater::Updater::idle(),
         );
         host.start();
         assert!(!host.is_running());
@@ -1506,8 +1449,12 @@ mod tests {
             },
             ..Default::default()
         };
-        let mut host =
-            LinuxDesktopHost::new(PathBuf::new(), settings, None, UpdateState::Unmanaged);
+        let mut host = LinuxDesktopHost::new(
+            PathBuf::new(),
+            settings,
+            None,
+            crate::updater::Updater::idle(),
+        );
         host.transcription_preparation = Some(TranscriptionPreparation {
             canceled: Arc::new(AtomicBool::new(false)),
             model: TranscriptionModelId::default(),

@@ -634,6 +634,8 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Hex Dictation", ["Dyktowanie Hex", "Hex 听写", "Hex 音声入力", "Hex-Diktat", "Dictado de Hex"]),
     ("Hex Dictation: update available", ["Dyktowanie Hex: dostępna aktualizacja", "Hex 听写：有可用更新", "Hex 音声入力: アップデートがあります", "Hex-Diktat: Update verfügbar", "Dictado de Hex: actualización disponible"]),
     ("Download update", ["Pobierz aktualizację", "下载更新", "アップデートをダウンロード", "Update herunterladen", "Descargar actualización"]),
+    ("Downloading update", ["Pobieranie aktualizacji", "正在下载更新", "アップデートをダウンロード中", "Update wird geladen", "Descargando actualización"]),
+    ("Managed by your organization", ["Zarządzane przez Twoją organizację", "由你的组织管理", "組織によって管理されています", "Von deiner Organisation verwaltet", "Gestionado por tu organización"]),
     ("Enabled", ["Włączony", "已启用", "有効", "Aktiviert", "Activado"]),
     ("Sleeping", ["Uśpiony", "休眠中", "スリープ中", "Schläft", "En reposo"]),
     ("Enabling…", ["Włączanie…", "正在启用…", "有効化中…", "Wird aktiviert…", "Activando…"]),

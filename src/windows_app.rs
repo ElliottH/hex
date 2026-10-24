@@ -23,7 +23,6 @@ use crate::app_settings::AppSettings;
 use crate::desktop_activity::DesktopActivity;
 use crate::desktop_host::{
     DesktopAction, DesktopListenerSnapshot, DesktopShortcuts, DesktopTranscriptionSnapshot,
-    DesktopUpdateStatus,
 };
 use crate::desktop_i18n::tr_fill;
 use crate::events::{EventReader, TranscriptPhase, VoiceEvent};
@@ -32,7 +31,6 @@ use crate::transcription_models::{ModelPreparationStage, TranscriptionModelId};
 use crate::transcription_preparation::TranscriptionPreparation;
 use crate::windows_dictation::voice_action_model;
 use crate::windows_rune::{Published, Request};
-use crate::windows_updater::UpdateCheck;
 
 type ListenerResult = std::result::Result<(), String>;
 
@@ -78,7 +76,7 @@ pub(crate) struct WindowsDesktopHost {
     voice_action_model: Arc<RwLock<Option<crate::dictation_processor::Model>>>,
     opencode_catalog_rx: Option<Receiver<Result<crate::dictation_processor::ModelCatalog>>>,
     preparation: TranscriptionPreparation,
-    updater: crate::windows_updater::WindowsUpdater,
+    updater: crate::updater::Updater,
 }
 
 /// Names the event that marks the running Hex app in this login session.
@@ -187,7 +185,7 @@ impl WindowsDesktopHost {
             voice_action_model,
             opencode_catalog_rx: None,
             preparation: TranscriptionPreparation::default(),
-            updater: crate::windows_updater::WindowsUpdater::start(),
+            updater: crate::updater::Updater::start(),
         };
         host.refresh_personal_commands_host();
         host.adopt_default_voice_action_model();
@@ -232,20 +230,19 @@ impl WindowsDesktopHost {
             DesktopAction::StartListening => self.start(),
             DesktopAction::StopListening => self.stop(),
             DesktopAction::ClearError => self.error = None,
-            DesktopAction::CheckForUpdates => self.updater.request_check(),
-            DesktopAction::OpenUpdate => {
-                if let UpdateCheck::Available { url } = self.updater.state()
-                    && let Err(error) = crate::commands::shell_open(&url)
-                {
-                    tracing::warn!(%error, "could not open the Hex release");
-                }
-            }
-            DesktopAction::RestartIntoUpdate => {
-                if self.restart_into_update().is_ok() {
-                    // Ends the app so the new version can take the named event.
+            DesktopAction::CheckForUpdates
+            | DesktopAction::OpenUpdate
+            | DesktopAction::RestartIntoUpdate => match self.updater.act(&action) {
+                // Ends the app so the new version can take the named event.
+                Ok(quit) if quit => {
+                    self.stop();
                     return true;
                 }
-            }
+                Ok(_) => {}
+                Err(error) => {
+                    self.error = Some(tr_fill("Could not restart Hex: {}", &format!("{error:#}")));
+                }
+            },
             // Windows saves shortcuts from the window.
             DesktopAction::SetDictationShortcut(_) => {}
         }
@@ -345,18 +342,6 @@ impl WindowsDesktopHost {
             listener.stop.store(true, Ordering::Relaxed);
             self.status = status.into();
         }
-    }
-
-    /// Starts the installed update; the caller quits Hex afterwards.
-    fn restart_into_update(&mut self) -> Result<()> {
-        let UpdateCheck::ReadyToRestart { executable } = self.updater.state() else {
-            return Err(eyre!("no installed Windows update is ready"));
-        };
-        crate::windows_updater::relaunch_at(&executable).inspect_err(|error| {
-            self.error = Some(tr_fill("Could not restart Hex: {}", &format!("{error:#}")));
-        })?;
-        self.stop();
-        Ok(())
     }
 
     /// Applies the settings the shared window saved. Shared state the
@@ -575,14 +560,7 @@ impl WindowsDesktopHost {
                 selection: self.settings.transcription.clone(),
                 preparing: preparation.model,
             },
-            update_status: match self.updater.state() {
-                UpdateCheck::Disabled => DesktopUpdateStatus::Unavailable,
-                UpdateCheck::Checking => DesktopUpdateStatus::Checking,
-                UpdateCheck::Current => DesktopUpdateStatus::Current,
-                UpdateCheck::Failed => DesktopUpdateStatus::Failed,
-                UpdateCheck::Available { .. } => DesktopUpdateStatus::Available,
-                UpdateCheck::ReadyToRestart { .. } => DesktopUpdateStatus::ReadyToRestart,
-            },
+            update_status: self.updater.status(),
             settings: self.settings.clone(),
         }
     }

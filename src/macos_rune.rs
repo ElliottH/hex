@@ -2,7 +2,7 @@
 //!
 //! - The main thread runs Rune's event loop (`rune::App`, windowless and
 //!   kept running, as an accessory app) and, beside it on the same AppKit
-//!   run loop, the native status item, Sparkle, the main menu, the Dock
+//!   run loop, the native status item, the updater, the main menu, the Dock
 //!   reopen handler, and the Metal dictation HUD. A 16 ms main-loop timer
 //!   ([`Pump`]) drives them, so they keep working with no window open.
 //! - The runtime thread owns model preparation, starts the listener once
@@ -15,7 +15,7 @@
 //! and the onboarding relaunch after scheduling the new copy, or Ctrl-C) ends
 //! the loop, then stops and joins everything and ends the process with
 //! `_exit` ([`crate::process_exit`]). AppKit's own terminate
-//! (the quit Apple event, logout, Sparkle) does the same from its
+//! (the quit Apple event, logout) does the same from its
 //! will-terminate notification.
 //!
 //! The meeting capsules (offer, call ended, ready, recording) are Rune
@@ -72,7 +72,7 @@ const REOPEN_APPLICATION: u32 = u32::from_be_bytes(*b"rapp");
 /// the shared panes send the same requests on every platform.
 #[derive(Clone, Debug)]
 pub(crate) enum Request {
-    /// Update actions go to Sparkle on the main thread (`rune_ui::host`).
+    /// Update actions go to the updater from the window (`rune_ui::host`).
     Desktop(#[allow(dead_code)] DesktopAction),
     /// Handled in the window (`rune_ui::host`): an AppKit event monitor.
     CaptureShortcutFor(#[allow(dead_code)] ShortcutTarget),
@@ -181,10 +181,30 @@ impl RuntimeHandle {
 
 static RUNTIME: OnceLock<RuntimeHandle> = OnceLock::new();
 static WINDOW: OnceLock<rune::AppHandle<Ui>> = OnceLock::new();
+static UPDATER: OnceLock<crate::updater::Updater> = OnceLock::new();
 
 /// The running app's runtime; `None` outside [`run`] (headless snapshots).
 pub(crate) fn runtime() -> Option<RuntimeHandle> {
     RUNTIME.get().cloned()
+}
+
+/// Carries out an update control from the window, a menu, or `hex`;
+/// switching to a staged update quits so it can start.
+pub(crate) fn update_action(action: &crate::desktop_host::DesktopAction) -> Result<()> {
+    let updater = UPDATER
+        .get()
+        .ok_or_else(|| eyre!("the updater is not running"))?;
+    if updater.act(action)? {
+        quit();
+    }
+    Ok(())
+}
+
+pub(crate) fn update_status() -> DesktopUpdateStatus {
+    UPDATER.get().map_or(
+        DesktopUpdateStatus::Unavailable,
+        crate::updater::Updater::status,
+    )
 }
 
 /// Quits Hex from any thread.
@@ -215,6 +235,8 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     }
     shutdown.store(false, Ordering::Relaxed);
     crate::keyboard::initialize_layout()?;
+    crate::updater::finish_on_launch();
+    let _ = UPDATER.set(crate::updater::Updater::start());
     let settings = AppSettings::load()?;
     let setup_ready = crate::onboarding::status(&settings.transcription).ready();
     let onboarding_completed = crate::onboarding::completion_recorded();
@@ -386,10 +408,14 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
         show_dock_icon: settings.show_dock_icon,
     };
     // Quit ends the loop and finishes below; AppKit's own terminate (the quit
-    // Apple event, logout, Sparkle) would `exit` from inside it, so its
+    // Apple event, logout) would `exit` from inside it, so its
     // will-terminate notification finishes there instead.
     DRAIN.set(move || {
         shutdown.store(true, Ordering::Relaxed);
+        if let Some(updater) = UPDATER.get() {
+            updater.stop();
+            updater.install_on_quit();
+        }
         drop(requests);
         local_api.shutdown();
         // The listener owns Moonshine and the transcription engine; joining
@@ -568,14 +594,7 @@ impl Runtime {
                 selection: self.settings.transcription.clone(),
                 preparing: preparation.model,
             },
-            update_status: match crate::sparkle::status() {
-                crate::sparkle::UpdateStatus::Unavailable => DesktopUpdateStatus::Unavailable,
-                crate::sparkle::UpdateStatus::Checking => DesktopUpdateStatus::Checking,
-                crate::sparkle::UpdateStatus::UpdateAvailable => DesktopUpdateStatus::Available,
-                crate::sparkle::UpdateStatus::Idle | crate::sparkle::UpdateStatus::UpToDate => {
-                    DesktopUpdateStatus::Current
-                }
-            },
+            update_status: update_status(),
             settings: self.settings.clone(),
             preparation,
         }
@@ -619,7 +638,6 @@ fn start_main_thread(mut pump: Pump) {
         tracing::error!("Hex's main-thread setup ran off the main thread");
         return;
     };
-    crate::sparkle::start();
     pump.status_actions = match crate::status_item::install() {
         Ok(actions) => Some(actions),
         Err(error) => {
@@ -750,9 +768,7 @@ impl Pump {
                 &self.meeting_state,
                 crate::app_settings::meetings_enabled(),
             );
-            crate::status_item::update_software(
-                crate::sparkle::status() == crate::sparkle::UpdateStatus::UpdateAvailable,
-            );
+            crate::status_item::update_software(&update_status());
             self.meeting_menu_at = now + MEETING_MENU_REFRESH;
         }
     }
@@ -778,7 +794,13 @@ impl Pump {
                     .runtime
                     .recognition(RecognitionControl::PasteLast { reply: None });
             }
-            StatusItemAction::CheckForUpdates => crate::sparkle::check_for_updates(),
+            StatusItemAction::Update => {
+                if let Some(updater) = UPDATER.get()
+                    && let Err(error) = update_action(&updater.menu_action())
+                {
+                    tracing::warn!(error = %format!("{error:#}"), "the update menu item failed");
+                }
+            }
             StatusItemAction::StartMeeting => {
                 if let Err(error) = self.runtime.meeting(MeetingRequest::Start { title: None }) {
                     tracing::warn!(%error, "could not start meeting from status item");
@@ -939,7 +961,7 @@ objc2::define_class!(
 
         #[unsafe(method(checkForUpdates:))]
         fn check_for_updates(&self, _sender: Option<&AnyObject>) {
-            crate::sparkle::check_for_updates();
+            let _ = update_action(&crate::desktop_host::DesktopAction::CheckForUpdates);
         }
 
         #[unsafe(method(hideHex:))]
@@ -1004,7 +1026,7 @@ fn install_main_menu(target: &MenuTarget, mtm: MainThreadMarker) {
     let name = crate::app_paths::app_name();
     let (hide, quit) = (format!("Hide {name}"), format!("Quit {name}"));
     let mut application = vec![];
-    if !crate::sparkle::updates_managed() {
+    if !crate::updater::managed_by_policy() {
         application.push(Some(("Check for Updates…", sel!(checkForUpdates:), "")));
         application.push(None);
     }

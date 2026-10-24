@@ -99,7 +99,7 @@ pub enum ControlCli {
         #[command(subcommand)]
         command: WindowCommand,
     },
-    /// Check for a Hex update now (Sparkle shows what it finds).
+    /// Check for a Hex update now; Hex shows what it finds.
     CheckForUpdates {
         #[command(flatten)]
         output: Output,

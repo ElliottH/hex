@@ -3,9 +3,9 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/scripts/macos-signing.sh"
-# HEX_TEST_BUILD=1 builds the CI test app: ad-hoc signed, without Sparkle,
-# under its own name and bundle ID so it installs beside the released Hex
-# and never touches its permissions or updates.
+# HEX_TEST_BUILD=1 builds the CI test app: ad-hoc signed, under its own
+# name and bundle ID so it installs beside the released Hex and never
+# touches its permissions; it never checks for updates.
 if [ "${HEX_TEST_BUILD:-}" = 1 ]; then
   team_id=
   identity=-
@@ -78,16 +78,6 @@ if [ ! -d "$moonshine_dir" ]; then
 fi
 cp "$moonshine_dir/libmoonshine.dylib" "$frameworks/"
 cp "$moonshine_dir/libonnxruntime.1.23.2.dylib" "$frameworks/"
-if [ "$identity" != - ]; then
-  sparkle_dir=$("$root/scripts/setup-sparkle.sh")
-  /usr/bin/ditto "$sparkle_dir/Sparkle.framework" "$frameworks/Sparkle.framework"
-  sparkle="$frameworks/Sparkle.framework/Versions/B"
-  sign "$sparkle/XPCServices/Installer.xpc"
-  sign --preserve-metadata=entitlements "$sparkle/XPCServices/Downloader.xpc"
-  sign "$sparkle/Autoupdate"
-  sign "$sparkle/Updater.app"
-  sign "$frameworks/Sparkle.framework"
-fi
 sign "$frameworks/libonnxruntime.1.23.2.dylib"
 sign "$frameworks/libmoonshine.dylib"
 sign "$bundle/Contents/Library/HexMicrophone.driver"

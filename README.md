@@ -66,7 +66,9 @@ Organizations that manage app versions themselves can turn off in-app updates,
 including manual checks, with the `DisableUpdates` Boolean in the
 `anomaly.hex` preference domain. Deploy it in a configuration profile
 (payload type `anomaly.hex`, key `DisableUpdates`, value `true`), or for a
-single Mac run `defaults write anomaly.hex DisableUpdates -bool true`.
+single Mac run `defaults write anomaly.hex DisableUpdates -bool true`. On
+Windows, set the DWORD `DisableUpdates` to `1` under
+`HKLM\SOFTWARE\Policies\Anomaly\Hex` (Group Policy) or the same path in HKCU.
 Relaunch HEX to apply it. Model downloads still work. Releases through 2.3.1
 used the `com.kitlangton.hex2` domain; profiles for those keep applying only to them.
 

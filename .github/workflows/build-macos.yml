@@ -111,6 +111,8 @@ jobs:
           scripts/validate-app.sh "$check/dmg/Hex.app" Hex.app "$HEX_VERSION" "$build"
           scripts/validate-app.sh "$check/update/Hex.app" Hex.app "$HEX_VERSION" "$build"
           xcrun stapler validate "$check/update/Hex.app"
+          # What the in-app updater requires before it swaps the bundle in.
+          codesign --verify --deep --strict -R="$(cat app/update-requirement.txt)" "$check/update/Hex.app"
           spctl --assess --type execute --verbose=2 "$check/dmg/Hex.app"
           diff -qr "$check/dmg/Hex.app" "$check/update/Hex.app"
           scripts/smoke-macos-app.sh "$check/dmg/Hex.app"
