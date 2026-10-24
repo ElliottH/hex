@@ -224,7 +224,7 @@ jobs:
           NOTES_URL: ${{ needs.resolve.outputs.notes-url }}
         run: |
           scripts/release-service.sh publish dist "$NOTES_URL"
-          echo "linux-url=$RELEASE/hex/$(jq -r '.release.targets["linux-x64"].url' dist/manifest.json)" >> "$GITHUB_OUTPUT"
+          echo "linux-url=${RELEASE%/release}$(jq -r '.release.targets["linux-x64"].url' dist/manifest.json)" >> "$GITHUB_OUTPUT"
           { echo '### Manifest'; echo '```json'; cat dist/manifest.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the Nix flake
         # The flake builds this commit from source, so it serves the version now.

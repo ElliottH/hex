@@ -13,40 +13,46 @@ const { values } = parseArgs({ options: { mode: { type: "string", default: "prod
 const service = `https://${hostForMode(values.mode)}/release`
 const site = originForMode(values.mode)
 const root = new URL("..", import.meta.url)
+const manifestUrl = `${service}/hex/desktop/stable.json`
 
 type Target = { url: string; size: number; sha256: string }
 type Manifest = { app: string; artifact: string; channel: string; release: { version: string; targets: Record<string, Target> } }
 
 async function manifest(): Promise<Manifest | undefined> {
-  const response = await fetch(`${service}/hex/desktop/stable.json`, { headers: { "User-Agent": "hex-site" } })
+  const response = await fetch(manifestUrl, { headers: { "User-Agent": "hex-site" } })
   if (response.status === 404) return undefined
-  if (!response.ok) throw new Error(`${service}/hex/desktop/stable.json answered ${response.status}`)
+  if (!response.ok) throw new Error(`${manifestUrl} answered ${response.status}`)
   const value = (await response.json()) as Manifest
   if (value.app !== "hex" || value.artifact !== "desktop" || value.channel !== "stable") throw new Error("not the Hex desktop stable manifest")
   return value
 }
 
-function fileUrl(value: Manifest, target: string) {
+// Target URLs resolve against the manifest's URL (anomalyco/release docs/protocol.md).
+// A dev release without a platform's build (macOS before the Apple secrets
+// exist) keeps that platform's frozen 2.3.1 link; production needs them all.
+function fileUrl(value: Manifest, target: string, fallback: string) {
   const entry = value.release.targets[target]
-  if (!entry) throw new Error(`Hex ${value.release.version} has no ${target} build`)
-  return `${service}/hex/${entry.url}`
+  if (entry) return new URL(entry.url, manifestUrl).toString()
+  if (values.mode !== "dev") throw new Error(`Hex ${value.release.version} has no ${target} build`)
+  console.warn(`Hex ${value.release.version} on ${service} has no ${target} build; linking ${fallback}.`)
+  return fallback
 }
 
-const current = await manifest()
 const legacy = "https://anoma.ly/hex/files"
+const current = await manifest()
 const data = current
   ? {
       version: current.release.version,
-      mac: fileUrl(current, "macos-arm64-dmg"),
-      windowsX64: fileUrl(current, "windows-x64-setup"),
-      windowsArm64: fileUrl(current, "windows-arm64-setup"),
+      mac: fileUrl(current, "macos-arm64-dmg", `${legacy}/releases/HEX-2.3.1-arm64.dmg`),
+      windowsX64: fileUrl(current, "windows-x64-setup", `${legacy}/releases/HEX-Setup-2.3.1-x64.exe`),
+      windowsArm64: fileUrl(current, "windows-arm64-setup", `${legacy}/releases/HEX-Setup-2.3.1-arm64.exe`),
       linuxInstaller: `${site}/install-linux.sh`,
       linuxCommand:
         values.mode === "dev"
           ? `curl -fsSL ${site}/install-linux.sh | HEX_RELEASE_BASE_URL=${service} sh`
           : `curl -fsSL ${site}/install-linux.sh | sh`,
       github: `https://github.com/anomalyco/hex/releases/tag/app-v${current.release.version}`,
-      manifest: `${service}/hex/desktop/stable.json`,
+      manifest: manifestUrl,
     }
   : {
       version: "2.3.1",

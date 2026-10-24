@@ -180,13 +180,15 @@ if [ -z "${HEX_INSTALL_ARTIFACT:-}" ]; then
   printf '%s\n' "$sha256" | grep -Eq '^[0-9a-f]{64}$' \
     || fail "Linux release has an invalid checksum."
   test "$bytes" -le 536870912 || fail "Linux release exceeds the 512 MiB limit."
-  # Target URLs are relative to the manifest and stay under the app.
-  printf '%s\n' "$url" | grep -Eq '^files/[0-9a-f]{64}/[A-Za-z0-9._-]+$' \
+  # Target URLs are absolute paths on the manifest's host, under the app's
+  # files (anomalyco/release docs/protocol.md).
+  printf '%s\n' "$url" | grep -Eq '^/([A-Za-z0-9._-]+/)*hex/files/[0-9a-f]{64}/[A-Za-z0-9._-]+$' \
     || fail "Linux release names an unexpected file URL."
+  host=$(printf '%s\n' "$origin" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
 
   curl --fail --location --proto '=https' --proto-redir '=https' \
     --silent --show-error --connect-timeout 10 --max-time 600 \
-    --max-filesize "$bytes" "$origin/hex/$url" -o "$artifact_path"
+    --max-filesize "$bytes" "$host$url" -o "$artifact_path"
   test "$(wc -c < "$artifact_path" | tr -d ' ')" = "$bytes" \
     || fail "Downloaded Linux release has the wrong size."
   test "$(sha256sum "$artifact_path" | awk '{ print $1 }')" = "$sha256" \

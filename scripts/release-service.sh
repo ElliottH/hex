@@ -85,6 +85,18 @@ distributions='[
   {"kind": "nix", "attribute": "github:anomalyco/hex", "command": "nix profile upgrade hex"}
 ]'
 
+# resolve <url>: a target URL from the manifest, an absolute path on the
+# service's host, as a full URL.
+resolve() {
+  case "$1" in
+    /*) printf '%s%s\n' "${RELEASE%/release}" "$1" ;;
+    *)
+      echo "Unexpected target URL $1." >&2
+      exit 1
+      ;;
+  esac
+}
+
 sha256_of() {
   sha256sum < "$1" | awk '{ print $1 }'
 }
@@ -175,7 +187,7 @@ publish() {
     entry=$(jq -c --arg target "$target" '.release.targets[$target]' "$dist/manifest.json")
     test "$(printf '%s' "$entry" | jq -r .sha256)" = "$expected"
     test "$(printf '%s' "$entry" | jq -r .size)" = "$(wc -c < "$dist/$name" | tr -d ' ')"
-    url="$RELEASE/$app/$(printf '%s' "$entry" | jq -r .url)"
+    url=$(resolve "$(printf '%s' "$entry" | jq -r .url)")
     curl -fsS --retry 3 "$url" -o "$temporary/served"
     test "$(sha256_of "$temporary/served")" = "$expected"
     echo "$target $url" >&2

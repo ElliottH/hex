@@ -44,7 +44,7 @@ jobs:
           version=$(jq -er .release.version manifest.json)
           mkdir -p dist
           for label in x64 arm64; do
-            url="$release/hex/$(jq -er --arg t "windows-$label" '.release.targets[$t].url' manifest.json)"
+            url="${release%/release}$(jq -er --arg t "windows-$label" '.release.targets[$t].url' manifest.json)"
             file="dist/Hex-$version-windows-$label.exe"
             curl --fail --silent --show-error --proto '=https' "$url" -o "$file"
             test "$(sha256sum < "$file" | cut -d' ' -f1)" = "$(jq -r --arg t "windows-$label" '.release.targets[$t].sha256' manifest.json)"

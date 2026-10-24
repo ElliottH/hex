@@ -52,22 +52,22 @@ chmod 755 "$unsigned"
 sha256=$(sha256sum "$unsigned" | awk '{ print $1 }')
 bytes=$(wc -c < "$unsigned" | tr -d ' ')
 file="hex-$version-linux-x64"
-mkdir -p "$server/hex/desktop" "$server/hex/files/$sha256"
-cp "$unsigned" "$server/hex/files/$sha256/$file"
-jq -n --arg version "$version" --arg url "files/$sha256/$file" --arg sha256 "$sha256" --argjson size "$bytes" \
+mkdir -p "$server/release/hex/desktop" "$server/release/hex/files/$sha256"
+cp "$unsigned" "$server/release/hex/files/$sha256/$file"
+jq -n --arg version "$version" --arg url "/release/hex/files/$sha256/$file" --arg sha256 "$sha256" --argjson size "$bytes" \
   '{schema: 1, app: "hex", artifact: "desktop", channel: "stable", sequence: 1,
     published_at: "2026-10-24T00:00:00Z",
     release: {version: $version, rollout_percent: 100, revoked_versions: [],
       targets: {"linux-x64": {url: $url, size: $size, sha256: $sha256}},
-      distributions: [{kind: "direct"}]}}' > "$server/hex/desktop/stable.json"
-cp "$server/hex/desktop/stable.json" "$temporary/manifest.json"
+      distributions: [{kind: "direct"}]}}' > "$server/release/hex/desktop/stable.json"
+cp "$server/release/hex/desktop/stable.json" "$temporary/manifest.json"
 
 port=$((38000 + ($$ % 1000)))
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$server" \
   > "$temporary/server.log" 2>&1 &
 server_pid=$!
 attempt=0
-until curl --fail --silent "http://127.0.0.1:$port/hex/desktop/stable.json" >/dev/null; do
+until curl --fail --silent "http://127.0.0.1:$port/release/hex/desktop/stable.json" >/dev/null; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 20 ]; then
     echo "Fixture server did not start." >&2
@@ -86,7 +86,7 @@ printf 'preserve me\n' > "$support_dir/settings.json"
 
 install() {
   HOME="$home" HEX_INSTALL_DIR="$install_dir" HEX_APPLICATION_SUPPORT_DIR="$support_dir" \
-    HEX_RELEASE_BASE_URL="http://127.0.0.1:$port" sh "$installer" "$@"
+    HEX_RELEASE_BASE_URL="http://127.0.0.1:$port/release" sh "$installer" "$@"
 }
 
 # Refuses a manifest, then checks that nothing was installed.
@@ -97,7 +97,7 @@ refuses() {
   fi
   test ! -e "$install_dir/hex"
   test ! -e "$support_dir/versions"
-  cp "$temporary/manifest.json" "$server/hex/desktop/stable.json"
+  cp "$temporary/manifest.json" "$server/release/hex/desktop/stable.json"
 }
 
 install
@@ -124,13 +124,13 @@ test ! -e "$support_dir/install.json"
 test ! -e "$home/.config/systemd/user/hex.service"
 test -f "$support_dir/settings.json"
 
-jq '.app = "other"' "$temporary/manifest.json" > "$server/hex/desktop/stable.json"
+jq '.app = "other"' "$temporary/manifest.json" > "$server/release/hex/desktop/stable.json"
 refuses "another app's manifest"
-jq '.release.targets = {}' "$temporary/manifest.json" > "$server/hex/desktop/stable.json"
+jq '.release.targets = {}' "$temporary/manifest.json" > "$server/release/hex/desktop/stable.json"
 refuses "a release without a linux-x64 build"
-jq '.release.targets["linux-x64"].url = "https://example.com/hex"' "$temporary/manifest.json" > "$server/hex/desktop/stable.json"
+jq '.release.targets["linux-x64"].url = "https://example.com/hex"' "$temporary/manifest.json" > "$server/release/hex/desktop/stable.json"
 refuses "a file outside the service"
-printf 'X' | dd of="$server/hex/files/$sha256/$file" bs=1 seek=0 conv=notrunc >/dev/null 2>&1
+printf 'X' | dd of="$server/release/hex/files/$sha256/$file" bs=1 seek=0 conv=notrunc >/dev/null 2>&1
 refuses "a same-size corrupted download"
 
 HOME="$home" HEX_INSTALL_DIR="$install_dir" HEX_APPLICATION_SUPPORT_DIR="$support_dir" \
