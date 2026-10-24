@@ -835,6 +835,12 @@ impl DictationHotkey {
         matches!(self.state, State::Recording { .. } | State::Locked)
     }
 
+    /// Recording hands-free: locked by a double tap, a Toggle release, or
+    /// `hex dictation start`.
+    pub fn is_locked(&self) -> bool {
+        matches!(self.state, State::Locked)
+    }
+
     pub fn suppresses_recognition(&self) -> bool {
         !matches!(self.state, State::Idle { .. })
     }

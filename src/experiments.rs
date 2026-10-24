@@ -28,17 +28,24 @@ pub const ENV: &str = "HEX_EXPERIMENTS";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Experiment {
     LiveChapters,
+    SmartTurn,
     Vocabulary,
     VoiceFilter,
 }
 
 impl Experiment {
-    pub const ALL: [Self; 3] = [Self::LiveChapters, Self::Vocabulary, Self::VoiceFilter];
+    pub const ALL: [Self; 4] = [
+        Self::LiveChapters,
+        Self::SmartTurn,
+        Self::Vocabulary,
+        Self::VoiceFilter,
+    ];
 
     /// The stable name the env variable, the file, and the CLI use.
     pub const fn name(self) -> &'static str {
         match self {
             Self::LiveChapters => "live-chapters",
+            Self::SmartTurn => "smart-turn",
             Self::Vocabulary => "vocabulary",
             Self::VoiceFilter => "voice-filter",
         }
@@ -47,6 +54,9 @@ impl Experiment {
     pub const fn description(self) -> &'static str {
         match self {
             Self::LiveChapters => "Chapter a meeting's transcript live while it records.",
+            Self::SmartTurn => {
+                "Stop hands-free dictation when Smart Turn hears you finish (macOS)."
+            }
             Self::Vocabulary => "A shared vocabulary list that guides transcription.",
             Self::VoiceFilter => {
                 "The Voice Filter pane: the Hex Microphone driver and its filters (macOS)."
@@ -611,6 +621,12 @@ mod tests {
                     {
                         "name": "live-chapters",
                         "description": Experiment::LiveChapters.description(),
+                        "enabled": false,
+                        "sources": [],
+                    },
+                    {
+                        "name": "smart-turn",
+                        "description": Experiment::SmartTurn.description(),
                         "enabled": false,
                         "sources": [],
                     },

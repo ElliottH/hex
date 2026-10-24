@@ -156,6 +156,56 @@ Checks in [suppression.rs](../../src/suppression.rs):
 `locked_dictation_finishes_after_a_missing_key_release`.
 These cover gesture decisions, not hardware keyboard-layout or remapping equivalence.
 
+### Smart Turn Auto-Stop (Experiment `smart-turn`)
+
+macOS only, off unless the `smart-turn` [experiment](experiments.md) is on.
+It finishes a hands-free capture when the speaker seems done, so a locked
+capture needs no finishing press.
+
+```ts
+Hands-free capture records                         // dictate.smart-turn
+  // double-tap LOCKED, Toggle, `hex dictation start` (it locks), or the
+  // spoken start phrase; never Hold, Voice Action, API capture, or meetings
+  -> 16 kHz, 20 ms frames, the meeting pause detector's speech rule
+  -> First hands-free capture -> Download and verify the pinned model
+       // models/smart-turn-v3.2-cpu.onnx in Application Support, size + SHA-256
+  ├── Under 200 ms of speech so far -> Pauses don't count
+  ├── Silence reaches the check point (300 ms)
+  │     -> Worker scores the last 8 s           // off the audio loop; newest pause wins
+  │     ├── P >= threshold (0.7) -> Finish as a locked finishing press
+  │     │     // hotkey: same release tail, transcription, paste, tones
+  │     │     // spoken start: as the stop phrase, without the phrase
+  │     └── P < threshold -> Keep listening
+  ├── Silence reaches the fallback (2 s) -> Finish the same way
+  ├── Speech resumes, or the capture ends or changes -> Late answer ignored
+  ├── Escape -> Cancel as usual
+  └── Download, runtime, or model fails -> Logged; dictation as if it were off
+```
+
+`HEX_SMART_TURN_CHECK_MS`, `HEX_SMART_TURN_THRESHOLD`, and
+`HEX_SMART_TURN_FALLBACK_MS` override the defaults at launch (invalid values
+are logged and ignored; the fallback is never shorter than the check). A
+patient preset is `1500`, `0.8`, `3000`. Every check writes one `smart_turn`
+event to `live.ndjson` with the probability, silence, decision (`stop`,
+`continue`, `fallback`, `stale`, `failed`), and inference time, never text.
+The model runs on the ONNX Runtime library Moonshine already ships, loaded
+with `ort`'s `load-dynamic`; its Whisper log-mel features are computed in Rust.
+
+Checks in [smart_turn.rs](../../src/smart_turn.rs): `log_mel_matches_whisper_feature_extractor`
+(against `transformers`' `WhisperFeatureExtractor(chunk_length=8)` on a
+synthetic signal), `checks_once_per_pause_after_speech`,
+`silence_alone_never_checks_or_stops`,
+`a_confident_answer_stops_and_a_doubtful_one_waits_for_the_fallback`,
+`answers_about_an_earlier_pause_are_stale`,
+`stops_a_hands_free_capture_when_the_model_hears_the_end`,
+`an_answer_for_an_ended_or_newer_capture_does_nothing`,
+`a_failed_load_leaves_dictation_alone`, and `off_by_default_nothing_loads`,
+all with a scripted predictor. The ignored
+`real_model_matches_python_on_the_reference_signal` downloads the model and
+matched Python onnxruntime 1.23.2 (P 0.8643) on 2026-10-24. Not covered: the
+recognition-loop wiring, a physical microphone, or whether the defaults suit
+real speech.
+
 ### Warm And Cold Capture
 
 ```ts

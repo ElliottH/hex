@@ -371,6 +371,7 @@ pub fn listen(
         dictation_worker.engine(),
     )?;
     let (mut transcription_revision, _) = crate::app_settings::transcription_selection();
+    let mut smart_turn = crate::smart_turn::SmartTurn::start(project_root);
     let mut action_executor: Option<ActionExecutor> = None;
     let mut personal_host_enabled =
         commands_enabled || crate::app_settings::custom_transformations_enabled();
@@ -1285,6 +1286,68 @@ pub fn listen(
         }
 
         let audio = input.recv_timeout(Duration::from_millis(20))?;
+        if let Some(smart_turn) = &mut smart_turn {
+            let hands_free = input.is_recording()
+                && programmatic.is_none()
+                && !hotkey_capture_suspended
+                && edit_pending_since.is_none()
+                && !hotkeys.edit_recording()
+                && (voice.is_some() || hotkeys.dictation.is_locked());
+            smart_turn.track(hands_free.then(|| input.capture_generation()));
+            if let Some(audio) = &audio
+                && audio.is_current(input.recognition_generation())
+            {
+                smart_turn.push(&audio.samples, input.sample_rate());
+            }
+            let mut stop = false;
+            for report in smart_turn.poll() {
+                stop |= report.stops();
+                events.emit(&report.event(now_ms()))?;
+            }
+            if stop && hands_free {
+                smart_turn.track(None);
+                let boundary = capture_boundary(&input, microphone_policy.release_while_idle);
+                if let Some(active) = voice.take() {
+                    // As the spoken stop phrase does, minus the phrase.
+                    finish_dictation(
+                        &input,
+                        boundary,
+                        Duration::ZERO,
+                        &dictation_worker,
+                        TranscriptionTarget::Paste,
+                        Some(active.protocol),
+                        &context,
+                        &input.device_name(),
+                        &mut events,
+                        indicator.as_ref(),
+                    )?;
+                    reset_command_recognizer(&input, &mut recognizer)?;
+                    emit_engine_state(
+                        &mut events,
+                        false,
+                        &dictation_worker,
+                        mode,
+                        &input.device_name(),
+                    )?;
+                } else {
+                    // As `hex dictation stop` does: a locked finish press.
+                    hotkeys.dictation.suspend();
+                    finish_hotkey_dictation(
+                        boundary,
+                        &mut recognizer,
+                        &input,
+                        &dictation_worker,
+                        mode,
+                        &context,
+                        &input.device_name(),
+                        &mut events,
+                        indicator.as_ref(),
+                        microphone_policy.release_while_idle,
+                    )?;
+                }
+                continue;
+            }
+        }
         if let (Some(active), Some(audio)) = (&mut programmatic, &audio) {
             if active.last_level.elapsed() >= Duration::from_millis(30) {
                 let _ = active.levels.try_send(level_for(&audio.samples));

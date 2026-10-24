@@ -130,6 +130,8 @@ mod recognition;
 #[cfg(target_os = "macos")]
 mod recording_environment;
 mod rune_ui;
+#[cfg(target_os = "macos")]
+mod smart_turn;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod spoken_text;
 #[cfg(target_os = "macos")]

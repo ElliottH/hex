@@ -244,7 +244,8 @@ impl DictationAudio {
         self.state.recording.load(Ordering::Acquire)
     }
 
-    fn capture_generation(&self) -> u64 {
+    /// Advances with every accepted capture start.
+    pub fn capture_generation(&self) -> u64 {
         self.state.capture_generation.load(Ordering::Acquire)
     }
 
