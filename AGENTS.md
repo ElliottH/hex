@@ -803,14 +803,17 @@ Automatic microphone selection follows the compiled preference order in
 `src/config.rs`, then falls back to the macOS default. A saved microphone takes
 precedence while available; override everything with `--device`. The app bundle
 build requires Xcode 26 for Icon Composer compilation and a Developer ID signing
-identity. `scripts/release-app.sh` prepares a notarized and stapled DMG plus its
-signed Sparkle appcast; run `scripts/release-app.sh publish` only after validating
-the prepared artifact. Public app downloads and update feeds use
-`https://anoma.ly/hex/files`, Anomaly's `hex-production-files` R2 bucket
-served by the site's Worker; [`docs/releasing.md`](docs/releasing.md) owns the
-Worker config, the release workflow, channels, secrets, and the transition from Kit's
-`downloads.hex.kitlangton.dev`/`.com`, which must keep redirecting to the new
-origin for installed clients. GitHub app releases use
+identity. `scripts/release-app.sh prepare` builds the notarized and stapled
+DMG and ZIP the Release workflow publishes. Hex publishes every platform to
+the Anomaly release service (`anomalyco/release`; `https://anoma.ly/release`,
+dev `https://dev.anoma.ly/release`) from the Release workflow with curl and its
+GitHub OIDC token, under app `hex`, artifact `desktop`;
+[`docs/plans/release-service.md`](docs/plans/release-service.md) pins the
+target and file names and the direct-install receipt, and
+[`docs/releasing.md`](docs/releasing.md) owns the workflow, channels, secrets,
+and old clients. The 2.3.1 feeds and appcast at `https://anoma.ly/hex/files`
+(and Kit's `downloads.hex.kitlangton.dev`/`.com`, which must keep redirecting
+there) stay frozen. GitHub app releases use
 `app-v<VERSION>` tags with `--latest=false`, keeping them distinct from SDK
 releases. Never overwrite a published artifact with different bytes.
 `https://anoma.ly/hex` (in-repo `site/`) is the only Hex website. One
@@ -818,11 +821,11 @@ releases. Never overwrite a published artifact with different bytes.
 bucket `hex-production-files`) and the dev Worker `hex-dev-site` (dev.anoma.ly/hex,
 bucket `hex-dev-files`); `cf deploy --prebuilt --mode <mode>` picks one, and
 only CI deploys: a push to `main` touching `site/` deploys dev, a stable
-Release deploys production. No subdomains. After publishing a version, bump
-`MAC_VERSION` or `DESKTOP_VERSION` in `site/src/release.ts`, the explicit
-GitHub mirror/version link in `README.md`, and (macOS) the Homebrew cask.
-`bun run --cwd site check:downloads` fails until every download link serves a
-file; every deploy runs it. Verify the live links afterwards.
+Release deploys production. No subdomains. The site's download links come
+from the service's stable manifest when it builds. After publishing a version,
+bump the explicit GitHub mirror/version link in `README.md` and the Homebrew
+cask. `bun run --cwd site check:downloads` fails until every download link
+serves a file; every deploy runs it. Verify the live links afterwards.
 The Rust app is named `Hex`, packaged as `Hex.app`,
 with bundle identifier `anomaly.hex` (deliberately not reverse-DNS) and executable
 `hex`; its SDK helper is `anomaly.hex.service` and the virtual microphone driver
@@ -871,62 +874,60 @@ hooks or persist a second launch-at-login flag.
 
 Every platform is built, signed, and published by one run of
 `.github/workflows/release-desktop.yml` ("Release"; see `docs/releasing.md`).
-Run it with `workflow_dispatch` (`ref`, `channel`: `staging` dry run under
-`staging/<run-id>/` with a draft GitHub release, or `stable`), or push an
-`app-v<VERSION>` tag, which must match the crate version. It builds Linux
-x86_64 in an Arch container and Windows x64 and ARM64 on native runners with
-each script's `build` mode, through the reusable
-`.github/workflows/build-desktop.yml`. `.github/workflows/test-builds.yml`
-calls the same workflow on every push to `main` with `test-build`, plus an
-ad-hoc signed `Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle
-ID `anomaly.hex.test`, no Sparkle, its own `hex-test` data folder and
-`~/.config/hex-test`; it must never read the real `hex` data), as unsigned 14-day artifacts for
-teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` also compiles Windows
-builds that never check for updates. A job that compiles nothing then signs all three
-feeds with `scripts/release-feed.sh` and validates signatures, sizes, SHA-256,
-version order against the live feeds, the absence of Visual C++ runtime
-imports, and (stable) Authenticode signatures. The `release` environment is
-limited to `main` and `app-v*` tags. `scripts/publish-release.sh` then uploads
-through `scripts/r2-put.sh`: immutable downloads first (never replacing
-different bytes), the GitHub release mirror (verified byte for byte), the
-content-addressed artifacts, installers as committed at the release commit,
-and the feeds after rechecking that the version is newer, then
-`HEX-latest-arm64.dmg` and the appcast. The `aur` job builds, installs, and
-tests `hex-bin` and pushes it to the AUR for stable releases.
-Rerunning after an interruption is safe.
+Run it with `workflow_dispatch` (`ref`, `channel`: `staging` publishes the
+release to the dev service with a draft GitHub release, `stable` to
+production), or push an `app-v<VERSION>` tag, which must match the crate
+version. It builds Linux x86_64 in an Arch container (`scripts/build-linux.sh`)
+and Windows x64 and ARM64 on native runners (`scripts/build-windows.sh`)
+through the reusable `.github/workflows/build-desktop.yml`, and macOS through
+`build-macos.yml`. `.github/workflows/test-builds.yml` calls the same desktop
+workflow on every push to `main` with `test-build`, plus an ad-hoc signed
+`Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle ID
+`anomaly.hex.test`, its own `hex-test` data folder and `~/.config/hex-test`;
+it must never read the real `hex` data), as unsigned 14-day artifacts for
+teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` builds never update
+themselves. The `collect` job checks the files, the absence of Visual C++
+runtime imports, and (stable) Authenticode signatures; `publish` uploads each
+target and then the release with `scripts/release-service.sh`, the only job
+holding `id-token: write` for the service, with no other secrets and actions
+pinned by SHA. The GitHub release mirror, the AUR package (built from the
+published Linux file), and the AUR/brew/nix distribution records follow.
+The `release` environment is limited to `main` and `app-v*` tags. Rerunning
+after an interruption is safe: the service stores files by hash and accepts
+the same version again.
 
-`HEX-Setup-<version>-<x64|arm64>.exe` is a per-user Inno Setup installer
-(`packaging/windows/hex.iss`, built by `scripts/build-windows-installer.ps1`)
-that installs exactly the managed layout `install-windows.ps1` creates, so
-self-updates keep working: `%APPDATA%\voice-control\versions\<version>\hex.exe`,
-`current-version`, and a Start Menu shortcut carrying the managed mark. Its
-uninstaller lives in `voice-control\uninstall` because updates prune old version
-directories; it removes every version, the shortcut, and Launch at login, and
-keeps settings. It refuses to roll back a newer self-updated version. Keep its
-`AppId` forever: the updater rewrites that Apps & Features entry's version.
-Release desktop and the Windows installer workflow install, reinstall, refuse a
-downgrade with, and uninstall it silently on x64 and ARM64 runners
-(`scripts/test-windows-installer.ps1`). With `sign-windows` (Release desktop),
-Build desktop's `windows-package` job, the only one in the `release`
-environment, Authenticode-signs both `hex.exe` through Azure Artifact Signing
-(GitHub OIDC, SHA-256, RFC 3161 timestamp) before building the installers,
-signs the installers, and re-addresses the signed executables in their feed
-payloads (`scripts/windows-authenticode.ps1`). Compile jobs and test builds
+`Hex-Setup-<version>-windows-<x64|arm64>.exe` is a per-user Inno Setup
+installer (`packaging/windows/hex.iss`, built by
+`scripts/build-windows-installer.ps1`) that installs exactly the managed
+layout `install-windows.ps1` creates, so self-updates keep working:
+`%APPDATA%\voice-control\versions\<version>\hex.exe`, `current-version`, the
+`install.json` direct-install receipt, and a Start Menu shortcut carrying the
+managed mark. Its uninstaller lives in `voice-control\uninstall` because
+updates prune old version directories; it removes every version, the
+receipt, the shortcut, and Launch at login, and keeps settings. It refuses to
+roll back a newer self-updated version. Keep its `AppId` forever: the updater
+rewrites that Apps & Features entry's version. Release and the Windows
+installer workflow install, reinstall, refuse a downgrade with, and uninstall
+it silently on x64 and ARM64 runners (`scripts/test-windows-installer.ps1`).
+With `sign-windows` (Release), Build desktop's `windows-package` job, the only
+one in the `release` environment, Authenticode-signs both `hex.exe` through
+Azure Artifact Signing (GitHub OIDC, SHA-256, RFC 3161 timestamp) before
+building the installers, then signs the installers
+(`scripts/windows-authenticode.ps1` checks them). Compile jobs and test builds
 never hold signing credentials, and signing is skipped with a warning until
 the Azure values exist in `release`. See `docs/windows-signing.md`.
 
-Both scripts still work locally: `prepare` builds and signs with the Ed25519
-private PEM in `HEX_RELEASE_SIGNING_KEY` (or `HEX_LINUX_SIGNING_KEY`), and
-`publish` uploads after validation with the R2 credentials in the environment. Run the Linux script on x86_64 Linux and the
-Windows script from Git Bash once per architecture with `HEX_WINDOWS_ARCH=x86_64`
-(the default; Vulkan SDK required) or `aarch64` (clang-cl and Ninja; best on an
-ARM64 host). The feeds are `linux-update.json`, `windows-update.json` for x64,
-and `windows-aarch64-update.json` for ARM64, all on the same key, bucket, and
-`https://anoma.ly/hex/files` origin. Signing refuses a key that does not match
-the public key compiled into HEX, and publishing refuses a non-monotonic stable
-release. Builds use `-DGGML_NATIVE=OFF` so the CPU kernels stay portable, and the
-static runtime in `.cargo/config.toml` keeps the Visual C++ Redistributable
-unnecessary; the release workflow asserts neither Windows executable imports it.
+Run `scripts/build-linux.sh` on x86_64 Linux and `scripts/build-windows.sh`
+from Git Bash once per architecture with `HEX_WINDOWS_ARCH=x86_64` (the
+default; Vulkan SDK required) or `aarch64` (clang-cl and Ninja; best on an
+ARM64 host). Builds use `-DGGML_NATIVE=OFF` so the CPU kernels stay portable,
+and the static runtime in `.cargo/config.toml` keeps the Visual C++
+Redistributable unnecessary; the release workflow asserts neither Windows
+executable imports it. `scripts/install-linux-release.sh` and
+`scripts/install-windows.ps1` (served at `https://anoma.ly/hex/`) install from
+the service's stable manifest and check each file's size and SHA-256;
+`scripts/test-install-linux-release.sh` exercises the Linux one against a
+fixture service.
 
 Use `termctrl` to verify TUI changes at both wide and narrow dimensions. The
 `hex dev dashboard` keys are `1` for commands, `2` for the activity log, `3` for meetings,

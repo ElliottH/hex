@@ -2,28 +2,27 @@
 
 Windows releases are Authenticode-signed with Anomaly's Azure Artifact Signing
 (formerly Trusted Signing) account from GitHub Actions. Signing is separate
-from the ed25519 update feed: Authenticode is what Windows and SmartScreen
-check, and the feed signature is what Hex's own updater checks.
+from the release service: Authenticode is what Windows and SmartScreen check,
+and Hex's updater checks it again (with the manifest's SHA-256) before
+installing an update.
 
 ## Pipeline
 
-`.github/workflows/build-desktop.yml`, called by Release desktop with
+`.github/workflows/build-desktop.yml`, called by Release with
 `sign-windows: true`:
 
 ```ts
 windows (x64 runner, ARM64 runner)          // compiles; no credentials
-└── unsigned-windows-<arch>: hex.exe + <feed>.payload.json
+└── unsigned-windows-<arch>: Hex-<v>-windows-<x64|arm64>.exe
 windows-package (one x64 runner, environment: release when signing)
 ├── azure/login (OIDC, no client secret)
 ├── artifact-signing-action: both hex.exe     // SHA-256, RFC 3161 timestamp
 ├── build-windows-installer.ps1 x64 + arm64   // Inno embeds the signed bytes
-├── artifact-signing-action: both HEX-Setup-*.exe
-├── scripts/windows-authenticode.ps1          // Valid + timestamped, then re-address
-│   └── signing changed the bytes -> new HEX-<v>-<sha256>-<arch>-windows.exe,
-│       payload.json gets the new artifact, bytes, sha256
-└── hex-windows-<arch>: payload.json, hex.exe, HEX-Setup-<v>-<x64|arm64>.exe
+├── artifact-signing-action: both Hex-Setup-*.exe
+├── scripts/windows-authenticode.ps1          // every exe Valid + timestamped
+└── hex-windows-<arch>: Hex-<v>-windows-<arch>.exe, Hex-Setup-<v>-windows-<arch>.exe
 windows-installer (native x64, ARM64)        // test-windows-installer.ps1
-Release desktop sign job                      // ed25519-signs the feeds over the signed exe
+Release collect + publish                     // stable requires the signatures; uploads both
 ```
 
 - The compile jobs never hold signing credentials. Only `windows-package`
@@ -36,7 +35,8 @@ Release desktop sign job                      // ed25519-signs the feeds over th
   written at install time and is not signed. It is created locally with no
   Mark of the Web, so SmartScreen does not check it.
 - Self-updates download `hex.exe` through Hex itself, so SmartScreen is not
-  involved there either. The feed's ed25519 signature and SHA-256 protect it.
+  involved there either. The manifest's SHA-256 and the Authenticode check
+  protect it.
 
 ## Configuration
 

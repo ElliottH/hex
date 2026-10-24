@@ -1,12 +1,12 @@
 name: Build macOS release
 
 # Builds the release Hex.app from one exact commit, signs it with Anomaly's
-# Developer ID (team 5NZ4Q7NXJ4), notarizes and staples the app and its DMG,
-# and extends the live Sparkle appcast with an EdDSA-signed item for this
-# version, all through scripts/release-app.sh prepare. Uploads one artifact,
-# hex-macos-arm64: HEX-<version>-arm64.dmg, HEX-<version>-arm64.zip (the
-# Sparkle archive, root HEX.app), and appcast.xml. Publishes nothing; the
-# caller uploads the archives first and appcast.xml last.
+# Developer ID (team 5NZ4Q7NXJ4), and notarizes and staples the app and its
+# DMG through scripts/release-app.sh prepare. Uploads one artifact,
+# hex-macos-arm64, holding the release service targets
+# (docs/plans/release-service.md): Hex-<version>-macos-arm64.zip (root
+# Hex.app, for the updater) and Hex-<version>-macos-arm64.dmg. Publishes
+# nothing.
 on:
   workflow_call:
     inputs:
@@ -16,14 +16,6 @@ on:
       version:
         type: string
         required: true
-      download-base:
-        description: Origin the release is served from, e.g. https://anoma.ly/hex/files or its staging/<run> prefix
-        type: string
-        required: true
-      require-newer:
-        description: Refuse a build that is not newer than the appcast's (off only for staging rehearsals)
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -37,9 +29,6 @@ jobs:
     env:
       VOICE_CONTROL_TEAM_ID: 5NZ4Q7NXJ4
       HEX_VERSION: ${{ inputs.version }}
-      HEX_RELEASE_BASE_URL: ${{ inputs.download-base }}
-      HEX_RELEASE_REQUIRE_NEWER: ${{ inputs.require-newer && '1' || '0' }}
-      LIVE_APPCAST: https://anoma.ly/hex/files/appcast.xml
     steps:
       - name: Require the signing secrets
         env:
@@ -48,11 +37,10 @@ jobs:
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           missing=
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY_PATH \
-            APPLE_API_KEY APPLE_API_ISSUER SPARKLE_ED_PRIVATE_KEY; do
+            APPLE_API_KEY APPLE_API_ISSUER; do
             eval "value=\${$name}"
             [ -n "$value" ] || missing="$missing $name"
           done
@@ -85,10 +73,9 @@ jobs:
           keychain: build
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      - name: Select the signing identity, notary key, Sparkle key, and appcast
+      - name: Select the signing identity and notary key
         env:
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
           identity=$(security find-identity -v -p codesigning build.keychain \
             | sed -n "s/.*\"\(Developer ID Application:.*($VOICE_CONTROL_TEAM_ID)\)\"/\1/p" | head -1)
@@ -96,37 +83,25 @@ jobs:
             echo "::error::No Developer ID Application identity for team $VOICE_CONTROL_TEAM_ID in APPLE_CERTIFICATE."
             exit 1
           fi
-          (
-            umask 077
-            printf '%s\n' "$APPLE_API_KEY_PATH" > "$RUNNER_TEMP/notary-key.p8"
-            printf '%s\n' "$SPARKLE_ED_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle-ed25519.key"
-          )
-          # A fresh staging prefix has no appcast yet; extend the live one.
-          appcast="$HEX_RELEASE_BASE_URL/appcast.xml"
-          if ! curl --fail --silent --head --location "$appcast" > /dev/null; then
-            appcast=$LIVE_APPCAST
-          fi
-          echo "Extending $appcast" >> "$GITHUB_STEP_SUMMARY"
+          (umask 077; printf '%s\n' "$APPLE_API_KEY_PATH" > "$RUNNER_TEMP/notary-key.p8")
           {
             echo "VOICE_CONTROL_CODESIGN_IDENTITY=$identity"
             echo "HEX_NOTARY_KEY=$RUNNER_TEMP/notary-key.p8"
-            echo "HEX_SPARKLE_KEY_FILE=$RUNNER_TEMP/sparkle-ed25519.key"
-            echo "HEX_RELEASE_APPCAST_URL=$appcast"
           } >> "$GITHUB_ENV"
-      - name: Build, sign, notarize, and sign the appcast
+      - name: Build, sign, and notarize
         env:
           HEX_NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY }}
           HEX_NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           scripts/setup.sh
           scripts/release-app.sh prepare
-      - name: Remove the keys
+      - name: Remove the notary key
         if: always()
-        run: rm -f "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/sparkle-ed25519.key"
+        run: rm -f "$RUNNER_TEMP/notary-key.p8"
       - name: Check the prepared release
         run: |
-          dmg="dist/HEX-$HEX_VERSION-arm64.dmg"
-          zip="dist/HEX-$HEX_VERSION-arm64.zip"
+          dmg="dist/Hex-$HEX_VERSION-macos-arm64.dmg"
+          zip="dist/Hex-$HEX_VERSION-macos-arm64.zip"
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
           check=$(mktemp -d)
@@ -134,31 +109,14 @@ jobs:
           /usr/bin/ditto -x -k "$zip" "$check/update"
           build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$check/dmg/Hex.app/Contents/Info.plist")
           scripts/validate-app.sh "$check/dmg/Hex.app" Hex.app "$HEX_VERSION" "$build"
-          scripts/validate-app.sh "$check/update/HEX.app" HEX.app "$HEX_VERSION" "$build"
-          xcrun stapler validate "$check/update/HEX.app"
+          scripts/validate-app.sh "$check/update/Hex.app" Hex.app "$HEX_VERSION" "$build"
+          xcrun stapler validate "$check/update/Hex.app"
           spctl --assess --type execute --verbose=2 "$check/dmg/Hex.app"
-          diff -qr "$check/dmg/Hex.app" "$check/update/HEX.app"
+          diff -qr "$check/dmg/Hex.app" "$check/update/Hex.app"
           scripts/smoke-macos-app.sh "$check/dmg/Hex.app"
-          # The new item must verify against the public key the app ships, or
-          # every installed Hex would reject the update.
-          uv run --no-project --with cryptography python3 - "$check/dmg/Hex.app/Contents/Info.plist" \
-            dist/updates/appcast.xml "$HEX_RELEASE_BASE_URL/releases/HEX-$HEX_VERSION-arm64.zip" "$zip" <<'EOF'
-          import base64, plistlib, sys, xml.etree.ElementTree as ET
-          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-          info, appcast, url, archive = sys.argv[1:]
-          sparkle = "{http://www.andymatuschak.org/xml-namespaces/sparkle}"
-          key = Ed25519PublicKey.from_public_bytes(
-              base64.b64decode(plistlib.load(open(info, "rb"))["SUPublicEDKey"]))
-          items = [e for e in ET.parse(appcast).iter("enclosure") if e.get("url") == url]
-          assert len(items) == 1, f"expected one enclosure for {url}, found {len(items)}"
-          data = open(archive, "rb").read()
-          assert int(items[0].get("length")) == len(data), "enclosure length mismatch"
-          key.verify(base64.b64decode(items[0].get(sparkle + "edSignature")), data)
-          print(f"{url} verifies against SUPublicEDKey")
-          EOF
           hdiutil detach -quiet "$check/dmg"
           mkdir -p release
-          cp "$dmg" "$zip" dist/updates/appcast.xml release/
+          cp "$dmg" "$zip" release/
           ls -l release >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:

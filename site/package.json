@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "bun scripts/release-data.ts --mode dev && vite",
     "build": "bun scripts/build.ts",
     "preview": "vite preview",
     "check:downloads": "bun scripts/check-downloads.ts",

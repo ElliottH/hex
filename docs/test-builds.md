@@ -8,9 +8,9 @@ access to the repository.
 
 ```ts
 hex-test-<commit>-macos-arm64       // Hex-Test-<commit>-arm64.dmg
-hex-test-<commit>-windows-x86_64    // HEX-Setup-<version>-x64.exe + bare HEX-<version>-<sha256>-x86_64-windows.exe
-hex-test-<commit>-windows-aarch64   // HEX-Setup-<version>-arm64.exe + bare HEX-…-aarch64-windows.exe
-hex-test-<commit>-linux-x86_64      // HEX-<version>-<sha256>-x86_64-linux
+hex-test-<commit>-windows-x86_64    // Hex-Setup-<version>-windows-x64.exe + bare Hex-<version>-windows-x64.exe
+hex-test-<commit>-windows-aarch64   // Hex-Setup-<version>-windows-arm64.exe + bare Hex-<version>-windows-arm64.exe
+hex-test-<commit>-linux-x86_64      // hex-<version>-linux-x64
 ```
 
 None of these are code-signed, notarized, or published. They never update
@@ -53,10 +53,10 @@ The installer and executable are unsigned, so SmartScreen warns: choose **More
 info**, then **Run anyway**.
 
 1. Quit Hex from its tray icon.
-2. Run `HEX-Setup-<version>-<x64|arm64>.exe`. It replaces an installed Hex of
+2. Run `Hex-Setup-<version>-windows-<x64|arm64>.exe`. It replaces an installed Hex of
    the same or an older version in the usual per-user layout, and refuses to
    replace a newer one: uninstall that first from Apps & Features (settings are
-   kept). Or skip the installer and run the bare `HEX-….exe` from any folder.
+   kept). Or skip the installer and run the bare `Hex-<version>-windows-<arch>.exe` from any folder.
 3. The test build never self-updates. To return to the release, run the
    release installer from <https://anoma.ly/hex>.
 
@@ -68,9 +68,9 @@ instance directly instead:
 
 ```sh
 hex quit
-chmod +x HEX-*-x86_64-linux
-./HEX-*-x86_64-linux service     # runs Hex in the foreground; Ctrl-C quits
-./HEX-*-x86_64-linux             # in another terminal: opens the window
+chmod +x hex-*-linux-x64
+./hex-*-linux-x64 service     # runs Hex in the foreground; Ctrl-C quits
+./hex-*-linux-x64             # in another terminal: opens the window
 ```
 
 After Ctrl-C, `hex` starts the installed Hex again.

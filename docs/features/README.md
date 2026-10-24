@@ -46,7 +46,7 @@ leaves runtime settings, models, and retained data intact.
 Download Hex                              // setup.download-recovery
 ├── anoma.ly/hex names the visitor's platform  // setup.download-button
 │   ├── Mac -> DMG | Intel Mac -> disabled, "needs Apple silicon"
-│   ├── Windows x64 / ARM64 (UA-CH) -> HEX-Setup-<version>-<arch>.exe + SmartScreen note
+│   ├── Windows x64 / ARM64 (UA-CH) -> Hex-Setup-<version>-windows-<arch>.exe + SmartScreen note
 │   ├── Linux -> copyable `curl … install-linux.sh | sh` + Arch/glibc requirement
 │   ├── Phone -> Send yourself the link
 │   └── Other platforms -> every build, Homebrew, the GitHub release
@@ -74,10 +74,10 @@ Prepare local models                      // separate network dependency
 
 The website shows the pinned macOS version and platform requirements beside its
 download links. App mirrors use explicit `app-v…` release tags rather than GitHub's
-repository-wide latest release, which may refer to the SDK. The legacy `r2.dev`
-endpoint remains available for installed clients. New builds use the custom host
-for Sparkle and Linux updates; the signed Linux payload and verification key are
-unchanged. Hosting does not guarantee access through every corporate policy.
+repository-wide latest release, which may refer to the SDK. Builds on the release
+service update from `https://anoma.ly/release` (docs/releasing.md); the 2.3.1
+feeds, appcast, and the legacy `r2.dev` endpoint stay frozen for installed
+clients. Hosting does not guarantee access through every corporate policy.
 
 The site's hero is an animated, optional show: an idle head and an ⌥ keycap until
 the visitor presses it, then a voiced demo of messages, OpenCode prompts and fixes
@@ -96,7 +96,7 @@ observed. The Linux library diagnosis has no automated check. The site's
 platform states were captured once in headless Chromium with `?platform=`.
 
 Sources: [website](../../site/src/Download.tsx), [installer](../../packaging/windows/hex.iss),
-[release publisher](../../scripts/publish-release.sh),
+[release publisher](../../scripts/release-service.sh),
 [mirror publisher](../../scripts/publish-app-mirror.sh),
 [macOS release publisher](../../scripts/release-app.sh),
 [Linux installer](../../scripts/install-linux-release.sh), and

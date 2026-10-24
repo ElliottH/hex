@@ -5,7 +5,8 @@
 # with it.
 #
 # Generated from anomalyco/hex packaging/aur by scripts/release-aur.sh, which
-# sets pkgver and the checksums for each release.
+# sets pkgver, the release service's linux-x64 file URL, and the checksums for
+# each release.
 pkgname=hex-bin
 pkgver=@VERSION@
 pkgrel=1
@@ -30,7 +31,7 @@ optdepends=(
 options=('!strip' '!debug')
 install=hex-bin.install
 source=(
-  "HEX-${pkgver}-x86_64-linux::https://github.com/anomalyco/hex/releases/download/app-v${pkgver}/HEX-${pkgver}-x86_64-linux"
+  "hex-${pkgver}-linux-x64::@URL@"
   'hex.desktop'
   'hex.service'
   'LICENSE'
@@ -41,7 +42,7 @@ sha256sums=('@SHA256@'
             '@LICENSE_SHA256@')
 
 package() {
-  install -Dm755 "HEX-${pkgver}-x86_64-linux" "$pkgdir/usr/bin/hex"
+  install -Dm755 "hex-${pkgver}-linux-x64" "$pkgdir/usr/bin/hex"
   install -Dm644 hex.desktop "$pkgdir/usr/share/applications/hex.desktop"
   install -Dm644 hex.service "$pkgdir/usr/lib/systemd/user/hex.service"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

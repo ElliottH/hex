@@ -2,20 +2,20 @@
 # Stage, test, and publish the AUR package hex-bin from a release's
 # Linux executable. Runs on Arch (CI uses the archlinux container).
 #
-#   release-aur.sh stage   <version> <executable> <dir>  # PKGBUILD, .SRCINFO, files
+#   release-aur.sh stage   <version> <executable> <url> <dir>  # PKGBUILD, .SRCINFO, files
 #   release-aur.sh test    <dir>                         # makepkg and install it
 #   release-aur.sh publish <dir>                         # push to the AUR
 #   release-aur.sh check                                 # the AUR accepts the key
 #
-# The package downloads the executable from the GitHub release app-v<version>,
-# so publish only after that release is public. `publish` and `check` read the
+# The package downloads the executable from <url>, the release service's
+# linux-x64 file, so publish only after the release is published there. `publish` and `check` read the
 # AUR SSH private key from AUR_SSH_PRIVATE_KEY.
 set -eu
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 package=hex-bin
 usage() {
-  echo "Usage: $0 stage <version> <executable> <dir> | test <dir> | publish <dir> | check" >&2
+  echo "Usage: $0 stage <version> <executable> <url> <dir> | test <dir> | publish <dir> | check" >&2
   exit 1
 }
 [ $# -ge 1 ] || usage
@@ -40,18 +40,20 @@ sha256_of() {
 
 case "$mode" in
   stage)
-    [ $# -eq 3 ] || usage
-    version=$1 executable=$2 dir=$3
+    [ $# -eq 4 ] || usage
+    version=$1 executable=$2 url=$3 dir=$4
     printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
+    printf '%s\n' "$url" | grep -Eq '^https://(dev\.)?anoma\.ly/release/hex/files/[0-9a-f]{64}/hex-[0-9.]+-linux-x64$'
     test "$(head -c 4 "$executable" | od -An -tx1 | tr -d ' ')" = 7f454c46
     mkdir -p "$dir"
     sed 's#@HEX_BIN@#/usr/bin/hex#g' "$root/packaging/hex.desktop" > "$dir/hex.desktop"
     cp "$root/packaging/aur/hex.service" "$root/packaging/aur/$package.install" "$dir/"
     cp "$root/LICENSE" "$dir/LICENSE"
     # makepkg uses a source already present under its file name, so `test`
-    # needs no published GitHub release.
-    cp "$executable" "$dir/HEX-$version-x86_64-linux"
+    # downloads nothing.
+    cp "$executable" "$dir/hex-$version-linux-x64"
     sed -e "s/@VERSION@/$version/" \
+      -e "s#@URL@#$url#" \
       -e "s/@SHA256@/$(sha256_of "$executable")/" \
       -e "s/@DESKTOP_SHA256@/$(sha256_of "$dir/hex.desktop")/" \
       -e "s/@SERVICE_SHA256@/$(sha256_of "$dir/hex.service")/" \

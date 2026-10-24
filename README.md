@@ -76,9 +76,10 @@ use `app-v…` tags; the repository also publishes separate TypeScript SDK relea
 If an older installation cannot check for updates on your network, install the
 DMG manually over the existing Rust app.
 
-On managed networks, ask IT to allow `anoma.ly` (downloads and updates live
-under `https://anoma.ly/hex/files`; releases up to 2.3.1 also use
-`downloads.hex.kitlangton.dev`, which redirects there). Local model setup separately needs `huggingface.co` and its model
+On managed networks, ask IT to allow `anoma.ly`: Hex downloads and updates
+from the Anomaly release service at `https://anoma.ly/release` (releases up to
+2.3.1 use `https://anoma.ly/hex/files` and `downloads.hex.kitlangton.dev`,
+which redirects there). Local model setup separately needs `huggingface.co` and its model
 download CDN; optional Voice Commands needs `download.moonshine.ai`. A successful
 app download does not establish that those model hosts are reachable. After
 restoring access, retry model preparation in Settings (or Retry for Commands).

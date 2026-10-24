@@ -3,27 +3,20 @@
 ## Public Paths
 
 ```ts
-anoma.ly/hex                               // the one site: platform-aware download (Worker hex-production-site)
-├── anoma.ly/hex/files/…                   // hex-production-files R2 bucket via the same Worker;
-│   │                                      // compiled into apps and feeds
-│   ├── releases/HEX-<version>-arm64.dmg
-│   ├── releases/HEX-<version>-arm64.zip    // signed Sparkle artifact
-│   ├── releases/HEX-latest-arm64.dmg      // mutable pointer; no-cache
-│   ├── releases/HEX-Setup-<version>-x64.exe    // per-user Windows installers
-│   ├── releases/HEX-Setup-<version>-arm64.exe
-│   ├── releases/HEX-<version>-<sha256>-<target>  // content-addressed feed artifacts
-│   ├── install-linux.sh, install-windows.ps1     // script installers
-│   ├── linux-update.json, windows-update.json, windows-aarch64-update.json
-│   └── appcast.xml                       // mutable pointer; published last
-├── dev.anoma.ly/hex, dev.anoma.ly/hex/files/…   // dev Worker and hex-dev-files;
-│                                                // staging/<run-id>/ holds dry-run releases
-├── hex.kitlangton.com, .dev                // Kit's old site; should redirect to anoma.ly/hex
-├── downloads.hex.kitlangton.dev, .com     // Kit's old bucket; compiled into releases up to 2.3.1;
-│                                          // redirects to anoma.ly/hex/files (keep forever)
-└── github.com/anomalyco/hex/releases/tag/app-v<version>
-    ├── HEX-<version>-arm64.dmg
-    ├── HEX-Setup-<version>-x64.exe, HEX-Setup-<version>-arm64.exe
-    └── HEX-<version>-x86_64-linux        // identical bytes to the feed artifact
+anoma.ly/release/hex/                      the Anomaly release service (docs/releasing.md)
+├── index.json, desktop/stable.json        what the site, installers, and apps read
+└── files/<sha256>/<name>                  Hex-<v>-macos-arm64.{zip,dmg}, Hex-<v>-windows-<arch>.exe,
+                                           Hex-Setup-<v>-windows-<arch>.exe, hex-<v>-linux-x64
+anoma.ly/hex                               the one site: platform-aware download (Worker hex-production-site)
+├── install-linux.sh, install-windows.ps1  installers from the stable manifest
+└── files/…                                hex-production-files, frozen at 2.3.1 for old clients:
+    ├── linux-update.json, windows-update.json, windows-aarch64-update.json, appcast.xml
+    └── releases/HEX-2.3.1-…, install-linux.sh, install-windows.ps1 (the 2.3.1 installers)
+dev.anoma.ly/release/hex/, dev.anoma.ly/hex       dev service (staging releases) and dev site
+hex.kitlangton.com, .dev                   Kit's old site; should redirect to anoma.ly/hex
+downloads.hex.kitlangton.dev, .com         Kit's old bucket; releases up to 2.3.1 compiled it;
+                                           redirects to anoma.ly/hex/files (keep forever)
+github.com/anomalyco/hex/releases/tag/app-v<version>   identical-byte mirror of every file
 ```
 
 `docs/releasing.md` describes the Worker config, the workflow that publishes
@@ -34,24 +27,24 @@ Check** for `/hex/files/` on anoma.ly and dev.anoma.ly: the zone check returned
 HTTP 403 to Python's default user agent. Keep browser challenges off download
 and updater routes.
 
-The release workflow uploads immutable downloads, mirrors them to the GitHub
-release (verified byte for byte), and only then moves the feeds, the latest DMG,
-and the appcast. Existing assets must match byte-for-byte; they are never
-clobbered. App tags remain separate from TypeScript SDK tags; do not use
-GitHub's generic `releases/latest` redirect for an app download.
+The release workflow uploads every file to the release service (stored by
+hash, never replaced), then the release, then mirrors the files to the GitHub
+release (verified byte for byte). App tags remain separate from TypeScript SDK
+tags; do not use GitHub's generic `releases/latest` redirect for an app
+download.
 
-After each publication, bump `MAC_VERSION` or `DESKTOP_VERSION` in
-`site/src/release.ts`, the README's explicit app mirror link, and (macOS)
-`anomalyco/homebrew-tap/Casks/hex.rb`. `bun run --cwd site check:downloads`
-must pass before deploying; then verify the live links.
+The site reads the stable manifest when it builds, so the production deploy
+that follows a stable release updates every link. Bump the README's explicit
+app mirror link and `anomalyco/homebrew-tap/Casks/hex.rb` by hand.
+`bun run --cwd site check:downloads` must pass; then verify the live links.
 
 ## Network Recovery
 
 App and model downloads have different hosts. Managed networks may need to allow:
 
-- `anoma.ly` (path `/hex/files/`) for app artifacts and feeds
-  (`downloads.hex.kitlangton.dev` too for releases up to 2.3.1, which reach it
-  through a redirect).
+- `anoma.ly` (paths `/release/` and, for 2.3.1, `/hex/files/`) for app
+  downloads and updates (`downloads.hex.kitlangton.dev` too for releases up to
+  2.3.1, which reach it through a redirect).
 - GitHub release downloads and their asset delivery host for the alternative DMG.
 - `huggingface.co` and its model download CDN for dictation-model setup.
 - `download.moonshine.ai` for optional Voice Commands.

@@ -308,7 +308,8 @@ first-run onboarding, complete OpenCode mode rewriting controls, and the bounded
 TypeScript transformation host already ship. Windows releases are built for
 x64 and ARM64 by
 [`release-desktop.yml`](../.github/workflows/release-desktop.yml) with
-[`scripts/release-windows.sh`](../scripts/release-windows.sh), which signs
-the update feeds with the same release key as Linux and publishes
-[`scripts/install-windows.ps1`](../scripts/install-windows.ps1). Users install
+[`scripts/build-windows.sh`](../scripts/build-windows.sh), Authenticode-signed,
+and published to the Anomaly release service with the other platforms
+(`docs/releasing.md`); [`scripts/install-windows.ps1`](../scripts/install-windows.ps1)
+installs from its stable manifest. Users install
 with the command under [Install](#install).

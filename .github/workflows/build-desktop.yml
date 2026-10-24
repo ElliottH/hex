@@ -1,16 +1,16 @@
 name: Build desktop
 
 # Builds the Linux x86_64 executable and the Windows x64 and ARM64
-# executables and installers from one commit. Release desktop calls it to
-# release; Test builds calls it with test-build so every push to main has
-# downloadable builds that never self-update from the signed feeds.
+# executables and installers from one commit, named as the release service
+# targets (docs/plans/release-service.md). Release calls it to release; Test
+# builds calls it with test-build so every push to main has downloadable
+# builds that never update themselves.
 #
 # Windows executables compile without credentials; one packaging job then
 # Authenticode-signs both executables through Azure Artifact Signing (when
 # sign-windows is set and the release environment has the Azure values),
-# builds both installers around the signed bytes, signs the installers, and
-# re-addresses the signed executables in their feed payloads. The installers
-# are then tested on native x64 and ARM64 runners.
+# builds both installers around the signed bytes, and signs the installers.
+# The installers are then tested on native x64 and ARM64 runners.
 on:
   workflow_call:
     inputs:
@@ -96,17 +96,16 @@ jobs:
             HEX_RELEASE_DIST="$GITHUB_WORKSPACE/dist" \
             CARGO_BUILD_JOBS=4 BLA_VENDOR=OpenBLAS OPENSSL_NO_VENDOR=1 \
             CC=clang CXX=clang++ \
-            sh -c 'rustup default stable && tools/scripts/release-linux.sh build'
+            sh -c 'rustup default stable && tools/scripts/build-linux.sh'
       - name: Report the glibc floor
         run: |
-          artifact=$(jq -r .artifact dist/linux-update.json.payload.json)
-          floor=$(objdump -T "dist/$artifact" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          floor=$(objdump -T "dist/hex-$HEX_VERSION-linux-x64" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
           ldd --version | head -1
           echo "Linux artifact requires $floor." | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact-prefix }}-linux-x86_64
-          path: ${{ inputs.test-build && 'dist/HEX-*' || 'dist/' }}
+          path: dist/hex-*-linux-x64
           retention-days: ${{ inputs.retention-days }}
           if-no-files-found: error
 
@@ -182,19 +181,19 @@ jobs:
           export MSYS2_ENV_CONV_EXCL=CL
           export HEX_RELEASE_SOURCE="$(cygpath -u "$GITHUB_WORKSPACE")/source"
           export HEX_RELEASE_DIST="$(cygpath -u "$GITHUB_WORKSPACE")/dist"
-          tools/scripts/release-windows.sh build
+          tools/scripts/build-windows.sh
       - name: Check the executable needs no Visual C++ Redistributable
         shell: pwsh
         run: |
-          $payload = Get-Content "dist/$(if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }).payload.json" | ConvertFrom-Json
+          $label = if ($env:HEX_WINDOWS_ARCH -eq 'x86_64') { 'x64' } else { 'arm64' }
           $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -match '${{ matrix.dumpbin_host }}' } | Select-Object -First 1
           if (-not $dumpbin) { throw "dumpbin.exe was not found" }
-          $imports = & $dumpbin.FullName /dependents "dist/$($payload.artifact)"
+          $imports = & $dumpbin.FullName /dependents "dist/Hex-$env:HEX_VERSION-windows-$label.exe"
           $imports
           $redist = $imports | Select-String -Pattern 'VCRUNTIME|MSVCP|vcomp'
           if ($redist) { throw "hex.exe imports Visual C++ runtime DLLs: $redist" }
-      # Not named after artifact-prefix: Release desktop downloads hex-*-*.
+      # Not named after artifact-prefix: Release downloads hex-*-*.
       - uses: actions/upload-artifact@v7
         with:
           name: unsigned-windows-${{ matrix.arch }}
@@ -289,9 +288,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force installers | Out-Null
           foreach ($arch in 'x86_64', 'aarch64') {
-            $feed = if ($arch -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }
-            $payload = Get-Content "dist/$feed.payload.json" | ConvertFrom-Json
-            tools/scripts/build-windows-installer.ps1 -Executable "dist/$($payload.artifact)" -Version $env:HEX_VERSION -Arch $arch -OutDir installers
+            $label = if ($arch -eq 'x86_64') { 'x64' } else { 'arm64' }
+            tools/scripts/build-windows-installer.ps1 -Executable "dist/Hex-$env:HEX_VERSION-windows-$label.exe" -Version $env:HEX_VERSION -Arch $arch -OutDir installers
           }
       - name: Sign the installers
         if: steps.signing.outputs.enabled == 'true'
@@ -317,22 +315,17 @@ jobs:
           exclude-azure-powershell-credential: true
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
-      - name: Check the signatures and re-address the signed executables
+      - name: Check the signatures
         if: steps.signing.outputs.enabled == 'true'
         shell: pwsh
-        run: tools/scripts/windows-authenticode.ps1 -Dist dist -Installers installers
+        run: tools/scripts/windows-authenticode.ps1 -Folders dist, installers
       - name: Collect each architecture's files
         shell: pwsh
-        env:
-          TEST_BUILD: ${{ inputs.test-build }}
         run: |
           foreach ($arch in 'x86_64', 'aarch64') {
-            $feed = if ($arch -eq 'x86_64') { 'windows-update.json' } else { 'windows-aarch64-update.json' }
             $label = if ($arch -eq 'x86_64') { 'x64' } else { 'arm64' }
-            $payload = Get-Content "dist/$feed.payload.json" | ConvertFrom-Json
             $out = New-Item -ItemType Directory -Force "out/$arch"
-            Copy-Item "dist/$($payload.artifact)", "installers/HEX-Setup-$env:HEX_VERSION-$label.exe" $out
-            if ($env:TEST_BUILD -ne 'true') { Copy-Item "dist/$feed.payload.json" $out }
+            Copy-Item "dist/Hex-$env:HEX_VERSION-windows-$label.exe", "installers/Hex-Setup-$env:HEX_VERSION-windows-$label.exe" $out
           }
       - uses: actions/upload-artifact@v7
         with:
@@ -376,9 +369,7 @@ jobs:
       - name: Install, reinstall, refuse a downgrade, and uninstall silently
         shell: pwsh
         run: |
-          $exe = Get-ChildItem dist -Filter "HEX-$env:HEX_VERSION-*-${{ matrix.arch }}-windows.exe" | Select-Object -First 1
-          if (-not $exe) { throw 'The executable is missing.' }
-          tools/scripts/test-windows-installer.ps1 -Installer "dist/HEX-Setup-$env:HEX_VERSION-${{ matrix.label }}.exe" -Executable $exe.FullName -Version $env:HEX_VERSION
+          tools/scripts/test-windows-installer.ps1 -Installer "dist/Hex-Setup-$env:HEX_VERSION-windows-${{ matrix.label }}.exe" -Executable "dist/Hex-$env:HEX_VERSION-windows-${{ matrix.label }}.exe" -Version $env:HEX_VERSION
       - name: Upload installer logs
         if: failure()
         uses: actions/upload-artifact@v7
