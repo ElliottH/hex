@@ -2069,6 +2069,27 @@ mod tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    /// Accepts one connection, failing instead of hanging when the client
+    /// under test never connects.
+    #[cfg(not(target_os = "windows"))]
+    fn accept_within(listener: &std::net::TcpListener) -> std::net::TcpStream {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).unwrap();
+                    return stream;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "the client never connected");
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        }
+    }
+
     /// Reads one authenticated request and returns its headers and body.
     #[cfg(not(target_os = "windows"))]
     fn receive_request(stream: &mut std::net::TcpStream, start_line: &str) -> (String, Vec<u8>) {
@@ -2191,7 +2212,7 @@ mod tests {
         assert!(models.len() > 256 * 1024);
         let server = thread::spawn(move || {
             for (path, response) in [("/api/model", models), ("/api/model/default", default)] {
-                let (mut stream, _) = listener.accept().unwrap();
+                let mut stream = accept_within(&listener);
                 stream
                     .set_write_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -2923,7 +2944,7 @@ mod tests {
             routes
                 .into_iter()
                 .map(|(path, status, response)| {
-                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut stream = accept_within(&listener);
                     let (_, body) = receive_request(&mut stream, &format!("POST {path}"));
                     write!(
                         stream,
@@ -3099,7 +3120,7 @@ mod tests {
             let cancelled = std::sync::Arc::new(AtomicBool::new(false));
             let flag = cancelled.clone();
             let server = thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
+                let mut stream = accept_within(&listener);
                 receive_request(&mut stream, "POST /api/generate");
                 flag.store(cancel, Ordering::Release);
                 let mut byte = [0];

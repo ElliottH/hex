@@ -1509,16 +1509,14 @@ mod tests {
             plist_string_value(plist, "CFBundleIdentifier").as_deref(),
             Some(EXPECTED_DRIVER_BUNDLE_ID)
         );
-        assert_eq!(
-            plist_string_value(plist, "CFBundleShortVersionString").as_deref(),
-            Some(env!("CARGO_PKG_VERSION"))
-        );
+        // The build script stamps the version, so the source plist's value
+        // never ships; `driver_plugin_loopback_*` checks the built bundle.
 
         let mismatch_status = HexMicrophoneStatus {
             driver_bundle_installed: true,
             driver_loaded: true,
             installed_version: Some("1.0.0".into()),
-            bundled_version: "2.3.0".into(),
+            bundled_version: env!("CARGO_PKG_VERSION").into(),
             sink_streaming: true,
             mic_in_use: false,
             active_apps: Vec::new(),
@@ -1528,7 +1526,7 @@ mod tests {
         assert!(!mismatch_status.is_up_to_date());
 
         let current_status = HexMicrophoneStatus {
-            installed_version: Some("2.3.0".into()),
+            installed_version: Some(env!("CARGO_PKG_VERSION").into()),
             ..mismatch_status
         };
         assert!(!current_status.needs_update());
@@ -1568,6 +1566,11 @@ mod tests {
 
         let dylib_path = out_dir.join("HexMicrophone.driver/Contents/MacOS/HexMicrophoneDriver");
         assert!(dylib_path.exists(), "built driver binary must exist");
+        assert_eq!(
+            read_driver_bundle_version(&out_dir.join("HexMicrophone.driver")).as_deref(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "the build script stamps the crate version into the driver"
+        );
 
         #[repr(C)]
         struct DriverInterfacePrefix {

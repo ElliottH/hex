@@ -2068,6 +2068,8 @@ mod tests {
     use super::*;
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    /// How long a test waits on another thread before failing instead of hanging.
+    const TEST_WAIT: Duration = Duration::from_secs(5);
 
     #[test]
     fn authenticated_server_reports_live_health_and_cleans_up_discovery() {
@@ -2308,13 +2310,14 @@ mod tests {
         .unwrap();
         let port = api.document.port;
         let token = api.document.token.clone();
+        let (attached, audio_attached) = mpsc::channel();
         let controller = thread::spawn(move || {
             let crate::recognition::RecognitionControl::StartDictation {
                 source,
                 owner_token,
                 levels,
                 reply,
-            } = controls.recv().unwrap()
+            } = controls.recv_timeout(TEST_WAIT).unwrap()
             else {
                 panic!("expected dictation start")
             };
@@ -2337,7 +2340,7 @@ mod tests {
                 id,
                 owner_token: heartbeat_token,
                 reply,
-            } = controls.recv().unwrap()
+            } = controls.recv_timeout(TEST_WAIT).unwrap()
             else {
                 panic!("expected dictation heartbeat")
             };
@@ -2350,7 +2353,7 @@ mod tests {
                 owner_token: audio_token,
                 audio,
                 reply,
-            } = controls.recv().unwrap()
+            } = controls.recv_timeout(TEST_WAIT).unwrap()
             else {
                 panic!("expected dictation audio subscription")
             };
@@ -2362,12 +2365,13 @@ mod tests {
                     samples: vec![0.25, -0.5],
                 })
                 .unwrap();
+            attached.send(()).unwrap();
 
             let crate::recognition::RecognitionControl::FinishDictation {
                 id,
                 owner_token: finish_token,
                 reply,
-            } = controls.recv().unwrap()
+            } = controls.recv_timeout(TEST_WAIT).unwrap()
             else {
                 panic!("expected dictation finish")
             };
@@ -2416,13 +2420,16 @@ mod tests {
 
         let level_token = token.clone();
         let level_owner = owner_token.clone();
+        let (subscribed, levels_subscribed) = mpsc::channel();
         let levels = thread::spawn(move || {
-            request_with_dictation_token(
+            // The level sent at start arrives once the stream has subscribed.
+            raw_request_signalling(
                 port,
-                &level_token,
-                &level_owner,
-                "GET",
-                "/dictations/7/levels",
+                &format!(
+                    "GET /dictations/7/levels HTTP/1.1\r\nAuthorization: Bearer {level_token}\r\nX-Hex-Dictation-Token: {level_owner}\r\nConnection: close\r\n\r\n"
+                ),
+                b"rmsDb",
+                subscribed,
             )
         });
         let audio_token = token.clone();
@@ -2430,7 +2437,8 @@ mod tests {
         let audio = thread::spawn(move || {
             request_bytes(port, &audio_token, &audio_owner, "/dictations/7/audio")
         });
-        thread::sleep(Duration::from_millis(20));
+        levels_subscribed.recv_timeout(TEST_WAIT).unwrap();
+        audio_attached.recv_timeout(TEST_WAIT).unwrap();
         let finish = request_with_dictation_token(
             port,
             &token,
@@ -2443,7 +2451,7 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(response_body(&finish)).unwrap(),
             serde_json::json!({ "transcript": "raw words", "durationMs": 875 })
         );
-        let levels = levels.join().unwrap();
+        let levels = String::from_utf8(levels.join().unwrap()).unwrap();
         assert!(levels.starts_with("HTTP/1.1 200"));
         assert!(levels.contains(r#""rmsDb":-24.5"#));
         assert!(levels.contains(r#""peakDb":-8.0"#));
@@ -2873,6 +2881,32 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).unwrap();
         response
+    }
+
+    /// Like `raw_request_bytes`, signalling once the response contains `marker`.
+    fn raw_request_signalling(
+        port: u16,
+        request: &str,
+        marker: &[u8],
+        ready: mpsc::Sender<()>,
+    ) -> Vec<u8> {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.set_read_timeout(Some(TEST_WAIT)).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = Vec::new();
+        let mut buffer = [0; 1024];
+        let mut signalled = false;
+        loop {
+            let read = stream.read(&mut buffer).unwrap();
+            if read == 0 {
+                return response;
+            }
+            response.extend_from_slice(&buffer[..read]);
+            if !signalled && response.windows(marker.len()).any(|bytes| bytes == marker) {
+                signalled = true;
+                let _ = ready.send(());
+            }
+        }
     }
 
     fn request_with_dictation_token(

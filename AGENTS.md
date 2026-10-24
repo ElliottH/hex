@@ -730,9 +730,8 @@ cargo run -- app -- --snap /tmp/hex-settings.png --scene mac-settings
 cargo run -- app -- --snap /tmp/hex-modes.png --scene modes --theme light
 cargo run -- app -- --snap /tmp/hex-onboarding.png --scene mac-onboarding
 ./scripts/install-app.sh
-cargo fmt --check
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+scripts/check            # fmt, clippy, every test
+scripts/check meeting::query  # fmt, then only matching tests
 git diff --check
 ./scripts/test-app-identity.sh # macOS only
 ./scripts/test-install-linux-release.sh # x86_64 Linux only
@@ -746,6 +745,12 @@ Unfinished features land on `main` dormant behind an experiment
 `hex experiments enable <name>` or `HEX_EXPERIMENTS=<name>`; it applies at the
 next launch. Experiments are unsupported and never on by default, in debug
 builds too; remove the variant when the feature ships or is dropped.
+
+Use `scripts/check [filter]` for the local loop, not raw `cargo test`. It runs
+tests through cargo-nextest (`brew install cargo-nextest`) with
+`.config/nextest.toml`, which kills a hung test and reports it by name; CI uses
+the same config's `ci` profile. Read its output whole rather than piping it
+through `grep | head`; failures are summarized at the end.
 
 Use Rune's headless renders as the desktop-UI iteration loop: `hex app --
 --snap <png> --scene <name>` draws one named fixture scene from `SCENES` in

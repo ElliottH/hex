@@ -388,7 +388,22 @@ impl HotkeyBinding {
 
 #[cfg(target_os = "macos")]
 fn paste_key_code() -> u16 {
-    *PASTE_KEY_CODE.get_or_init(|| crate::keyboard::key_code_for('v').unwrap_or(9))
+    *PASTE_KEY_CODE.get_or_init(|| layout_key_code('v').unwrap_or(9))
+}
+
+/// The active layout's key for `character`. GUI startup snapshots the layout
+/// on the main thread; unit tests run on worker threads, where reaching TIS is
+/// unsupported, so they resolve against the ANSI layout instead.
+#[cfg(target_os = "macos")]
+fn layout_key_code(character: char) -> Option<u16> {
+    if cfg!(test) {
+        return match character {
+            'e' => Some(14),
+            'v' => Some(9),
+            _ => None,
+        };
+    }
+    crate::keyboard::key_code_for(character).ok()
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1424,15 +1439,13 @@ impl AppSettings {
             return;
         }
         #[cfg(target_os = "macos")]
-        let edit_with_key = crate::keyboard::key_code_for('e')
-            .ok()
-            .map(|code| HotkeyBinding {
-                modifiers: HotkeyModifiers::option_command(),
-                key: Some(HotkeyKey {
-                    code,
-                    label: "E".into(),
-                }),
-            });
+        let edit_with_key = layout_key_code('e').map(|code| HotkeyBinding {
+            modifiers: HotkeyModifiers::option_command(),
+            key: Some(HotkeyKey {
+                code,
+                label: "E".into(),
+            }),
+        });
         #[cfg(not(target_os = "macos"))]
         let edit_with_key = Some(HotkeyBinding::chord(HotkeyModifiers::option_command(), "e"));
         let control_command = HotkeyBinding {

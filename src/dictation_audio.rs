@@ -950,7 +950,9 @@ mod tests {
     fn control<T>(owner: &mut Owner, command: impl FnOnce(SyncSender<T>) -> Command) -> T {
         let (reply, response) = mpsc::sync_channel(1);
         assert!(owner.handle(command(reply)));
-        response.recv().unwrap()
+        response
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the owner replies to each command")
     }
 
     fn start(owner: &mut Owner, at: CaptureInstant) {
@@ -1542,10 +1544,10 @@ mod tests {
 
     #[test]
     fn startup_microphone_failure_keeps_audio_owner_alive() {
-        let input = DictationAudio::open(
-            Some("HEX nonexistent microphone for startup recovery test"),
-            0,
-            None,
+        let device = "HEX nonexistent microphone for startup recovery test";
+        let input = DictationAudio::with_input(
+            RecoveringAudioInput::failed_for_test(device),
+            device.into(),
             RecordingEnvironmentController::for_test(),
             PendingInputEvents::default(),
             false,

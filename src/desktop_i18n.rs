@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
+#[cfg(not(test))]
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The selectable interface languages: persisted code and native name. The
@@ -21,7 +22,35 @@ pub(crate) const LANGUAGE_CHOICES: &[(Option<&str>, &str)] = &[
 ];
 
 /// Active language column into [`TRANSLATIONS`]; 255 means English.
+#[cfg(not(test))]
 static CURRENT: AtomicU8 = AtomicU8::new(255);
+
+// Tests render scenes in different languages concurrently, so each test
+// thread has its own language.
+#[cfg(test)]
+thread_local! {
+    static CURRENT: std::cell::Cell<u8> = const { std::cell::Cell::new(ENGLISH) };
+}
+
+#[cfg(not(test))]
+fn current() -> u8 {
+    CURRENT.load(Ordering::Relaxed)
+}
+
+#[cfg(not(test))]
+fn set_current(code: u8) {
+    CURRENT.store(code, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+fn current() -> u8 {
+    CURRENT.get()
+}
+
+#[cfg(test)]
+fn set_current(code: u8) {
+    CURRENT.set(code);
+}
 
 const ENGLISH: u8 = 255;
 
@@ -43,7 +72,7 @@ pub(crate) fn apply(setting: Option<&str>) {
         Some(code) => column_for_code(code),
         None => column_for_code(&system_language()),
     };
-    CURRENT.store(code, Ordering::Relaxed);
+    set_current(code);
 }
 
 pub(crate) fn system_language() -> String {
@@ -146,7 +175,7 @@ pub(crate) fn choice_name(setting: Option<&str>) -> &'static str {
 /// Translate one UI string. Returns the input unchanged for English or for
 /// strings missing from the table, so dynamic values pass through safely.
 pub(crate) fn tr(english: &str) -> &str {
-    let column = CURRENT.load(Ordering::Relaxed);
+    let column = current();
     if column == ENGLISH {
         return english;
     }

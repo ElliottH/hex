@@ -492,6 +492,14 @@ impl RecoveringAudioInput {
         }
     }
 
+    /// An input whose startup open failed, without touching CoreAudio.
+    #[cfg(test)]
+    pub fn failed_for_test(device_override: &str) -> Self {
+        let mut input = Self::closed(Some(device_override), 0, None);
+        input.finish_initial_open(Err(eyre!("{device_override} not found")), Instant::now());
+        input
+    }
+
     #[cfg(test)]
     pub fn pending_for_test() -> (Self, Sender<InputOpenResult>) {
         let mut input = Self::closed(

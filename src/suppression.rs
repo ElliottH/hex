@@ -1267,6 +1267,12 @@ impl DictationHotkey {
 }
 
 fn trigger_is_physically_down(binding: RuntimeHotkey) -> bool {
+    // Unit tests never read the real keyboard: a key held while they run must
+    // not change their outcome, and the first HID query can deadlock in a
+    // process without a window-server session.
+    if cfg!(test) {
+        return false;
+    }
     // HID state reflects the physical keyboard. Combined-session state can
     // remain latched after synthetic events or application switching.
     // SAFETY: These are pure system queries with a documented state id.
