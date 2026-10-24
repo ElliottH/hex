@@ -36,6 +36,28 @@ const STREAM_FINISH_DEADLINE: Duration = Duration::from_millis(1_500);
 /// Audio fed past the clip's trimmed end (a release handled late) that the
 /// stream may still keep. Beyond it, the offline clip is authoritative.
 const MAX_OVERFED_SAMPLES: usize = 16_000 / 4;
+/// How long a finish may wait for the whole-clip transcription, beyond the
+/// clip's own duration. It covers queued engine work such as a model load; a
+/// wedged native run fails the job instead of holding the queue forever.
+const WHOLE_CLIP_DEADLINE: Duration = Duration::from_secs(90);
+/// How long dropping the engine waits for its thread. A native run that cannot
+/// be aborted is left to finish on its own.
+const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy)]
+struct Deadlines {
+    stream_finish: Duration,
+    whole_clip: Duration,
+    shutdown: Duration,
+}
+
+impl Deadlines {
+    const PRODUCTION: Self = Self {
+        stream_finish: STREAM_FINISH_DEADLINE,
+        whole_clip: WHOLE_CLIP_DEADLINE,
+        shutdown: SHUTDOWN_DEADLINE,
+    };
+}
 
 pub(crate) enum Command {
     Begin {
@@ -101,6 +123,7 @@ pub struct TranscriptionEngine {
     /// Whether the loaded model can stream on its device.
     streams: Arc<AtomicBool>,
     next_stream: AtomicU64,
+    deadlines: Deadlines,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -140,17 +163,21 @@ impl Drop for LiveStream {
 }
 
 /// A finish in flight. Waiting enforces the stream deadline from the caller's
-/// side, so a stalled native stream cannot hold the paste forever.
+/// side, so a stalled native stream cannot hold the paste forever, then bounds
+/// the whole-clip fallback so a wedged engine fails the job instead.
 pub struct PendingTranscript {
     reply: Receiver<Result<Transcribed, String>>,
     cancel: CancelToken,
     streamed: bool,
+    /// The clip's duration plus the whole-clip allowance.
+    whole_clip: Duration,
+    stream_finish: Duration,
 }
 
 impl PendingTranscript {
     pub fn wait(self) -> Result<Transcribed, String> {
         if self.streamed {
-            match self.reply.recv_timeout(STREAM_FINISH_DEADLINE) {
+            match self.reply.recv_timeout(self.stream_finish) {
                 Ok(result) => return result,
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err("transcription engine stopped".into());
@@ -161,9 +188,18 @@ impl PendingTranscript {
                 }
             }
         }
-        self.reply
-            .recv()
-            .unwrap_or_else(|_| Err("transcription engine stopped".into()))
+        match self.reply.recv_timeout(self.whole_clip) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Disconnected) => Err("transcription engine stopped".into()),
+            Err(RecvTimeoutError::Timeout) => {
+                tracing::error!(
+                    deadline_ms = self.whole_clip.as_millis() as u64,
+                    "transcription missed its deadline; failing the job"
+                );
+                self.cancel.cancel();
+                Err("transcription timed out".into())
+            }
+        }
     }
 }
 
@@ -188,6 +224,7 @@ impl TranscriptionEngine {
             requests,
             streams,
             next_stream: AtomicU64::new(0),
+            deadlines: Deadlines::PRODUCTION,
             thread: Some(thread),
         })
     }
@@ -203,6 +240,7 @@ impl TranscriptionEngine {
             requests: Arc::default(),
             streams: Arc::new(AtomicBool::new(true)),
             next_stream: AtomicU64::new(0),
+            deadlines: Deadlines::PRODUCTION,
             thread: None,
         };
         (engine, receiver)
@@ -214,6 +252,12 @@ impl TranscriptionEngine {
         let (engine, receiver) = Self::for_test();
         engine.streams.store(false, Ordering::Release);
         (engine, receiver)
+    }
+
+    #[cfg(test)]
+    fn with_deadlines(mut self, deadlines: Deadlines) -> Self {
+        self.deadlines = deadlines;
+        self
     }
 
     /// Opens a live stream when the loaded model can stream on this device.
@@ -257,6 +301,8 @@ impl TranscriptionEngine {
     ) -> Result<PendingTranscript> {
         let (reply, receiver) = mpsc::channel();
         let streamed = stream.is_some();
+        let whole_clip =
+            self.deadlines.whole_clip + Duration::from_secs(clip.len() as u64 / 16_000);
         self.requests.fetch_add(1, Ordering::AcqRel);
         let stream = stream.map(|mut stream| {
             stream.finished = true;
@@ -274,6 +320,8 @@ impl TranscriptionEngine {
             reply: receiver,
             cancel: self.cancel.clone(),
             streamed,
+            whole_clip,
+            stream_finish: self.deadlines.stream_finish,
         })
     }
 
@@ -334,8 +382,17 @@ impl Drop for TranscriptionEngine {
         self.cancel.cancel();
         // A live stream's sender may outlive the engine; stop explicitly.
         let _ = self.commands.send(Command::Shutdown);
-        if let Some(thread) = self.thread.take() {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        let deadline = Instant::now() + self.deadlines.shutdown;
+        while !thread.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if thread.is_finished() {
             let _ = thread.join();
+        } else {
+            tracing::error!("transcription engine did not stop in time; leaving it running");
         }
     }
 }
@@ -594,6 +651,49 @@ mod tests {
         ));
     }
 
+    const SHORT: Deadlines = Deadlines {
+        stream_finish: Duration::from_millis(50),
+        whole_clip: Duration::from_millis(100),
+        shutdown: Duration::from_millis(100),
+    };
+
+    #[test]
+    fn waiting_on_a_stalled_engine_fails_the_job_instead_of_hanging() {
+        // The test engine has no worker, so no reply ever arrives.
+        let (engine, _commands) = TranscriptionEngine::for_test();
+        let engine = engine.with_deadlines(SHORT);
+        for streamed in [false, true] {
+            engine.cancel.reset();
+            let stream = streamed.then(|| engine.begin().expect("the test engine streams"));
+            let pending = engine
+                .finish_with(stream, vec![0.0; 1_600], Box::new(|_, _| Ok(String::new())))
+                .unwrap();
+            let started = Instant::now();
+            assert_eq!(pending.wait().unwrap_err(), "transcription timed out");
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(
+                engine.cancel.is_cancelled(),
+                "a timeout aborts the stuck run"
+            );
+        }
+    }
+
+    #[test]
+    fn the_whole_clip_deadline_grows_with_the_clip() {
+        let (engine, _commands) = TranscriptionEngine::for_test_without_streaming();
+        let pending = engine
+            .finish_with(
+                None,
+                vec![0.0; 16_000 * 30],
+                Box::new(|_, _| Ok(String::new())),
+            )
+            .unwrap();
+        assert_eq!(
+            pending.whole_clip,
+            WHOLE_CLIP_DEADLINE + Duration::from_secs(30)
+        );
+    }
+
     /// A real engine thread over macOS's warm transcriber with no model
     /// loaded: it cannot stream, so every finish runs the offline closure.
     #[cfg(target_os = "macos")]
@@ -669,6 +769,49 @@ mod tests {
                 })
                 .unwrap();
             assert!(!ran.recv().unwrap(), "stale background work must not run");
+        }
+
+        #[test]
+        fn a_wedged_run_times_out_its_job_and_later_jobs_still_finish() {
+            let engine = TranscriptionEngine::start(Model::default())
+                .unwrap()
+                .with_deadlines(SHORT);
+            let (release, wedged) = mpsc::channel::<()>();
+            let stuck = engine
+                .finish_with(
+                    None,
+                    Vec::new(),
+                    Box::new(move |_, _| {
+                        let _ = wedged.recv();
+                        Ok("late".into())
+                    }),
+                )
+                .unwrap();
+            assert_eq!(stuck.wait().unwrap_err(), "transcription timed out");
+            let next = engine
+                .finish_with(None, vec![0.0; 2], offline_text("next"))
+                .unwrap();
+            release.send(()).unwrap();
+            assert_eq!(next.wait().unwrap().text, "next 2");
+        }
+
+        #[test]
+        fn dropping_a_wedged_engine_returns() {
+            let engine = TranscriptionEngine::start(Model::default())
+                .unwrap()
+                .with_deadlines(SHORT);
+            let (_release, wedged) = mpsc::channel::<()>();
+            let (entered, running) = mpsc::channel();
+            engine
+                .run(move |_| {
+                    entered.send(()).unwrap();
+                    let _ = wedged.recv();
+                })
+                .unwrap();
+            running.recv_timeout(Duration::from_secs(5)).unwrap();
+            let started = Instant::now();
+            drop(engine);
+            assert!(started.elapsed() < Duration::from_secs(2));
         }
 
         #[test]
