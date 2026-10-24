@@ -132,9 +132,15 @@ Create config / hex commands init                      // commands.personal-conf
   -> Managed Bun workspace + @hex/commands SDK
   -> ~/.config/hex/hex.config.ts                         // trusted executable user code
 
+No config at launch -> Not configured; poll for hex.config.ts
+  // the workspace folder may not exist yet; no restart needed
+Config appears + workspace settles -> Prepare and start host as at launch
+  // waits up to 10 s for an in-progress SDK install to finish first
+
 Running watcher sees config edit -> Validate candidate
 ├── Valid -> Replace active registry and catalog
-└── Invalid -> Preserve active registry; show reload error
+├── Invalid -> Preserve active registry; show reload error
+└── Config deleted -> Stop host; native registry; back to polling
 
 Same workspace -> Custom transformations for Modes     // Commands need not be enabled
 ```
@@ -144,8 +150,11 @@ in [personal_commands.rs](../../src/personal_commands.rs), plus
 [host.ts](../../sdk/commands/src/host.ts). Checks in `personal_commands.rs`:
 `clean_workspace_provisioning_preserves_user_config_on_refresh`,
 `invalid_candidate_does_not_mutate_base_registry`,
-`wake_sleep_ids_and_phrases_are_reserved`.
-These cover provisioning/registration fixtures, not a live editor-to-reload path.
+`wake_sleep_ids_and_phrases_are_reserved`,
+`unconfigured_host_starts_when_config_appears_without_restart`,
+`unconfigured_host_wait_stops_on_shutdown`.
+These cover provisioning/registration fixtures and the not-configured wait, not
+a live editor-to-reload path or a real host start after the config appears.
 
 [Host tests](../../sdk/commands/test/host.test.ts), including
 `emits a bounded serializable registration without handlers` and
@@ -201,11 +210,10 @@ native voice-to-paste pass.
 
 ## Gaps And Constraints
 
-- **Pre-watcher startup failure:** `run_worker` can return before starting
-  `watch_workspace` when config, Bun, or SDK preparation is unavailable. Repairing
-  the files alone then has no watcher to trigger a reload. The live-reload
-  contract above applies only after the watcher starts; startup recovery remains
-  a gap.
+- **Pre-watcher startup failure:** a missing config is watched for, but
+  `run_worker` still returns before starting `watch_workspace` when Bun or SDK
+  preparation fails. Repairing those alone then has no watcher to trigger a
+  reload; that startup recovery remains a gap.
 - **Timeout and late native result:** [#20](https://github.com/anomalyco/hex/issues/20)
   remains a known gap. Host interruption removes tool correlation;
   a late reply is rejected, and Rust rejects completion with outstanding tools.

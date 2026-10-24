@@ -25,6 +25,7 @@ const MAX_INPUT_FRAME_BYTES: usize = 64 * 1024;
 const HOST_START_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const RELOAD_DEBOUNCE: Duration = Duration::from_millis(350);
+const SDK_INSTALL_GRACE: Duration = Duration::from_secs(10);
 const MAX_COMMANDS: usize = 512;
 const MAX_TRANSFORMATIONS: usize = 128;
 const MAX_TRANSFORMATIONS_PER_INVOCATION: usize = 32;
@@ -1288,66 +1289,125 @@ fn run_worker(
         ..StatusSnapshot::default()
     };
     persist_status(&status);
+    // Generations keep counting across configure/unconfigure cycles so a stale
+    // invocation can never reach a newer host.
+    let mut generation = 0;
+    loop {
+        let paths = match prepare_host() {
+            Ok(Some(paths)) => paths,
+            Ok(None) => {
+                status = StatusSnapshot {
+                    host_state: HostState::NotConfigured,
+                    ..StatusSnapshot::default()
+                };
+                persist_status(&status);
+                let Ok(workspace) = crate::app_paths::personal_commands_workspace() else {
+                    return;
+                };
+                if !wait_for_config(&workspace, &requests, &outcomes, &stop) {
+                    return;
+                }
+                tracing::info!("personal command config appeared; starting the host");
+                status.host_state = HostState::Starting;
+                persist_status(&status);
+                continue;
+            }
+            Err(error) => {
+                let error = format!("{error:#}");
+                status.host_state = HostState::Unavailable;
+                status.last_reload_error = Some(bounded_status_error(&error));
+                persist_status(&status);
+                tracing::warn!(error, "personal commands are unavailable");
+                return;
+            }
+        };
+        let exit = run_host(
+            paths,
+            &base,
+            &active,
+            &requests,
+            &request_sender,
+            &outcomes,
+            &stop,
+            &transformations,
+            &mut generation,
+            &mut status,
+        );
+        match exit {
+            HostExit::Stopped => return,
+            HostExit::Unconfigured => {
+                tracing::info!("personal command config was removed; waiting for a new one");
+                *active.write().expect("command registry poisoned") =
+                    Arc::new(RuntimeSnapshot::native(base.clone()));
+            }
+        }
+    }
+}
+
+enum HostExit {
+    Stopped,
+    Unconfigured,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_host(
+    paths: HostPaths,
+    base: &CommandConfig,
+    active: &RwLock<Arc<RuntimeSnapshot>>,
+    requests: &Receiver<Request>,
+    request_sender: &SyncSender<Request>,
+    outcomes: &SyncSender<ActionOutcome>,
+    stop: &AtomicBool,
+    transformations: &TransformationClient,
+    generation: &mut u64,
+    status: &mut StatusSnapshot,
+) -> HostExit {
     let HostPaths {
         workspace,
         config,
         bun,
         host_entrypoint,
-    } = match prepare_host() {
-        Ok(Some(paths)) => paths,
-        Ok(None) => {
-            status.host_state = HostState::NotConfigured;
-            persist_status(&status);
-            return;
-        }
-        Err(error) => {
-            let error = format!("{error:#}");
-            status.host_state = HostState::Unavailable;
-            status.last_reload_error = Some(bounded_status_error(&error));
-            persist_status(&status);
-            tracing::warn!(error, "personal commands are unavailable");
-            return;
-        }
-    };
+    } = paths;
     let (event_sender, events) = mpsc::sync_channel(64);
     let (tool_sender, tool_jobs) = mpsc::sync_channel(TOOL_QUEUE);
     spawn_tool_workers(tool_jobs, event_sender.clone());
     let (reload_sender, reload_requests) = mpsc::sync_channel(1);
-    let watcher_stop = stop.clone();
+    let session_stop = Arc::new(AtomicBool::new(false));
+    let watcher_session_stop = session_stop.clone();
     let watcher_workspace = workspace.clone();
     let _ = thread::Builder::new()
         .name("personal-command-watch".into())
-        .spawn(move || watch_workspace(watcher_workspace, reload_sender, watcher_stop));
+        .spawn(move || watch_workspace(watcher_workspace, reload_sender, watcher_session_stop));
     let launch = HostLaunch {
-        base: &base,
+        base,
         workspace: &workspace,
         config: &config,
         bun: &bun,
         host_entrypoint: &host_entrypoint,
         event_sender: &event_sender,
     };
-    let mut generation = 0;
     let mut generations = Generations::default();
     let mut restart_backoff = RestartBackoff::default();
     if let Some(host) = reload(
         &launch,
-        &active,
-        &mut generation,
-        &mut status,
-        &request_sender,
-        &transformations,
+        active,
+        generation,
+        status,
+        request_sender,
+        transformations,
     ) {
         restart_backoff.host_started(Instant::now());
         generations.hosts.insert(host.generation, host);
     }
     let mut next_invocation = 0_u64;
+    let mut exit = HostExit::Stopped;
 
     while !stop.load(Ordering::Acquire) {
         restart_backoff.reset_if_healthy(Instant::now());
         let mut active_host_failed = false;
         while let Ok(event) = events.try_recv() {
             active_host_failed |=
-                handle_host_event(event, &mut generations, &outcomes, &tool_sender);
+                handle_host_event(event, &mut generations, outcomes, &tool_sender);
         }
         if active_host_failed {
             restart_backoff.host_failed(Instant::now());
@@ -1358,15 +1418,22 @@ fn run_worker(
         if config_reload {
             restart_backoff.reset();
         }
+        if config_reload && !stop.load(Ordering::Acquire) && !config.is_file() {
+            if let Ok(request) = request {
+                reject_request(request, outcomes);
+            }
+            exit = HostExit::Unconfigured;
+            break;
+        }
         let automatic_restart = !config_reload && restart_backoff.ready(Instant::now());
         if config_reload || automatic_restart {
             if let Some(candidate) = reload(
                 &launch,
-                &active,
-                &mut generation,
-                &mut status,
-                &request_sender,
-                &transformations,
+                active,
+                generation,
+                status,
+                request_sender,
+                transformations,
             ) {
                 let now = Instant::now();
                 for host in generations.hosts.values_mut() {
@@ -1386,7 +1453,7 @@ fn run_worker(
                 if generations.pending.len() >= MAX_PENDING_INVOCATIONS {
                     emit_failure(
                         invocation,
-                        &outcomes,
+                        outcomes,
                         "too many personal commands are still running",
                     );
                     continue;
@@ -1394,7 +1461,7 @@ fn run_worker(
                 let Some(host) = generations.hosts.get(&invocation.generation) else {
                     emit_failure(
                         invocation,
-                        &outcomes,
+                        outcomes,
                         "personal command generation is no longer available",
                     );
                     continue;
@@ -1426,8 +1493,8 @@ fn run_worker(
                 let host_generation = host.generation;
                 if let Err(error) = host.input.try_send(input) {
                     let reason = writer_queue_error(error);
-                    emit_failure(invocation, &outcomes, reason);
-                    if generations.fail(host_generation, &outcomes, reason) {
+                    emit_failure(invocation, outcomes, reason);
+                    if generations.fail(host_generation, outcomes, reason) {
                         restart_backoff.host_failed(Instant::now());
                     }
                 } else {
@@ -1508,7 +1575,7 @@ fn run_worker(
             })
             .collect::<HashSet<_>>();
         for generation in timed_out_generations {
-            if generations.fail(generation, &outcomes, "custom transformations timed out") {
+            if generations.fail(generation, outcomes, "custom transformations timed out") {
                 restart_backoff.host_failed(now);
             }
         }
@@ -1528,15 +1595,87 @@ fn run_worker(
             })
             .collect::<Vec<_>>();
         for generation in retired {
-            generations.fail(generation, &outcomes, "personal command generation retired");
+            generations.fail(generation, outcomes, "personal command generation retired");
         }
     }
+    session_stop.store(true, Ordering::Release);
     for host in generations.hosts.values() {
         let _ = host.input.try_send(HostInput::Shutdown);
     }
-    status.host_state = HostState::Stopped;
     transformations.clear();
-    persist_status(&status);
+    match exit {
+        HostExit::Stopped => {
+            status.host_state = HostState::Stopped;
+            persist_status(status);
+        }
+        HostExit::Unconfigured => {
+            let hosts = generations.hosts.keys().copied().collect::<Vec<_>>();
+            for host in hosts {
+                generations.fail(host, outcomes, "personal commands are no longer configured");
+            }
+        }
+    }
+    exit
+}
+
+fn reject_request(request: Request, outcomes: &SyncSender<ActionOutcome>) {
+    match request {
+        Request::Invoke(invocation) => {
+            emit_failure(
+                *invocation,
+                outcomes,
+                "personal commands are not configured",
+            );
+        }
+        Request::Transform(request) => {
+            let _ = request
+                .response
+                .send(Err("custom transformations are not configured".into()));
+        }
+        Request::Reload => {}
+    }
+}
+
+/// Waits while personal commands are not configured for `hex.config.ts` to
+/// appear in `workspace`, which may not exist yet. Returns `false` on shutdown.
+/// The workspace must settle first, and a missing managed SDK gets a grace
+/// period so `hex commands init` can finish its own install.
+fn wait_for_config(
+    workspace: &Path,
+    requests: &Receiver<Request>,
+    outcomes: &SyncSender<ActionOutcome>,
+    stop: &AtomicBool,
+) -> bool {
+    let config = workspace.join("hex.config.ts");
+    let mut fingerprint = None;
+    let mut settled_since = Instant::now();
+    while !stop.load(Ordering::Acquire) {
+        match requests.recv_timeout(POLL_INTERVAL) {
+            Ok(request) => reject_request(request, outcomes),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+        }
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        if !config.is_file() {
+            fingerprint = None;
+            continue;
+        }
+        let next = workspace_fingerprint(workspace);
+        if fingerprint != Some(next) {
+            fingerprint = Some(next);
+            settled_since = Instant::now();
+            continue;
+        }
+        let settled = settled_since.elapsed();
+        if settled >= RELOAD_DEBOUNCE
+            && (managed_host_entrypoint(workspace).is_file() || settled >= SDK_INSTALL_GRACE)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Resolves the workspace, Bun, and managed SDK a host launch needs. `Ok(None)`
@@ -3665,6 +3804,64 @@ mod tests {
             .unwrap();
         kill_and_wait(&mut child);
         assert!(child.try_wait().unwrap().is_some());
+    }
+
+    fn spawn_config_wait(
+        workspace: PathBuf,
+        stop: Arc<AtomicBool>,
+    ) -> (SyncSender<Request>, thread::JoinHandle<bool>) {
+        let (request_sender, requests) = mpsc::sync_channel(4);
+        let (outcome_sender, _outcomes) = mpsc::sync_channel(4);
+        let handle =
+            thread::spawn(move || wait_for_config(&workspace, &requests, &outcome_sender, &stop));
+        (request_sender, handle)
+    }
+
+    fn finishes_within(handle: &thread::JoinHandle<bool>, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !handle.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        handle.is_finished()
+    }
+
+    #[test]
+    fn unconfigured_host_starts_when_config_appears_without_restart() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("hex-config-wait-{unique}"));
+        let workspace = root.join("hex");
+        let (_requests, handle) =
+            spawn_config_wait(workspace.clone(), Arc::new(AtomicBool::new(false)));
+
+        assert!(!finishes_within(&handle, POLL_INTERVAL * 2));
+        let entrypoint = workspace.join("node_modules/@hex/commands/src/bin.ts");
+        fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+        fs::write(&entrypoint, "// host\n").unwrap();
+        assert!(!finishes_within(&handle, POLL_INTERVAL * 2));
+        fs::write(workspace.join("hex.config.ts"), "// config\n").unwrap();
+
+        assert!(finishes_within(&handle, Duration::from_secs(5)));
+        assert!(handle.join().unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unconfigured_host_wait_stops_on_shutdown() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let workspace = std::env::temp_dir().join(format!("hex-config-stop-{unique}"));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (requests, handle) = spawn_config_wait(workspace, stop.clone());
+        stop.store(true, Ordering::Release);
+        let _ = requests.try_send(Request::Reload);
+
+        assert!(finishes_within(&handle, Duration::from_secs(2)));
+        assert!(!handle.join().unwrap());
     }
 
     #[test]
