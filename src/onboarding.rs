@@ -832,6 +832,7 @@ pub fn request_microphone() {
 
 /// Reopens the installed app once this process exits. Returns false outside
 /// an app bundle (a development binary), where the person reopens Hex.
+/// The relaunch keeps this process's `HEX_*` environment.
 #[cfg(target_os = "macos")]
 pub fn spawn_relaunch() -> bool {
     let Ok(executable) = std::env::current_exe() else {
@@ -844,17 +845,62 @@ pub fn spawn_relaunch() -> bool {
     else {
         return false;
     };
-    // Waiting for this pid keeps the relaunched copy from racing the
-    // instance lock; `open` without -n leaves a single copy.
     Command::new("/bin/sh")
-        .arg("-c")
-        .arg("while kill -0 \"$1\" 2>/dev/null; do sleep 0.1; done; /usr/bin/open \"$2\"")
-        .arg("hex-relaunch")
-        .arg(std::process::id().to_string())
-        .arg(bundle)
+        .args(relaunch_arguments(
+            std::process::id(),
+            bundle,
+            std::env::vars_os(),
+        ))
         .spawn()
         .inspect_err(|error| tracing::error!(%error, "could not schedule relaunch"))
         .is_ok()
+}
+
+/// `/bin/sh` arguments that wait for `pid` to exit, then open `bundle` with
+/// the forwarded environment. Waiting keeps the relaunched copy from racing
+/// the instance lock; `open` without -n leaves a single copy.
+#[cfg(target_os = "macos")]
+fn relaunch_arguments(
+    pid: u32,
+    bundle: &Path,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<std::ffi::OsString> {
+    let mut arguments: Vec<std::ffi::OsString> = vec![
+        "-c".into(),
+        "pid=$1; shift; while kill -0 \"$pid\" 2>/dev/null; do sleep 0.1; done; \
+         exec /usr/bin/open \"$@\""
+            .into(),
+        "hex-relaunch".into(),
+        pid.to_string().into(),
+    ];
+    arguments.extend(open_env_arguments(vars));
+    arguments.push(bundle.into());
+    arguments
+}
+
+/// `open --env` arguments for every `HEX_*` variable in `vars`
+/// (HEX_RETAIN_DICTATION_AUDIO, HEX_ENABLE_LLM, HEX_EXPERIMENTS, …), sorted.
+/// LaunchServices starts apps without the caller's environment, so a
+/// relaunch or `hex start` passes these explicitly. Values go only to
+/// `open`'s arguments; never log them.
+#[cfg(target_os = "macos")]
+pub fn open_env_arguments(
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<std::ffi::OsString> {
+    let mut forwarded = vars
+        .into_iter()
+        .filter(|(key, _)| key.to_str().is_some_and(|key| key.starts_with("HEX_")))
+        .collect::<Vec<_>>();
+    forwarded.sort();
+    forwarded
+        .into_iter()
+        .flat_map(|(key, value)| {
+            let mut pair = key;
+            pair.push("=");
+            pair.push(value);
+            [std::ffi::OsString::from("--env"), pair]
+        })
+        .collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -921,6 +967,40 @@ unsafe extern "C" {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn relaunch_forwards_only_the_hex_environment() {
+        let vars = [
+            ("PATH", "/usr/bin"),
+            ("HEX_RETAIN_DICTATION_AUDIO", "1"),
+            ("HEX_ENABLE_LLM", "1"),
+            ("HEX_EXPERIMENTS", "a=b,c"),
+            ("HEXAGON", "no"),
+        ]
+        .map(|(key, value)| (key.into(), value.into()));
+        let arguments = relaunch_arguments(42, Path::new("/Applications/Hex.app"), vars);
+        let arguments = arguments
+            .iter()
+            .map(|argument| argument.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(arguments[0], "-c");
+        assert!(arguments[1].ends_with("exec /usr/bin/open \"$@\""));
+        assert_eq!(
+            arguments[2..],
+            [
+                "hex-relaunch",
+                "42",
+                "--env",
+                "HEX_ENABLE_LLM=1",
+                "--env",
+                "HEX_EXPERIMENTS=a=b,c",
+                "--env",
+                "HEX_RETAIN_DICTATION_AUDIO=1",
+                "/Applications/Hex.app",
+            ]
+        );
+    }
 
     #[test]
     fn missing_commands_model_does_not_block_dictation_setup() {

@@ -386,18 +386,15 @@ fn start(output: Output) -> u8 {
             output,
         );
     }
-    let mut open = std::process::Command::new("/usr/bin/open");
-    match installed_bundle() {
-        Some(bundle) => open.arg(bundle),
-        None => open
-            .arg("-b")
-            .arg(if crate::app_paths::is_macos_test_build() {
-                "anomaly.hex.test"
-            } else {
-                "anomaly.hex"
-            }),
-    };
-    match open.status() {
+    let arguments = open_arguments(
+        installed_bundle().as_deref(),
+        crate::app_paths::is_macos_test_build(),
+        std::env::vars_os(),
+    );
+    match std::process::Command::new("/usr/bin/open")
+        .args(arguments)
+        .status()
+    {
         Ok(status) if status.success() => {}
         Ok(_) | Err(_) => {
             return print(
@@ -425,6 +422,30 @@ fn start(output: Output) -> u8 {
 #[cfg(not(target_os = "macos"))]
 fn start(output: Output) -> u8 {
     print(unsupported(), output)
+}
+
+/// `open` arguments for `hex start`: the caller's `HEX_*` environment, then
+/// the Hex.app this `hex` belongs to, or the installed app by bundle id.
+#[cfg(target_os = "macos")]
+fn open_arguments(
+    bundle: Option<&std::path::Path>,
+    test_build: bool,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Vec<std::ffi::OsString> {
+    let mut arguments = crate::onboarding::open_env_arguments(vars);
+    match bundle {
+        Some(bundle) => arguments.push(bundle.into()),
+        None => arguments.extend([
+            "-b".into(),
+            if test_build {
+                "anomaly.hex.test"
+            } else {
+                "anomaly.hex"
+            }
+            .into(),
+        ]),
+    }
+    arguments
 }
 
 /// The Hex.app this `hex` belongs to, when it runs from (or links into) one.
@@ -755,6 +776,44 @@ mod tests {
         assert_eq!(exit_code(&ControlReply::unchanged("ok")), 0);
         assert_eq!(exit_code(&ControlReply::error("busy", "x")), EXIT_REFUSED);
         assert_eq!(exit_code(&not_running()), EXIT_NOT_RUNNING);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn start_forwards_the_callers_hex_environment() {
+        let vars = || {
+            [
+                ("HOME", "/Users/kit"),
+                ("HEX_RETAIN_DICTATION_AUDIO", "1"),
+                ("HEX_ENABLE_LLM", "1"),
+            ]
+            .map(|(key, value)| (key.into(), value.into()))
+        };
+        let strings = |arguments: Vec<std::ffi::OsString>| {
+            arguments
+                .into_iter()
+                .map(|argument| argument.into_string().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let env = [
+            "--env",
+            "HEX_ENABLE_LLM=1",
+            "--env",
+            "HEX_RETAIN_DICTATION_AUDIO=1",
+        ];
+        let bundle = std::path::Path::new("/Applications/Hex.app");
+        assert_eq!(
+            strings(open_arguments(Some(bundle), false, vars())),
+            [&env[..], &["/Applications/Hex.app"]].concat()
+        );
+        assert_eq!(
+            strings(open_arguments(None, false, vars())),
+            [&env[..], &["-b", "anomaly.hex"]].concat()
+        );
+        assert_eq!(
+            strings(open_arguments(None, true, [])),
+            ["-b", "anomaly.hex.test"]
+        );
     }
 
     #[test]

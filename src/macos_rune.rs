@@ -86,6 +86,8 @@ pub(crate) enum Request {
     },
     /// The menu bar's model list: only installed models, never a download.
     SelectInstalledModel(TranscriptionModelId),
+    /// `hex model use`: this exact selection, installed only, never a download.
+    UseInstalledSelection(TranscriptionSelection),
     CancelModel,
     /// The window saved `settings.json`; adopt it.
     ReloadSettings,
@@ -478,6 +480,7 @@ impl Runtime {
                 self.preparation
                     .start(self.settings.transcription_for_model(model), true);
             }
+            Request::UseInstalledSelection(selection) => self.preparation.start(selection, true),
             Request::CancelModel => self.preparation.cancel(),
             Request::ReloadSettings => self.reload_settings(),
             Request::Desktop(_)
@@ -745,7 +748,9 @@ impl Pump {
                 self.model_menu_at = Instant::now();
             }
             StatusItemAction::PasteLast => {
-                let _ = self.runtime.recognition(RecognitionControl::PasteLast);
+                let _ = self
+                    .runtime
+                    .recognition(RecognitionControl::PasteLast { reply: None });
             }
             StatusItemAction::CheckForUpdates => crate::sparkle::check_for_updates(),
             StatusItemAction::StartMeeting => {

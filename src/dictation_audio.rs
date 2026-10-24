@@ -109,6 +109,9 @@ enum Command {
         at: CaptureInstant,
         reply: SyncSender<bool>,
     },
+    MarkIntentional {
+        reply: SyncSender<bool>,
+    },
     Finish {
         at: CaptureInstant,
         tail: Duration,
@@ -316,6 +319,15 @@ impl DictationAudio {
 
     pub fn become_intentional(&self, at: CaptureInstant) -> Result<bool> {
         self.call(|reply| Command::BecomeIntentional { at, reply })
+    }
+
+    /// Counts the active capture as intentional now, without a hold: a
+    /// `hex dictation start` has no shortcut press to judge. True when the
+    /// open capture just became intentional; a capture still waiting for the
+    /// microphone becomes intentional when it opens and reports
+    /// `ReadyIntentional`.
+    pub fn mark_intentional(&self) -> Result<bool> {
+        self.call(|reply| Command::MarkIntentional { reply })
     }
 
     pub fn finish(&self, at: CaptureInstant) -> Result<Finish> {
@@ -528,6 +540,15 @@ impl Owner {
                     false
                 } else {
                     self.capture.become_intentional(at)
+                };
+                let _ = reply.send(became_intentional);
+            }
+            Command::MarkIntentional { reply } => {
+                let became_intentional = if let Some(pending) = &mut self.pending_capture {
+                    pending.mark_intentional(pending.at + crate::dictation::MINIMUM_HOLD_DURATION);
+                    false
+                } else {
+                    self.capture.mark_intentional()
                 };
                 let _ = reply.send(became_intentional);
             }
@@ -1001,6 +1022,55 @@ mod tests {
                 assert_eq!(stream.is_some(), hotkey && !cancel, "{cancel}");
             }
         }
+    }
+
+    #[test]
+    fn marked_captures_are_intentional_without_a_hold() {
+        use crate::transcription_engine::Command as EngineCommand;
+        // Open microphone: intentional at once, so it streams and a stop
+        // shorter than the hold threshold still transcribes.
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let (mut owner, _input, _samples) = owner_for_test(true);
+        owner.engine = Some(Arc::new(engine));
+        let at = capture_time();
+        start(&mut owner, at);
+        assert!(control(&mut owner, |reply| Command::MarkIntentional {
+            reply
+        }));
+        assert!(!control(&mut owner, |reply| Command::MarkIntentional {
+            reply
+        }));
+        let through = at + Duration::from_millis(50);
+        owner.handle_input(RecoveringAudioInputEvent::Chunk {
+            samples: vec![0.25; 2_400],
+            captured_through: through,
+        });
+        assert!(
+            commands
+                .try_iter()
+                .any(|command| matches!(command, EngineCommand::Begin { .. }))
+        );
+        assert!(matches!(
+            control(&mut owner, |reply| Command::Finish {
+                tail: Duration::ZERO,
+                at: through,
+                reply,
+            }),
+            Finish::Transcribe(_)
+        ));
+
+        // Microphone still opening: it reports ReadyIntentional once open.
+        let (mut owner, input, _samples) = owner_for_test(false);
+        start(&mut owner, at);
+        assert!(!control(&mut owner, |reply| Command::MarkIntentional {
+            reply
+        }));
+        let event = owner.input.recv_timeout(Duration::ZERO, false);
+        owner.handle_input(event);
+        assert!(matches!(
+            input.try_recv_event(),
+            Some(DictationAudioEvent::ReadyIntentional { .. })
+        ));
     }
 
     #[test]

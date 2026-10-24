@@ -48,7 +48,7 @@ impl Default for TranscriptionPreparation {
 }
 
 impl TranscriptionPreparation {
-    fn with_prepare(prepare: Arc<Prepare>) -> Self {
+    pub(crate) fn with_prepare(prepare: Arc<Prepare>) -> Self {
         Self(Rc::new(RefCell::new(State {
             prepare,
             active: None,

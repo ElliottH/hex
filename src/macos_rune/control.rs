@@ -69,7 +69,7 @@ impl Pump {
                 let meeting = meeting_report(&self.meeting_state);
                 let reply = reply.clone();
                 spawn(move || {
-                    let capture = capture_snapshot(&runtime).ok();
+                    let capture = capture_snapshot(&runtime);
                     let answer = control::check_quit(&meeting, capture, force).and_then(|()| {
                         if restart && !crate::onboarding::spawn_relaunch() {
                             return Err(ControlError::new(
@@ -111,16 +111,10 @@ impl Pump {
             }
             ControlCommand::PasteLast => {
                 background(reply, move || {
-                    if capture_snapshot(&runtime)?.recording.is_some() {
-                        return Err(ControlError::new(
-                            "busy",
-                            "a recording is in progress; finish or cancel it first",
-                        ));
-                    }
-                    runtime
-                        .recognition(RecognitionControl::PasteLast)
-                        .map_err(|error| ControlError::new("busy", error))?;
-                    Ok(ControlReply::done("Pasting the last dictation"))
+                    listener_ready(&runtime)?;
+                    ask(&runtime, |reply| RecognitionControl::PasteLast {
+                        reply: Some(reply),
+                    })
                 });
                 None
             }
@@ -554,6 +548,12 @@ fn launch_at_login(enabled: Option<bool>) -> Result<ControlReply, ControlError> 
     )))
 }
 
+/// What `hex model use` asks the runtime: the installed-only path, which
+/// verifies the model on disk and never downloads or repairs it.
+fn use_request(selection: crate::transcription_models::TranscriptionSelection) -> Request {
+    Request::UseInstalledSelection(selection)
+}
+
 /// Switches to an installed model and waits until it's loaded.
 fn use_model(
     runtime: &RuntimeHandle,
@@ -571,10 +571,7 @@ fn use_model(
         )));
     }
     runtime
-        .send(Request::ChooseModel {
-            model: selection.model,
-            language: selection.language.clone(),
-        })
+        .send(use_request(selection.clone()))
         .map_err(|error| ControlError::new("unavailable", error.to_string()))?;
     let started = Instant::now();
     let mut seen_preparing = false;
@@ -729,4 +726,44 @@ fn status(
         }
         .into(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use crate::transcription_models::{TranscriptionModelId, TranscriptionSelection};
+    use crate::transcription_preparation::TranscriptionPreparation;
+
+    #[test]
+    fn model_use_prepares_the_exact_selection_installed_only() {
+        let (sender, prepared) = mpsc::channel();
+        let preparation = TranscriptionPreparation::with_prepare(Arc::new(
+            move |selection: &TranscriptionSelection,
+                  installed_only: bool,
+                  _: &AtomicBool,
+                  _: &AtomicU64| {
+                let _ = sender.send((selection.clone(), installed_only));
+                Ok(())
+            },
+        ));
+        let mut runtime = super::super::Runtime {
+            settings: Default::default(),
+            preparation,
+            recognition_start: None,
+        };
+        let selection = TranscriptionSelection {
+            model: TranscriptionModelId::WhisperLargeV3Turbo,
+            language: "de".into(),
+            recognition_hints: "Kit Langton".into(),
+        };
+        runtime.handle(super::use_request(selection.clone()));
+        // installed_only: verify what's on disk, never download or repair.
+        assert_eq!(
+            prepared.recv_timeout(Duration::from_secs(3)).unwrap(),
+            (selection, true)
+        );
+    }
 }

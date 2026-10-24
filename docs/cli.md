@@ -19,11 +19,11 @@ The read-only `hex history` and `hex meetings list|show|search` commands, and
 hex
 ├── status                         what Hex is doing (see Status below)
 ├── start                          open Hex.app if it isn't running; wait until it answers
-├── quit [--force]                 refused while a meeting or dictation is active
+├── quit [--force]                 refused while a meeting or dictation is active, or unconfirmed
 ├── restart [--force]              quit and reopen (opens Hex when it isn't running)
 ├── dictation start|stop|cancel|toggle
 ├── voice-action start|stop|cancel|toggle   needs voice_action.enabled
-├── paste-last                     paste the last dictation (Option-Shift-V)
+├── paste-last                     paste the last dictation (Option-Shift-V); refused while recording
 ├── meetings
 │   ├── record [--title T]         as the menu bar's Record Meeting; needs meetings.enabled
 │   ├── stop                       Stop & Transcribe
@@ -35,7 +35,7 @@ hex
 │   └── set <key> <value> [--yes]
 ├── model
 │   ├── list                       every model, its languages and size, installed or not
-│   ├── use <id> [--language L]    installed models only; never downloads
+│   ├── use <id> [--language L]    installed models only; never downloads or repairs
 │   ├── install <id> [--language L] download, then switch to it
 │   └── cancel                     stop a download or load in progress
 ├── commands
@@ -54,9 +54,39 @@ hex
 
 `dictation start` locks the recording, as a double tap would: `dictation stop`
 or the next shortcut press finishes it, and `dictation cancel` or Escape
-discards it. `dictation cancel` with nothing recording cancels the newest
-unfinished dictation, like Escape. `meetings cancel` doesn't exist because Hex
-has no way to discard a meeting recording.
+discards it. A CLI start has no press to judge, so its recording counts as
+intentional at once: the start tone plays once the microphone is open, and the
+recording behavior (mute or pause media, idle-sleep prevention) and the live
+stream start as they do after a held shortcut. `voice-action start` behaves
+the same way. A `stop` replies `done` only when the clip went to
+transcription; a clip with no audio yet (the microphone was still opening) or
+a silent one is dropped with `discarded`, and nothing shows as transcribing.
+
+`dictation cancel` with nothing recording cancels the newest unfinished
+dictation, like Escape. Escape cancels an active recording before any job, so
+while the other capture records (a Voice Action, say), an idle `cancel` is
+refused with `busy` rather than reach past it; cancel that recording first.
+`voice-action cancel` follows the same rule. `meetings cancel` doesn't exist
+because Hex has no way to discard a meeting recording.
+
+`paste-last` needs a listening Hex (`not-ready` during setup) and is refused
+with `busy` while anything records or a shortcut gesture is in progress. The
+menu bar's Paste Last Dictation does nothing in that case.
+
+`model use` switches only to a downloaded model and checks it on disk; it never
+downloads or repairs one (`model install` does). It keeps that model's own
+remembered language and recognition hints, as the menu bar does; `--language`
+overrides only the language, and must be one the model supports.
+
+`quit` and `restart` without `--force` are refused with `busy` when the
+listener doesn't answer whether it's recording; no listener, or one waiting for
+setup, counts as idle.
+
+`start` and `restart` keep the `HEX_*` environment (`HEX_RETAIN_DICTATION_AUDIO`,
+`HEX_ENABLE_LLM`, and so on): macOS opens apps without the caller's
+environment, so Hex passes each `HEX_*` variable to `open --env`. `start`
+takes them from the shell that runs it, `restart` from the running Hex. The
+values are never logged.
 
 A CLI-started meeting is the same recording the menu bar starts: the menu-bar
 state, the recording capsule, and Stop & Transcribe all apply to it.
@@ -184,7 +214,9 @@ not-installed          `model use` on a model that isn't downloaded (`hex model 
 feature-off            the command needs an opt-in that is off (Meetings, Voice Action, commands)
 not-ready              Hex is waiting for setup (permissions or the dictation model)
 meeting-active         quit/restart while a meeting records (pass --force)
-busy                   something is in progress (recording, transcribing, a full queue)
+busy                   something is in progress (recording, transcribing, a full queue),
+                       or the listener couldn't confirm it's idle
+discarded              `stop` dropped the clip: no audio yet, or silent; nothing transcribes
 unavailable            a part of Hex the command needs isn't available
 unsupported            this build or OS can't do it (e.g. restart from a development binary)
 failed                 Hex tried and failed (the message has the cause)

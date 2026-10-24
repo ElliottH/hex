@@ -874,6 +874,18 @@ impl DictationCapture {
         became_intentional
     }
 
+    /// Counts the active recording as intentional now, whatever its length.
+    pub fn mark_intentional(&mut self) -> bool {
+        let Some(started_at) = self
+            .recording
+            .as_ref()
+            .map(|recording| recording.started_at)
+        else {
+            return false;
+        };
+        self.become_intentional(started_at + MINIMUM_HOLD_DURATION)
+    }
+
     /// Ends the active recording's environment (mute, paused media, idle-sleep
     /// prevention) before the capture finishes, and runs `then` once a muted
     /// output is audible again. A recording that never became intentional

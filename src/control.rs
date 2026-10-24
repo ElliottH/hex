@@ -406,32 +406,36 @@ pub fn model_selection(
                 format!("unknown model `{model}`; run `hex model list` for the ids"),
             )
         })?;
+    // The model's own remembered language and recognition hints, as the
+    // menu bar picks them; only the language can be overridden.
     let mut selection = settings.transcription_for_model(id);
     if let Some(language) = language {
         selection.language = language.into();
     }
     let definition = crate::transcription_models::definition(id);
-    if !definition.supports_language(&selection.language) {
-        return Err(ControlError::new(
-            "invalid-value",
-            format!(
-                "{} doesn't support language `{}`; it supports {}",
-                definition.name,
-                selection.language,
-                definition.languages.join(", ")
-            ),
-        ));
-    }
     if !definition.supports_recognition_hints {
         selection.recognition_hints.clear();
     }
+    crate::transcription_models::validate(&selection).map_err(|error| {
+        let supported = if definition.languages.contains(&"*") {
+            "any language code Hex knows (en, de, fr, ja, …)".to_owned()
+        } else {
+            definition.languages.join(", ")
+        };
+        ControlError::new(
+            "invalid-value",
+            format!("{error}; {} supports {supported}", definition.name),
+        )
+    })?;
     Ok(selection)
 }
 
-/// Refuses to stop Hex while it records, unless forced.
+/// Refuses to stop Hex while it records, unless forced. `capture` is the
+/// listener's answer (idle when no listener runs or setup gates it); a
+/// listener that couldn't answer might be recording, so it refuses too.
 pub fn check_quit(
     meeting: &MeetingReport,
-    capture: Option<CaptureSnapshot>,
+    capture: Result<CaptureSnapshot, ControlError>,
     force: bool,
 ) -> Result<(), ControlError> {
     if force {
@@ -446,13 +450,22 @@ pub fn check_quit(
             ),
         ));
     }
-    if capture.is_some_and(|capture| capture.recording.is_some() || capture.pending_jobs > 0) {
-        return Err(ControlError::new(
+    match capture {
+        Ok(capture) if capture.recording.is_some() || capture.pending_jobs > 0 => {
+            Err(ControlError::new(
+                "busy",
+                "a dictation is recording or transcribing; wait for it or pass --force",
+            ))
+        }
+        Ok(_) => Ok(()),
+        Err(error) => Err(ControlError::new(
             "busy",
-            "a dictation is recording or transcribing; wait for it or pass --force",
-        ));
+            format!(
+                "couldn't confirm nothing is recording ({}); try again or pass --force",
+                error.message
+            ),
+        )),
     }
-    Ok(())
 }
 
 /// Process memory footprint on macOS; `None` where unmeasured.
@@ -611,19 +624,76 @@ mod tests {
             state: "recording".into(),
             ..Default::default()
         };
-        assert!(check_quit(&idle, None, false).is_ok());
+        let quiet = || Ok(CaptureSnapshot::default());
+        assert!(check_quit(&idle, quiet(), false).is_ok());
         assert_eq!(
-            check_quit(&recording, None, false).unwrap_err().code,
+            check_quit(&recording, quiet(), false).unwrap_err().code,
             "meeting-active"
         );
-        assert!(check_quit(&recording, None, true).is_ok());
+        assert!(check_quit(&recording, quiet(), true).is_ok());
         let busy = CaptureSnapshot {
             recording: None,
             pending_jobs: 1,
         };
+        assert_eq!(check_quit(&idle, Ok(busy), false).unwrap_err().code, "busy");
+        // A listener that can't answer may be recording: only --force quits.
+        let unanswered = || {
+            Err(ControlError::new(
+                "unavailable",
+                "the listener didn't answer",
+            ))
+        };
         assert_eq!(
-            check_quit(&idle, Some(busy), false).unwrap_err().code,
+            check_quit(&idle, unanswered(), false).unwrap_err().code,
             "busy"
+        );
+        assert!(check_quit(&idle, unanswered(), true).is_ok());
+    }
+
+    #[test]
+    fn model_selection_keeps_remembered_hints_and_validates_the_language() {
+        use crate::transcription_models::{TranscriptionModelId as Id, TranscriptionSelection};
+        let settings = crate::app_settings::AppSettings {
+            transcription: TranscriptionSelection {
+                model: Id::ParakeetV3,
+                language: "en".into(),
+                recognition_hints: "Current hints".into(),
+            },
+            transcription_recents: vec![TranscriptionSelection {
+                model: Id::WhisperLargeV3Turbo,
+                language: "de".into(),
+                recognition_hints: "Kit Langton".into(),
+            }],
+            ..Default::default()
+        };
+        let pick = |model, language| model_selection(&settings, model, language);
+        let remembered = pick("whisper_large_v3_turbo", None).unwrap();
+        assert_eq!(
+            (
+                remembered.language.as_str(),
+                remembered.recognition_hints.as_str()
+            ),
+            ("de", "Kit Langton")
+        );
+        let french = pick("whisper_large_v3_turbo", Some("fr")).unwrap();
+        assert_eq!(
+            (french.language.as_str(), french.recognition_hints.as_str()),
+            ("fr", "Kit Langton")
+        );
+        // Whisper's wildcard takes any language Hex knows, not any string.
+        for (model, language) in [
+            ("whisper_large_v3_turbo", "klingon"),
+            ("sense_voice_small", "de"),
+        ] {
+            assert_eq!(
+                pick(model, Some(language)).unwrap_err().code,
+                "invalid-value",
+                "{model} {language}"
+            );
+        }
+        assert_eq!(
+            pick("apple_speech", None).unwrap_err().code,
+            "unknown-model"
         );
     }
 
