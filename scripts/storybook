@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# The Hex storybook: a debug fixture window plus Rune's dev panel, which lists
+# every scene in `SCENES` (src/rune_ui.rs) and switches the window to one.
+#
+#   scripts/storybook [scene]          open the window (default mac-settings)
+#   scripts/storybook list             scenes, transitions, and the current scene
+#   scripts/storybook scene <name>     switch the open window to a scene
+#   scripts/storybook transition <n>   replay a transition ("Open model picker")
+#   scripts/storybook tree             the window's elements as JSON
+#
+# The panel is http://127.0.0.1:7863/ (HEX_STORYBOOK_ADDR overrides the
+# address). It runs no Hex runtime and takes no instance lock, so it opens
+# beside an installed Hex; only the `live` scene talks to that Hex.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+address="${HEX_STORYBOOK_ADDR:-127.0.0.1:7863}"
+
+client() {
+  bun -e '
+const [address, kind, arg] = process.argv.slice(1);
+const ws = new WebSocket(`ws://${address}/`);
+const id = 1;
+const message =
+  kind === "scene" ? { type: "set", key: "rune.state", value: arg, id } :
+  kind === "transition" ? { type: "action", key: `rune.transition.${arg}`, id } :
+  kind === "tree" ? { type: "tree", id } : null;
+const timer = setTimeout(() => { console.error("no answer from the storybook"); process.exit(1); }, 5000);
+const done = (code) => { clearTimeout(timer); ws.close(); process.exit(code); };
+ws.onerror = () => { console.error(`no storybook at ws://${address}/ (is scripts/storybook running?)`); process.exit(1); };
+ws.onopen = () => ws.send(JSON.stringify(message ?? { type: "get" }));
+ws.onmessage = (event) => {
+  const reply = JSON.parse(event.data);
+  if (reply.type === "error") { console.error(reply.message); done(1); }
+  if (message === null && reply.type === "state") {
+    const field = (key) => reply.descriptors.find((d) => d.key === key);
+    console.log(`current: ${reply.values["rune.state"] ?? "(launch scene)"}`);
+    console.log(`scenes: ${field("rune.state")?.choices.join(" ")}`);
+    const transitions = reply.descriptors.filter((d) => d.group === "Transitions").map((d) => d.label);
+    console.log(`transitions: ${transitions.join(" | ")}`);
+    done(0);
+  }
+  if (reply.id === id && reply.type === "tree") { console.log(JSON.stringify(reply.elements, null, 1)); done(0); }
+  if (reply.id === id && reply.type === "ack") { console.log(`ok (frame ${reply.frame})`); done(0); }
+};
+' "$address" "$@"
+}
+
+case "${1:-}" in
+  list) client list ;;
+  scene | transition)
+    [[ $# -eq 2 ]] || { echo "usage: scripts/storybook $1 <name>" >&2; exit 2; }
+    client "$1" "$2"
+    ;;
+  tree) client tree ;;
+  -h | --help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *)
+    export HEX_STORYBOOK_ADDR="$address"
+    exec cargo run --features storybook -- app -- --scene "${1:-mac-settings}"
+    ;;
+esac

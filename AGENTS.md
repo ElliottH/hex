@@ -805,6 +805,15 @@ render on lavapipe with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`.
 A scene is a fixture, not native end-to-end proof; the meeting capsules and
 HUDs have no scene.
 
+`scripts/storybook [scene]` is the live counterpart (macOS and Windows): a
+resizable debug fixture window, built with the `storybook` feature, plus Rune's
+dev panel at `http://127.0.0.1:7863/` listing every scene and transition. It
+starts no runtime and takes no instance lock, so it runs beside an installed
+Hex. Switch it from a shell with `scripts/storybook scene <name>` (also `list`,
+`transition <name>`, `tree`); see `docs/design-system.md`. Release builds
+never include the panel. Agents don't open it on the Studio, whose displays
+stay dark; Kit opens it, or an agent tries it on the Pro.
+
 The supported Linux beta and release host use x86_64 Arch Linux. Install its
 native build dependencies with:
 

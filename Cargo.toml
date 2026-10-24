@@ -18,6 +18,9 @@ embed-resource = "3"
 
 [features]
 onnx-benchmark = ["dep:transcribe-rs"]
+# Debug builds only: Rune's dev panel over the window's fixture scenes
+# (`scripts/storybook`).
+storybook = ["rune/dev"]
 
 [profile.moonshine-lab]
 inherits = "release"

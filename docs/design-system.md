@@ -119,3 +119,17 @@ On a machine without a GPU, render on lavapipe with
 them only for an intended visual change. A scene is a fixture, not native
 end-to-end proof: the real window, overlays, and input still need a person on
 each OS.
+
+### Storybook
+
+`scripts/storybook [scene]` opens a live, resizable fixture window (default
+`mac-settings`) with Rune's dev panel at `http://127.0.0.1:7863/`: every scene
+in `SCENES`, a few transitions (open the model picker, record a shortcut, go to
+Modes), and playback controls. It is a debug build with the `storybook`
+feature, starts no runtime, asks for no permissions, and takes no instance
+lock, so it runs beside an installed Hex; only the `live` scene talks to that
+Hex. An agent drives the same window with `scripts/storybook list`,
+`scene <name>`, `transition <name>`, and `tree`. `HEX_STORYBOOK_ADDR` moves the
+panel; to reach it from another device, keep it on loopback and publish the
+port with `tailscale serve`. macOS and Windows only: Linux renders scenes
+without the app builder.

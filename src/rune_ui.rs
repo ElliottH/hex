@@ -30,6 +30,8 @@ mod picker;
 mod platform;
 mod platform_settings;
 mod settings;
+#[cfg(all(feature = "storybook", debug_assertions))]
+mod storybook;
 mod vocabulary;
 mod voice_action;
 
@@ -154,6 +156,8 @@ pub(crate) fn app(connect: host::Connect) -> rune::App<Ui> {
     let app = rune::App::new(spec())
         .init(move || Ui::load_with(connect))
         .on_close(on_close);
+    #[cfg(all(feature = "storybook", debug_assertions))]
+    let app = app.dev_panel(storybook::config());
     let window = app.handle();
     window.update({
         let window = window.clone();
