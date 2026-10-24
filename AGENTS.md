@@ -547,6 +547,11 @@ CoreAudio formats, AppleScript details, or event serialization.
   (one-second audio blocks) and chunk backlog stay bounded; a source that
   falls behind skips its oldest audio, keeps going, and is rebuilt from its
   WAV after Stop. A capture gap restarts that source's chunks after the gap.
+- Quitting while a meeting records stops capture and saves its WAVs and
+  manifest (`Interrupted`, `final.pending`) without transcribing; once
+  quitting begins, no meeting work starts a chunk or loads a model. The next
+  launch with Meetings on runs the final pass on the dictation engine's model
+  (or its own after 30 s without an engine).
 - Meetings run no Moonshine. Every in-call view and copy (the Meetings pane,
   Option-Control-V, provisional titles, `hex meetings`, and MCP) reads the
   rolling Parakeet transcript, which publishes only entries no later chunk

@@ -16,6 +16,9 @@ use crate::events::now_ms;
 
 const SAMPLE_RATE: u32 = 16_000;
 const TRANSCRIPT_TURN_GAP_MS: u64 = 3_000;
+/// Beside the manifest of a meeting Hex quit while recording: its audio is
+/// saved and its final transcript runs at the next launch.
+const FINAL_PENDING_FILE: &str = "final.pending";
 
 #[path = "meeting_capture.rs"]
 mod capture;
@@ -306,6 +309,21 @@ struct ActiveMeeting {
 }
 
 impl ActiveMeeting {
+    /// `None` while another process holds the meeting.
+    fn try_acquire(directory: &Path) -> Result<Option<Self>> {
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.join("active.lock"))?;
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     fn acquire(directory: &Path) -> Result<Self> {
         let path = directory.join("active.lock");
         let file = OpenOptions::new()
@@ -458,6 +476,18 @@ pub fn record(
         stats.microphone.dropped_packets = microphone_drops.load(Ordering::Relaxed);
         manifest.system = stats.system;
         manifest.microphone = stats.microphone;
+        if crate::process_exit::quitting() && has_recorded_audio(&manifest) {
+            // Final transcription would outlast quitting's drain.
+            drop(rolling.finish());
+            fs::write(meeting_dir.join(FINAL_PENDING_FILE), b"")?;
+            manifest.status = MeetingStatus::Interrupted;
+            write_manifest(&meeting_dir, &manifest)?;
+            tracing::info!(
+                meeting = manifest.id,
+                "Hex quit while recording; the transcript finishes at the next launch"
+            );
+            return Ok(manifest);
+        }
         let capture_error =
             (!has_recorded_audio(&manifest)).then(|| "no meeting audio was captured".to_string());
         prepare_for_transcription(
@@ -843,7 +873,63 @@ fn transcribe(
             manifest.export_error = Some(error.to_string());
         }
     }
+    let _ = fs::remove_file(directory.join(FINAL_PENDING_FILE));
     Ok(())
+}
+
+/// Meetings Hex quit while recording, oldest first.
+pub fn pending_final_transcripts() -> Vec<String> {
+    let Ok(entries) = root().and_then(|root| Ok(fs::read_dir(root)?)) else {
+        return Vec::new();
+    };
+    let mut ids = entries
+        .flatten()
+        .filter(|entry| entry.path().join(FINAL_PENDING_FILE).exists())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+/// Transcribes and publishes a meeting Hex quit while recording, as Stop
+/// would have. `None` when it is no longer pending or another process holds
+/// it. Quitting again, or a missing model, leaves it pending for the next
+/// launch; any other failure keeps it Interrupted with its draft.
+pub fn finish_pending(id: &str) -> Result<Option<MeetingManifest>> {
+    let directory = root()?.join(id);
+    let Some(_active) = ActiveMeeting::try_acquire(&directory)? else {
+        return Ok(None);
+    };
+    let pending = directory.join(FINAL_PENDING_FILE);
+    if !pending.exists() {
+        return Ok(None);
+    }
+    let (_, selection) = crate::app_settings::transcription_selection();
+    let model = crate::transcription_models::validate(&selection)?;
+    if !crate::transcription_models::is_installed(model, &selection.language) {
+        return Err(eyre!("{} is not installed", model.name));
+    }
+    let mut manifest = read_manifest(&directory)?;
+    tracing::info!(
+        meeting = id,
+        "finishing the transcript of a meeting Hex quit while recording"
+    );
+    match transcribe(&directory, &mut manifest, &selection, None) {
+        Ok(()) => {
+            manifest.status = MeetingStatus::Complete;
+            manifest.error = None;
+            write_manifest(&directory, &manifest)?;
+            Ok(Some(manifest))
+        }
+        Err(error) if crate::process_exit::quitting() => Err(error),
+        Err(error) => {
+            manifest.status = MeetingStatus::Interrupted;
+            manifest.error = Some(error.to_string());
+            write_manifest(&directory, &manifest)?;
+            let _ = fs::remove_file(&pending);
+            Err(error)
+        }
+    }
 }
 
 pub fn list() -> Result<Vec<MeetingManifest>> {

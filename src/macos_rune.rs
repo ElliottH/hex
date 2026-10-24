@@ -227,6 +227,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     };
     let event_path = listener.event_path.clone();
     let event_log = crate::events::EventLog::create(&event_path)?;
+    let drained_event_log = event_log.clone();
     let (developer_sender, developer_receiver) = mpsc::sync_channel(8);
     let (control_sender, control_receiver) = mpsc::sync_channel(8);
     let (recognition_controls, recognition_control_receiver) = mpsc::sync_channel(8);
@@ -401,6 +402,10 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
             if worker.join().is_err() {
                 tracing::error!("{name} worker panicked during shutdown");
             }
+        }
+        crate::recording_environment::wait_until_restored(Duration::from_secs(2));
+        if let Err(error) = drained_event_log.flush_within(Duration::from_millis(500)) {
+            tracing::warn!(%error, "could not flush the event log before quitting");
         }
     });
     // Runs first on the main thread once the loop (and NSApp) is live.

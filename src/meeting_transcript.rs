@@ -621,7 +621,10 @@ fn source_index(source: MeetingSource) -> usize {
 
 fn wait_for_dictation() {
     let started = Instant::now();
-    while crate::parakeet::dictation_busy() && started.elapsed() < DICTATION_WAIT {
+    while crate::parakeet::dictation_busy()
+        && !crate::process_exit::quitting()
+        && started.elapsed() < DICTATION_WAIT
+    {
         thread::sleep(Duration::from_millis(50));
     }
 }
@@ -655,6 +658,11 @@ impl ChunkModel {
 
     /// Fails with the chunk's own transcription error.
     fn transcribe(&mut self, samples: &[f32]) -> Result<Chunked> {
+        // Quitting drops the dictation engine; a model loaded now would
+        // outlast the drain.
+        if crate::process_exit::quitting() {
+            return Ok(Chunked::Unavailable(eyre!("Hex is quitting")));
+        }
         let engine = crate::transcription_engine::TranscriptionEngine::shared();
         if let Some(engine) = &engine
             && let Some(result) = Self::transcribe_shared(engine, samples)
@@ -681,6 +689,9 @@ impl ChunkModel {
             return Ok(Chunked::Unavailable(eyre!(
                 "meeting transcriber is unavailable"
             )));
+        }
+        if crate::process_exit::quitting() {
+            return Ok(Chunked::Unavailable(eyre!("Hex is quitting")));
         }
         let model = match load_model(&mut self.owned, &selection) {
             Ok(model) => model,
@@ -746,6 +757,8 @@ fn load_model<'a>(
     selection: &TranscriptionSelection,
 ) -> Result<&'a mut Transcriber> {
     if model.is_none() {
+        #[cfg(test)]
+        tests::MODEL_LOADS.fetch_add(1, Ordering::SeqCst);
         *model = Some(Transcriber::load_selection(selection)?);
     }
     model
@@ -945,6 +958,7 @@ fn run_rolling(
         // A preempted chunk falls through to the wait below before retrying.
         if !pending.is_empty()
             && !model_failed
+            && !crate::process_exit::quitting()
             && !crate::parakeet::dictation_busy()
             && transcribe_pending(
                 directory,
@@ -970,7 +984,7 @@ fn run_rolling(
             track.end(index, &mut envelope, &mut pending);
         }
     }
-    while !pending.is_empty() && !model_failed {
+    while !pending.is_empty() && !model_failed && !crate::process_exit::quitting() {
         wait_for_dictation();
         if !transcribe_pending(
             directory,
@@ -1097,6 +1111,10 @@ fn transcribe_pending(
         Ok(Chunked::Preempted) => {
             pending.push_front((index, chunk));
             return false;
+        }
+        Ok(Chunked::Unavailable(_)) if crate::process_exit::quitting() => {
+            *model_failed = true;
+            return true;
         }
         Ok(Chunked::Unavailable(error)) => {
             tracing::warn!(%error, "rolling meeting transcription could not load the model");
@@ -2066,6 +2084,75 @@ mod tests {
             transcript(vec![segment(1_200, 2_500, "Maybe Friday.")]),
         );
         assert_eq!(view(&track), ["Settled words.", "Maybe Friday."]);
+    }
+
+    pub(super) static MODEL_LOADS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    const QUIT_CHILD: &str = "HEX_MEETING_QUIT_CHILD";
+
+    /// The child half of `quitting_mid_meeting_loads_no_model_and_finishes_in_time`.
+    #[test]
+    fn quitting_mid_meeting_child() {
+        let Some(mode) = std::env::var_os(QUIT_CHILD) else {
+            return;
+        };
+        let directory =
+            std::env::temp_dir().join(format!("hex-meeting-quit-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut rolling = Rolling::start(directory.clone(), TranscriptionSelection::default());
+        let mut feed = rolling.feed().unwrap();
+        // Set before any audio arrives so no chunk can start a load first.
+        if mode == "quit" {
+            crate::process_exit::begin_quitting_for_test();
+        }
+        let quit = Instant::now();
+        let audio = speech(30);
+        for (index, block) in audio.chunks(RATE).enumerate() {
+            let position = (index * RATE) as u64;
+            feed.offer(&packet(MeetingSource::System, position, block.to_vec()));
+            feed.offer(&packet(MeetingSource::Microphone, position, block.to_vec()));
+        }
+        feed.flush();
+        drop(feed);
+        rolling.finish().unwrap();
+        println!(
+            "loads={} elapsed_ms={} error_file={}",
+            MODEL_LOADS.load(Ordering::SeqCst),
+            quit.elapsed().as_millis(),
+            directory.join(ERROR_FILE).exists(),
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    fn quitting_mid_meeting_report(mode: &str) -> std::collections::HashMap<String, String> {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "meeting::transcript::tests::quitting_mid_meeting_child",
+                "--nocapture",
+            ])
+            .env(QUIT_CHILD, mode)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .filter_map(|field| field.split_once('='))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn quitting_mid_meeting_loads_no_model_and_finishes_in_time() {
+        // Without quitting, the same audio with no engine tries to load one.
+        let staying = quitting_mid_meeting_report("stay");
+        assert_ne!(staying["loads"], "0", "{staying:?}");
+        let quitting = quitting_mid_meeting_report("quit");
+        assert_eq!(quitting["loads"], "0", "{quitting:?}");
+        assert_eq!(quitting["error_file"], "false", "{quitting:?}");
+        let elapsed_ms: u64 = quitting["elapsed_ms"].parse().unwrap();
+        assert!(elapsed_ms < 2_000, "{quitting:?}");
     }
 
     fn packet(source: MeetingSource, position: u64, samples: Vec<f32>) -> AudioPacket {

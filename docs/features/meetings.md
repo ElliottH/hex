@@ -362,7 +362,22 @@ Stop & Transcribe
   -> Flush tails -> finish pending chunks           // usually seconds
   -> Any track that fell behind or failed -> stream its WAV in 1 s blocks
   -> Join on one timeline -> Echo suppression -> Final publication
+
+Hex quits while recording                           // meetings.quit
+  -> Capture stops; WAVs and manifest finalized; no chunk starts, no model loads
+  -> Interrupted with its rolling draft + final.pending beside the manifest
+  -> Next launch, Meetings on, no recording, once the dictation engine is up
+     (or 30 s without one) -> full-WAV final pass -> Complete + Markdown + notes
+     ├── Quit again or model not installed -> stays pending
+     └── Other failure -> stays Interrupted with the error and its draft
 ```
+
+Quitting gives its workers 5 s before `_exit`, and the final pass of a long
+meeting can take longer, or load a model once the dictation engine is gone.
+Sources: `record`, `finish_pending` in [meeting.rs](../../src/meeting.rs),
+`PendingFinals` in [meeting_watcher.rs](../../src/meeting_watcher.rs). Check:
+`quitting_mid_meeting_loads_no_model_and_finishes_in_time`. No repeatable
+driver quits a real recording and relaunches.
 
 Design choice: chunks are background jobs on the dictation transcription engine
 (`TranscriptionEngine::background`), using whatever model dictation has loaded,

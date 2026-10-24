@@ -8,9 +8,10 @@
 //! `ggml_metal_rsets_free` unless every Metal buffer was already freed, and
 //! Moonshine's transcriber map is destroyed while a thread may still look a
 //! transcriber up in it. So Hex drains its own work first, then ends with
-//! `_exit`, which runs none of them. Nothing Hex keeps relies on them: logs
-//! are written unbuffered, and settings, history, and meetings are saved
-//! atomically when they change.
+//! `_exit`, which runs none of them. Nothing Hex keeps relies on them: the
+//! drain flushes the event log, and settings, history, and meetings are saved
+//! atomically when they change. A meeting recording at quit keeps its audio
+//! and finishes its transcript at the next launch.
 //!
 //! The drain runs on the main thread, so a worker that never stops would hang
 //! quit, logout, and updates. After [`DEADLINE`] the process ends anyway.
@@ -20,10 +21,24 @@
 
 use std::io::Write;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// How long quitting waits for the drain before ending the process anyway.
 const DEADLINE: Duration = Duration::from_secs(5);
+
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the process has begun quitting. Work that would outlast the
+/// drain, such as loading a model, checks this and stops instead.
+pub(crate) fn quitting() -> bool {
+    QUITTING.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+pub(crate) fn begin_quitting_for_test() {
+    QUITTING.store(true, Ordering::Release);
+}
 
 /// Work that must finish before the process ends, run once by whichever
 /// quit path gets there first.
@@ -59,6 +74,7 @@ pub(crate) fn finish(drain: &Drain) -> ! {
 }
 
 fn finish_within(drain: &Drain, deadline: Duration) -> ! {
+    QUITTING.store(true, Ordering::Release);
     let _ = std::thread::Builder::new()
         .name("hex-exit-deadline".into())
         .spawn(move || {

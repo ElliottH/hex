@@ -123,6 +123,7 @@ pub(crate) fn controller_loop(
     let mut recording: Option<ActiveRecording> = None;
     let mut reminders = Reminders::default();
     let mut observed_microphone_apps = Vec::new();
+    let mut pending_finals = PendingFinals::new();
     tracing::info!("meeting watcher started");
 
     while !shutdown.load(Ordering::Relaxed) {
@@ -150,6 +151,7 @@ pub(crate) fn controller_loop(
 
         poll_recording(&mut recording, &events)?;
         reminders.poll(enabled, recording.is_some(), &events);
+        pending_finals.poll(enabled, recording.is_some(), &events);
 
         if recording.is_none() && enabled {
             let choices = crate::app_settings::meeting_provider_choices();
@@ -178,7 +180,79 @@ pub(crate) fn controller_loop(
             .join()
             .map_err(|_| eyre!("meeting recorder panicked"))??;
     }
+    pending_finals.join();
     Ok(())
+}
+
+/// How long finishing pending transcripts waits for the dictation engine
+/// before loading its own model, as a recording without one does.
+const ENGINE_GRACE: Duration = Duration::from_secs(30);
+
+/// Finishes, once per launch, the transcripts of meetings Hex quit while
+/// recording. It waits for the dictation engine so the work borrows its
+/// model rather than loading a second copy.
+struct PendingFinals {
+    since: Instant,
+    checked: bool,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl PendingFinals {
+    fn new() -> Self {
+        Self {
+            since: Instant::now(),
+            checked: false,
+            worker: None,
+        }
+    }
+
+    fn poll(&mut self, enabled: bool, recording: bool, events: &SyncSender<ControllerEvent>) {
+        if self.checked
+            || !enabled
+            || recording
+            || (crate::transcription_engine::TranscriptionEngine::shared().is_none()
+                && self.since.elapsed() < ENGINE_GRACE)
+        {
+            return;
+        }
+        self.checked = true;
+        let ids = meeting::pending_final_transcripts();
+        if ids.is_empty() {
+            return;
+        }
+        let events = events.clone();
+        self.worker = thread::Builder::new()
+            .name("meeting-pending-finals".into())
+            .spawn(move || {
+                for id in ids {
+                    if crate::process_exit::quitting() {
+                        return;
+                    }
+                    match meeting::finish_pending(&id) {
+                        Ok(Some(manifest)) => {
+                            tracing::info!(meeting = id, "finished a pending meeting transcript");
+                            if meeting::notes_wanted() {
+                                start_notes(manifest.id, &events);
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(%error, meeting = id, "could not finish a pending meeting transcript");
+                        }
+                    }
+                }
+            })
+            .map_err(|error| tracing::error!(%error, "could not start pending meeting transcripts"))
+            .ok();
+    }
+
+    fn join(self) {
+        if let Some(worker) = self.worker
+            && worker.join().is_err()
+        {
+            tracing::error!("pending meeting transcripts panicked");
+        }
+    }
 }
 
 fn handle_command(

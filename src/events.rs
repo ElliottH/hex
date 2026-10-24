@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use std::collections::VecDeque;
 
@@ -233,6 +233,45 @@ impl EventLog {
         match flushed.recv().map_err(|_| self.writer_stopped_error())? {
             Some((kind, message)) => Err(io::Error::new(kind, message)),
             None => Ok(()),
+        }
+    }
+
+    /// Like [`Self::flush`], but gives up after `deadline`, so quitting
+    /// never waits on a stalled disk.
+    pub fn flush_within(&self, deadline: Duration) -> io::Result<()> {
+        self.check_error()?;
+        let started = Instant::now();
+        let sender = self
+            .inner
+            .sender
+            .as_ref()
+            .ok_or_else(|| self.writer_stopped_error())?;
+        let (reply, flushed) = mpsc::sync_channel(1);
+        let mut message = WriterMessage::Flush(reply);
+        loop {
+            match sender.try_send(message) {
+                Ok(()) => break,
+                Err(TrySendError::Full(returned)) if started.elapsed() < deadline => {
+                    message = returned;
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(TrySendError::Full(_)) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "event log flush timed out",
+                    ));
+                }
+                Err(TrySendError::Disconnected(_)) => return Err(self.writer_stopped_error()),
+            }
+        }
+        match flushed.recv_timeout(deadline.saturating_sub(started.elapsed())) {
+            Ok(Some((kind, message))) => Err(io::Error::new(kind, message)),
+            Ok(None) => Ok(()),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "event log flush timed out",
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(self.writer_stopped_error()),
         }
     }
 
@@ -627,6 +666,23 @@ mod tests {
             Some(VoiceEvent::SessionStarted { timestamp_ms: 3 })
         ));
         assert_eq!(reader.current_context(), None);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_bounded_flush_writes_every_queued_event() {
+        let path = std::env::temp_dir().join(format!(
+            "hex-bounded-flush-{}-{}.ndjson",
+            std::process::id(),
+            now_ms()
+        ));
+        let log = EventLog::create(&path).unwrap();
+        for timestamp_ms in 1..=500 {
+            log.dictation(DictationPhase::Pasted, format!("{timestamp_ms}"))
+                .unwrap();
+        }
+        log.flush_within(Duration::from_secs(5)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 500);
         fs::remove_file(path).unwrap();
     }
 
