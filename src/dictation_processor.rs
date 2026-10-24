@@ -1035,15 +1035,34 @@ fn discover_opencode_service(
     discover_opencode_service_with(
         &opencode_executable(),
         &workspace,
+        default_opencode_state_dir().as_deref(),
         deadline.saturating_sub(started.elapsed()),
         cancelled,
     )
 }
 
+/// OpenCode's own state directory for Hex's environment: `$XDG_STATE_HOME`
+/// when absolute, else `~/.local/state`, then `opencode`.
+#[cfg(not(target_os = "windows"))]
+fn default_opencode_state_dir() -> Option<PathBuf> {
+    let root = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| dirs::home_dir().map(|home| home.join(".local/state")))?;
+    Some(root.join("opencode"))
+}
+
+/// Asks the CLI which service it reaches, then reads that service's private
+/// registration for the URL and password. The registration is looked up in
+/// the state directory the CLI reports and in OpenCode's default one: a
+/// wrapper can reject `debug paths` or point the CLI's own state elsewhere
+/// while it still reaches the default service. Only a registration matching
+/// the live server's pid and version counts.
 #[cfg(not(target_os = "windows"))]
 fn discover_opencode_service_with(
     executable: &Path,
     workspace: &Path,
+    default_state: Option<&Path>,
     deadline: Duration,
     cancelled: &AtomicBool,
 ) -> Result<(String, String)> {
@@ -1083,7 +1102,7 @@ fn discover_opencode_service_with(
     let (newest, older) = SERVICE_INFO_ENDPOINTS.split_first().expect("endpoints");
     let mut output = run(&["api", "get", newest])?;
     // Older OpenCode versions expose the service info under an earlier name.
-    // Only an exact CLI 404 diagnostic tries the next name; other failures are final.
+    // Only a CLI 404 diagnostic tries the next name; other failures are final.
     for endpoint in older {
         if !endpoint_is_missing(&output) {
             break;
@@ -1092,21 +1111,39 @@ fn discover_opencode_service_with(
     }
     let info: ServiceInfo = serde_json::from_str(&decode(output)?)
         .map_err(|_| eyre!("OpenCode returned an invalid service info response"))?;
-    let paths = decode(run(&["debug", "paths"])?)?;
-    let state = paths
-        .lines()
-        .find_map(|line| {
+    // A failed `debug paths` is not final: the default state directory remains.
+    let reported_state = decode(run(&["debug", "paths"])?).ok().and_then(|paths| {
+        paths.lines().find_map(|line| {
             let (key, value) = line.split_once(char::is_whitespace)?;
-            (key == "state").then(|| Path::new(value.trim_start()))
+            let path = PathBuf::from(value.trim_start());
+            (key == "state" && path.is_absolute()).then_some(path)
         })
-        .filter(|path| path.is_absolute())
-        .ok_or_else(|| eyre!("OpenCode did not report its state directory"))?;
-    read_service_registration(state, info.pid, &info.version)
+    });
+    let mut states: Vec<&Path> = reported_state.as_deref().into_iter().collect();
+    if let Some(default_state) = default_state
+        && !states.contains(&default_state)
+    {
+        states.push(default_state);
+    }
+    let mut last_error = eyre!("OpenCode did not report its state directory");
+    for state in states {
+        match read_service_registration(state, info.pid, &info.version) {
+            Ok(endpoint) => return Ok(endpoint),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
 }
 
+/// The CLI reports a missing route as a final `HTTP 404 Not Found` stderr
+/// line; earlier lines may carry warnings such as a client/server version skew.
 fn endpoint_is_missing(output: &CommandOutput) -> bool {
     !output.status.success()
-        && String::from_utf8_lossy(&output.stderr).trim() == "HTTP 404 Not Found"
+        && String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())
+            == Some("HTTP 404 Not Found")
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -2591,7 +2628,22 @@ mod tests {
         let executable = root.join("opencode2");
         const INFO: &str = "printf '%s\\n' '{\"pid\":42,\"version\":\"fixture-version\"}'";
         const MISSING: &str = "echo 'HTTP 404 Not Found' >&2; exit 1";
+        const SKEWED_MISSING: &str = "echo 'Warning: Server at http://127.0.0.1:4096 has version a; this client is b. Continuing anyway.' >&2; echo 'HTTP 404 Not Found' >&2; echo >&2; exit 1";
         for (info, status, health, succeeds, expected_calls) in [
+            (
+                SKEWED_MISSING,
+                SKEWED_MISSING,
+                INFO,
+                true,
+                "api get /api/info\napi get /api/status\napi get /api/health\ndebug paths\n",
+            ),
+            (
+                "echo 'HTTP 404 Not Found' >&2; echo 'private trailing diagnostic' >&2; exit 1",
+                INFO,
+                INFO,
+                false,
+                "api get /api/info\n",
+            ),
             (
                 INFO,
                 MISSING,
@@ -2666,6 +2718,7 @@ mod tests {
             let result = discover_opencode_service_with(
                 &executable,
                 &root,
+                None,
                 Duration::from_secs(20),
                 &AtomicBool::new(false),
             );
@@ -2690,6 +2743,83 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A wrapper like Kit's Studio guard appends `--server` to every
+    /// subcommand, so `debug paths` prints help and exits 1, and it points the
+    /// CLI's own state elsewhere while the service registers in the default one.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn service_discovery_finds_the_default_registration_behind_a_wrapper() {
+        let root = std::env::temp_dir().join(format!(
+            "hex-service-wrapper-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let reported = root.join("wrapper-state");
+        let default_state = root.join("default-state");
+        fs::create_dir_all(&reported).unwrap();
+        fs::create_dir_all(&default_state).unwrap();
+        let registration = default_state.join("service.json");
+        fs::write(
+            &registration,
+            br#"{"id":"x","version":"fixture-version","url":"http://127.0.0.1:1234","pid":42,"password":"registered-password"}"#,
+        )
+        .unwrap();
+        fs::set_permissions(&registration, fs::Permissions::from_mode(0o600)).unwrap();
+        let executable = root.join("opencode2");
+        const INFO: &str = "echo 'Warning: Server at http://127.0.0.1:4096 has version a; this client is b. Continuing anyway.' >&2; printf '%s\\n' '{\"pid\":42,\"version\":\"fixture-version\",\"urls\":[\"http://127.0.0.1:4096\"]}'";
+        let guard_paths = "printf 'DESCRIPTION\\n  Show global paths (data, config, cache, state)\\n'; printf '\\nERROR\\n  Unrecognized flag: --server in command opencode debug paths\\n' >&2; exit 1";
+        let reporting_paths = format!("printf 'state      %s\\n' '{}'", reported.display());
+        for (paths, default, succeeds) in [
+            (guard_paths, Some(default_state.as_path()), true),
+            (
+                reporting_paths.as_str(),
+                Some(default_state.as_path()),
+                true,
+            ),
+            (guard_paths, None, false),
+            (reporting_paths.as_str(), None, false),
+        ] {
+            write_script(
+                &executable,
+                &format!(
+                    "#!/bin/sh\ncase \"$*\" in\n'api get /api/info') {INFO} ;;\n'debug paths') {paths} ;;\n*) exit 2 ;;\nesac\n"
+                ),
+            );
+            let result = discover_opencode_service_with(
+                &executable,
+                &root,
+                default,
+                Duration::from_secs(20),
+                &AtomicBool::new(false),
+            );
+            if succeeds {
+                assert_eq!(
+                    result.unwrap(),
+                    ("http://127.0.0.1:1234".into(), "registered-password".into())
+                );
+            } else {
+                let error = format!("{:#}", result.unwrap_err());
+                assert!(!error.contains("registered-password"), "{error}");
+            }
+        }
+        // A registration for another server process never counts.
+        fs::write(
+            &registration,
+            br#"{"version":"fixture-version","url":"http://127.0.0.1:1234","pid":43,"password":"stale-password"}"#,
+        )
+        .unwrap();
+        let error = discover_opencode_service_with(
+            &executable,
+            &root,
+            Some(&default_state),
+            Duration::from_secs(20),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err();
+        assert!(!format!("{error:#}").contains("stale-password"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn service_discovery_fallback_shares_deadline_and_observes_cancellation() {
@@ -2707,6 +2837,7 @@ mod tests {
         let error = discover_opencode_service_with(
             &executable,
             &root,
+            None,
             // Leaves the health probe ~4 s to start on a busy machine.
             Duration::from_secs(6),
             &AtomicBool::new(false),
@@ -2721,6 +2852,7 @@ mod tests {
         let error = discover_opencode_service_with(
             &executable,
             &root,
+            None,
             Duration::from_secs(2),
             &AtomicBool::new(true),
         )
