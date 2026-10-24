@@ -49,7 +49,7 @@ fn history_filters_and_order_apply_before_the_limit() {
         "--limit",
         "1",
     ]);
-    let output = history_output(&entries, &query, HistoryRetention::Week, NOW).unwrap();
+    let output = history_output(&entries, &query, HistoryRetention::Week, NOW, &[]).unwrap();
     assert_eq!(output.entries.iter().map(|e| e.id).collect::<Vec<_>>(), [2]);
     assert!(!output.truncated);
     let output = history_output(
@@ -57,6 +57,7 @@ fn history_filters_and_order_apply_before_the_limit() {
         &args(&["--oldest-first", "--limit", "1"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     assert_eq!(output.entries[0].id, 2);
@@ -66,6 +67,7 @@ fn history_filters_and_order_apply_before_the_limit() {
         &args(&["--grep", "needle"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     assert_eq!(output.entries[0].id, 4);
@@ -75,6 +77,7 @@ fn history_filters_and_order_apply_before_the_limit() {
         &args(&["--until", "1792700000000"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -86,7 +89,8 @@ fn history_filters_and_order_apply_before_the_limit() {
             &entries,
             &args(&["--since", "now", "--until", "1d"]),
             HistoryRetention::Week,
-            NOW
+            NOW,
+            &[]
         )
         .is_err()
     );
@@ -106,6 +110,7 @@ fn history_search_ranks_fuzzy_stemmed_matches_within_retention() {
         &args(&["--search", "problem bord"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     // Entry 2 matches both words; 5 only one; 1 has expired; 3 and 4 miss.
@@ -124,6 +129,7 @@ fn history_search_ranks_fuzzy_stemmed_matches_within_retention() {
         &args(&["--search", "needle", "--app", "opencode beta"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     assert_eq!(output.entries[0].id, 4);
@@ -136,7 +142,8 @@ fn history_search_ranks_fuzzy_stemmed_matches_within_retention() {
             &entries,
             &args(&["--search", "\"\""]),
             HistoryRetention::Week,
-            NOW
+            NOW,
+            &[]
         )
         .is_err()
     );
@@ -167,6 +174,7 @@ fn history_search_counts_raw_and_final_text_as_one_document() {
         &args(&["--search", "Dax"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     let mut ids = output.entries.iter().map(|e| e.id).collect::<Vec<_>>();
@@ -183,6 +191,7 @@ fn history_json_contract_snapshot() {
         &args(&["--grep", "problems", "--raw"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -201,6 +210,7 @@ fn history_json_contract_snapshot() {
         &args(&["--limit", "1"]),
         HistoryRetention::Week,
         NOW,
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -222,9 +232,9 @@ fn retention_defaults_fails_closed_and_off_preserves_existing_entries() {
     assert_eq!(retention(&root).unwrap(), HistoryRetention::Week);
     fs::write(root.join("settings.json"), r#"{"history_retention":"day"}"#).unwrap();
     let entries = entries();
-    let output = history_output(&entries, &args(&[]), retention(&root).unwrap(), NOW).unwrap();
+    let output = history_output(&entries, &args(&[]), retention(&root).unwrap(), NOW, &[]).unwrap();
     assert_eq!(output.entries.iter().map(|e| e.id).collect::<Vec<_>>(), [4]);
-    let output = history_output(&entries, &args(&[]), HistoryRetention::Off, NOW).unwrap();
+    let output = history_output(&entries, &args(&[]), HistoryRetention::Off, NOW, &[]).unwrap();
     assert_eq!(output.entries.len(), 4);
     fs::write(root.join("settings.json"), "{broken").unwrap();
     assert!(retention(&root).is_err());

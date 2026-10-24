@@ -975,6 +975,10 @@ pub struct AppSettings {
     /// The interface language code; `None` follows the system language.
     pub ui_language: Option<String>,
     pub indicator_position: IndicatorPosition,
+    /// The shared vocabulary (`crate::vocabulary`). Left out of the file
+    /// while empty, so settings without one stay as they were.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary: Vec<crate::vocabulary::VocabularyEntry>,
     /// One-time settings changes already applied. A file that predates a
     /// change lacks its ID, so the change runs once on the next load; new
     /// settings start with every ID because they need none.
@@ -1030,6 +1034,7 @@ impl Default for AppSettings {
             paste_with_shift: false,
             ui_language: None,
             indicator_position: IndicatorPosition::default(),
+            vocabulary: Vec::new(),
             migrations: MIGRATIONS.iter().map(|id| id.to_string()).collect(),
             text_replacements: Vec::new(),
         }
@@ -1300,6 +1305,7 @@ impl AppSettings {
             .get_or_init(Default::default)
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.voice_action.clone();
+        crate::vocabulary::apply(&self.vocabulary);
     }
 
     /// Mode activations saved while Finder showed filename extensions carry a
@@ -2081,6 +2087,55 @@ mod tests {
             reloaded.transcription.model,
             TranscriptionModelId::ParakeetV3
         );
+    }
+
+    #[test]
+    fn vocabulary_round_trips_and_stays_out_of_files_without_one() {
+        use crate::vocabulary::VocabularyEntry;
+        // A file from before the vocabulary loads with an empty one and is
+        // not rewritten to gain the field.
+        let dir = TestSettingsDir::new("vocabulary");
+        let older = r#"{"sound_effects": false}"#;
+        fs::write(&dir.path, older).unwrap();
+        let settings = AppSettings::load_from(&dir.path).unwrap();
+        assert!(settings.vocabulary.is_empty());
+        assert!(
+            !fs::read_to_string(&dir.path)
+                .unwrap()
+                .contains("vocabulary")
+        );
+        assert!(
+            serde_json::to_value(AppSettings::default())
+                .unwrap()
+                .get("vocabulary")
+                .is_none()
+        );
+
+        let filled = AppSettings {
+            vocabulary: vec![
+                VocabularyEntry {
+                    term: "Abattoir".into(),
+                    sounds_like: vec!["avatar".into(), "a bat war".into()],
+                },
+                VocabularyEntry {
+                    term: "Rune".into(),
+                    sounds_like: vec![],
+                },
+            ],
+            ..settings
+        };
+        filled.write_to(&dir.path).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&dir.path).unwrap()).unwrap();
+        assert_eq!(
+            json["vocabulary"],
+            serde_json::json!([
+                {"term": "Abattoir", "sounds_like": ["avatar", "a bat war"]},
+                {"term": "Rune"},
+            ])
+        );
+        let reloaded = AppSettings::load_from(&dir.path).unwrap();
+        assert_eq!(reloaded.vocabulary, filled.vocabulary);
     }
 
     struct TestSettingsDir {

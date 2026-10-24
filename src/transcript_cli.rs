@@ -12,6 +12,7 @@ use crate::meeting::query::{
     Library, ListQuery, Meeting, OffsetRange, SearchQuery, TextHit, TimeRange, TranscriptSource,
     search_texts,
 };
+use crate::vocabulary::VocabularyEntry;
 
 #[derive(Args, Debug)]
 pub struct HistoryArgs {
@@ -160,6 +161,7 @@ fn history_output<'a>(
     args: &HistoryArgs,
     retention: HistoryRetention,
     now: u64,
+    vocabulary: &[VocabularyEntry],
 ) -> Result<HistoryOutput<'a>> {
     let range = TimeRange::parse(args.since.as_deref(), args.until.as_deref(), now)?;
     let cutoff = retention.max_age_ms().map(|age| now.saturating_sub(age));
@@ -189,7 +191,7 @@ fn history_output<'a>(
         matching.reverse();
     }
     let ranked: Vec<(&HistoryEntry, Option<TextHit>)> = match &args.search {
-        Some(query) => rank_history(&matching, query)?
+        Some(query) => rank_history(&matching, query, vocabulary)?
             .into_iter()
             .map(|(entry, hit)| (entry, Some(hit)))
             .collect(),
@@ -225,6 +227,7 @@ fn history_output<'a>(
 fn rank_history<'a>(
     entries: &[&'a HistoryEntry],
     query: &str,
+    vocabulary: &[VocabularyEntry],
 ) -> Result<Vec<(&'a HistoryEntry, TextHit)>> {
     let documents = entries
         .iter()
@@ -236,7 +239,7 @@ fn rank_history<'a>(
             texts
         })
         .collect::<Vec<_>>();
-    Ok(search_texts(&documents, query)?
+    Ok(search_texts(&documents, query, vocabulary)?
         .into_iter()
         .map(|hit| (entries[hit.index], hit))
         .collect())
@@ -270,7 +273,13 @@ pub fn history(args: &HistoryArgs) -> Result<()> {
     let root = crate::app_paths::support_dir()?;
     let entries = crate::history::read_snapshot(&root.join("history.json"))
         .wrap_err("could not read history.json")?;
-    let output = history_output(&entries, args, retention(&root)?, crate::events::now_ms())?;
+    let output = history_output(
+        &entries,
+        args,
+        retention(&root)?,
+        crate::events::now_ms(),
+        &crate::vocabulary::read_saved(&root),
+    )?;
     let mut out = io::stdout().lock();
     if args.json {
         return write_json(&mut out, &output);
@@ -369,7 +378,8 @@ fn meeting_list_json(
 }
 
 pub fn meetings(command: &MeetingsCommand) -> Result<()> {
-    let library = Library::new(crate::app_paths::support_dir()?.join("meetings"));
+    let root = crate::app_paths::support_dir()?;
+    let library = Library::new(root.join("meetings"));
     let now = crate::events::now_ms();
     let mut out = io::stdout().lock();
     match command {
@@ -431,6 +441,7 @@ pub fn meetings(command: &MeetingsCommand) -> Result<()> {
                         limit: *limit as usize,
                         fuzzy: true,
                         include_in_progress: true,
+                        vocabulary: crate::vocabulary::read_saved(&root),
                     },
                     now
                 )?

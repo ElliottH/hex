@@ -61,8 +61,6 @@ impl Experiment {
 }
 
 /// Whether `experiment` is on for this process, as read at launch.
-// No experiment is gated yet; the first gates arrive with their features.
-#[allow(dead_code)]
 pub fn enabled(experiment: Experiment) -> bool {
     snapshot().enabled(experiment)
 }

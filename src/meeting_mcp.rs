@@ -160,6 +160,19 @@ fn reply(result: Result<String>) -> Result<CallToolResult, ErrorData> {
     })
 }
 
+impl MeetingServer {
+    /// The saved vocabulary, read on each search so edits apply without a
+    /// restart; empty unless the `vocabulary` experiment is on.
+    fn vocabulary(&self) -> Vec<crate::vocabulary::VocabularyEntry> {
+        if !crate::vocabulary::enabled() {
+            return Vec::new();
+        }
+        crate::app_paths::support_dir()
+            .map(|root| crate::vocabulary::read_saved(&root))
+            .unwrap_or_default()
+    }
+}
+
 #[tool_router]
 impl MeetingServer {
     pub fn new(root: PathBuf) -> Self {
@@ -210,6 +223,7 @@ and fuzzy for speech-recognition errors (Dax/DAX/Dacks).",
                 limit: args.limit.unwrap_or(10) as usize,
                 fuzzy: args.fuzzy.unwrap_or(true),
                 include_in_progress: args.include_in_progress.unwrap_or(true),
+                vocabulary: self.vocabulary(),
             },
             now_ms(),
         ))

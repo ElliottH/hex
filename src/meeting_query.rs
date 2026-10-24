@@ -23,6 +23,7 @@ use super::{
     MeetingManifest, MeetingSource, MeetingStatus, TranscriptEntry, coalesce_transcript,
     display_title, format_duration, notes_markdown, recovered_status, transcript_markdown,
 };
+use crate::vocabulary::VocabularyEntry;
 
 const TURN_GAP_MS: u64 = 3_000;
 const PASSAGE_WORDS: usize = 60;
@@ -388,7 +389,7 @@ impl Library {
                 .cloned()
                 .collect(),
         };
-        let hits = rank(&scope, &parsed, query.fuzzy);
+        let hits = rank(&scope, &parsed, query.fuzzy, &query.vocabulary);
         Ok(render_search(query, &parsed, &scope, &hits, &scan.skipped))
     }
 
@@ -785,6 +786,17 @@ const STOPWORDS: &[&str] = &[
 ];
 
 fn soundex(word: &str) -> Option<String> {
+    let mut key = sound_key(word)?;
+    key.truncate(4);
+    while key.len() < 4 {
+        key.push('0');
+    }
+    Some(key)
+}
+
+/// Soundex without its four-character cap or padding: the first letter, then
+/// every consonant sound (`abattoir` and `avatar` are both `a136`).
+fn sound_key(word: &str) -> Option<String> {
     let mut characters = word.chars().filter(char::is_ascii_alphabetic);
     let first = characters.next()?;
     let code = |character: char| match character {
@@ -804,16 +816,10 @@ fn soundex(word: &str) -> Option<String> {
             && current != previous
         {
             key.push(digit);
-            if key.len() == 4 {
-                break;
-            }
         }
         if !matches!(character, 'h' | 'w') {
             previous = current;
         }
-    }
-    while key.len() < 4 {
-        key.push('0');
     }
     Some(key)
 }
@@ -869,6 +875,8 @@ pub struct SearchQuery {
     pub limit: usize,
     pub fuzzy: bool,
     pub include_in_progress: bool,
+    /// Fuzzy search also finds these terms' likely mis-transcriptions.
+    pub vocabulary: Vec<VocabularyEntry>,
 }
 
 #[derive(Debug, Default)]
@@ -933,14 +941,19 @@ enum MatchKind {
     /// A spelling variant this many edits away.
     Edit(usize),
     Sound,
+    /// A vocabulary term's "sounds like" spelling, or the term as two words.
+    Alias,
+    /// A word that sounds like a vocabulary term ([`sounds_alike`]).
+    Phonetic,
 }
 
 impl MatchKind {
     fn weight(self) -> f32 {
         match self {
             Self::Exact => 1.0,
-            Self::Prefix => 0.5,
+            Self::Prefix | Self::Alias => 0.5,
             Self::Edit(_) => 0.35,
+            Self::Phonetic => 0.3,
             Self::Sound => 0.2,
         }
     }
@@ -958,10 +971,13 @@ const COMMON_MIN_PASSAGES: f32 = 5.0;
 /// Whether an expansion found by [`expand`] is used. Prefixes are kept like
 /// stems. Spelling fallbacks need a term whose exact hits are rare and a
 /// candidate that is not a common word, except that a term with no exact hit
-/// at all still reaches a common word one edit away (a plain typo).
+/// at all still reaches a common word one edit away (a plain typo). A
+/// vocabulary alias the person wrote is always used; a phonetic one only when
+/// it is not a common word, however often the term itself appears.
 fn admits(kind: MatchKind, exact_passages: u32, passages: u32, common: f32) -> bool {
     match kind {
-        MatchKind::Exact | MatchKind::Prefix => true,
+        MatchKind::Exact | MatchKind::Prefix | MatchKind::Alias => true,
+        MatchKind::Phonetic => passages as f32 <= common,
         MatchKind::Edit(_) | MatchKind::Sound => {
             exact_passages < RARE_EXACT_PASSAGES
                 && (passages as f32 <= common
@@ -1015,6 +1031,93 @@ fn expand<'a>(
     expansions
 }
 
+/// Transcript stems, one word or an adjacent phrase, that stand for a
+/// vocabulary term.
+struct Alias {
+    stems: Vec<String>,
+    kind: MatchKind,
+}
+
+/// The aliases a query `term` gets when it names a one-word vocabulary term:
+/// the term's "sounds like" spellings, the term split into two adjacent words
+/// found in `corpus` (`open code` for OpenCode), and words in `corpus` that
+/// sound like it ([`sounds_alike`]) and pass [`admits`]. Multi-word terms get
+/// none; their words are searched like any other.
+fn vocabulary_aliases(
+    term: &str,
+    vocabulary: &[VocabularyEntry],
+    corpus: &HashMap<&String, u32>,
+    common: f32,
+) -> Vec<Alias> {
+    let mut aliases: Vec<Alias> = Vec::new();
+    let mut add = |stems: Vec<String>, kind: MatchKind| {
+        if stems.is_empty() || stems == [term] {
+            return;
+        }
+        match aliases.iter_mut().find(|alias| alias.stems == stems) {
+            Some(alias) if alias.kind.weight() < kind.weight() => alias.kind = kind,
+            Some(_) => {}
+            None => aliases.push(Alias { stems, kind }),
+        }
+    };
+    for entry in vocabulary {
+        let tokens = tokenize(&entry.term);
+        let [token] = tokens.as_slice() else {
+            continue;
+        };
+        if token.stem != term {
+            continue;
+        }
+        for spelling in &entry.sounds_like {
+            add(
+                tokenize(spelling)
+                    .into_iter()
+                    .map(|token| token.stem)
+                    .collect(),
+                MatchKind::Alias,
+            );
+        }
+        let word = fold(&entry.term[token.start..token.end])
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .collect::<String>();
+        let boundaries = word
+            .char_indices()
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        for &split in boundaries.iter().skip(3) {
+            if word[split..].chars().count() < 3 {
+                break;
+            }
+            let (left, right) = (stem(&word[..split]), stem(&word[split..]));
+            if corpus.contains_key(&left) && corpus.contains_key(&right) {
+                add(vec![left, right], MatchKind::Alias);
+            }
+        }
+        for (candidate, passages) in corpus {
+            if sounds_alike(term, candidate) && admits(MatchKind::Phonetic, 0, *passages, common) {
+                add(vec![(*candidate).clone()], MatchKind::Phonetic);
+            }
+        }
+    }
+    aliases.sort_unstable_by(|left, right| left.stems.cmp(&right.stems));
+    aliases
+}
+
+/// Whether the corpus stem `candidate` is a likely mis-transcription of the
+/// vocabulary stem `term` (`avatar` for `abattoir`): the same uncapped
+/// Soundex key with at least two consonant sounds, at most half the letters
+/// changed, and not a stopword. Names with fewer consonant sounds (Rune, Dax)
+/// match too many words this way and rely on "sounds like" spellings.
+fn sounds_alike(term: &str, candidate: &str) -> bool {
+    let length = term.chars().count().max(candidate.chars().count());
+    candidate != term
+        && candidate.chars().count() >= 4
+        && !STOPWORDS.contains(&candidate)
+        && sound_key(term).is_some_and(|key| key.len() >= 3 && sound_key(candidate) == Some(key))
+        && edit_distance(term, candidate, length / 2).is_some()
+}
+
 struct Hit {
     meeting: Arc<Meeting>,
     passage: usize,
@@ -1023,7 +1126,12 @@ struct Hit {
     labels: Vec<String>,
 }
 
-fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit> {
+fn rank(
+    meetings: &[Arc<Meeting>],
+    query: &ParsedQuery,
+    fuzzy: bool,
+    vocabulary: &[VocabularyEntry],
+) -> Vec<Hit> {
     let owners = meetings
         .iter()
         .flat_map(|meeting| (0..meeting.passages.len()).map(move |index| (meeting, index)))
@@ -1033,7 +1141,7 @@ fn rank(meetings: &[Arc<Meeting>], query: &ParsedQuery, fuzzy: bool) -> Vec<Hit>
         .map(|(meeting, index)| &meeting.passages[*index])
         .collect::<Vec<_>>();
     let documents = (0..passages.len()).collect::<Vec<_>>();
-    let mut scored = score(&passages, &documents, query, fuzzy);
+    let mut scored = score(&passages, &documents, query, fuzzy, vocabulary);
     scored.sort_by(|left, right| {
         let (left_meeting, left_passage) = owners[left.passage];
         let (right_meeting, right_passage) = owners[right.passage];
@@ -1091,8 +1199,15 @@ fn stands_for_term(
 /// BM25 over `passages` as one corpus, with stemmed, optionally fuzzy terms.
 /// `owners[i]` is passage `i`'s document: alternative texts of one document
 /// (contiguous, such as a raw and a corrected transcript) count once in
-/// document frequencies. Unsorted; passages that match nothing are omitted.
-fn score(passages: &[&Passage], owners: &[usize], query: &ParsedQuery, fuzzy: bool) -> Vec<Scored> {
+/// document frequencies. Fuzzy search adds `vocabulary` aliases, which never
+/// count as exact. Unsorted; passages that match nothing are omitted.
+fn score(
+    passages: &[&Passage],
+    owners: &[usize],
+    query: &ParsedQuery,
+    fuzzy: bool,
+    vocabulary: &[VocabularyEntry],
+) -> Vec<Scored> {
     debug_assert_eq!(passages.len(), owners.len());
     // Per stem: documents containing it, and the last document counted.
     let mut counted: HashMap<&String, (u32, usize)> = HashMap::new();
@@ -1133,14 +1248,42 @@ fn score(passages: &[&Passage], owners: &[usize], query: &ParsedQuery, fuzzy: bo
         .iter()
         .map(|term| {
             let exact_passages = passages_with(term);
-            expand(term, document_frequency.keys().copied(), fuzzy)
+            let mut stems = expand(term, document_frequency.keys().copied(), fuzzy)
                 .into_iter()
                 .filter(|(stem, kind)| admits(*kind, exact_passages, passages_with(stem), common))
+                .collect::<Vec<_>>();
+            let mut phrases = Vec::new();
+            if fuzzy {
+                for alias in vocabulary_aliases(term, vocabulary, &document_frequency, common) {
+                    let [stem] = alias.stems.as_slice() else {
+                        phrases.push(alias);
+                        continue;
+                    };
+                    stems.retain(|(other, kind)| {
+                        other != stem || kind.weight() >= alias.kind.weight()
+                    });
+                    if !stems.iter().any(|(other, _)| other == stem) {
+                        stems.push((stem.clone(), alias.kind));
+                    }
+                }
+            }
+            let stems = stems
+                .into_iter()
                 .map(|(stem, kind)| {
                     let weight = kind.weight() * idf(&stem);
                     (stem, kind, weight)
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let phrases = phrases
+                .into_iter()
+                .map(|alias| {
+                    let weight =
+                        alias.kind.weight() * alias.stems.iter().map(|stem| idf(stem)).sum::<f32>();
+                    let label = alias.stems.join(" ");
+                    (alias, label, weight)
+                })
+                .collect::<Vec<_>>();
+            (stems, phrases)
         })
         .collect::<Vec<_>>();
     let mut hits = Vec::new();
@@ -1175,7 +1318,7 @@ fn score(passages: &[&Passage], owners: &[usize], query: &ParsedQuery, fuzzy: bo
         let mut term_score = 0.0;
         let mut matched_weight = 0.0;
         let mut exact_terms = Vec::with_capacity(query.terms.len());
-        for (term, candidates) in query.terms.iter().zip(&expansions) {
+        for (term, (candidates, phrases)) in query.terms.iter().zip(&expansions) {
             let mut best: Option<(f32, &str, MatchKind)> = None;
             for (stem, kind, weight) in candidates {
                 if let Some(frequency) = passage.frequencies.get(stem) {
@@ -1184,6 +1327,23 @@ fn score(passages: &[&Passage], owners: &[usize], query: &ParsedQuery, fuzzy: bo
                     if best.is_none_or(|best| stands_for_term(candidate, best).is_gt()) {
                         best = Some(candidate);
                     }
+                }
+            }
+            for (alias, label, weight) in phrases {
+                let starts = phrase_starts(passage, &alias.stems);
+                if starts.is_empty() {
+                    continue;
+                }
+                for start in &starts {
+                    matched_positions.extend(*start..*start + alias.stems.len());
+                }
+                let candidate = (
+                    weight * saturate(starts.len() as u32),
+                    label.as_str(),
+                    alias.kind,
+                );
+                if best.is_none_or(|best| stands_for_term(candidate, best).is_gt()) {
+                    best = Some(candidate);
                 }
             }
             exact_terms.push(matches!(best, Some((_, _, MatchKind::Exact))));
@@ -1252,7 +1412,11 @@ pub struct TextHit {
 /// and quoted-phrase rules. A document's texts are alternatives, such as a raw
 /// and a corrected transcript: they count as one document for term statistics,
 /// and the best of them is its hit. Best first; ties keep input order.
-pub fn search_texts(documents: &[Vec<&str>], query: &str) -> Result<Vec<TextHit>> {
+pub fn search_texts(
+    documents: &[Vec<&str>],
+    query: &str,
+    vocabulary: &[VocabularyEntry],
+) -> Result<Vec<TextHit>> {
     let parsed = ParsedQuery::parse(query);
     if parsed.is_empty() {
         return Err(eyre!("The search query has no words."));
@@ -1266,7 +1430,7 @@ pub fn search_texts(documents: &[Vec<&str>], query: &str) -> Result<Vec<TextHit>
         }
     }
     let texts = passages.iter().collect::<Vec<_>>();
-    let mut scored = score(&texts, &owners, &parsed, true);
+    let mut scored = score(&texts, &owners, &parsed, true, vocabulary);
     scored.sort_by(|left, right| relevance(left, right).then(left.passage.cmp(&right.passage)));
     let mut seen = HashSet::new();
     Ok(scored
