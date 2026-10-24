@@ -6,9 +6,9 @@ name: Release
 # by its GitHub OIDC token: repository anomalyco/hex, ref main or app-v*,
 # environment release (anomalyco/release registry/hex.json).
 #
-# channel=staging (the default) is the dry run: the release goes to the dev
-# service, https://dev.anoma.ly/release, on its dev channel as
-# <version>-dev.<run number> (the service refuses publishing a channel's
+# channel=staging (the default) is the dry run: every platform is built as
+# <version>-dev.<run number> and published on the dev service's dev channel,
+# https://dev.anoma.ly/release (the service refuses publishing a channel's
 # current version again), with a draft GitHub release, and the AUR package is
 # built and installed but not pushed. channel=stable (or an
 # app-v<version> tag) publishes to https://anoma.ly/release, the GitHub
@@ -116,7 +116,7 @@ jobs:
     uses: ./.github/workflows/build-desktop.yml
     with:
       sha: ${{ needs.resolve.outputs.sha }}
-      version: ${{ needs.resolve.outputs.version }}
+      version: ${{ needs.resolve.outputs.release-version }}
       sign-windows: true
     # Azure Artifact Signing (OIDC); the values live in the release environment.
     secrets:
@@ -133,7 +133,7 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     with:
       sha: ${{ needs.resolve.outputs.sha }}
-      version: ${{ needs.resolve.outputs.version }}
+      version: ${{ needs.resolve.outputs.release-version }}
     # Its job runs in the release environment, which holds the Apple secrets.
 
   # Collects every platform's files into one artifact and checks them; a
@@ -146,7 +146,7 @@ jobs:
       (needs.macos.result == 'success' || needs.resolve.outputs.channel == 'staging')
     runs-on: ubuntu-24.04
     env:
-      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       CHANNEL: ${{ needs.resolve.outputs.channel }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -206,9 +206,8 @@ jobs:
       id-token: write
     env:
       RELEASE: ${{ needs.resolve.outputs.service }}
-      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
-      HEX_RELEASE_VERSION: ${{ needs.resolve.outputs.release-version }}
     outputs:
       linux-url: ${{ steps.publish.outputs.linux-url }}
     steps:
@@ -228,7 +227,7 @@ jobs:
           { echo '### Manifest'; echo '```json'; cat dist/manifest.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the Nix flake
         # The flake builds this commit from source, so it serves the version now.
-        run: scripts/release-service.sh distribution nix "$HEX_RELEASE_VERSION"
+        run: scripts/release-service.sh distribution nix "$HEX_VERSION"
 
   github:
     name: GitHub release
@@ -238,7 +237,7 @@ jobs:
     permissions:
       contents: write
     env:
-      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       HEX_RELEASE_COMMIT: ${{ needs.resolve.outputs.sha }}
       HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.channel }}
       HEX_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
@@ -270,7 +269,7 @@ jobs:
     container: archlinux:base-devel
     environment: release
     env:
-      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       LINUX_URL: ${{ needs.publish.outputs.linux-url }}
     steps:
       - name: Install tools
@@ -313,14 +312,13 @@ jobs:
       id-token: write
     env:
       RELEASE: ${{ needs.resolve.outputs.service }}
-      HEX_VERSION: ${{ needs.resolve.outputs.version }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
-      HEX_RELEASE_VERSION: ${{ needs.resolve.outputs.release-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: scripts/release-service.sh distribution aur "$HEX_RELEASE_VERSION"
+      - run: scripts/release-service.sh distribution aur "$HEX_VERSION"
 
   record-brew:
     needs: resolve

@@ -8,10 +8,9 @@
 #   release-service.sh distribution <kind> <version>  # a package manager now serves <version>
 #
 # RELEASE is the service origin (https://anoma.ly/release or
-# https://dev.anoma.ly/release); HEX_VERSION the built version, which names
-# the files; HEX_RELEASE_CHANNEL the channel (default stable) and
-# HEX_RELEASE_VERSION the published version (default HEX_VERSION; staging
-# publishes X.Y.Z-dev.<run> on the dev channel). `publish` writes
+# https://dev.anoma.ly/release); HEX_VERSION the version the files were built
+# as and name (staging builds X.Y.Z-dev.<run> for the dev channel);
+# HEX_RELEASE_CHANNEL the channel (default stable). `publish` writes
 # <dist>/manifest.json after checking every file the service serves against
 # the local bytes. Publishing the channel's current version again succeeds
 # only when the service already has exactly these files, so a rerun is safe.
@@ -20,7 +19,7 @@ set -eu
 : "${RELEASE:?Set RELEASE to the release service origin}"
 : "${HEX_VERSION:?Set HEX_VERSION}"
 channel=${HEX_RELEASE_CHANNEL:-stable}
-release_version=${HEX_RELEASE_VERSION:-$HEX_VERSION}
+release_version=$HEX_VERSION
 app=hex
 artifact=desktop
 # One request stays under Cloudflare's 100 MB limit; bigger files go in parts.

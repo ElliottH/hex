@@ -42,8 +42,10 @@ case "$mode" in
   stage)
     [ $# -eq 4 ] || usage
     version=$1 executable=$2 url=$3 dir=$4
-    printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
-    printf '%s\n' "$url" | grep -Eq '^https://(dev\.)?anoma\.ly/release/hex/files/[0-9a-f]{64}/hex-[0-9.]+-linux-x64$'
+    printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(beta|dev)\.[0-9]+)?$'
+    printf '%s\n' "$url" | grep -Eq '^https://(dev\.)?anoma\.ly/release/hex/files/[0-9a-f]{64}/hex-[0-9a-z.-]+-linux-x64$'
+    # pkgver may not contain hyphens: a staging 2.4.0-dev.3 is 2.4.0_dev.3.
+    pkgver=$(printf '%s' "$version" | tr - _)
     test "$(head -c 4 "$executable" | od -An -tx1 | tr -d ' ')" = 7f454c46
     mkdir -p "$dir"
     sed 's#@HEX_BIN@#/usr/bin/hex#g' "$root/packaging/hex.desktop" > "$dir/hex.desktop"
@@ -51,8 +53,8 @@ case "$mode" in
     cp "$root/LICENSE" "$dir/LICENSE"
     # makepkg uses a source already present under its file name, so `test`
     # downloads nothing.
-    cp "$executable" "$dir/hex-$version-linux-x64"
-    sed -e "s/@VERSION@/$version/" \
+    cp "$executable" "$dir/hex-$pkgver-linux-x64"
+    sed -e "s/@VERSION@/$pkgver/" \
       -e "s#@URL@#$url#" \
       -e "s/@SHA256@/$(sha256_of "$executable")/" \
       -e "s/@DESKTOP_SHA256@/$(sha256_of "$dir/hex.desktop")/" \

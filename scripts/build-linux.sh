@@ -30,6 +30,7 @@ if [ -n "$(git -C "$root" status --porcelain)" ]; then
 fi
 
 "$script_root/scripts/test-install-linux-release.sh"
+"$script_root/scripts/set-crate-version.sh" "$root" "$version"
 mkdir -p "$dist"
 # Portable native code: ggml otherwise tunes its CPU kernels to the build
 # machine (for example AVX-512), and the release would crash on older CPUs.

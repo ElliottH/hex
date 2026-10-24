@@ -48,6 +48,7 @@ installer="$root/scripts/install-windows.ps1"
 installer_windows=$(cygpath -w "$installer" 2>/dev/null || printf '%s' "$installer")
 powershell -NoProfile -Command "[void][ScriptBlock]::Create((Get-Content -Raw '$installer_windows'))"
 
+"$script_root/scripts/set-crate-version.sh" "$root" "$version"
 mkdir -p "$dist"
 # Portable native code: ggml otherwise tunes its CPU kernels to this build
 # machine (for example AVX-512), and the release would crash on older CPUs.

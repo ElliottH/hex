@@ -46,10 +46,11 @@ clients check HTTPS, each file's size and SHA-256, and the OS code signature
 
 ## Channels
 
-- `staging` (the default) is the dry run: the release goes to the dev
-  service's `dev` channel as `<version>-dev.<run number>` (the service refuses
-  publishing a channel's current version again, and every build's bytes
-  differ), with a draft prerelease GitHub release tagged `staging-<run-id>`;
+- `staging` (the default) is the dry run: every platform is built as
+  `<version>-dev.<run number>` (`scripts/set-crate-version.sh` stamps it into
+  the build, so the binaries report it) and published on the dev service's
+  `dev` channel (the service refuses publishing a channel's current version
+  again, and every build's bytes differ), with a draft prerelease GitHub release tagged `staging-<run-id>`;
   the AUR package is built from the published file and installed in a
   container but not pushed, and the AUR and Nix versions are recorded on the
   dev service. Rerunning a failed run republishes nothing: the same version
