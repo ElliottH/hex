@@ -74,6 +74,11 @@ enum Command {
         #[command(subcommand)]
         command: crate::control::cli::SettingsCommand,
     },
+    /// Turn unfinished, unsupported features on or off for your Hex.
+    Experiments {
+        #[command(subcommand)]
+        command: crate::experiments::ExperimentsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -148,6 +153,10 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
     if let Command::Settings { command } = command {
         crate::control::cli::finish(crate::control::cli::settings(command));
     }
+    // Like a read command: no log, lock, or running Hex.
+    if let Command::Experiments { command } = &command {
+        return crate::experiments::run(command);
+    }
     let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
     let event_path = log_dir.join("live.ndjson");
@@ -167,6 +176,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Listen { device, selection } => {
             shutdown.store(false, Ordering::Relaxed);
             let _instance = crate::instance::acquire("windows-listener")?;
+            crate::experiments::log_launch();
             let settings = crate::app_settings::AppSettings::load()?;
             let history = crate::history::History::open_default(settings.history_retention)?;
             let config = crate::windows_dictation::WindowsDictationConfig {
@@ -213,6 +223,7 @@ pub fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Status { lines } => print_status(&event_path, lines),
         Command::Model { command } => run_model_command(command, shutdown),
         Command::Settings { .. } => unreachable!("handled before logging"),
+        Command::Experiments { .. } => unreachable!("handled before logging"),
     }
 }
 
@@ -499,6 +510,11 @@ fn fail_capture(events: &EventLog, device: &str, error: &str) -> Result<()> {
 }
 
 fn print_status(path: &Path, limit: usize) -> Result<()> {
+    // Read from the sources now; the running Hex read them at its launch.
+    let experiments = crate::experiments::active_names();
+    if !experiments.is_empty() {
+        println!("experiments\t{}", experiments.join(","));
+    }
     if !path.exists() {
         println!("No observations yet at {}", path.display());
         return Ok(());

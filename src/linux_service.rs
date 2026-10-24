@@ -91,6 +91,9 @@ pub(crate) struct Status {
     pub(crate) window_open: bool,
     pub(crate) pid: u32,
     pub(crate) session: Session,
+    /// The experiments this Hex read at its launch.
+    #[serde(default)]
+    pub(crate) experiments: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

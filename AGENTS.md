@@ -308,6 +308,9 @@ substitute for source inspection or a second roadmap.
   AppKit's main thread, `IFileOpenDialog` on its own STA thread, the portal on
   its own thread. Answers on a channel; cancel and a dialog that never opened
   read as nothing chosen.
+- `experiments`: the compiled list of unsupported experiments and the
+  launch snapshot of `HEX_EXPERIMENTS` and `~/.config/hex/experiments`
+  behind `experiments::enabled` and `hex experiments`.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
 - `feedback`: bounded volume-controlled mode, capture, cancellation, and
@@ -735,6 +738,14 @@ git diff --check
 ./scripts/test-install-linux-release.sh # x86_64 Linux only
 cd sdk/typescript && bun run check && bun run test && bun run build
 ```
+
+Unfinished features land on `main` dormant behind an experiment
+([docs/features/experiments.md](docs/features/experiments.md)): add a variant to
+`Experiment` in `src/experiments.rs` and gate where the feature's work starts
+(worker, thread, capture), not just its UI. Turn one on for yourself with
+`hex experiments enable <name>` or `HEX_EXPERIMENTS=<name>`; it applies at the
+next launch. Experiments are unsupported and never on by default, in debug
+builds too; remove the variant when the feature ships or is dropped.
 
 Use Rune's headless renders as the desktop-UI iteration loop: `hex app --
 --snap <png> --scene <name>` draws one named fixture scene from `SCENES` in

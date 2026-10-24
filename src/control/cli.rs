@@ -738,6 +738,11 @@ fn human_status(report: &StatusReport) -> String {
         (None, true) => "open".into(),
         _ => "closed".into(),
     };
+    // Shown only when on: experiments are unsupported and off for nearly everyone.
+    let experiments = match report.experiments.as_slice() {
+        [] => String::new(),
+        names => format!("Experiments  {}\n", names.join(", ")),
+    };
     format!(
         "Hex {} (pid {}{memory})\n\
          Listener     {}\n\
@@ -748,7 +753,8 @@ fn human_status(report: &StatusReport) -> String {
          release mic while idle {}, history {}\n\
          Permissions  {permission_line}\n\
          Window       {window}\n\
-         Update       {}\n",
+         Update       {}\n\
+         {experiments}",
         report.app_version,
         report.pid,
         if report.listener.running {
@@ -853,5 +859,22 @@ mod tests {
         let text = human_status(&report);
         assert!(text.starts_with("Hex 2.3.1 (pid 42, 412 MB)\n"));
         assert!(text.contains("Meeting      recording “Design sync” for 1:02:03\n"));
+        assert!(!text.contains("Experiments"));
+
+        report.experiments = vec!["live-chapters".into(), "vocabulary".into()];
+        assert!(human_status(&report).ends_with("Experiments  live-chapters, vocabulary\n"));
+    }
+
+    #[test]
+    fn status_reports_experiments_and_reads_older_replies_without_them() {
+        let report = StatusReport {
+            experiments: vec!["vocabulary".into()],
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["experiments"], serde_json::json!(["vocabulary"]));
+        json.as_object_mut().unwrap().remove("experiments");
+        let older: StatusReport = serde_json::from_value(json).unwrap();
+        assert!(older.experiments.is_empty());
     }
 }

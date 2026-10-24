@@ -29,6 +29,7 @@ HEX                                      // macOS release
 have detailed maps.
 Agents can [read retained transcripts](transcript-cli.md) and
 [control the running app](control-cli.md) with the release CLI.
+[Experiments](experiments.md) turn unfinished features on per person with a flag.
 The other capabilities stay here until they need their own verification recipe.
 
 ## Get Ready

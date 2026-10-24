@@ -47,6 +47,7 @@ hex
 │   ├── show [settings|models|modes|voice-action|history|commands|meetings]
 │   └── hide                       close the window; Hex stays in the menu bar
 ├── history clear --yes            delete every retained dictation
+├── experiments list|enable|disable  edit ~/.config/hex/experiments; no running Hex (features/experiments.md)
 ├── check-for-updates              ask Sparkle to check now
 ├── launch-at-login [on|off]       report or change Launch at Login (installed Hex.app only)
 └── logs [--process] [-n N] [-f]   tail live.ndjson (or process.log); no running Hex needed
@@ -182,7 +183,8 @@ recording", "The window isn't open"). Setting `kind` is one of `bool`,
   "permissions": {"ready": true, "microphone": "ready", "input_monitoring": "ready",
                   "accessibility": "ready", "transcription_model": true},
   "window": {"open": false, "pane": null},
-  "update": "current"
+  "update": "current",
+  "experiments": []
 }
 ```
 
@@ -197,6 +199,8 @@ update              current | checking | available | unavailable
 ```
 
 `memory_footprint_bytes` is the physical footprint Activity Monitor shows.
+`experiments` lists the [experiments](features/experiments.md) Hex read at its
+launch; older Hex omits it.
 
 ### Error codes
 

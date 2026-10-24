@@ -725,6 +725,7 @@ fn status(
             | DesktopUpdateStatus::PackageManager => "current",
         }
         .into(),
+        experiments: crate::experiments::active_names(),
     })))
 }
 

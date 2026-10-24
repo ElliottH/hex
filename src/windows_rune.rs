@@ -147,6 +147,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
     let Some(instance) = crate::windows_app::AppInstance::claim(start_hidden)? else {
         return Ok(());
     };
+    crate::experiments::log_launch();
     shutdown.store(false, Ordering::Relaxed);
     let (settings, settings_error) = match AppSettings::load() {
         Ok(settings) => (settings, None),

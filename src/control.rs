@@ -246,6 +246,9 @@ pub struct StatusReport {
     pub window: WindowReport,
     /// current, checking, available, or unavailable.
     pub update: String,
+    /// The experiments this Hex read at its launch (`crate::experiments`).
+    #[serde(default)]
+    pub experiments: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]

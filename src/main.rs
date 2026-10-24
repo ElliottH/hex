@@ -47,6 +47,7 @@ mod dictation_modes;
 mod dictation_processor;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod events;
+mod experiments;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod feedback;
 mod file_dialog;
@@ -232,6 +233,11 @@ enum Command {
     Meetings {
         #[command(subcommand)]
         command: transcript_cli::MeetingsCommand,
+    },
+    /// Turn unfinished, unsupported features on or off for this Mac's Hex.
+    Experiments {
+        #[command(subcommand)]
+        command: experiments::ExperimentsCommand,
     },
     /// Run the desktop app with local dictation.
     App {
@@ -515,6 +521,7 @@ fn main() -> Result<()> {
             }
             return transcript_cli::meetings(command);
         }
+        Some(Command::Experiments { command }) => return experiments::run(command),
         #[cfg(debug_assertions)]
         Some(Command::Meeting {
             command: MeetingCommand::List,
@@ -590,6 +597,7 @@ fn main() -> Result<()> {
         Command::App { device, rune_args } => open_app(root, event_path, device, rune_args),
         Command::Listen { device } => {
             let _instance = instance::acquire("listener")?;
+            experiments::log_launch();
             let settings = app_settings::AppSettings::load()?;
             hex_microphone::host_service();
             let events = events::EventLog::create(&event_path)?;
@@ -673,6 +681,7 @@ fn main() -> Result<()> {
         Command::Mcp { .. }
         | Command::History(_)
         | Command::Meetings { .. }
+        | Command::Experiments { .. }
         | Command::Control(_)
         | Command::Commands {
             command:
@@ -865,6 +874,7 @@ fn open_app(
         return Ok(());
     }
     let _instance = instance::acquire("listener")?;
+    experiments::log_launch();
     hex_microphone::host_service();
     macos_rune::run(
         &SHUTDOWN,
@@ -1015,6 +1025,26 @@ mod tests {
             }))
         ));
         assert!(parse(&["hex", "meetings", "cancel"]).is_err());
+    }
+
+    #[test]
+    fn experiments_parse_as_a_read_command() {
+        use super::experiments::ExperimentsCommand;
+
+        assert!(matches!(
+            Cli::try_parse_from(["hex", "experiments", "list", "--json"]).map(|cli| cli.command),
+            Ok(Some(Command::Experiments {
+                command: ExperimentsCommand::List { json: true }
+            }))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["hex", "experiments", "enable", "vocabulary"])
+                .map(|cli| cli.command),
+            Ok(Some(Command::Experiments {
+                command: ExperimentsCommand::Enable { name }
+            })) if name == "vocabulary"
+        ));
+        assert!(Cli::try_parse_from(["hex", "experiments", "disable"]).is_err());
     }
 
     #[test]

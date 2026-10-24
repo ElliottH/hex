@@ -83,6 +83,11 @@ enum Command {
         #[command(subcommand)]
         command: crate::control::cli::SettingsCommand,
     },
+    /// Turn unfinished, unsupported features on or off for your Hex.
+    Experiments {
+        #[command(subcommand)]
+        command: crate::experiments::ExperimentsCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -124,13 +129,17 @@ enum ModelCommand {
 pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
     let activation = crate::linux_service::Activation::take_from_environment();
     color_eyre::install()?;
-    let log_dir = crate::app_paths::init_process_logging(shutdown)?;
-
-    let event_path = log_dir.join("live.ndjson");
     let command = Cli::parse().command.unwrap_or(Command::App {
         hidden: false,
         rune_args: Vec::new(),
     });
+    // Like a read command: no log, lock, or running Hex.
+    if let Command::Experiments { command } = &command {
+        return crate::experiments::run(command);
+    }
+    let log_dir = crate::app_paths::init_process_logging(shutdown)?;
+
+    let event_path = log_dir.join("live.ndjson");
     let client = command.is_client();
     let result = (|| match command {
         // Rune reads its own flags (`--snap`, `--scene`, …) from the process arguments.
@@ -151,6 +160,7 @@ pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Restart => crate::linux_service::restart(),
         Command::Listen { device } => {
             let _instance = crate::instance::acquire("listener")?;
+            crate::experiments::log_launch();
             listen(&event_path, device.as_deref(), shutdown)
         }
         Command::Dictation { action } => shortcut(match action {
@@ -167,6 +177,7 @@ pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::PasteLast => shortcut(ShortcutCommand::PasteLast),
         Command::Dictate { device } => {
             let _instance = crate::instance::acquire("listener")?;
+            crate::experiments::log_launch();
             let settings = crate::app_settings::AppSettings::load()?;
             crate::linux_dictation::initialize_feedback(&settings);
             crate::linux_dictation::run(
@@ -235,6 +246,7 @@ pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Settings { command } => {
             crate::control::cli::finish(crate::control::cli::settings(command))
         }
+        Command::Experiments { .. } => unreachable!("handled before logging"),
     })();
     match result {
         // A keybinding or script wants one line, not a report.
