@@ -38,7 +38,8 @@ Agent or terminal                                  // control.cli; macOS release
 │       model's remembered language and hints (--language overrides)
 ├── hex commands enable [--yes] | disable | retry
 ├── hex window show [pane] | hide
-│   └── meetings pane with Meetings off -> feature-off
+│   ├── settings -> the General pane (status window.pane stays "settings")
+│   └── meetings pane with Meetings off -> the pane's opt-in card
 ├── hex history clear --yes -> without --yes refused before Hex is asked
 ├── hex check-for-updates -> The updater checks now
 ├── hex launch-at-login [on|off] -> SMAppService; changes need Hex.app

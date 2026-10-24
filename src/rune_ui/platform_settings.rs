@@ -1,8 +1,8 @@
-//! Settings rows only some OSes show, chosen by
+//! Rows only some OSes show, chosen by
 //! [`Capabilities`](super::platform::Capabilities): macOS's permission
-//! warnings, Meetings section, Show Dock icon, and the experimental Hex
-//! Microphone; Launch at login on macOS and Windows; and the voice command
-//! model notice. Their state is [`PlatformState`](super::platform::PlatformState)
+//! warnings, Meetings › Settings, Show Dock icon, and the Hex Microphone
+//! driver row Voice Filter shows; Launch at login on macOS and Windows. Their
+//! state is [`PlatformState`](super::platform::PlatformState)
 //! data and their actions are [`PlatformRequest`]s.
 
 use rune::{El, Icon, row, text};
@@ -24,7 +24,6 @@ use crate::desktop_i18n::{tr, tr_fill, tr_named};
 use crate::hex_microphone::DriverActionState;
 use crate::login_item::LoginItemStatus;
 use crate::onboarding::{PermissionAction, PermissionKind, PermissionWarning};
-use crate::voice_filter::VoiceFilterMode;
 
 /// A permission's row key, its name as System Settings lists it, and what
 /// Hex cannot do without it.
@@ -113,17 +112,6 @@ pub(super) fn permissions_section(ui: &Ui, p: Paint) -> Option<El> {
     Some(section(p, "permissions", tr("Permissions needed"), rows))
 }
 
-/// The voice command model's notice, when commands are on but not ready.
-pub(super) fn command_model_notice(ui: &Ui, p: Paint) -> Option<El> {
-    let (title, description) = super::commands::model_notice(ui)?;
-    Some(super::commands::model_notice_panel(
-        ui,
-        p,
-        title,
-        description,
-    ))
-}
-
 /// A save error where the OS has no listener card to show it in.
 pub(super) fn error_section(ui: &Ui, p: Paint) -> Option<El> {
     if ui.platform.caps.listener_control {
@@ -165,30 +153,28 @@ fn folder_label(ui: &Ui) -> String {
         .unwrap_or_else(|| folder.display().to_string())
 }
 
-/// Meetings (beta): the opt-in, then its permission, indicator, folder, and
-/// Apple Intelligence notes; once on, a second card with each detected call
-/// provider's Ask / Always record / Never offer choice.
-pub(super) fn meetings_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<El> {
-    if !ui.platform.caps.meetings {
-        return Vec::new();
-    }
-    let meetings = &ui.settings.meetings;
-    let mut rows = vec![toggle_row(
+/// The Meetings (beta) switch: the opt-in card's only row, and the first row
+/// of Meetings › Settings.
+pub(super) fn meetings_toggle(ui: &Ui, p: Paint) -> El {
+    toggle_row(
         p,
         "meetings-enabled",
         tr("Meetings (beta)"),
         tr("Offer to record calls and save local transcripts"),
-        meetings.enabled,
+        ui.settings.meetings.enabled,
         |ui: &mut Ui| {
             let enabled = !ui.settings.meetings.enabled;
-            if ui.update(|settings| settings.meetings.enabled = enabled)
-                && !enabled
-                && ui.pane == super::Pane::Meetings
-            {
-                ui.pane = super::Pane::Settings;
-            }
+            ui.update(|settings| settings.meetings.enabled = enabled);
         },
-    )];
+    )
+}
+
+/// Meetings › Settings: the opt-in, then its permission, indicator, folder,
+/// and Apple Intelligence notes; once on, Calendar and each detected call
+/// provider's Ask / Always record / Never offer choice.
+pub(super) fn meetings_settings(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<El> {
+    let meetings = &ui.settings.meetings;
+    let mut rows = vec![meetings_toggle(ui, p)];
     if meetings.enabled {
         let permitted = ui.platform.system_audio;
         rows.push(setting_row(
@@ -268,7 +254,7 @@ pub(super) fn meetings_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> Vec<El
             rows.push(note("meeting-folder-error", error, p.danger()));
         }
     }
-    let mut sections = vec![section(p, "meetings", tr("Meetings"), rows)];
+    let mut sections = vec![section(p, "meetings", tr("Call recording"), rows)];
     if meetings.enabled {
         sections.extend(calendar_section(ui, p, layer));
         sections.push(detected_calls_section(ui, p));
@@ -596,13 +582,7 @@ pub(super) fn launch_at_login_rows(ui: &Ui, p: Paint) -> Vec<El> {
         ),
         Some(status) => row_switch(p, status == LoginItemStatus::Enabled),
     };
-    let mut row = setting_row(
-        p,
-        "launch-at-login",
-        tr("Launch at login"),
-        Some(tr("Start Hex when you log in")),
-        control,
-    );
+    let mut row = setting_row(p, "launch-at-login", tr("Launch at login"), None, control);
     if matches!(
         status,
         Some(LoginItemStatus::Enabled | LoginItemStatus::Disabled)
@@ -630,7 +610,7 @@ pub(super) fn dock_icon_row(ui: &Ui, p: Paint) -> Option<El> {
             p,
             "dock-icon",
             tr("Show Dock icon"),
-            tr("Keep Hex in the menu bar when Settings is closed"),
+            None,
             ui.settings.show_dock_icon,
             |ui: &mut Ui| {
                 let show = !ui.settings.show_dock_icon;
@@ -639,13 +619,6 @@ pub(super) fn dock_icon_row(ui: &Ui, p: Paint) -> Option<El> {
         )
     })
 }
-
-const HEX_MICROPHONE_MODES: [VoiceFilterMode; 4] = [
-    VoiceFilterMode::Muffled,
-    VoiceFilterMode::Muted,
-    VoiceFilterMode::Quiet,
-    VoiceFilterMode::Normal,
-];
 
 /// The virtual microphone driver's row: install, update, or uninstall it.
 pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
@@ -765,71 +738,6 @@ pub(super) fn driver_row(ui: &Ui, p: Paint) -> El {
         ),
     };
     setting_row(p, "hex-mic-driver", title, Some(&description), controls)
-}
-
-/// Experimental: Hex Microphone, while its experiment is on.
-pub(super) fn hex_microphone_section(ui: &Ui, p: Paint) -> Option<El> {
-    if !ui.platform.caps.hex_microphone || !ui.settings.experimental.hex_microphone_available() {
-        return None;
-    }
-    let experimental = &ui.settings.experimental;
-    let labels: Vec<&str> = HEX_MICROPHONE_MODES
-        .iter()
-        .map(|m| super::fun::mode_label(*m))
-        .collect();
-    let selected = HEX_MICROPHONE_MODES
-        .iter()
-        .position(|mode| *mode == experimental.hex_microphone_mode)
-        .unwrap_or(0);
-    let mut rows = vec![
-        driver_row(ui, p),
-        setting_row(
-            p,
-            "hex-mic-mode",
-            tr("Mode while dictating"),
-            Some(super::fun::mode_description(
-                experimental.hex_microphone_mode,
-            )),
-            segmented(p, "hex-mic-mode-control", &labels, selected, |ui, index| {
-                let mode = HEX_MICROPHONE_MODES[index];
-                super::fun::set_tuning(ui, |cfg| cfg.mode = mode, true);
-            }),
-        ),
-        toggle_row(
-            p,
-            "hex-mic-comfort-noise",
-            tr("Comfort noise"),
-            tr("Keeps a quiet room tone while muted so callers know the line is live"),
-            experimental.hex_microphone_comfort_noise,
-            |ui: &mut Ui| {
-                let enabled = !ui.settings.experimental.hex_microphone_comfort_noise;
-                super::fun::set_tuning(ui, |cfg| cfg.comfort_noise = enabled, true);
-            },
-        ),
-    ];
-    if ui.platform.caps.fun {
-        rows.push(setting_row(
-            p,
-            "hex-mic-try-it",
-            tr("Try it"),
-            Some(tr(
-                "Try Hex Microphone and preview how callers hear you while you dictate",
-            )),
-            button(
-                p,
-                "open-fun-pane",
-                tr("Open Fun"),
-                ButtonKind::Secondary,
-                |ui: &mut Ui, tx| ui.select_pane(super::Pane::Fun, tx),
-            ),
-        ));
-    }
-    Some(section(
-        p,
-        "hex-microphone",
-        tr("Experimental: Hex microphone"),
-        rows,
-    ))
 }
 
 /// `target`'s modifier-only shortcut moved to `side`, unless that collides

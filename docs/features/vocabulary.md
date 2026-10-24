@@ -12,7 +12,7 @@ Turn it on                               // vocabulary.gate
 └── Off -> no Settings card, `hex vocabulary` refused (feature-off),
            prompts and search see an empty list   // vocabulary::entries / read_saved
 
-Settings › Vocabulary › Names and terms  // vocabulary.settings; after Dictation
+General › Vocabulary › Names and terms   // vocabulary.settings; after Dictation
 ├── Each row -> Term | Sounds like (comma-separated) | ×
 ├── + -> New empty row; saved once the term has text
 ├── Add suggested -> Adds vocabulary::SUGGESTED terms not already listed

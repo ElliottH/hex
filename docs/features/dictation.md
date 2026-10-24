@@ -18,8 +18,8 @@ The GPUI regression that injected this failure went with GPUI; no Rune test
 injects a failed shortcut save yet.
 
 **Shortcut:** Option by default, after macOS permissions and the selected local
-model are ready. Commands and OpenCode are not required. Settings > Dictation
-shortcut accepts modifier-only, modifier-plus-key, standalone Fn/Globe, and
+model are ready. Commands and OpenCode are not required. General > Dictation >
+Shortcut accepts modifier-only, modifier-plus-key, standalone Fn/Globe, and
 standalone function-key bindings. Capturing a replacement suspends global matching.
 On macOS and Windows the recorder shows the modifiers held so far (`⌥ ⌘ …`);
 a key records them at once, and releasing them all records the most held.
@@ -96,9 +96,9 @@ keep the 300 ms rule. Check:
 ### Shortcut Mode
 
 ```ts
-Settings > Shortcut mode = Hold (default)            // dictate.shortcut-mode
+General > Shortcut mode = Hold (default)             // dictate.shortcut-mode
   -> Hold and lock behave as described above
-Settings > Shortcut mode = Toggle
+General > Shortcut mode = Toggle
   Press -> Start (pre-roll as usual) -> Release keeps recording
   -> Fresh shortcut press -> Finish (with the release tail)
   -> Escape -> Cancel
@@ -132,13 +132,13 @@ and explicit programmatic capture have different intentional-start rules.
 ### Lock, With Or Without Hold
 
 ```ts
-Settings > Double-tap to lock                         // dictate.lock
+General > Double-tap to lock                          // dictate.lock; Hold only
   Hold -> Ordinary hold path remains available
   Tap -> Tap
     ├── Second press AND release <300 ms after first release -> LOCKED
     └── Slow second release -> No lock
 
-Settings > Double-tap only                            // dictate.double-tap-only
+General > Advanced > Double-tap only                  // dictate.double-tap-only
   Requires a key binding AND locking enabled
   Single press/hold -> No capture                     // disables hold, not a toggle
   Same two qualifying complete taps -> LOCKED         // same lock, not a third mode

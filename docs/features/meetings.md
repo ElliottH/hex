@@ -11,8 +11,11 @@ Linked checks are locators unless an executed result is recorded below.
 ## How To Get To It
 
 ```ts
-Settings > Meetings > Meetings (beta)               // meetings.opt-in; off by default
-├── On -> Meetings pane, menu-bar items, call detection, Option-Control-V
+Sidebar > Meetings (always listed on macOS)          // meetings.opt-in; off by default
+├── Off -> opt-in card "Meetings (beta)" -> Turn on -> meetings.enabled = true
+├── On -> header switch Recordings | Settings; menu-bar items, call detection,
+│   Option-Control-V
+│   Settings view: Call recording, Calendar, Detected calls
 │   ├── System Audio Recording                  // meetings.permission; asked only now
 │   │   ├── Allow -> macOS prompt the first time (tour's permission_control)
 │   │   ├── Decided before -> Privacy pane + drag guide ("System Audio Recording Only")
@@ -25,7 +28,8 @@ Settings > Meetings > Meetings (beta)               // meetings.opt-in; off by d
 │   └── Detected calls -> Ask / Always record / Never offer per provider // meetings.policy
 │       ├── Slack huddles, Zoom, Google Meet, Microsoft Teams, FaceTime (always listed)
 │       └── then each website or app chosen for from an offer's "…"
-└── Off -> Controller idles; no microphone-activity inspection, pane, or shortcut
+└── Off -> Controller idles; no microphone-activity inspection or shortcut;
+           the pane shows only the opt-in card
 
 Debug builds -> Always available (DEVELOPER_FEATURES_ENABLED)
 Agents -> hex mcp (read-only MCP server; works whether or not Meetings is on)
@@ -141,7 +145,7 @@ Mac with a GPU.
 ### Calendar Reminders
 
 ```ts
-Settings > Meetings > Calendar                       // meetings.calendar (macOS)
+Meetings > Settings > Calendar                       // meetings.calendar (macOS)
 ├── Connect calendar -> macOS full-access prompt, on this click only
 │   ├── Granted -> meetings.calendar.connected = true; reminders on, 1 min lead
 │   └── Denied / Restricted / write-only -> "Calendar access is off"
@@ -230,8 +234,8 @@ Checks: `meetings_need_other_people_or_a_call_link`,
 `the_calendar_asks_for_access_only_when_connect_is_pressed`,
 `a_connected_calendar_saves_reminders_and_lists_meetings`, and
 `denied_calendar_access_links_to_privacy_settings`. Scenes:
-`mac-settings` (disconnected), `mac-settings-calendar`, and
-`mac-settings-calendar-denied`.
+`meetings-settings` (disconnected), `meetings-calendar`, and
+`meetings-calendar-denied`.
 
 Not yet observed: the EventKit bridge against a real calendar, the macOS
 permission prompt, and a reminder on screen. The controller loop that turns a

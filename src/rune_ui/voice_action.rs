@@ -6,7 +6,7 @@ use rune::{El, col, row};
 
 use super::ShortcutTarget;
 use super::Ui;
-use super::controls::{Paint, card, note, section, setting_row, toggle_row};
+use super::controls::{Paint, card, described_row, note, section, toggle_row};
 use super::models::{self, Target};
 use super::settings::{cancel_capture, hotkey_control};
 use crate::app_settings::AppSettings;
@@ -75,15 +75,22 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             p,
             "capture",
             tr("Capture"),
-            vec![setting_row(
+            vec![described_row(
                 p,
                 "voice-action-shortcut",
                 tr("Shortcut"),
-                Some(if enabled {
-                    tr("Hold to speak; selected text is included automatically")
-                } else {
-                    tr("Saved for when Voice Action is enabled")
-                }),
+                Some(
+                    super::settings::granted(ui, p, ShortcutTarget::VoiceAction).unwrap_or_else(
+                        || {
+                            let purpose = if enabled {
+                                tr("Hold to speak; selected text is included automatically")
+                            } else {
+                                tr("Saved for when Voice Action is enabled")
+                            };
+                            (purpose.to_string(), p.muted())
+                        },
+                    ),
+                ),
                 row()
                     .key("voice-action-shortcut-control")
                     .gap(8.0)

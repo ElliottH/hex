@@ -2,8 +2,9 @@
 
 Experiments are unfinished features whose code sits on `main` but stays
 dormant until someone turns one on for their own Hex. They are **unsupported**:
-an experiment may misbehave, change, or disappear without notice, and nothing in
-the window shows or offers them. There is a flag, not a setting.
+an experiment may misbehave, change, or disappear without notice, and the
+window offers no switch for them. There is a flag, not a setting. Panes an
+experiment adds list under **Experiments** at the bottom of the sidebar.
 
 ```ts
 Turn an experiment on                    // experiments.sources
@@ -37,8 +38,15 @@ The known experiments are compiled into
   chapters in the manifest, and the boundary pass after Stop.
 - `vocabulary`: a shared list of names and their likely mis-transcriptions,
   for rewriting and search ([Vocabulary](vocabulary.md)). It adds a Settings
-  card and the `hex vocabulary` commands, an exception to "nothing in the
-  window shows them" that appears only while it is on.
+  card and the `hex vocabulary` commands, which appear only while it is on.
+- `voice-filter`: the Voice Filter pane (macOS), the only home of the Hex
+  Microphone driver, its filter modes, and Try it
+  ([Hex Microphone](README.md#experimental-hex-microphone-and-voice-filter)).
+  It lists under Experiments while the experiment is on, and also whenever
+  `experimental.hex_microphone` is true or the driver is installed, so nobody
+  loses the controls for a driver they already use. Check:
+  `voice_filter_needs_its_experiment_or_hex_microphone` in
+  [panes.rs](../../src/rune_ui/tests/panes.rs).
 
 `hex experiments` reads and edits only the sources; it runs before process
 logging, the instance lock, the GUI, or permissions, and never talks to a

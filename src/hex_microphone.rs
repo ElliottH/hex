@@ -144,7 +144,7 @@ static SERVICE_HOSTED: AtomicBool = AtomicBool::new(false);
 static PENDING_ENGINE_SWAP: AtomicBool = AtomicBool::new(false);
 static PENDING_ENGINE: OnceLock<Mutex<Option<HexMicEngine>>> = OnceLock::new();
 
-// Tunable per-mode parameters for the live engine and Fun pane sliders.
+// Tunable per-mode parameters for the live engine and Voice Filter pane sliders.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TunedFilterConfig {
     pub mode: VoiceFilterMode,

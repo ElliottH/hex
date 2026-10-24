@@ -3,8 +3,8 @@
 **Status:** Done and merged into `main`: Rune is Hex's only UI toolkit and GPUI is
 deleted. Every surface runs on Rune: the Linux single-process window and HUD,
 the Windows tray app and HUD, the macOS menu-bar app with its meeting capsules,
-every pane (Settings, Modes, Voice Action, History, Commands, Meetings, Fun,
-Activity, HUD Lab), the onboarding tour, and the transcription picker. The
+every pane (General, Modes, Voice Action, History, Commands, Meetings, Voice
+Filter, Activity, HUD Lab), the onboarding tour, and the transcription picker. The
 macOS dictation HUD stays a native Metal `NSPanel` (`dictation_indicator.rs`,
 with `spring.rs` for its springs). Rune, `rune-kit`, and
 `rune-theme-opencode` are pinned to a commit on Rune's public MIT `main`
@@ -42,8 +42,8 @@ src/rune_ui/lists.rs             split list/detail, rows, group labels, tags,
                                  permission control, small_button, slider
 src/rune_ui/platform.rs          Capabilities, PlatformState, PlatformRequest,
                                  NativeHost / Fixture seam
-src/rune_ui/platform_settings.rs macOS and Windows Settings sections and rows
-src/rune_ui/settings.rs          Settings pane and shortcut recorder
+src/rune_ui/platform_settings.rs macOS and Windows General rows; Meetings settings
+src/rune_ui/settings.rs          General pane and shortcut recorder
 src/rune_ui/modes.rs             Modes pane (rules, corrections, OpenCode, transformations)
 src/rune_ui/voice_action.rs      Voice Action pane
 src/rune_ui/models.rs            OpenCode catalog, model and thinking pickers
@@ -53,7 +53,7 @@ src/rune_ui/onboarding.rs        First-run setup tour across all platforms
 src/rune_ui/commands.rs          Commands pane (macOS)
 src/rune_ui/meetings.rs          Meetings pane (macOS)
 src/rune_ui/meeting_capsules.rs  Offer, call-ended, recording, and ready capsules (macOS)
-src/rune_ui/fun.rs               Experimental Hex Microphone / Fun pane (macOS)
+src/rune_ui/fun.rs               Voice Filter pane: Hex Microphone (macOS, experiment)
 src/rune_ui/hud_lab.rs           Developer HUD Lab pane (macOS debug)
 src/rune_ui/activity.rs          Developer Activity pane (debug)
 src/rune_ui/linux_host.rs        In-process Linux host bridge
@@ -67,16 +67,16 @@ src/rune_ui/tests/panes.rs       macOS and Windows surface tests and goldens
 
 | Surface | Status | Goldens (`tests/golden/rune-*.png`) |
 | --- | --- | --- |
-| Shell & Settings (Linux) | Sidebar navigation, status card, desktop shortcuts (X11 / portal / commands), dictation, behavior, application rows, Quit Hex, Update button when ready | `rune-portal-{light,dark}`, `rune-commands-dark`, `rune-disabled-light`, `rune-capturing-dark`, `rune-chinese-dark`, `rune-menus-light` |
+| Shell & General (Linux) | Sidebar navigation, status card, desktop shortcuts (X11 / portal / commands), dictation, behavior, application rows, Quit Hex, Update button when ready | `rune-portal-{light,dark}`, `rune-commands-dark`, `rune-disabled-light`, `rune-capturing-dark`, `rune-chinese-dark`, `rune-menus-light` |
 | Voice Action | Opt-in with shortcut conflict check, recorder, searchable OpenCode model and thinking pickers, missing/unavailable OpenCode notice | `rune-voice-action-{light,dark}`, `rune-voice-action-off-light`, `rune-voice-action-unavailable-{light,dark}`, `rune-voice-action-models-dark` |
 | History | Search, retention select, two-step Clear all, detail with Copy and Delete, latency and processing facts | `rune-history-{light,dark}`, `rune-history-empty-light` |
 | Modes | Global + custom modes, searchable application picker, native file dialog ("Choose a file…": FileChooser portal, `NSOpenPanel`, `IFileOpenDialog`), website rules, corrections, OpenCode rewriting, drag-reordered transformations, two-step delete | `rune-modes-{light,dark}`, `rune-modes-global-light`, `rune-modes-picker-{light,dark}` |
 | Transcription picker | Modal over scrim: languages, model cards with recommendation and `Streams` tags, Use/Download/Cancel/Delete (two-step), live progress | `rune-picker-{light,dark}`, `rune-picker-downloading-{light,dark}` |
 | Onboarding tour | `onboarding::Flow`: Linux/Windows Welcome → Model setup → Done; macOS adds Microphone/Input Monitoring/Accessibility rows, System Settings guides, Give it a try practice field, and relaunch recovery | `rune-onboarding-dark`, `rune-onboarding-setup-{light,dark}`, `rune-mac-onboarding*` (10 states) |
-| Settings (macOS & Windows) | macOS permissions, command model notice, Meetings section, Launch at login, Show Dock icon, Check now, Experimental Hex microphone, shortcut sides; Windows listener card, Launch at login, Enable on launch | `rune-mac-settings-{light,dark}`, `rune-mac-settings-permissions-dark`, `rune-mac-settings-sides-dark`, `rune-windows-settings-light` |
-| Commands (macOS) | Task-grouped catalog, search, detail, Create/Edit config, Copy agent prompt, opt-in with microphone-policy confirmation, command model retry/disable notice | `rune-mac-commands-{light,dark}`, `rune-mac-commands-confirm-light` |
-| Meetings (macOS) | Day-grouped list, search, detail with summary and `You`/`Them` turns, Copy transcript, inline Rename, overflow menu (Copy summary, Reveal, Summarize/Regenerate, Delete…), two-step trash, Start/Stop recording | `rune-meetings-{light,dark}`, `rune-meetings-recording-{light,dark}`, `rune-meetings-actions-dark`, `rune-meetings-delete-light`, `rune-meetings-rename-dark`, `rune-meetings-failed-dark`, `rune-meetings-empty-light` |
-| Fun (macOS) | Driver status and install/update/uninstall, nine voice-filter modes, live sliders, Try it 5 s recorder and dual `rune::Shape` bar waveforms | `rune-mac-fun-{light,dark}`, `rune-mac-fun-muted-dark`, `rune-mac-fun-driver-missing-light` |
+| General (macOS & Windows) | Dictation, Output, and Application cards with a collapsed Advanced disclosure (fits 980×760 on macOS), macOS permissions, Launch at login, Show Dock icon, shortcut sides; Windows listener card, Launch at login, Enable on launch; Check for updates under the sidebar version | `rune-mac-settings-{light,dark}`, `rune-mac-settings-advanced-light`, `rune-mac-settings-permissions-dark`, `rune-mac-settings-sides-dark`, `rune-windows-settings-light` |
+| Commands (macOS) | Task-grouped catalog, search, detail, Create/Edit config, Copy agent prompt, enable card with microphone-policy confirmation, command model retry/disable notice | `rune-mac-commands-{light,dark}`, `rune-mac-commands-confirm-light`, `rune-mac-commands-unavailable-dark` |
+| Meetings (macOS) | Day-grouped list, search, detail with summary and `You`/`Them` turns, Copy transcript, inline Rename, overflow menu (Copy summary, Reveal, Summarize/Regenerate, Delete…), two-step trash, Start/Stop recording; Recordings | Settings switch (Call recording, Calendar, Detected calls); opt-in card while off | `rune-meetings-{light,dark}`, `rune-meetings-settings-{light,dark}`, `rune-meetings-off-{light,dark}`, `rune-meetings-calendar-{light,dark}`, `rune-meetings-calendar-denied-dark`, `rune-meetings-recording-{light,dark}`, `rune-meetings-actions-dark`, `rune-meetings-delete-light`, `rune-meetings-rename-dark`, `rune-meetings-failed-dark`, `rune-meetings-empty-light` |
+| Voice Filter (macOS, Experiments) | Driver status and install/update/uninstall, nine voice-filter modes, live sliders, Try it 5 s recorder and dual `rune::Shape` bar waveforms | `rune-mac-voice-filter-{light,dark}`, `rune-mac-voice-filter-muted-dark`, `rune-mac-voice-filter-driver-missing-light` |
 | HUD Lab & Activity (debug) | HUD Lab state/queue/style/slider controls and preset copy; Activity live event list and raw JSON inspector | `rune-mac-hud-lab-{light,dark}`, `rune-mac-activity-light` |
 
 Run headlessly on any OS:

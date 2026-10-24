@@ -90,6 +90,11 @@ static HUD_LAB_ICON: Icon = Icon {
     view: 16.0,
     body: include_str!("../assets/icons/hud-lab.svg"),
 };
+static VOICE_FILTER_ICON: Icon = Icon {
+    name: "hex-voice-filter",
+    view: 16.0,
+    body: include_str!("../assets/icons/voice-filter.svg"),
+};
 static MEETINGS_ICON: Icon = Icon {
     name: "hex-meetings",
     view: 16.0,
@@ -190,7 +195,7 @@ pub(crate) enum Destination {
 #[cfg(target_os = "macos")]
 pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
     let pane = match &destination {
-        Destination::Settings | Destination::Models => Pane::Settings,
+        Destination::Settings | Destination::Models => Pane::General,
         Destination::Meetings(_) => Pane::Meetings,
         Destination::Modes => Pane::Modes,
         Destination::Commands => Pane::Commands,
@@ -205,15 +210,22 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
             let language = ui.settings.transcription.language.clone();
             picker::open(ui, language);
         }
-        Destination::Meetings(Some(id)) => ui.meetings.select(id),
+        Destination::Meetings(Some(id)) => {
+            ui.meetings.view = meetings::View::Recordings;
+            ui.meetings.select(id);
+        }
         _ => {}
     }
 }
 
-/// The pane the window shows, by its `hex window show` name.
+/// The pane the window shows, by its `hex window show` name: General is
+/// still `settings` there.
 #[cfg(target_os = "macos")]
 pub(crate) fn current_pane(ui: &Ui) -> &'static str {
-    ui.pane.key().trim_start_matches("nav-")
+    match ui.pane {
+        Pane::General => "settings",
+        pane => pane.key().trim_start_matches("nav-"),
+    }
 }
 
 /// The OS's rules for a shortcut, the ones Settings applies when recording
@@ -338,34 +350,35 @@ struct ServiceView {
 /// [`platform::Capabilities`] and opt-ins ([`Pane::shown`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum Pane {
+    /// Dictation, output, and application basics.
     #[default]
-    Settings,
+    General,
     Modes,
-    /// The voice command catalog (macOS).
-    Commands,
     VoiceAction,
+    /// The voice command catalog and its opt-in (macOS).
+    Commands,
+    /// Recorded calls and their settings, or the opt-in (macOS beta).
+    Meetings,
     History,
-    /// The Hex Microphone's tuning and try-it demo (macOS, behind its
-    /// experiment).
-    Fun,
+    /// The Hex Microphone's driver, tuning, and try-it demo (macOS, under
+    /// Experiments).
+    VoiceFilter,
     /// The dictation indicator's tuning (macOS debug builds).
     HudLab,
-    /// Recorded calls (macOS beta, behind the Meetings opt-in).
-    Meetings,
     /// The event log (debug builds).
     Activity,
 }
 
 impl Pane {
     const ALL: [Pane; 9] = [
-        Pane::Settings,
+        Pane::General,
         Pane::Modes,
-        Pane::Commands,
         Pane::VoiceAction,
-        Pane::History,
-        Pane::Fun,
-        Pane::HudLab,
+        Pane::Commands,
         Pane::Meetings,
+        Pane::History,
+        Pane::VoiceFilter,
+        Pane::HudLab,
         Pane::Activity,
     ];
 
@@ -373,23 +386,37 @@ impl Pane {
         let caps = ui.platform.caps;
         match self {
             Pane::Commands => caps.commands,
-            Pane::Meetings => caps.meetings && ui.settings.meetings.available(),
-            Pane::Fun => caps.fun && ui.settings.experimental.hex_microphone_available(),
+            Pane::Meetings => caps.meetings,
+            Pane::VoiceFilter => {
+                caps.fun
+                    && (ui.platform.voice_filter
+                        || ui.settings.experimental.hex_microphone_available()
+                        || ui
+                            .platform
+                            .hex_microphone
+                            .as_ref()
+                            .is_some_and(|status| status.driver_bundle_installed))
+            }
             Pane::HudLab => caps.hud_lab && ui.platform.developer,
             Pane::Activity => ui.platform.developer,
             _ => true,
         }
     }
 
+    /// Listed under the sidebar's Experiments heading.
+    fn experimental(self) -> bool {
+        matches!(self, Pane::VoiceFilter | Pane::HudLab | Pane::Activity)
+    }
+
     fn title(self) -> &'static str {
         match self {
-            Pane::Settings => tr("Settings"),
+            Pane::General => tr("General"),
             Pane::Modes => tr("Modes"),
             Pane::Commands => tr("Commands"),
             Pane::VoiceAction => tr("Voice Action"),
             Pane::History => tr("History"),
             Pane::Meetings => tr("Meetings"),
-            Pane::Fun => tr("Fun"),
+            Pane::VoiceFilter => tr("Voice Filter"),
             Pane::HudLab => "HUD Lab",
             Pane::Activity => tr("Activity"),
         }
@@ -397,13 +424,13 @@ impl Pane {
 
     fn key(self) -> &'static str {
         match self {
-            Pane::Settings => "nav-settings",
+            Pane::General => "nav-general",
             Pane::Modes => "nav-modes",
             Pane::Commands => "nav-commands",
             Pane::VoiceAction => "nav-voice-action",
             Pane::History => "nav-history",
             Pane::Meetings => "nav-meetings",
-            Pane::Fun => "nav-fun",
+            Pane::VoiceFilter => "nav-voice-filter",
             Pane::HudLab => "nav-hud-lab",
             Pane::Activity => "nav-activity",
         }
@@ -411,13 +438,14 @@ impl Pane {
 
     fn icon(self) -> &'static Icon {
         match self {
-            Pane::Settings => &SETTINGS_ICON,
+            Pane::General => &SETTINGS_ICON,
             Pane::Modes => &MODES_ICON,
             Pane::Commands => &COMMANDS_ICON,
             Pane::VoiceAction => &VOICE_ACTION_ICON,
             Pane::History => &HISTORY_ICON,
             Pane::Meetings => &MEETINGS_ICON,
-            Pane::Fun | Pane::HudLab => &HUD_LAB_ICON,
+            Pane::VoiceFilter => &VOICE_FILTER_ICON,
+            Pane::HudLab => &HUD_LAB_ICON,
             Pane::Activity => &ACTIVITY_ICON,
         }
     }
@@ -455,9 +483,11 @@ pub(crate) struct Ui {
     service_settings: Option<AppSettings>,
     pane: Pane,
     open: Option<Menu>,
-    // Settings
+    // General
     microphones: Result<Vec<String>, String>,
     confirm_release: bool,
+    /// General's Advanced disclosure is open.
+    advanced: bool,
     capture: Capture,
     hints: TextEdit,
     vocabulary: vocabulary::VocabularyEditor,
@@ -504,6 +534,8 @@ impl Ui {
         ui.modes.load_personal_commands();
         ui.platform.developer = crate::DEVELOPER_FEATURES_ENABLED;
         ui.platform.vocabulary = crate::vocabulary::enabled();
+        ui.platform.voice_filter =
+            crate::experiments::enabled(crate::experiments::Experiment::VoiceFilter);
         ui.tour = onboarding::Tour::start(&ui.settings, &ui.platform);
         ui.platform.set_login_item(host::launch_at_login());
         ui
@@ -520,10 +552,11 @@ impl Ui {
             error: None,
             connection_error: None,
             service_settings: None,
-            pane: Pane::Settings,
+            pane: Pane::General,
             open: None,
             microphones: Ok(Vec::new()),
             confirm_release: false,
+            advanced: false,
             capture: Capture::Idle,
             hints,
             vocabulary,
@@ -815,6 +848,7 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed |= modes::poll_chooser(ui);
     changed |= ui.host.poll(&mut ui.platform);
     if ui.pane == Pane::Meetings
+        && meetings::available(ui)
         && let Some(listed) = ui.host.meetings()
     {
         ui.meetings.adopt(listed);
@@ -840,10 +874,10 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
         }
         if let Some(settings) = settings {
             changed |= ui.adopt(settings);
-            // A pane the adopted settings hide (Meetings turned off from
-            // `hex settings`) leaves for Settings.
+            // A pane the adopted settings hide (the Hex Microphone turned
+            // off from `hex settings`) leaves for General.
             if !ui.pane.shown(ui) {
-                ui.pane = Pane::Settings;
+                ui.pane = Pane::General;
                 ui.open = None;
                 changed = true;
             }
@@ -869,13 +903,13 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     // Menus and popovers mount above the page (rune-kit overlays).
     let mut layer = Vec::new();
     let (actions, body) = match ui.pane {
-        Pane::Settings => (Vec::new(), settings::pane(ui, p, &mut layer)),
+        Pane::General => (Vec::new(), settings::pane(ui, p, &mut layer)),
         Pane::Modes => modes::pane(ui, p, &mut layer),
         Pane::Commands => commands::pane(ui, p),
         Pane::VoiceAction => (Vec::new(), voice_action::pane(ui, p, &mut layer)),
         Pane::History => history::pane(ui, p, &mut layer),
         Pane::Meetings => meetings::pane(ui, p, &mut layer),
-        Pane::Fun => (Vec::new(), fun::pane(ui, p)),
+        Pane::VoiceFilter => (Vec::new(), fun::pane(ui, p)),
         Pane::HudLab => hud_lab::pane(ui, p),
         Pane::Activity => activity::pane(ui, p),
     };
@@ -930,7 +964,13 @@ fn title_bar(element: El) -> El {
 fn sidebar(ui: &Ui, p: Paint) -> El {
     // Rows touch, so the pointer is always over one, as in a native source list.
     let mut nav = lists::source_list(col().key("nav"));
+    let mut experiments = false;
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
+        if pane.experimental() && !experiments {
+            experiments = true;
+            nav = nav
+                .child(lists::group_label(p, "nav-experiments", tr("Experiments"), false).px(6.0));
+        }
         nav = nav.child(nav_item(p, pane, ui.pane == pane));
     }
     let action = match ui.view.as_ref().map(|view| &view.update_status) {
@@ -968,6 +1008,60 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
                 .pl(6.0)
                 .pt(8.0),
         )
+        .children(update_status(ui, p))
+}
+
+/// Under the version: a manual check, or what the updater is doing. An
+/// available update is the Update button above.
+fn update_status(ui: &Ui, p: Paint) -> Option<El> {
+    let status = |label: &str| {
+        text(label)
+            .key("update-status")
+            .font(p.k.ty.small)
+            .color(p.faint())
+            .pl(6.0)
+            .pt(2.0)
+    };
+    Some(match &ui.view.as_ref()?.update_status {
+        DesktopUpdateStatus::Unavailable
+        | DesktopUpdateStatus::Available
+        | DesktopUpdateStatus::ReadyToRestart => return None,
+        DesktopUpdateStatus::Managed => status(tr("Managed by your organization")),
+        DesktopUpdateStatus::Checking => status(tr("Checking for updates…")),
+        DesktopUpdateStatus::Downloading => status(tr("Downloading update")),
+        DesktopUpdateStatus::Current | DesktopUpdateStatus::Failed => {
+            let c = &p.k.c;
+            row()
+                .key("check-for-updates")
+                .role("button")
+                .label(tr("Check for updates"))
+                .h(20.0)
+                .px(6.0)
+                .center_y()
+                .radius(p.k.radius.sm)
+                .hover(c.hover)
+                .press(c.pressed)
+                .focusable(true)
+                .focus_ring(2.0, -2.0, c.border_focus)
+                .on_press(|ui: &mut Ui| ui.send(Request::Desktop(DesktopAction::CheckForUpdates)))
+                .child(
+                    text(tr("Check for updates"))
+                        .key("label")
+                        .font(p.k.ty.small)
+                        .color(c.text_muted)
+                        .truncate(),
+                )
+        }
+        DesktopUpdateStatus::SourceBuild => status(tr("Updated from your source checkout")),
+        DesktopUpdateStatus::PackageManager => status(tr("Updated by your package manager")),
+        DesktopUpdateStatus::PackageUpdate { command } => text(command)
+            .key("update-command")
+            .font(p.k.ty.small)
+            .color(p.faint())
+            .wrap()
+            .pl(6.0)
+            .pt(2.0),
+    })
 }
 
 /// Test builds also name their commit: main moves past a release without
@@ -1233,20 +1327,12 @@ const SCENES: &[Scene] = &[
         ui.platform
             .permissions_asked
             .push(crate::onboarding::PermissionKind::Accessibility);
-        ui.settings.commands_enabled = true;
-        ui.platform.command_model = platform::CommandModel::Failed;
         ui.platform.login_item = Some(crate::login_item::LoginItemStatus::RequiresApproval);
         ui.platform.accessibility_renamed = true;
     }),
-    ("mac-settings-calendar", |ui| {
+    ("mac-settings-advanced", |ui| {
         *ui = mac_fixture();
-        ui.settings.meetings.calendar.connected = true;
-        ui.settings.meetings.calendar.excluded_calendars = vec!["birthdays".into()];
-        ui.platform.calendar = platform::CalendarView::preview();
-    }),
-    ("mac-settings-calendar-denied", |ui| {
-        *ui = mac_fixture();
-        ui.platform.calendar.access = crate::calendar::CalendarAccess::Denied;
+        ui.advanced = true;
     }),
     ("windows-settings", |ui| {
         *ui = fixture(DesktopShortcuts::Registered);
@@ -1259,6 +1345,12 @@ const SCENES: &[Scene] = &[
         ui.settings.commands_enabled = true;
         ui.pane = Pane::Commands;
     }),
+    ("mac-commands-unavailable", |ui| {
+        *ui = mac_fixture();
+        ui.settings.commands_enabled = true;
+        ui.platform.command_model = platform::CommandModel::Failed;
+        ui.pane = Pane::Commands;
+    }),
     ("mac-commands-confirm", |ui| {
         *ui = mac_fixture();
         ui.settings.release_microphone_while_idle = true;
@@ -1269,6 +1361,30 @@ const SCENES: &[Scene] = &[
     }),
     ("meetings", |ui| {
         *ui = mac_fixture();
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-settings", |ui| {
+        *ui = mac_fixture();
+        ui.meetings.view = meetings::View::Settings;
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-calendar", |ui| {
+        *ui = mac_fixture();
+        ui.settings.meetings.calendar.connected = true;
+        ui.settings.meetings.calendar.excluded_calendars = vec!["birthdays".into()];
+        ui.platform.calendar = platform::CalendarView::preview();
+        ui.meetings.view = meetings::View::Settings;
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-calendar-denied", |ui| {
+        *ui = mac_fixture();
+        ui.platform.calendar.access = crate::calendar::CalendarAccess::Denied;
+        ui.meetings.view = meetings::View::Settings;
+        ui.pane = Pane::Meetings;
+    }),
+    ("meetings-off", |ui| {
+        *ui = mac_fixture();
+        ui.settings.meetings.enabled = false;
         ui.pane = Pane::Meetings;
     }),
     ("meetings-recording", |ui| {
@@ -1307,20 +1423,20 @@ const SCENES: &[Scene] = &[
         ui.meetings = meetings::MeetingsPane::default();
         ui.pane = Pane::Meetings;
     }),
-    ("mac-fun", |ui| {
+    ("mac-voice-filter", |ui| {
         *ui = mac_fixture();
-        ui.pane = Pane::Fun;
+        ui.pane = Pane::VoiceFilter;
     }),
-    ("mac-fun-muted", |ui| {
+    ("mac-voice-filter-muted", |ui| {
         *ui = mac_fixture();
         ui.platform.tuning.mode = crate::voice_filter::VoiceFilterMode::Muted;
         ui.platform.demo = Some(fun::preview_demo(
             false,
             Some(crate::hex_microphone::DemoPlaybackTrack::CallHears),
         ));
-        ui.pane = Pane::Fun;
+        ui.pane = Pane::VoiceFilter;
     }),
-    ("mac-fun-driver-missing", |ui| {
+    ("mac-voice-filter-driver-missing", |ui| {
         *ui = mac_fixture();
         if let Some(driver) = &mut ui.platform.hex_microphone {
             driver.driver_bundle_installed = false;
@@ -1329,7 +1445,7 @@ const SCENES: &[Scene] = &[
             driver.active_apps.clear();
         }
         ui.platform.demo = Some(fun::preview_demo(true, None));
-        ui.pane = Pane::Fun;
+        ui.pane = Pane::VoiceFilter;
     }),
     ("mac-hud-lab", |ui| {
         *ui = mac_fixture();

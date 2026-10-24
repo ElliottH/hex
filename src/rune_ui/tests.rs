@@ -4,7 +4,7 @@ use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
 use rune::text::TextSystem;
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
-/// Tall enough to show every Settings section without scrolling.
+/// Tall enough to show every General section without scrolling.
 const GOLDEN_SIZE: (f32, f32) = (980.0, 1720.0);
 /// The window's own size, for the other panes.
 const PANE_SIZE: (f32, f32) = (980.0, 760.0);
@@ -62,7 +62,7 @@ fn portal_desktops_show_what_they_granted_beside_each_recorder() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     let shown = texts(&rt);
     for expected in [
-        "Shortcuts",
+        "Dictation",
         "Your desktop granted F12",
         "Your desktop granted Ctrl+Alt+V",
         "Change shortcut",
@@ -143,6 +143,7 @@ fn enabling_sends_the_listener_action() {
 #[test]
 fn releasing_the_microphone_asks_first() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    tap(&mut rt, "advanced-toggle");
     tap(&mut rt, "microphone-mode-control/segment1");
     assert!(rt.state.confirm_release);
     assert!(!rt.state.settings.release_microphone_while_idle);
@@ -287,7 +288,7 @@ fn the_sidebar_switches_panes_and_keeps_settings() {
         ("nav-modes", Pane::Modes),
         ("nav-voice-action", Pane::VoiceAction),
         ("nav-history", Pane::History),
-        ("nav-settings", Pane::Settings),
+        ("nav-general", Pane::General),
     ] {
         tap(&mut rt, key);
         assert_eq!(rt.state.pane, pane);
@@ -325,7 +326,7 @@ fn switching_panes_is_instant() {
         !panel
             .iter()
             .any(|e| e.key.as_deref() == Some("terminal-paste")),
-        "Settings left at once"
+        "General left at once"
     );
     for element in panel {
         assert!(
@@ -641,7 +642,7 @@ fn the_sidebar_moves_with_arrows_and_command_numbers() {
     let mut rt = runtime("portal", true, PANE_SIZE);
     key(&mut rt, Key::Tab, Mods::default());
     assert!(
-        focused(&rt).ends_with("nav-settings"),
+        focused(&rt).ends_with("nav-general"),
         "Tab enters at the current pane"
     );
     key(&mut rt, Key::Down, Mods::default());
@@ -661,11 +662,11 @@ fn the_sidebar_moves_with_arrows_and_command_numbers() {
         "focus follows the shortcut"
     );
     key(&mut rt, Key::Command('1'), command);
-    assert_eq!(rt.state.pane, Pane::Settings);
+    assert_eq!(rt.state.pane, Pane::General);
     key(&mut rt, Key::Command('9'), command);
-    assert_eq!(rt.state.pane, Pane::Settings, "no ninth pane");
+    assert_eq!(rt.state.pane, Pane::General, "no ninth pane");
     key(&mut rt, Key::Up, Mods::default());
-    assert_eq!(rt.state.pane, Pane::Settings, "Up stops at the first pane");
+    assert_eq!(rt.state.pane, Pane::General, "Up stops at the first pane");
     let last = *shown.last().unwrap();
     key(
         &mut rt,
@@ -897,7 +898,7 @@ impl Drop for Goldens {
     }
 }
 
-/// Every pane in both appearances; Settings at its full height.
+/// Every pane in both appearances; General at its full height.
 #[test]
 fn goldens() {
     let _goldens = Goldens::collect();

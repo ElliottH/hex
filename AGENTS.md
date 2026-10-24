@@ -246,9 +246,10 @@ substitute for source inspection or a second roadmap.
   snapshot-and-action types shared by the Linux and Windows hosts, the window,
   and `hex status`.
 - `rune_ui`: the one window on macOS, Windows, and Linux, on Rune with
-  `rune-kit` and the OpenCode theme: Settings, Modes with mode-owned
-  corrections and processing, Voice Action, History, opt-in Commands, Meetings,
-  experimental Fun, developer-only Activity and HUD Lab, the transcription
+  `rune-kit` and the OpenCode theme: General, Modes with mode-owned
+  corrections and processing, Voice Action, opt-in Commands, Meetings (each
+  feature owns its settings), History, and under Experiments the Voice Filter
+  and developer-only HUD Lab and Activity, the transcription
   picker, the onboarding tour, the macOS meeting capsules, and the `--snap`
   fixture scenes. `platform::Capabilities` decides which panes and rows exist;
   `rune_ui/linux_host.rs`, `windows_host.rs`, and `macos_host.rs` connect it to
@@ -518,7 +519,7 @@ CoreAudio formats, AppleScript details, or event serialization.
 - Meeting detection may inspect process audio metadata but must not capture
   samples. Detection offers recording, and starts it automatically only for a
   provider (website or app) the user explicitly set to Always record in
-  Settings › Meetings › Detected calls or an offer's "…"; every provider
+  Meetings › Settings › Detected calls or an offer's "…"; every provider
   defaults to Ask. An automatic start passes the same stability count and
   snooze as an offer, so a stopped or dismissed call never restarts until its
   app leaves the microphone, and it shows as visibly as a manual recording. An
@@ -797,7 +798,7 @@ lists them; `--theme light|dark`, `--size WxH`, and `--scale` adjust the
 render). Scenes cover every pane and state the goldens check: the Linux and
 Windows panes (`modes`, `voice-action`, `history`, `picker`, `onboarding`,
 `windows-settings`, …) and the macOS ones (`mac-settings`, `mac-commands`,
-`meetings*`, `mac-fun*`, `mac-hud-lab`, `mac-activity`, `mac-onboarding*`).
+`meetings*`, `mac-voice-filter*`, `mac-hud-lab`, `mac-activity`, `mac-onboarding*`).
 `live` renders the running Linux Hex's real state. On a host without a GPU,
 render on lavapipe with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`.
 `cargo test rune_ui` compares the light and dark goldens in `tests/golden/`.

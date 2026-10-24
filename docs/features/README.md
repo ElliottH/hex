@@ -145,13 +145,13 @@ Launch Hex, setup incomplete              // setup.tour; full-window, own column
 └── Done -> paste last, Voice Action, Modes tips -> Start using Hex
     // Windows and Linux: Welcome -> Setup (the model row only) -> Done
 
-Settings > Local transcription
+General > Speech model
   -> Prepare candidate
      ├── Success -> Save selection
      └── Failure -> Preserve previous selection and show error
 
 Permissions revoked later
-  -> Settings > Permissions needed: the same rows and Allow control as the tour
+  -> General > Permissions needed: the same rows and Allow control as the tour
      └── On, waiting for a relaunch -> "Restart Hex"
 ```
 
@@ -319,7 +319,7 @@ Saved shortcut                           // dictation; Option by default
     ├── Capture active -> Cancel that capture
     └── Otherwise -> Cancel newest cancellable job
 
-Settings > Double-tap only               // optional for key bindings
+General > Advanced > Double-tap only     // optional for key bindings
   -> Disable single-hold activation
   -> Keep the double-tap hands-free path
 ```
@@ -529,11 +529,12 @@ actual capture and output remain in [Dictation](dictation.md).
 focus-free offer, menu-bar recording state, rolling transcription, echo
 suppression, and the Markdown copy in the user's transcript folder.
 
-## Experimental: Hex Microphone And Fun
+## Experimental: Hex Microphone And Voice Filter
 
 ```ts
-HEX_EXPERIMENTAL_MIC=1 or experimental.hex_microphone = true // fun.hex-microphone; macOS
-├── Sidebar -> Fun pane + Settings > Experimental: Hex microphone
+voice-filter experiment, HEX_EXPERIMENTAL_MIC=1, experimental.hex_microphone = true,
+or the driver installed                  // fun.hex-microphone; macOS
+├── Sidebar > Experiments > Voice Filter  // the only home of these controls
 ├── Hex Microphone card
 │   ├── Driver status -> Installed v<ver> / In use by <app> + Uninstall
 │   │   ├── Version mismatch -> v<old> installed + Update + Uninstall
@@ -563,9 +564,11 @@ and [rune_ui/fun.rs](../../src/rune_ui/fun.rs). Checks:
 `driver_plist_version_and_status_mismatch_are_detected`,
 `osascript_failure_classifies_user_cancel_and_errors`,
 `audio_service_restart_interrupts_stream_and_recovers`,
-`fun_saves_the_mode_and_applies_the_tuning_live`,
-`try_it_records_and_plays_through_the_host`, and `settings_try_it_opens_fun`.
-Scenes: `mac-fun`, `mac-fun-muted`, `mac-fun-driver-missing`.
+`voice_filter_saves_the_mode_and_applies_the_tuning_live`,
+`try_it_records_and_plays_through_the_host`, and
+`voice_filter_needs_its_experiment_or_hex_microphone`.
+Scenes: `mac-voice-filter`, `mac-voice-filter-muted`,
+`mac-voice-filter-driver-missing`.
 Proof limit: in-process `dlopen` loopback proves the compiled driver's 48 kHz
 `WriteMix`/`ReadInput` path at 5.33 ms (256 frames), not an interactive macOS
 admin authorization prompt or an active Slack/Zoom call.
@@ -602,7 +605,7 @@ Show Dock icon off                       // maintain.dock-policy
 ```
 
 ```ts
-Settings > Launch at login               // maintain.login-item
+General > Launch at login                // maintain.login-item
 ├── Open -> Checking until macOS returns the initial state
 ├── Refresh / toggle / Open settings -> One persistent background worker
 │   └── One active request; latest pending user action precedes the next refresh
@@ -673,22 +676,22 @@ failed; no visual or installed-app startup verification is claimed.
 
 ```ts
 Hex checks the release service            // maintain.updates
-├── 10 s after launch, hourly, and Check now -> anoma.ly/release/hex/desktop/<channel>.json
+├── 10 s after launch, hourly, and sidebar Check for updates -> anoma.ly/release/hex/desktop/<channel>.json
 ├── Protocol client rules (shared vectors) -> newer, required (minimum), revoked, or none
 │   └── Rollout -> device-local bucket in <support>/update-bucket, never sent
 ├── Direct install -> download (resumable) -> size + SHA-256 -> code signature -> stage
 │   ├── macOS -> unpack beside Hex.app -> Developer ID 5NZ4Q7NXJ4, anomaly.hex, notarized
 │   ├── Windows -> Authenticode valid, signer AUTHENTICODE_SIGNER -> new version directory
 │   ├── Linux -> SHA-256 only -> new version directory, `current` switched
-│   └── Sidebar Update, Settings, menu bar / tray: Restart to update
+│   └── Sidebar Update, menu bar / tray: Restart to update
 │       └── macOS -> renamex_np swap (also at quit) -> relaunch -> old bundle removed at launch
 ├── macOS location not replaceable (read-only, translocated, root-owned) -> Download update (DMG)
 ├── Package manager (pacman, Nix) -> its command, once it serves the newer version
 ├── Source build, test build -> never checks
-└── Failure -> keep the running version, back off, Check now retries
+└── Failure -> keep the running version, back off, Check for updates retries
 
 DisableUpdates at launch                 // maintain.managed-updates
-├── No checks, downloads, or installs; Settings: Managed by your organization
+├── No checks, downloads, or installs; sidebar: Managed by your organization
 ├── macOS app menu -> Check for Updates omitted
 └── macOS menu bar -> Disabled "Updates Managed by Your Organization"
 ```
@@ -746,7 +749,7 @@ Linux beta                               // not macOS feature parity
 ├── Shortcuts -> One state machine, three sources        // linux.shortcuts
 │   ├── X11 -> Root-window key grabs; Settings records the chord
 │   ├── Wayland + GlobalShortcuts portal -> Desktop grants the triggers
-│   │   ├── Settings > Shortcuts -> Change shortcut -> Press chord (Esc cancels)
+│   │   ├── General > Change shortcut -> Press chord (Esc cancels)
 │   │   │   └── Saved -> New portal session asks for it as preferred_trigger
 │   │   │       // observed on the niri fork: a new session gets it, a rebind in the same one fails
 │   │   ├── Each row: "Your desktop granted <trigger>" (it may assign another)
@@ -943,7 +946,7 @@ records an Arch/i3 client-independent ownership check, not transcription accurac
 or physical logout, Wayland, or signed cross-version update proof.
 
 ```ts
-Linux Settings > Sound volume             // dictate.feedback.linux; X11 + Wayland
+Linux General > Sound volume              // dictate.feedback.linux; X11 + Wayland
 ├── Default / older settings -> 50%
 ├── Off -> No recording tones
 └── 25% / 50% / 75% / 100% -> Save and apply live; preview the start sound
@@ -1034,7 +1037,7 @@ macOS debug runtime                      // not release navigation
 `hex app -- --snap OUT --scene NAME` -> Rendered fixtures    // not proof capture/download/update happened
 Linux `hex` -> the Linux window on Rune, in the Hex process // dev.rune-ui
 ├── Calls the host directly: saves settings through it; woken on host changes
-├── Sidebar: Settings, Modes, Voice Action, History
+├── Sidebar: General, Modes, Voice Action, History
 ├── Transcription picker -> ChooseModel / CancelModel; progress from the snapshot
 ├── First-run setup -> onboarding::Flow without permissions or practice
 ├── Modes: "Choose a file…" through file_dialog (FileChooser portal); drag to reorder
@@ -1043,9 +1046,9 @@ Linux `hex` -> the Linux window on Rune, in the Hex process // dev.rune-ui
 ├── Model and application searches: Up/Down highlight, Enter picks it
 ├── Not yet: right-click delete
 └── macOS/Windows surfaces as scenes too (Capabilities + preview data):
-    Commands, Meetings, Fun, HUD Lab, Activity, permission rows, Launch at
-    login, Dock icon, shortcut sides, Meetings and Hex microphone sections,
-    the full tour
+    Commands, Meetings (Recordings | Settings, opt-in card), Voice Filter,
+    HUD Lab, Activity, permission rows, Launch at login, Dock icon, shortcut
+    sides, the full tour
 macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── rune::App on the main thread: accessory, windowless unless setup/onboarding/Dock icon open it
 ├── Same AppKit loop: status item, updater, Hex/File/Window menu, Dock reopen event, Metal HUD (16 ms timer)
@@ -1068,7 +1071,7 @@ Windows `hex app` -> one tray process, Rune window // dev.rune-ui-windows
 ├── Runtime thread owns WindowsDesktopHost (listener, model preparation, OpenCode, transformations, updater)
 ├── Named event: a second launch shows the window; tray Show / Enable-Disable / Quit
 ├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
-├── Settings adds Launch at login and Check now; no terminal paste; chord capture polls
+├── General adds Launch at login; no terminal paste; chord capture polls
 ├── HUD: shared indicator model + CPU shader in a Rune overlay
 ├── Modes: "Choose a file…" opens IFileOpenDialog (file_dialog) on its own STA thread, no owner window
 ├── Modes app icons: the executable's first icon (PrivateExtractIconsW)
@@ -1085,20 +1088,21 @@ iOS physical-device proof and temporary-WAV failure cleanup remain gaps;
 best-effort deletion is not guaranteed deletion.
 
 `dev.rune-ui` lives in [rune_ui.rs](../../src/rune_ui.rs) and its pane modules;
-its tests drive the Rune runtime headlessly (navigation; Settings rows per
-shortcut source, saves through the host, Quit Hex, microphone-release
+its tests drive the Rune runtime headlessly (navigation; General rows per
+shortcut source, fitting the default window with Advanced collapsed, saves through the host, Quit Hex, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
 clear, copy; Modes add/delete, corrections, transformations (drag reorder saves once
 on release), application conflicts, a chosen file joining the mode, arrow
 keys in the model and application searches; the picker's ChooseModel/CancelModel; setup's download; draft
 saves; and, from macOS/Windows preview data, each OS's panes and rows, Launch
-at login, permission warnings, the command model notice, Meetings settings,
-the Hex Microphone section, Commands search/opt-in/prompt, Meetings select,
+at login, permission warnings, the command model notice in Commands, the
+Meetings opt-in card and Settings view, Commands search/opt-in card/prompt,
+Meetings select,
 search, copy, rename, start/stop, two-step trash, and the overflow menu, and
-the macOS tour's permissions, practice, and relaunch; Fun's modes, sliders,
-and demo requests, HUD Lab's indicator requests, Activity, and shortcut
-sides) and compare 53 offscreen
+the macOS tour's permissions, practice, and relaunch; Voice Filter's
+experiment gate, modes, sliders, and demo requests, HUD Lab's indicator requests, Activity, and shortcut
+sides) and compare 62 offscreen
 GPU renders with [tests/golden](../../tests/golden). In these tests the macOS and
 Windows requests are recorded, never performed; the macOS native host
 (`dev.rune-ui-macos`) has no automated test of its own. They skip the goldens without a GPU

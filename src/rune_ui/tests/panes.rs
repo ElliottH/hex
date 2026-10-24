@@ -1,5 +1,5 @@
 //! The macOS and Windows surfaces, driven headlessly on Linux from preview
-//! data: Commands, Meetings, the OS-only Settings rows, and the full tour.
+//! data: Commands, Meetings, the OS-only General rows, and the full tour.
 
 use super::*;
 use crate::login_item::LoginItemStatus;
@@ -28,7 +28,7 @@ fn each_os_lists_only_the_panes_it_can_run() {
     for (key, pane) in [
         ("nav-commands", Pane::Commands),
         ("nav-meetings", Pane::Meetings),
-        ("nav-settings", Pane::Settings),
+        ("nav-general", Pane::General),
     ] {
         tap(&mut mac, key);
         assert_eq!(mac.state.pane, pane);
@@ -49,20 +49,21 @@ fn settings_rows_follow_each_os() {
     assert!(!present(&linux, "dock-icon"));
     assert!(!present(&linux, "meetings-enabled"));
 
-    let mac = runtime("mac-settings", true, (980.0, 2400.0));
-    for key in [
-        "launch-at-login",
-        "dock-icon",
-        "meetings-enabled",
-        "meeting-system-audio",
-        "detected-calls",
-        "hex-mic-driver",
-        "check-for-updates",
-    ] {
+    let mac = runtime("mac-settings", true, PANE_SIZE);
+    for key in ["launch-at-login", "dock-icon", "check-for-updates"] {
         assert!(present(&mac, key), "macOS shows {key}");
     }
-    for key in ["terminal-paste", "toggle-listening", "enable-on-launch"] {
-        assert!(!present(&mac, key), "macOS has no {key}");
+    // Features own their settings: none of these are in General.
+    for key in [
+        "terminal-paste",
+        "toggle-listening",
+        "enable-on-launch",
+        "meetings-enabled",
+        "detected-calls",
+        "hex-mic-driver",
+        "command-model-notice",
+    ] {
+        assert!(!present(&mac, key), "macOS General has no {key}");
     }
 
     let windows = runtime("windows-settings", true, GOLDEN_SIZE);
@@ -107,8 +108,50 @@ fn missing_permissions_lead_settings_and_open_the_guide() {
 }
 
 #[test]
+fn general_fits_the_default_window_and_hides_advanced_options() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    let height = |key: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key))
+            .map(|e| e.rect[3])
+            .unwrap()
+    };
+    let (body, inset) = (height("scroll"), height("inset"));
+    assert!(inset <= body, "General scrolls: {inset} > {body}");
+    assert!(rt.find("microphone-mode").is_none());
+    tap(&mut rt, "advanced-toggle");
+    assert!(rt.find("microphone-mode").is_some());
+    assert_eq!(
+        rt.find("double-tap-only").is_some(),
+        rt.state.settings.dictation_hotkey.key.is_some(),
+        "double-tap only needs a key chord"
+    );
+    tap(&mut rt, "advanced-toggle");
+    assert!(rt.find("microphone-mode").is_none());
+}
+
+#[test]
+fn double_tap_to_lock_shows_only_for_hold() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    assert!(rt.find("double-tap").is_some());
+    tap(&mut rt, "shortcut-mode-control/segment1");
+    assert_eq!(
+        rt.state.settings.shortcut_mode,
+        crate::dictation::ShortcutMode::Toggle
+    );
+    assert!(rt.find("double-tap").is_none());
+}
+
+#[test]
 fn a_failed_command_model_offers_retry_and_turning_commands_off() {
-    let mut rt = runtime("mac-settings-permissions", true, (980.0, 2400.0));
+    let mut rt = runtime("mac-commands-unavailable", true, PANE_SIZE);
+    assert!(
+        runtime("mac-settings-permissions", true, (980.0, 2400.0))
+            .find("command-model-notice")
+            .is_none(),
+        "the notice lives in Commands"
+    );
     tap(&mut rt, "retry-commands");
     assert_eq!(asked(&rt), [PlatformRequest::RetryCommandModel]);
     tap(&mut rt, "disable-commands");
@@ -117,8 +160,32 @@ fn a_failed_command_model_offers_retry_and_turning_commands_off() {
 }
 
 #[test]
+fn meetings_switch_between_recordings_and_settings() {
+    let mut rt = runtime("meetings", true, PANE_SIZE);
+    assert!(rt.find("meeting-preview-design").is_some());
+    assert!(rt.find("meetings-enabled").is_none());
+    tap(&mut rt, "meetings-view/segment1");
+    assert_eq!(rt.state.meetings.view, meetings::View::Settings);
+    assert!(rt.find("meetings-enabled").is_some());
+    assert!(rt.find("meeting-preview-design").is_none());
+    tap(&mut rt, "meetings-view/segment0");
+    assert!(rt.find("meeting-preview-design").is_some());
+}
+
+#[test]
+fn meetings_off_offers_the_opt_in_and_keeps_the_pane() {
+    let mut rt = runtime("meetings-off", true, PANE_SIZE);
+    assert!(rt.find("nav-meetings").is_some(), "always in the sidebar");
+    assert!(rt.find("meetings-view").is_none());
+    assert!(rt.find("start-meeting").is_none());
+    tap(&mut rt, "meetings-enabled");
+    assert!(rt.state.settings.meetings.enabled);
+    assert!(rt.find("meetings-view").is_some());
+}
+
+#[test]
 fn meetings_settings_save_and_ask_for_system_audio() {
-    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
+    let mut rt = runtime("meetings-settings", true, (980.0, 2400.0));
     rt.state.platform.system_audio = false;
     refresh(&mut rt);
     tap(&mut rt, "meeting-system-audio-allow");
@@ -148,11 +215,12 @@ fn meetings_settings_save_and_ask_for_system_audio() {
     tap(&mut rt, "meetings-enabled");
     assert!(!rt.state.settings.meetings.enabled);
     assert!(rt.find("meeting-folder").is_none());
+    assert!(rt.find("meetings-enabled").is_some(), "the opt-in remains");
 }
 
 #[test]
 fn the_calendar_asks_for_access_only_when_connect_is_pressed() {
-    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
+    let mut rt = runtime("meetings-settings", true, (980.0, 2400.0));
     assert!(rt.find("calendar-connect").is_some());
     assert!(rt.find("calendar-remind").is_none());
     assert!(asked(&rt).is_empty());
@@ -173,7 +241,7 @@ fn the_calendar_asks_for_access_only_when_connect_is_pressed() {
 
 #[test]
 fn a_connected_calendar_saves_reminders_and_lists_meetings() {
-    let mut rt = runtime("mac-settings-calendar", true, (980.0, 2600.0));
+    let mut rt = runtime("meetings-calendar", true, (980.0, 2600.0));
     let shown = texts(&rt);
     for text in [
         "Design sync",
@@ -199,7 +267,7 @@ fn a_connected_calendar_saves_reminders_and_lists_meetings() {
 
 #[test]
 fn denied_calendar_access_links_to_privacy_settings() {
-    let mut rt = runtime("mac-settings-calendar-denied", true, (980.0, 2400.0));
+    let mut rt = runtime("meetings-calendar-denied", true, (980.0, 2400.0));
     assert!(rt.find("calendar-connect").is_none());
     tap(&mut rt, "calendar-privacy");
     assert_eq!(
@@ -207,26 +275,6 @@ fn denied_calendar_access_links_to_privacy_settings() {
         [PlatformRequest::Calendar(
             CalendarRequest::OpenPrivacySettings
         )]
-    );
-}
-
-#[test]
-fn the_hex_microphone_section_saves_its_mode_and_drives_the_driver() {
-    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
-    tap(&mut rt, "hex-mic-mode-control/segment2");
-    assert_eq!(
-        rt.state.settings.experimental.hex_microphone_mode,
-        crate::voice_filter::VoiceFilterMode::Quiet
-    );
-    assert!(matches!(
-        asked(&rt),
-        [PlatformRequest::SetTuning(cfg)]
-            if cfg.mode == crate::voice_filter::VoiceFilterMode::Quiet
-    ));
-    tap(&mut rt, "hex-mic-driver/controls/uninstall");
-    assert_eq!(
-        asked(&rt).last(),
-        Some(&PlatformRequest::UninstallHexMicrophone)
     );
 }
 
@@ -250,6 +298,15 @@ fn commands_search_select_and_show_their_detail() {
             .iter()
             .any(|text| text == "No matching commands.")
     );
+}
+
+#[test]
+fn commands_turn_on_from_their_card() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    tap(&mut rt, "nav-commands");
+    assert!(rt.find("commands-enabled").is_some());
+    tap(&mut rt, "commands-enabled");
+    assert!(rt.state.settings.commands_enabled);
 }
 
 #[test]
@@ -510,12 +567,13 @@ fn a_refused_microphone_points_to_system_settings() {
 fn platform_goldens() {
     let _goldens = Goldens::collect();
     for dark in [true, false] {
-        check_golden("mac-settings", dark, (980.0, 2100.0));
-        check_golden("mac-settings-calendar", dark, (980.0, 2500.0));
-        check_golden("mac-settings-calendar-denied", dark, (980.0, 2100.0));
+        check_golden("meetings-calendar", dark, (980.0, 1800.0));
         for scene in [
+            "mac-settings",
             "mac-commands",
             "meetings",
+            "meetings-settings",
+            "meetings-off",
             "meetings-recording",
             "mac-onboarding-setup",
             "mac-onboarding-landed",
@@ -524,6 +582,9 @@ fn platform_goldens() {
         }
     }
     check_golden("mac-settings-permissions", true, PANE_SIZE);
+    check_golden("mac-settings-advanced", false, PANE_SIZE);
+    check_golden("meetings-calendar-denied", true, PANE_SIZE);
+    check_golden("mac-commands-unavailable", true, PANE_SIZE);
     check_golden("windows-settings", false, GOLDEN_SIZE);
     check_golden("mac-commands-confirm", false, PANE_SIZE);
     check_golden("meetings-actions", true, PANE_SIZE);
@@ -540,9 +601,9 @@ fn platform_goldens() {
 }
 
 #[test]
-fn fun_saves_the_mode_and_applies_the_tuning_live() {
+fn voice_filter_saves_the_mode_and_applies_the_tuning_live() {
     use crate::voice_filter::VoiceFilterMode;
-    let mut rt = runtime("mac-fun", true, PANE_SIZE);
+    let mut rt = runtime("mac-voice-filter", true, PANE_SIZE);
     tap(&mut rt, "fun-mode/segment1");
     assert_eq!(
         rt.state.settings.experimental.hex_microphone_mode,
@@ -564,8 +625,8 @@ fn fun_saves_the_mode_and_applies_the_tuning_live() {
 }
 
 #[test]
-fn fun_sliders_set_the_filter_from_the_pointer() {
-    let mut rt = runtime("mac-fun", true, PANE_SIZE);
+fn voice_filter_sliders_set_the_filter_from_the_pointer() {
+    let mut rt = runtime("mac-voice-filter", true, PANE_SIZE);
     let before = rt.state.platform.tuning.muffled_wall_hz;
     let (x, y) = rt.find("fun-slider-wall/track").unwrap();
     rt.pointer_down(x + 140.0, y);
@@ -584,7 +645,7 @@ fn fun_sliders_set_the_filter_from_the_pointer() {
 #[test]
 fn try_it_records_and_plays_through_the_host() {
     use platform::DemoRequest;
-    let mut rt = runtime("mac-fun", true, PANE_SIZE);
+    let mut rt = runtime("mac-voice-filter", true, PANE_SIZE);
     tap(&mut rt, "fun-demo-record");
     tap(&mut rt, "fun-play-call-hears");
     tap(&mut rt, "fun-demo-source/segment1");
@@ -600,7 +661,7 @@ fn try_it_records_and_plays_through_the_host() {
             )),
         ]
     );
-    let mut rt = runtime("mac-fun-muted", true, PANE_SIZE);
+    let mut rt = runtime("mac-voice-filter-muted", true, PANE_SIZE);
     tap(&mut rt, "fun-play-call-hears");
     assert_eq!(
         asked(&rt),
@@ -611,21 +672,31 @@ fn try_it_records_and_plays_through_the_host() {
 }
 
 #[test]
-fn settings_try_it_opens_fun() {
-    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
-    tap(&mut rt, "open-fun-pane");
-    assert_eq!(rt.state.pane, Pane::Fun);
-}
-
-#[test]
 fn developer_panes_show_only_in_developer_builds() {
     let rt = runtime("mac-settings", true, PANE_SIZE);
     assert!(rt.find("nav-hud-lab").is_none());
     assert!(rt.find("nav-activity").is_none());
-    assert!(rt.find("nav-fun").is_some(), "the experiment is on");
+    assert!(
+        rt.find("nav-voice-filter").is_some(),
+        "Hex Microphone is on"
+    );
+    assert!(rt.find("nav-experiments").is_some());
     let rt = runtime("mac-hud-lab", true, PANE_SIZE);
     assert!(rt.find("nav-hud-lab").is_some());
     assert!(rt.find("nav-activity").is_some());
+}
+
+#[test]
+fn voice_filter_needs_its_experiment_or_hex_microphone() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    rt.state.settings.experimental.hex_microphone = false;
+    rt.state.platform.hex_microphone = None;
+    refresh(&mut rt);
+    assert!(rt.find("nav-voice-filter").is_none());
+    assert!(rt.find("nav-experiments").is_none(), "no empty heading");
+    rt.state.platform.voice_filter = true;
+    refresh(&mut rt);
+    assert!(rt.find("nav-voice-filter").is_some());
 }
 
 #[test]
@@ -729,14 +800,14 @@ fn macos_27_names_accessibility_as_system_settings_does() {
 }
 
 #[test]
-fn fun_goldens() {
+fn experiment_goldens() {
     let _goldens = Goldens::collect();
     for dark in [true, false] {
-        check_golden("mac-fun", dark, PANE_SIZE);
+        check_golden("mac-voice-filter", dark, PANE_SIZE);
         check_golden("mac-hud-lab", dark, PANE_SIZE);
     }
-    check_golden("mac-fun-muted", true, PANE_SIZE);
-    check_golden("mac-fun-driver-missing", false, PANE_SIZE);
+    check_golden("mac-voice-filter-muted", true, PANE_SIZE);
+    check_golden("mac-voice-filter-driver-missing", false, PANE_SIZE);
     check_golden("mac-activity", false, PANE_SIZE);
     check_golden("mac-settings-sides", true, PANE_SIZE);
 }

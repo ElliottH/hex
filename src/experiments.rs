@@ -29,16 +29,18 @@ pub const ENV: &str = "HEX_EXPERIMENTS";
 pub enum Experiment {
     LiveChapters,
     Vocabulary,
+    VoiceFilter,
 }
 
 impl Experiment {
-    pub const ALL: [Self; 2] = [Self::LiveChapters, Self::Vocabulary];
+    pub const ALL: [Self; 3] = [Self::LiveChapters, Self::Vocabulary, Self::VoiceFilter];
 
     /// The stable name the env variable, the file, and the CLI use.
     pub const fn name(self) -> &'static str {
         match self {
             Self::LiveChapters => "live-chapters",
             Self::Vocabulary => "vocabulary",
+            Self::VoiceFilter => "voice-filter",
         }
     }
 
@@ -46,6 +48,9 @@ impl Experiment {
         match self {
             Self::LiveChapters => "Chapter a meeting's transcript live while it records.",
             Self::Vocabulary => "A shared vocabulary list that guides transcription.",
+            Self::VoiceFilter => {
+                "The Voice Filter pane: the Hex Microphone driver and its filters (macOS)."
+            }
         }
     }
 
@@ -553,7 +558,7 @@ mod tests {
         let snapshot = Snapshot::parse(None, read_optional(&path).unwrap().as_deref());
         assert_eq!(
             snapshot.active().collect::<Vec<_>>(),
-            Experiment::ALL.to_vec()
+            [Experiment::LiveChapters, Experiment::Vocabulary]
         );
 
         assert!(set(&path, Experiment::Vocabulary, false).unwrap());
@@ -614,6 +619,12 @@ mod tests {
                         "description": Experiment::Vocabulary.description(),
                         "enabled": true,
                         "sources": ["env", "file"],
+                    },
+                    {
+                        "name": "voice-filter",
+                        "description": Experiment::VoiceFilter.description(),
+                        "enabled": false,
+                        "sources": [],
                     },
                 ],
                 "unknown": [{ "name": "mystery", "source": "file" }],

@@ -32,7 +32,8 @@ pub(super) struct Capabilities {
     pub(super) os: Os,
     /// The voice command catalog and its opt-in (macOS).
     pub(super) commands: bool,
-    /// Meeting recording, its pane, and its Settings section (macOS beta).
+    /// Meeting recording and its pane, with the recordings and their
+    /// settings (macOS beta).
     pub(super) meetings: bool,
     /// Calendar meeting reminders: the Calendar card under Meetings
     /// (macOS, EventKit).
@@ -50,8 +51,8 @@ pub(super) struct Capabilities {
     /// The window sees dictation events, so the tour can end with a
     /// practice dictation into its own field.
     pub(super) practice_dictation: bool,
-    /// The Fun pane: tuning and trying the Hex Microphone (macOS, while
-    /// its experiment is on).
+    /// The Voice Filter pane: the Hex Microphone's driver, tuning, and
+    /// try-it demo (macOS, under Experiments).
     pub(super) fun: bool,
     /// The HUD Lab developer pane drives the dictation indicator (macOS).
     pub(super) hud_lab: bool,
@@ -286,13 +287,16 @@ pub(super) struct PlatformState {
     /// The `vocabulary` experiment: the Vocabulary card under Dictation
     /// (`crate::vocabulary::enabled` on a native host).
     pub(super) vocabulary: bool,
+    /// The `voice-filter` experiment: the Voice Filter pane even before the
+    /// Hex Microphone is on (`crate::experiments::enabled` on a native host).
+    pub(super) voice_filter: bool,
     /// macOS 27 lists Accessibility as "Device Control and Data Access"
     /// (`permission_guide::list_name`); the permission rows use that name.
     pub(super) accessibility_renamed: bool,
     /// The Hex Microphone's live filter tuning
     /// (`hex_microphone::current_tuned_config`).
     pub(super) tuning: TunedFilterConfig,
-    /// The Fun pane's try-it demo (`hex_microphone::demo_snapshot`); `None`
+    /// The Voice Filter pane's try-it demo (`hex_microphone::demo_snapshot`); `None`
     /// until the host has one. Refresh it every frame while it records or
     /// plays (`DemoSnapshot::is_recording`, `playing`).
     pub(super) demo: Option<DemoSnapshot>,
@@ -355,7 +359,7 @@ pub(super) struct HudLab {
     pub(super) queued: usize,
 }
 
-/// The Fun pane's demo controls (`hex_microphone`'s demo functions).
+/// The Voice Filter pane's demo controls (`hex_microphone`'s demo functions).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DemoRequest {
     /// `start_demo_recording` (five seconds of the microphone).
@@ -389,6 +393,7 @@ impl PlatformState {
             relaunch_failed: false,
             developer: false,
             vocabulary: false,
+            voice_filter: false,
             accessibility_renamed: false,
             tuning: TunedFilterConfig::default(),
             demo: None,

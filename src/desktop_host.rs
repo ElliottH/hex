@@ -92,7 +92,7 @@ pub(crate) struct DesktopShortcut {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum DesktopAction {
-    /// Checks for an update now ("Check now").
+    /// Checks for an update now ("Check for updates").
     CheckForUpdates,
     ClearError,
     /// Opens the download an install cannot apply itself.

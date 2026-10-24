@@ -408,15 +408,8 @@ impl Pump {
             Some(Pane::VoiceAction) => Destination::VoiceAction,
             Some(Pane::History) => Destination::History,
             Some(Pane::Commands) => Destination::Commands,
-            Some(Pane::Meetings) => {
-                if !crate::app_settings::meetings_enabled() {
-                    return Err(ControlError::new(
-                        "feature-off",
-                        "Meetings are off; turn them on with `hex settings set meetings.enabled on`",
-                    ));
-                }
-                Destination::Meetings(None)
-            }
+            // While Meetings is off the pane shows its opt-in.
+            Some(Pane::Meetings) => Destination::Meetings(None),
         };
         show(&self.window, destination);
         Ok(ControlReply::done("Opened the window"))

@@ -11,7 +11,8 @@ previews, providers, or native actions were run for this split.
 
 ```ts
 Hex > Commands                                      // commands; off by default
-├── Enable -> Prepare command model                  // needs setup permissions
+├── Top card "Voice commands" switch -> Prepare command model // needs setup permissions
+├── Model failed -> card below it: Retry / Turn off commands  // only in this pane
 ├── Search / select a catalog row -> Inspect, not execute
 └── Create config / Edit config / Copy agent prompt  // personal workspace
 
@@ -42,10 +43,11 @@ Hotkey dictation -> Remains available during preparation and failure
 ```
 
 Sources: `load_command_recognizer` and live policy handling in
-[recognition.rs](../../src/recognition.rs); the command model notice in
-[rune_ui/platform_settings.rs](../../src/rune_ui/platform_settings.rs). Checks:
+[recognition.rs](../../src/recognition.rs); the enable card and command model
+notice in [rune_ui/commands.rs](../../src/rune_ui/commands.rs). Checks:
 `command_preparation_does_not_block_the_listener_or_propagate_failure`,
-`a_failed_command_model_offers_retry_and_turning_commands_off`, and
+`a_failed_command_model_offers_retry_and_turning_commands_off`,
+`commands_turn_on_from_their_card` (scene `mac-commands-unavailable`), and
 `missing_fields_receive_defaults` /
 `microphone_policy_requires_explicit_combined_transitions` in
 [app_settings.rs](../../src/app_settings.rs).

@@ -2,7 +2,9 @@
 //! search, a detail with notes, the live or final transcript as turns,
 //! Copy transcript, Rename, an overflow menu (copy summary, reveal,
 //! summarize, delete), and the two-step trash confirmation. Recording is
-//! started and stopped from the header.
+//! started and stopped from the header, whose `Recordings | Settings` switch
+//! also shows the feature's settings (Call recording, Calendar, Detected
+//! calls). With Meetings off, the pane is the opt-in card alone.
 //!
 //! The meetings store and controller are macOS-only, so the pane reads
 //! [`Meeting`] values the host loads (formatted with `meeting::day_label`,
@@ -12,7 +14,7 @@
 use rune::{El, TextEdit, Tx, col, el, row, text};
 use rune_kit::{IconButton, IconButtonVariant, Menu as KitMenu, MenuItem, Placement, TextInput};
 
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, pulsing_dot, segmented};
 use super::lists::{
     Tone, detail_header, detail_title, error_panel, group_label, list_row, message, placeholder,
     section_label, small_button, source_list, split, tone_tag,
@@ -121,8 +123,23 @@ impl Meeting {
     }
 }
 
+/// What the pane shows, picked in its header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum View {
+    #[default]
+    Recordings,
+    Settings,
+}
+
+/// Meetings is on, so the pane lists recordings and settings instead of the
+/// opt-in card (`MeetingSettings::available`; scenes leave `developer` off).
+pub(super) fn available(ui: &Ui) -> bool {
+    ui.settings.meetings.enabled || ui.platform.developer
+}
+
 #[derive(Default)]
 pub(super) struct MeetingsPane {
+    pub(super) view: View,
     /// Newest first, as the store lists them.
     pub(super) meetings: Vec<Meeting>,
     error: Option<String>,
@@ -488,16 +505,63 @@ fn status_tag(p: Paint, status: Status, stop_pending: bool, show_ready: bool) ->
     Some(tone_tag(p, "status", label, tone))
 }
 
-/// The header actions (search, Start/Stop) and the list + detail body.
+/// The opt-in card while Meetings is off; otherwise the header's view
+/// switch and Start/Stop, then the recordings or the settings.
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
-    let pane = &ui.meetings;
-    let search = TextInput::new(&pane.search)
+    if !available(ui) {
+        let content = col().key("content").px(24.0).pt(4.0).child(card(
+            p,
+            "enable",
+            vec![super::platform_settings::meetings_toggle(ui, p)],
+        ));
+        return (Vec::new(), super::scroll_body("scroll", content));
+    }
+    let views = [tr("Recordings"), tr("Settings")];
+    let switch = segmented(
+        p,
+        "meetings-view",
+        &views,
+        match ui.meetings.view {
+            View::Recordings => 0,
+            View::Settings => 1,
+        },
+        |ui, index| {
+            ui.meetings.view = if index == 0 {
+                View::Recordings
+            } else {
+                View::Settings
+            };
+        },
+    );
+    let action = recording_action(ui, p);
+    if ui.meetings.view == View::Settings {
+        let content = col()
+            .key("content")
+            .px(24.0)
+            .pt(4.0)
+            .gap(24.0)
+            .children(super::platform_settings::meetings_settings(ui, p, layer));
+        return (
+            vec![switch, action],
+            super::scroll_body("settings-scroll", content),
+        );
+    }
+    recordings(ui, p, layer, vec![switch, search(ui, p), action])
+}
+
+fn search(ui: &Ui, p: Paint) -> El {
+    TextInput::new(&ui.meetings.search)
         .placeholder(tr("Search meetings"))
         .width(Some(200.0))
         .leading_icon(p.k.glyph.search)
         .on_edit(|ui: &mut Ui| &mut ui.meetings.search)
         .build(p.k)
-        .key("meetings-search");
+        .key("meetings-search")
+}
+
+/// Start recording, or the active recording's state and Stop.
+fn recording_action(ui: &Ui, p: Paint) -> El {
+    let pane = &ui.meetings;
     let busy = |label: &str| {
         text(label)
             .key("meeting-busy")
@@ -505,7 +569,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
             .color(p.muted())
     };
     let active = pane.active();
-    let action = match active.map(|meeting| meeting.status) {
+    match active.map(|meeting| meeting.status) {
         _ if pane.stop_pending => busy(tr("Finalizing…")),
         Some(Status::Transcribing) => busy(tr("Finalizing…")),
         Some(Status::Starting) => busy(tr("Starting…")),
@@ -536,9 +600,12 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
             ButtonKind::Primary,
             |ui: &mut Ui, _| start(ui),
         ),
-    };
-    let actions = vec![search, action];
+    }
+}
 
+/// The day-grouped list and the selected meeting's detail.
+fn recordings(ui: &Ui, p: Paint, layer: &mut Vec<El>, actions: Vec<El>) -> (Vec<El>, El) {
+    let pane = &ui.meetings;
     let visible = pane.visible();
     let searching = !pane.search.text.trim().is_empty();
     let mut list = col().key("meetings-list");

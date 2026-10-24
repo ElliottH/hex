@@ -1,6 +1,6 @@
 //! Hex's in-app updater on every OS, a client of the Anomaly release service
 //! (`docs/plans/release-service.md`). One worker polls the channel's manifest
-//! 10 seconds after launch, then hourly or on "Check now", decides with the
+//! 10 seconds after launch, then hourly or on "Check for updates", decides with the
 //! protocol's client rules, and for a direct install downloads the target,
 //! checks its size, SHA-256, and OS code signature, and stages it until the
 //! user restarts. Package-managed installs only learn the command to run;
@@ -97,7 +97,7 @@ struct Shared {
     state: Mutex<State>,
     /// A package manager installed Hex, so "up to date" is its to say.
     packaged: bool,
-    /// Set by "Check now" and `stop`; the worker waits on it between checks.
+    /// Set by "Check for updates" and `stop`; the worker waits on it between checks.
     wake: Mutex<Wake>,
     signal: Condvar,
 }

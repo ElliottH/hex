@@ -167,15 +167,15 @@ pub(super) fn row_switch(p: Paint, on: bool) -> El {
 }
 
 /// A whole-row switch: the row presses, the switch shows the state.
-pub(super) fn toggle_row(
+pub(super) fn toggle_row<'a>(
     p: Paint,
     key: &str,
     title: &str,
-    description: &str,
+    description: impl Into<Option<&'a str>>,
     on: bool,
     flip: impl Fn(&mut Ui) + 'static,
 ) -> El {
-    setting_row(p, key, title, Some(description), row_switch(p, on))
+    setting_row(p, key, title, description.into(), row_switch(p, on))
         .role("toggle")
         .focusable(true)
         .hover(p.k.c.hover)

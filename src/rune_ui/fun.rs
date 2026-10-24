@@ -1,4 +1,5 @@
-//! The Fun pane (macOS, while the Hex Microphone experiment is on): the
+//! The Voice Filter pane (macOS, under Experiments while the `voice-filter`
+//! experiment is on or the Hex Microphone is already in use): the
 //! virtual microphone's driver, the filter mode and its key sliders, comfort
 //! noise, and "Try it": record five seconds or use the example clip, then
 //! compare your voice with what the call hears on two waveforms drawn with

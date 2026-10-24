@@ -685,7 +685,7 @@ impl NativeHost for MacHost {
             }
             changed = true;
         }
-        // The Fun pane's demo moves every frame while it records or plays.
+        // The Voice Filter pane's demo moves every frame while it records or plays.
         if state.demo.is_none()
             || crate::hex_microphone::demo_is_busy()
             || crate::hex_microphone::demo_recompute_is_running()
