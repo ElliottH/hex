@@ -76,7 +76,8 @@ docs/publishing.md) from a job with the same OIDC identity.
    and a staged update.
 3. Run Release with `channel: stable` from `main`.
 4. Bump the Homebrew cask (`anomalyco/homebrew-tap`, `Casks/hex.rb`: version,
-   URL of the `macos-arm64-dmg` file, sha256), then run Release with
+   URL of the `macos-arm64-dmg` file, sha256; keep `auto_updates true`, since
+   Hex updates any writable `Hex.app` itself), then run Release with
    `brew-version: <version>` and `channel: stable`.
 5. Bump the README version link. The site reads the release from the service
    when it deploys.
