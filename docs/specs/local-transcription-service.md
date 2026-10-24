@@ -210,12 +210,16 @@ candidate loading fails. A verified download can remain installed after a load
 failure; artifact publication and runtime activation are separate steps.
 
 Preparing a model that is already loaded, including the desktop app's
-dictation model, reruns the prewarm: a one-second silent inference that, in
-the app, yields to dictation like meeting chunks. ggml keeps the Metal weights
-resident for three minutes after a run; then macOS may compress or swap them,
-and the next transcription pays to restore them. A host that records its own
-audio can prepare when recording starts, so the restore happens while it
-records rather than after.
+dictation model, reruns the prewarm: an inference over 1.5 seconds of silence
+(the minimum clip length) that, in the app, yields to dictation like meeting
+chunks. ggml keeps the Metal weights resident for three minutes after a run;
+then macOS may compress or swap them, and the next transcription pays to
+restore them. A host that records its own audio can prepare when recording
+starts, so the restore happens while it records rather than after. The
+prewarm is skipped when the model ran in the last minute. When the app's
+dictation model is the one requested, preparation uses it and never loads a
+second copy; if dictation is recording or transcribing, the model is already
+warm and preparation succeeds at once.
 
 ### Ready Transcriber
 

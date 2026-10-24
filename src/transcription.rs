@@ -157,6 +157,14 @@ impl WarmTranscriber {
         })
     }
 
+    /// The selection of the warm model when it is a GGUF model.
+    pub(crate) fn gguf_selection(&self) -> Option<&TranscriptionSelection> {
+        match &self.active {
+            Some(Transcriber::Gguf(model)) => model.selection(),
+            _ => None,
+        }
+    }
+
     /// Stream options of the warm model, when it can stream on its device.
     pub(crate) fn stream_options(&self) -> Option<&transcribe_cpp::StreamOptions> {
         match &self.active {

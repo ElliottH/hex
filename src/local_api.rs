@@ -1443,6 +1443,7 @@ fn stream_model_prepare_with(
     let mut last_heartbeat = Instant::now();
     let total_bytes = model.download_bytes().unwrap_or(0);
     let mut connected = true;
+    let mut finished = None;
     let result = loop {
         if shutdown.load(Ordering::Acquire) {
             canceled.store(true, Ordering::Release);
@@ -1483,12 +1484,9 @@ fn stream_model_prepare_with(
         }
         last_stage = Some(current_stage);
         last_downloaded = current_downloaded;
-        match result_receiver.try_recv() {
-            Ok(result) => break Some(result),
-            Err(TryRecvError::Disconnected) => {
-                break Some(Err(eyre!("model preparer stopped unexpectedly")));
-            }
-            Err(TryRecvError::Empty) => {}
+        // The last stage has been reported, so a finished result ends here.
+        if let Some(result) = finished.take() {
+            break Some(result);
         }
         if last_heartbeat.elapsed() >= Duration::from_secs(5) {
             if stream.write_all(b": keep-alive\n\n").is_err() || stream.flush().is_err() {
@@ -1498,7 +1496,13 @@ fn stream_model_prepare_with(
             }
             last_heartbeat = Instant::now();
         }
-        thread::sleep(Duration::from_millis(100));
+        match result_receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(result) => finished = Some(result),
+            Err(RecvTimeoutError::Disconnected) => {
+                finished = Some(Err(eyre!("model preparer stopped unexpectedly")));
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+        }
     };
     if worker.join().is_err() {
         tracing::error!(model = model.id.as_str(), "model preparer panicked");
@@ -2821,6 +2825,40 @@ mod tests {
         let ok = response.find("\"type\":\"ok\"").unwrap();
         assert!(downloading < verifying && verifying < loading && loading < ok);
         assert!(!preparing.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_prepare_that_finishes_at_once_still_reports_its_last_stage() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            response
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        let preparer: ModelPreparer = Box::new(|_, _, stage| {
+            crate::transcription_models::ModelPreparationStage::Loading.store(&stage);
+            Ok(())
+        });
+        stream_model_prepare_with(
+            &mut stream,
+            crate::transcription_models::definition(
+                crate::transcription_models::TranscriptionModelId::ParakeetV2,
+            ),
+            Arc::new(AtomicBool::new(true)),
+            &AtomicBool::new(false),
+            preparer,
+        );
+        drop(stream);
+        let response = client.join().unwrap();
+        let loading = response.find("\"type\":\"loading\"").unwrap();
+        let ok = response.find("\"type\":\"ok\"").unwrap();
+        assert!(loading < ok);
     }
 
     #[test]

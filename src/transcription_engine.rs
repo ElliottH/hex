@@ -194,10 +194,16 @@ pub struct TranscriptionEngine {
     requests: Arc<AtomicU64>,
     /// Whether the loaded model can stream on its device.
     streams: Arc<AtomicBool>,
+    #[cfg(target_os = "macos")]
+    held: Held,
     next_stream: AtomicU64,
     deadlines: Deadlines,
     thread: Option<JoinHandle<()>>,
 }
+
+/// The GGUF selection the engine's model held after its last command.
+#[cfg(target_os = "macos")]
+type Held = Arc<Mutex<Option<crate::transcription_models::TranscriptionSelection>>>;
 
 /// A live stream for one capture. Feed it the capture's 16 kHz audio in order,
 /// then either [`TranscriptionEngine::finish`] or drop it to cancel.
@@ -314,12 +320,16 @@ impl TranscriptionEngine {
         let requests = Arc::new(AtomicU64::new(0));
         let running = Running::default();
         let stalled = Arc::new(AtomicBool::new(false));
+        #[cfg(target_os = "macos")]
+        let held = Held::new(Mutex::new(model.gguf_selection().cloned()));
         let worker = Worker {
             model,
             running: running.clone(),
             stalled: stalled.clone(),
             streams: streams.clone(),
             requests: requests.clone(),
+            #[cfg(target_os = "macos")]
+            held: held.clone(),
         };
         let thread = thread::Builder::new()
             .name("transcription-engine".into())
@@ -330,6 +340,8 @@ impl TranscriptionEngine {
             stalled,
             requests,
             streams,
+            #[cfg(target_os = "macos")]
+            held,
             next_stream: AtomicU64::new(0),
             deadlines: Deadlines::PRODUCTION,
             thread: Some(thread),
@@ -347,6 +359,8 @@ impl TranscriptionEngine {
             stalled: Arc::default(),
             requests: Arc::default(),
             streams: Arc::new(AtomicBool::new(true)),
+            #[cfg(target_os = "macos")]
+            held: Held::default(),
             next_stream: AtomicU64::new(0),
             deadlines: Deadlines::PRODUCTION,
             thread: None,
@@ -504,6 +518,20 @@ impl TranscriptionEngine {
             .unwrap_or_else(|error| error.into_inner())
             .upgrade()
     }
+
+    /// Whether the model holds the GGUF `selection` as of its last finished
+    /// command. Readable while dictation runs, unlike the model itself.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn holds(
+        &self,
+        selection: &crate::transcription_models::TranscriptionSelection,
+    ) -> bool {
+        self.held
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            == Some(selection)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -536,6 +564,8 @@ struct Worker {
     stalled: Arc<AtomicBool>,
     streams: Arc<AtomicBool>,
     requests: Arc<AtomicU64>,
+    #[cfg(target_os = "macos")]
+    held: Held,
 }
 
 /// How a live stream ended inside the worker.
@@ -599,6 +629,19 @@ impl Worker {
                 // Stale input for a stream that already ended.
                 Command::Feed { .. } | Command::Cancel { .. } => {}
             }
+            #[cfg(target_os = "macos")]
+            self.publish_selection();
+        }
+    }
+
+    /// Any command may load or switch the model (a dictation job activates
+    /// its selection), so the held selection is refreshed after each.
+    #[cfg(target_os = "macos")]
+    fn publish_selection(&self) {
+        let current = self.model.gguf_selection();
+        let mut held = self.held.lock().unwrap_or_else(|error| error.into_inner());
+        if held.as_ref() != current {
+            *held = current.cloned();
         }
     }
 
