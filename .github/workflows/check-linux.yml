@@ -21,7 +21,7 @@ on:
       - ".config/nextest.toml"
       - ".github/workflows/check-linux.yml"
   push:
-    branches: [main, rune-ui]
+    branches: [dev]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"

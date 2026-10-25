@@ -3,8 +3,9 @@ name: Site deploy
 # Builds site/ for one environment and deploys its Worker (the site at /hex and
 # the files bucket at /hex/files) with `cf deploy --prebuilt --mode <mode>`:
 # dev -> https://dev.anoma.ly/hex, production -> https://anoma.ly/hex. The
-# github-actions-hex token lives in the release environment (main and app-v*
-# only). Called by Site for dev and by Release after a stable publish.
+# github-actions-hex token lives in the release environment (dev, production
+# and app-v* only; dev so pushes to dev can deploy the dev site). Called by
+# Site for dev and by Release after a stable publish.
 on:
   workflow_call:
     inputs:

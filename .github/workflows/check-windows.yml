@@ -3,7 +3,7 @@ name: Check Windows
 on:
   pull_request:
   push:
-    branches: [main, rune-ui]
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:

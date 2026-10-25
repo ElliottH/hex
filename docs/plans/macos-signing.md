@@ -80,7 +80,7 @@ permissions once (needs `build-app.sh` to accept a team with
 
 ## Secrets for `anomalyco/hex`
 
-Add to the `release` environment (limited to `main` and `app-v*` tags).
+Add to the `release` environment (limited to `dev`, `production`, and `app-v*` tags).
 Names mirror OpenCode; GitHub cannot copy secret values, so an admin
 re-enters them from the source (1Password):
 

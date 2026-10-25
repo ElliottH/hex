@@ -3,7 +3,7 @@ name: Build desktop
 # Builds the Linux x86_64 executable and the Windows x64 and ARM64
 # executables and installers from one commit, named as the release service
 # targets (docs/plans/release-service.md). Release calls it to release; Test
-# builds calls it with test-build so every push to main has downloadable
+# builds calls it with test-build so every push to dev has downloadable
 # builds that never update themselves.
 #
 # Windows executables compile without credentials; one packaging job then

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Mirrors a release's downloads to its GitHub release, byte for byte. Stable
 # pushes tag app-v<version> at the release commit with git (the Releases API
-# cannot create it with GITHUB_TOKEN when main's workflows have moved on) and
+# cannot create it with GITHUB_TOKEN when dev's workflows have moved on) and
 # publishes the release off "Latest", which the TypeScript SDK uses; staging
 # keeps a draft prerelease.
 #
@@ -56,7 +56,7 @@ if ! gh release view "$tag" -R "$repo" --json name >/dev/null 2>&1; then
   else
     printf 'Staging build of Hex %s from %s, published to %s.\n' \
       "$version" "$commit" "${HEX_RELEASE_NOTES_URL:-the dev release service}" > "$temporary/notes.md"
-    gh release create "$tag" -R "$repo" --target main --title "Hex $version (staging)" \
+    gh release create "$tag" -R "$repo" --target dev --title "Hex $version (staging)" \
       --notes-file "$temporary/notes.md" --draft --prerelease
   fi
 fi

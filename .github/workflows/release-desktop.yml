@@ -3,8 +3,11 @@ name: Release
 # Builds, signs, and publishes Hex for macOS, Windows, and Linux from one
 # exact commit to the Anomaly release service (docs/releasing.md,
 # docs/plans/release-service.md). The service authorizes this workflow file
-# by its GitHub OIDC token: repository anomalyco/hex, ref main or app-v*,
-# environment release (anomalyco/release registry/hex.json).
+# by its GitHub OIDC token: repository anomalyco/hex, ref dev, production or
+# app-v*, environment release (anomalyco/release registry/hex.json).
+#
+# production holds what was released and only moves by a fast-forward from
+# dev. Run staging from dev; run stable from production or push an app-v tag.
 #
 # channel=staging (the default) is the dry run: every platform is built as
 # <version>-dev.<run number> and published on the dev service's dev channel,
@@ -22,7 +25,7 @@ on:
       ref:
         description: Commit, tag, or branch to release
         required: true
-        default: main
+        default: production
       channel:
         description: staging (dry run on dev.anoma.ly/release) or stable (public)
         type: choice
@@ -71,6 +74,10 @@ jobs:
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::Stable releases need an X.Y.Z version, not $version."
+            exit 1
+          fi
+          if [ "$CHANNEL" = stable ] && [ "$REF_TYPE" != tag ] && [ "$REF_NAME" != production ]; then
+            echo "::error::Stable releases run from production or an app-v tag, not $REF_NAME."
             exit 1
           fi
           if [ "$EVENT:$REF_TYPE" = push:tag ] && [ "$REF_NAME" != "app-v$version" ]; then

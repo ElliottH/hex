@@ -26,7 +26,8 @@ Release (workflow_dispatch: ref, channel, brew-version; or push tag app-v<versio
 The service authorizes the publish jobs by their GitHub OIDC token alone:
 `registry/hex.json` in `anomalyco/release` admits repository `anomalyco/hex`
 (by name and id), workflow `.github/workflows/release-desktop.yml` running
-from `refs/heads/main` or `refs/tags/app-v*` with that same ref, and only in
+from `refs/heads/dev`, `refs/heads/production`, or `refs/tags/app-v*` with
+that same ref, and only in
 the `release` environment, for artifact `desktop` and channels `stable`,
 `beta`, and `dev`, on both the dev and production services. No key or secret
 publishes. Only the `publish`, `record-aur`, and `record-brew` jobs get
@@ -70,12 +71,20 @@ docs/publishing.md) from a job with the same OIDC identity.
 
 ## Cutting a release
 
+Work lands on `dev`. `production` holds what was released and moves only by a
+fast-forward from `dev`; nobody commits to it directly, and its ruleset
+refuses force pushes and deletion.
+
 1. Bump `version` in `Cargo.toml` (and `Cargo.lock`), add
-   `docs/releases/<version>.md`, push to `main`.
-2. Run Release with `channel: staging`; check the summary, the manifest at
+   `docs/releases/<version>.md`, push to `dev`.
+2. Run Release from `dev` with `channel: staging` and `ref: dev`; check the
+   summary, the manifest at
    `https://dev.anoma.ly/release/hex/desktop/stable.json`, the draft release,
    and a staged update.
-3. Run Release with `channel: stable` from `main`.
+3. Fast-forward `production` to that commit (`git push origin
+   <commit>:production`, which refuses anything but a fast-forward), then run
+   Release from `production` with `channel: stable` (its default `ref`).
+   Stable runs refuse any other branch.
 4. Bump the Homebrew cask (`anomalyco/homebrew-tap`, `Casks/hex.rb`: version,
    URL of the `macos-arm64-dmg` file, sha256; keep `auto_updates true`, since
    Hex updates any writable `Hex.app` itself), then run Release with
@@ -121,9 +130,9 @@ The installers fetch the stable manifest, download their target, check its
 size and SHA-256, and write the direct-install receipt.
 
 Deploys run only from CI (`.github/workflows/site.yml` and `site-deploy.yml`):
-a push to `main` that touches `site/` deploys dev; a stable Release deploys
+a push to `dev` that touches `site/` deploys dev; a stable Release deploys
 production after publishing, and Site can be dispatched with `mode:
-production` from `main`. `bun run check:downloads` runs after each deploy.
+production` from `production` only. `bun run check:downloads` runs after each deploy.
 
 Set once by hand on the anomaly account, because the config only binds them:
 the two buckets (`cf deploy` provisions only unnamed bindings; a missing named
@@ -150,7 +159,7 @@ app (new updater, and on macOS a new bundle ID), so:
   to `appcast.xml` that tells 2.3.1 users to download the new Hex from
   https://anoma.ly/hex (no enclosure, so Sparkle installs nothing). The item
   is prepared with the macOS client work; upload it with the Legacy appcast
-  workflow (`.github/workflows/legacy-appcast.yml`, dispatch from `main`),
+  workflow (`.github/workflows/legacy-appcast.yml`, dispatch from `production`),
   which replaces only `appcast.xml`.
 - **Windows signer:** the updater accepts only a Valid Authenticode signature
   whose signer is `AUTHENTICODE_SIGNER` in `src/updater/windows.rs` (OpenCode's
@@ -186,7 +195,9 @@ the release service compile `https://anoma.ly/release`.
 - Without the redirect, Kit would publish the informational appcast item to
   his own bucket too.
 
-## Secrets (`release` environment, limited to `main` and `app-v*`)
+## Secrets (`release` environment, limited to `dev`, `production`, and `app-v*`)
+
+`dev` is allowed because dev site deploys and staging releases run from it.
 
 | Name | Use |
 | --- | --- |

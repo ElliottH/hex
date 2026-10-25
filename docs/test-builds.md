@@ -1,6 +1,6 @@
 # Test Builds
 
-Every push to `main` runs the [Test builds](https://github.com/anomalyco/hex/actions/workflows/test-builds.yml)
+Every push to `dev` runs the [Test builds](https://github.com/anomalyco/hex/actions/workflows/test-builds.yml)
 workflow (`.github/workflows/test-builds.yml`; run it by hand with **Run
 workflow**). Open the latest green run: its summary links each download.
 Artifacts are kept 14 days, and downloading one requires a GitHub login with

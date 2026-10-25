@@ -1,6 +1,6 @@
 # One Hex Process Per User, Hosting Rune Windows
 
-**Status:** Implemented on `main` for every OS; GPUI is deleted (see
+**Status:** Implemented on `dev` for every OS; GPUI is deleted (see
 [`rune-ui.md`](rune-ui.md)). Linux runs as one process per user and data root
 with launch forwarding, the single-instance socket, the `Type=notify` systemd
 user unit, and the Rune window and HUD overlay (see

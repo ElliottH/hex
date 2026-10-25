@@ -1,6 +1,6 @@
 # Experiments
 
-Experiments are unfinished features whose code sits on `main` but stays
+Experiments are unfinished features whose code sits on `dev` but stays
 dormant until someone turns one on for their own Hex. They are **unsupported**:
 an experiment may misbehave, change, or disappear without notice, and the
 window offers no switch for them. There is a flag, not a setting. Panes an

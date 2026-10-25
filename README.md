@@ -262,7 +262,7 @@ For Nix/NixOS packaging and per-user autostart, see the [Nix guide](docs/nix.md)
 
 ## Testing Builds
 
-Every push to `main` produces unsigned test builds for macOS, Windows, and
+Every push to `dev` produces unsigned test builds for macOS, Windows, and
 Linux in the [Test builds](https://github.com/anomalyco/hex/actions/workflows/test-builds.yml)
 workflow. Open the latest green run and download from its summary. The
 [test build guide](docs/test-builds.md) explains how to install and remove each

@@ -1,9 +1,9 @@
 name: Site
 
-# Builds site/ and checks every download link on pull requests; a push to main
+# Builds site/ and checks every download link on pull requests; a push to dev
 # deploys dev (https://dev.anoma.ly/hex). Production (https://anoma.ly/hex)
 # deploys after a stable Release publishes, or by dispatching this workflow
-# with mode production from main.
+# with mode production from production.
 on:
   pull_request:
     paths:
@@ -11,7 +11,7 @@ on:
       - ".github/workflows/site.yml"
       - ".github/workflows/site-deploy.yml"
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - "site/**"
       - ".github/workflows/site.yml"
@@ -47,7 +47,7 @@ jobs:
       - run: bun run check:downloads
 
   deploy:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'push' || inputs.mode == 'dev' || github.ref == 'refs/heads/production'
     uses: ./.github/workflows/site-deploy.yml
     with:
       mode: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'dev' }}

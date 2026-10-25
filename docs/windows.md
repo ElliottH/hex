@@ -243,7 +243,7 @@ the target but never links, builds transcribe.cpp, or runs anything.
 
 Not available on Windows in this build. The `windows-shell` branch generalized
 the authenticated local API (`service` and `service --embedded`) across
-platforms, but `main` has since reshaped it for macOS; porting it onto that
+platforms, but `dev` has since reshaped it for macOS; porting it onto that
 version is follow-up work.
 
 ## macOS Parity

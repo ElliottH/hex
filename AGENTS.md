@@ -2,12 +2,15 @@
 
 ## Private Kit Tool
 
-Commit and push straight to `main`, no PRs. Merge any open PR without asking.
-After pushing, update the installed copy. See `~/code/control/AGENTS.md`.
+Commit and push straight to `dev` (the default branch), no PRs. Merge any open
+PR without asking. After pushing, update the installed copy. See
+`~/code/control/AGENTS.md`. `production` holds what was released and moves
+only by a fast-forward from `dev` (`git push origin dev:production`) when Kit
+releases; never commit to it. There is no `main`.
 
-`main` is canonical and contains the Rune front end on every OS; GPUI is
+`dev` is canonical and contains the Rune front end on every OS; GPUI is
 removed. The `rune-ui` integration branch is merged and kept only for history:
-branch from and push to `main`.
+branch from and push to `dev`.
 
 ## Purpose
 
@@ -752,7 +755,9 @@ authorizes `anomalyco/hex` and that exact workflow filename for `npm publish`.
 The workflow uses npm trusted publishing without requesting a Sigstore
 provenance bundle.
 Use the configured Changesets release command (`cd sdk && bun run release`), not
-direct `npm publish`, after the bootstrap release.
+direct `npm publish`, after the bootstrap release. Pending changesets on `dev`
+keep a version pull request open into `dev`; the workflow publishes only when
+`production` is fast-forwarded to an unpublished SDK version.
 
 ```sh
 ./scripts/setup.sh
@@ -777,7 +782,7 @@ git diff --check
 cd sdk/typescript && bun run check && bun run test && bun run build
 ```
 
-Unfinished features land on `main` dormant behind an experiment
+Unfinished features land on `dev` dormant behind an experiment
 ([docs/features/experiments.md](docs/features/experiments.md)): add a variant to
 `Experiment` in `src/experiments.rs` and gate where the feature's work starts
 (worker, thread, capture), not just its UI. Turn one on for yourself with
@@ -848,7 +853,7 @@ releases. Never overwrite a published artifact with different bytes.
 `site/cloudflare.config.ts` defines the production Worker `hex-production-site` (anoma.ly/hex,
 bucket `hex-production-files`) and the dev Worker `hex-dev-site` (dev.anoma.ly/hex,
 bucket `hex-dev-files`); `cf deploy --prebuilt --mode <mode>` picks one, and
-only CI deploys: a push to `main` touching `site/` deploys dev, a stable
+only CI deploys: a push to `dev` touching `site/` deploys dev, a stable
 Release deploys production. No subdomains. The site's download links come
 from the service's stable manifest when it builds. After publishing a version,
 bump the explicit GitHub mirror/version link in `README.md` and the Homebrew
@@ -907,7 +912,7 @@ version. It builds Linux x86_64 in an Arch container (`scripts/build-linux.sh`)
 and Windows x64 and ARM64 on native runners (`scripts/build-windows.sh`)
 through the reusable `.github/workflows/build-desktop.yml`, and macOS through
 `build-macos.yml`. `.github/workflows/test-builds.yml` calls the same desktop
-workflow on every push to `main` with `test-build`, plus an ad-hoc signed
+workflow on every push to `dev` with `test-build`, plus an ad-hoc signed
 `Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle ID
 `anomaly.hex.test`, its own `hex-test` data folder and `~/.config/hex-test`;
 it must never read the real `hex` data), as unsigned 14-day artifacts for
@@ -918,7 +923,8 @@ target and then the release with `scripts/release-service.sh`, the only job
 holding `id-token: write` for the service, with no other secrets and actions
 pinned by SHA. The GitHub release mirror, the AUR package (built from the
 published Linux file), and the AUR/brew/nix distribution records follow.
-The `release` environment is limited to `main` and `app-v*` tags. Rerunning
+The `release` environment is limited to `dev` (dev site and staging),
+`production`, and `app-v*` tags; stable runs only from `production` or a tag. Rerunning
 after an interruption is safe: the service stores files by hash and accepts
 the same version again.
 
@@ -988,8 +994,9 @@ seam once there are two real adapters or a current test requires substitution.
 `ROADMAP.md` is the authoritative work list. Keep these constraints visible:
 
 - Release freeze (Kit, 2026-10-22): publish no Hex release on any OS, stable or
-  staging-to-stable, until Kit lifts it after the Rune front end has been
-  tested thoroughly on real Macs and Windows PCs. Test builds are fine.
+  staging-to-stable, and don't move `production` (it stays at `app-v2.3.1`),
+  until Kit lifts it after the Rune front end has been tested thoroughly on
+  real Macs and Windows PCs. Test builds are fine.
 - Validate public onboarding from a clean macOS account and signed Linux updates
   on the supported Arch/i3 host.
 - Validate native Wayland on a real compatible compositor, including physical

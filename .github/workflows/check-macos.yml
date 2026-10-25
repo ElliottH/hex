@@ -17,7 +17,7 @@ on:
       - ".config/nextest.toml"
       - ".github/workflows/check-macos.yml"
   push:
-    branches: [main, rune-ui]
+    branches: [dev]
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
