@@ -1,10 +1,12 @@
 //! "How the shortcut works": a modal from General's Shortcut mode row that
 //! shows Hold and Toggle side by side, and Double-tap to lock under Hold. Each
-//! choice draws a keycap and two lanes on one playhead, the key above and what
-//! Hex records below. Picking a card is the setting.
+//! choice draws a keycap and two lanes, the key above and what Hex records
+//! below, like a chart recorder: a pen holds still at the lanes' right end
+//! while the tape scrolls left under it, so each press draws on at the pen and
+//! slides away into a soft left edge. Picking a card is the setting.
 //!
-//! The lanes loop on the window's poll clock while the modal is open; Reduce
-//! Motion shows the finished frame.
+//! The tape runs on the window's poll clock while the modal is open; Reduce
+//! Motion shows one whole take, still.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -15,7 +17,7 @@ use rune::{
 
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, KEY_GAP, KeySize, Paint, button, keycap, row_switch,
+    ButtonKind, DESCRIPTION, KEY_GAP, KeySize, Paint, button, folds, keycap, row_switch,
 };
 use crate::desktop_i18n::tr;
 use crate::dictation::ShortcutMode;
@@ -31,26 +33,29 @@ const CARD_LANES: f32 =
     (MODAL_WIDTH - 2.0 * PADDING - CARD_GAP) / 2.0 - 2.0 * CARD_PADDING - KEYCAP_WIDTH - VISUAL_GAP;
 const LOCK_LANES: f32 =
     MODAL_WIDTH - 2.0 * PADDING - 2.0 * CARD_PADDING - KEYCAP_WIDTH - VISUAL_GAP;
-/// The playhead overhangs the lanes by 4 points above and below.
+/// The pen overhangs the lanes by 4 points above and below.
 const LANES_HEIGHT: f32 = 25.0;
 const LANE: f32 = 6.0;
 const KEY_LANE_Y: f32 = 7.0;
 const RECORD_LANE_Y: f32 = 18.0;
+/// The empty tape past the pen.
+const PEN_LEAD: f32 = 5.0;
+/// The soft left edge the tape slides out under.
+const TAPE_FADE: f32 = 18.0;
+/// A tap keeps drawing at the pen after the key comes up until it is this
+/// wide, so it is never a sliver on narrow lanes.
+const MIN_TAP: f32 = 7.0;
 
-// One loop, in milliseconds: the playhead crosses the lanes from T0 to T1,
-// the finished frame holds, the drawn segments fade, and it starts again.
-const LOOP: f32 = 3800.0;
-const T0: f32 = 200.0;
-const T1: f32 = 2740.0;
-/// The finished frame: the key up and both lanes fully drawn.
-pub(super) const DONE: f32 = 3000.0;
-const FADE_FROM: f32 = 3300.0;
-const FADE: f32 = 400.0;
-/// A press widens to at least this once the playhead passes, so a tap is
-/// never a sliver.
-const MIN_PRESS: f32 = 9.0;
-/// Frozen snapshots show the playhead mid-loop.
+/// One take of each script, in milliseconds; the scripts repeat end to end.
+const LOOP: f64 = 3800.0;
+/// How much time the tape shows between its left edge and the pen.
+const WINDOW: f64 = 3000.0;
+/// The still frame: a whole take on the tape, the key up.
+pub(super) const DONE: f32 = 2700.0;
+/// Frozen snapshots stop the tape mid-take.
 pub(super) const SNAPSHOT_MS: f32 = 1800.0;
+/// Room around the Double-tap row inside its folding slot for the focus ring.
+const RING_ROOM: f32 = 4.0;
 const FRAME: Duration = Duration::from_micros(16_667);
 
 /// A press under 300 ms never records on its own, and a second tap released
@@ -81,25 +86,38 @@ const LOCK: Script = Script {
 #[derive(Default)]
 pub(super) struct Explainer {
     pub(super) open: bool,
-    /// The poll clock when the loop started.
+    /// The poll clock when the tape started.
     start: Option<f64>,
-    elapsed_ms: f32,
+    /// Since the tape started, so takes before it never show.
+    elapsed_ms: f64,
     /// The poll clock when the next frame's wake is due, so each frame asks
     /// for one.
     next_frame: f64,
     /// A fixed frame for snapshots.
     held_ms: Option<f32>,
-    /// Reduce Motion, as the last view saw it: the loop stops ticking.
+    /// Reduce Motion, as the last view saw it: the tape stops.
     reduced: Cell<bool>,
+    /// Where the panel's top settled when it opened, and the window height
+    /// it settled in. It stays there while Hold and Toggle change its
+    /// height, so the cards hold still under the pointer and only the bottom
+    /// edge moves; resizing the window centres it again.
+    top: Cell<Option<(f32, f32)>>,
 }
 
 impl Explainer {
-    pub(super) fn time(&self) -> f32 {
+    /// Milliseconds of tape since it started.
+    fn now(&self) -> f64 {
         if self.reduced.get() {
-            DONE
+            f64::from(DONE)
         } else {
-            self.held_ms.unwrap_or(self.elapsed_ms)
+            self.held_ms.map_or(self.elapsed_ms, f64::from)
         }
+    }
+
+    /// Where the pen is in the current take.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn time(&self) -> f32 {
+        (self.now() % LOOP) as f32
     }
 }
 
@@ -113,6 +131,7 @@ pub(super) fn open(ui: &mut Ui) {
     ui.explainer.start = None;
     ui.explainer.elapsed_ms = 0.0;
     ui.explainer.next_frame = 0.0;
+    ui.explainer.top.set(None);
 }
 
 pub(super) fn close(ui: &mut Ui) {
@@ -132,7 +151,7 @@ pub(super) fn poll(ui: &mut Ui, clock: f64, visible: bool, tx: &mut Tx) -> bool 
         return false;
     }
     let start = *explainer.start.get_or_insert(clock);
-    explainer.elapsed_ms = ((clock - start) * 1000.0 % f64::from(LOOP)) as f32;
+    explainer.elapsed_ms = (clock - start) * 1000.0;
     if clock >= explainer.next_frame {
         explainer.next_frame = clock + FRAME.as_secs_f64();
         tx.wake_after(FRAME);
@@ -162,7 +181,13 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
     if !ui.explainer.open {
         return None;
     }
-    let t = ui.explainer.time();
+    let t = ui.explainer.now();
+    // A still tape needs no edge to slide out under.
+    let fade = if ui.explainer.reduced.get() {
+        0.0
+    } else {
+        TAPE_FADE
+    };
     let c = &p.k.c;
     let colors = Colors::new(p);
     let keys = ui.settings.dictation_hotkey.keycaps();
@@ -182,7 +207,15 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
             ShortcutMode::Hold,
             tr("Hold"),
             tr("Hold to talk. Let go to paste."),
-            visual(p, &colors, &keys, &HOLD, lanes("mode-hold", CARD_LANES), t),
+            visual(
+                p,
+                &colors,
+                &keys,
+                &HOLD,
+                lanes("mode-hold", CARD_LANES),
+                t,
+                fade,
+            ),
         ))
         .child(card(
             ui,
@@ -197,14 +230,26 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
                 &TOGGLE,
                 lanes("mode-toggle", CARD_LANES),
                 t,
+                fade,
             ),
         ));
     let lock_lanes = lanes("double-tap", LOCK_LANES);
-    let body = col()
-        .key("explainer-body")
-        .gap(CARD_GAP)
-        .child(cards)
-        .children(hold.then(|| lock_row(ui, p, &colors, &keys, lock_lanes, t)));
+    // Double-tap to lock is Hold's. Its slot stays and clips it, so it folds
+    // away under the footer as the panel's bottom edge rises, never over it.
+    let lock = col()
+        .key("lock")
+        .clip_soft(0.0)
+        .ml(-RING_ROOM)
+        .mr(-RING_ROOM)
+        .px(RING_ROOM)
+        .mb(-RING_ROOM)
+        .pb(RING_ROOM)
+        .children(hold.then(|| {
+            lock_row(ui, p, &colors, &keys, lock_lanes, t, fade)
+                .mt(CARD_GAP)
+                .transition(folds())
+        }));
+    let body = col().key("explainer-body").child(cards).child(lock);
     let mut panel = col()
         .key("shortcut-explainer")
         .role("dialog")
@@ -243,13 +288,29 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
             .w_full()
             .h_full()
     };
+    // Centred as it opens, then held at that top.
+    let top = &ui.explainer.top;
+    let window = cx.layout("explainer-layer").map(|[_, _, _, height]| height);
+    if top.get().map(|(_, height)| height) != window {
+        top.set(
+            cx.layout("shortcut-explainer")
+                .zip(window)
+                .map(|([_, y, _, _], height)| (y, height)),
+        );
+    }
+    let placed = match top.get() {
+        Some((y, _)) => layer("explainer-layer")
+            .justify_center()
+            .items_start()
+            .pt(y),
+        None => layer("explainer-layer").center(),
+    };
     Some([
         layer("explainer-scrim")
             .fill(c.scrim)
             .on_press(close)
             .transition(Transition::opacity().springs(overlay_springs(p))),
-        layer("explainer-layer")
-            .center()
+        placed
             .transition(panel_transition(p))
             // Keys stay inside, Escape or a press outside closes, and focus
             // returns to the link that opened it.
@@ -321,7 +382,15 @@ fn pick(ui: &mut Ui, mode: ShortcutMode) {
     }
 }
 
-fn lock_row(ui: &Ui, p: Paint, colors: &Colors, keys: &[String], width: f32, t: f32) -> El {
+fn lock_row(
+    ui: &Ui,
+    p: Paint,
+    colors: &Colors,
+    keys: &[String],
+    width: f32,
+    now: f64,
+    fade: f32,
+) -> El {
     let c = &p.k.c;
     // Like General's switch rows, the switch shows focus for the row.
     col()
@@ -364,7 +433,7 @@ fn lock_row(ui: &Ui, p: Paint, colors: &Colors, keys: &[String], width: f32, t: 
                 )
                 .child(row_switch(p, ui.settings.double_tap_lock)),
         )
-        .child(visual(p, colors, keys, &LOCK, width, t))
+        .child(visual(p, colors, keys, &LOCK, width, now, fade))
 }
 
 /// Double-tap to lock, as General's row flips it.
@@ -379,13 +448,24 @@ pub(super) fn flip_lock(ui: &mut Ui) {
 }
 
 /// One keycap per key of the shortcut, pressing together, beside the lanes
-/// drawn `width` points wide.
-fn visual(p: Paint, colors: &Colors, keys: &[String], script: &Script, width: f32, t: f32) -> El {
+/// drawn `width` points wide, whose tape fades out over its first `fade`
+/// points.
+fn visual(
+    p: Paint,
+    colors: &Colors,
+    keys: &[String],
+    script: &Script,
+    width: f32,
+    now: f64,
+    fade: f32,
+) -> El {
+    let t = (now % LOOP) as f32;
     let down = script.presses.iter().any(|&(d, u)| d <= t && t < u);
+    let fill = |el: El| el.absolute(0.0, 0.0).w_full().h_full();
     row()
         .key("visual")
         .role("none")
-        .h(28.0)
+        .h(KeySize::Large.height())
         .gap(VISUAL_GAP)
         .center_y()
         .child(
@@ -396,11 +476,18 @@ fn visual(p: Paint, colors: &Colors, keys: &[String], script: &Script, width: f3
             ),
         )
         .child(
-            canvas(lanes(colors, script, width, t))
-                .key("lanes")
+            el().key("lanes")
+                .role("none")
                 .grow(1.0)
                 .shrink()
-                .h(LANES_HEIGHT),
+                .h(LANES_HEIGHT)
+                .child(fill(canvas(tracks(colors, width)).key("tracks")))
+                .child(
+                    fill(el().key("tape").role("none"))
+                        .clip_fade(fade, 0.0, 0.0, 0.0)
+                        .child(fill(canvas(tape(colors, script, width, now)).key("marks"))),
+                )
+                .child(fill(canvas(pen(colors, width)).key("pen"))),
         )
 }
 
@@ -431,82 +518,94 @@ impl Colors {
     }
 }
 
-/// Both lanes at `t`: each segment draws up to the playhead.
-fn lanes(colors: &Colors, script: &Script, width: f32, t: f32) -> Shape {
-    let x = |ms: f32| at(ms, width);
-    let fade = ((t - FADE_FROM) / FADE).clamp(0.0, 1.0);
-    let ink = |color: Color| color.mix(colors.track, fade);
-    let drawn = |stretch: (f32, f32), min: f32| drawn(stretch, min, width, t);
+/// The empty lanes, the full width.
+fn tracks(colors: &Colors, width: f32) -> Shape {
     let mut shape = Shape::new();
     for y in [KEY_LANE_Y, RECORD_LANE_Y] {
         shape = bar(shape, 0.0, width, y, colors.track, (true, true));
     }
-    for &press in script.presses {
-        let start = x(press.0);
-        shape = bar(
-            shape,
-            start,
-            start + drawn(press, MIN_PRESS),
-            KEY_LANE_Y,
-            ink(colors.key),
-            (true, true),
-        );
-    }
-    let start = x(script.recording.0);
-    let end = start + drawn(script.recording, 0.0);
-    shape = bar(
-        shape,
-        start,
-        end,
-        RECORD_LANE_Y,
-        ink(colors.recording),
-        (true, script.locked.is_none()),
-    );
-    if let Some(locked) = script.locked {
-        let start = x(locked.0);
-        let end = start + drawn(locked, 0.0);
-        shape = bar(
-            shape,
-            start,
-            end,
-            RECORD_LANE_Y,
-            ink(colors.locked),
-            (false, true),
-        );
-        shape = stripes(
-            shape,
-            start,
-            end - LANE / 2.0,
-            RECORD_LANE_Y,
-            ink(colors.recording),
-        );
-    }
-    if t < T1 {
-        let head = x(t.clamp(T0, T1));
-        shape = shape.line(
-            [head, 0.75],
-            [head, LANES_HEIGHT - 0.75],
-            1.5,
-            LineCap::Round,
-            colors.playhead,
-        );
-    }
     shape.view_box(width, LANES_HEIGHT)
 }
 
-/// Where `ms` falls across lanes `width` points wide.
-fn at(ms: f32, width: f32) -> f32 {
-    (ms - T0) / (T1 - T0) * width
+/// Where the tape meets the pen.
+fn pen_x(width: f32) -> f32 {
+    width - PEN_LEAD
 }
 
-/// How much of the stretch from `d` to `u` shows at `t`: up to the playhead.
-/// A tap widens to `min` as the playhead passes, never ahead of it.
-fn drawn((d, u): (f32, f32), min: f32, width: f32, t: f32) -> f32 {
-    if t < d {
-        return 0.0;
+fn pen(colors: &Colors, width: f32) -> Shape {
+    let x = pen_x(width);
+    Shape::new()
+        .line(
+            [x, 0.75],
+            [x, LANES_HEIGHT - 0.75],
+            1.5,
+            LineCap::Round,
+            colors.playhead,
+        )
+        .view_box(width, LANES_HEIGHT)
+}
+
+/// Where the tape shows `ms` when the pen is at `now`: the pen at the
+/// lanes' right end, `WINDOW` before it at their left.
+fn at(ms: f64, now: f64, width: f32) -> f32 {
+    let pen = pen_x(width);
+    pen - ((now - ms) / WINDOW) as f32 * pen
+}
+
+/// Where the stretch from `d` to `u` of the take starting at `from` lies on
+/// the tape at `now`, at least `min` wide but never past the pen, or `None`
+/// before it starts.
+fn drawn((d, u): (f32, f32), from: f64, now: f64, width: f32, min: f32) -> Option<(f32, f32)> {
+    let d = from + f64::from(d);
+    if d >= now {
+        return None;
     }
-    let held = at(t.min(u), width) - at(d, width);
-    held.max(min).min(at(t, width) - at(d, width))
+    let start = at(d, now, width);
+    let end = at((from + f64::from(u)).min(now), now, width);
+    Some((start, end.max(start + min).min(pen_x(width))))
+}
+
+/// The takes on the tape at `now`, from the first one.
+fn takes(now: f64) -> impl Iterator<Item = f64> {
+    let first = ((now - WINDOW) / LOOP).floor().max(0.0) as u32;
+    let last = (now / LOOP).floor() as u32;
+    (first..=last).map(|take| f64::from(take) * LOOP)
+}
+
+/// Each take on the tape at `now`: every stretch draws up to the pen and
+/// keeps its place on the tape as it scrolls.
+fn tape(colors: &Colors, script: &Script, width: f32, now: f64) -> Shape {
+    let mut shape = Shape::new();
+    for from in takes(now) {
+        let drawn = |stretch, min| drawn(stretch, from, now, width, min);
+        for &press in script.presses {
+            if let Some((start, end)) = drawn(press, MIN_TAP) {
+                shape = bar(shape, start, end, KEY_LANE_Y, colors.key, (true, true));
+            }
+        }
+        if let Some((start, end)) = drawn(script.recording, 0.0) {
+            let ends = (true, script.locked.is_none());
+            shape = bar(shape, start, end, RECORD_LANE_Y, colors.recording, ends);
+        }
+        if let Some((start, end)) = script.locked.and_then(|locked| drawn(locked, 0.0)) {
+            shape = bar(
+                shape,
+                start,
+                end,
+                RECORD_LANE_Y,
+                colors.locked,
+                (false, true),
+            );
+            shape = stripes(
+                shape,
+                start,
+                end - LANE / 2.0,
+                RECORD_LANE_Y,
+                colors.recording,
+            );
+        }
+    }
+    shape.view_box(width, LANES_HEIGHT)
 }
 
 /// A lane-thick bar from `start` to `end`, each end round or square.
@@ -560,7 +659,7 @@ fn bar(
 }
 
 /// Diagonal stripes over the hands-free stretch, anchored at its start so
-/// they hold still while it grows.
+/// they ride the tape with it.
 fn stripes(mut shape: Shape, start: f32, end: f32, y: f32, color: Color) -> Shape {
     const PERIOD: f32 = 7.0;
     const BAND: f32 = 3.5;
@@ -620,18 +719,70 @@ mod tests {
         assert!(clip_x(&band, 20.0, 30.0).is_empty());
     }
 
-    #[test]
-    fn a_tap_never_draws_ahead_of_the_playhead() {
-        let width = 60.0;
-        for &press in TOGGLE.presses.iter().chain(LOCK.presses) {
-            let mut t = press.0;
-            while t < DONE {
-                let end = at(press.0, width) + drawn(press, MIN_PRESS, width, t);
-                assert!(end <= at(t, width) + 1e-3, "{press:?} at {t} ms");
-                t += 5.0;
+    /// Each stretch's ends on the tape in the first four takes, or `None`
+    /// before it starts.
+    fn ends(script: &Script, width: f32, now: f64) -> Vec<Option<(f32, f32)>> {
+        let mut ends = Vec::new();
+        for take in 0..4 {
+            let from = f64::from(take) * LOOP;
+            for &press in script.presses {
+                ends.push(drawn(press, from, now, width, MIN_TAP));
             }
-            let done = drawn(press, MIN_PRESS, width, DONE);
-            assert!(done >= MIN_PRESS, "{press:?} finishes {done} wide");
+            ends.push(drawn(script.recording, from, now, width, 0.0));
+        }
+        ends
+    }
+
+    #[test]
+    fn nothing_draws_past_the_pen() {
+        let width = 60.0;
+        for script in [HOLD, TOGGLE, LOCK] {
+            let mut now = 0.0;
+            while now < 3.0 * LOOP {
+                for (start, end) in ends(&script, width, now).into_iter().flatten() {
+                    assert!(start <= end && end <= pen_x(width) + 1e-3, "at {now} ms");
+                }
+                now += 5.0;
+            }
+        }
+    }
+
+    /// One frame to the next, the tape moves the same small step: no
+    /// stretch ever jumps, widens ahead of time, or resets.
+    #[test]
+    fn the_tape_scrolls_without_steps() {
+        let width = 120.0;
+        let step = 1000.0 / 60.0;
+        let travel = (step / WINDOW) as f32 * pen_x(width);
+        for script in [HOLD, TOGGLE, LOCK] {
+            let mut now = 0.0;
+            while now < 3.0 * LOOP {
+                let (before, after) = (ends(&script, width, now), ends(&script, width, now + step));
+                for (a, b) in before.iter().zip(&after) {
+                    let (Some(a), Some(b)) = (a, b) else { continue };
+                    assert!(
+                        (a.0 - b.0 - travel).abs() < 1e-2,
+                        "a start jumped at {now} ms"
+                    );
+                    assert!(b.1 - a.1 >= -travel - 1e-2, "an end jumped at {now} ms");
+                }
+                now += step;
+            }
+        }
+    }
+
+    /// The still frame shows each script's whole take, on the tape and up.
+    #[test]
+    fn the_still_frame_shows_a_whole_take() {
+        let width = 60.0;
+        for script in [HOLD, TOGGLE, LOCK] {
+            let now = f64::from(DONE);
+            let ends: Vec<_> = ends(&script, width, now).into_iter().flatten().collect();
+            assert_eq!(ends.len(), script.presses.len() + 1);
+            for (start, end) in ends {
+                assert!(start > 0.0 && end <= pen_x(width), "{start}..{end}");
+            }
+            assert!(script.presses.iter().all(|&(_, u)| u < DONE));
         }
     }
 
@@ -640,7 +791,12 @@ mod tests {
         for script in [HOLD, TOGGLE, LOCK] {
             let (start, _) = script.recording;
             assert!(script.presses.iter().any(|&(d, _)| d == start));
-            assert!(script.presses.iter().all(|&(d, u)| T0 <= d && u <= T1));
+            assert!(
+                script
+                    .presses
+                    .iter()
+                    .all(|&(d, u)| 0.0 < d && d < u && u < DONE)
+            );
         }
     }
 }

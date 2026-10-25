@@ -129,16 +129,18 @@ an isolated Xwayland display). No physical keyboard check yet.
 ```ts
 General > Shortcut mode > How it works                // dictate.shortcut-explainer
   -> Modal: Hold and Toggle cards, each the shortcut's keycaps (one per key,
-     pressing together) beside two lanes (key above, recording below) drawn
-     on one looping playhead; opening it ends a shortcut recording and closes
-     the model picker
+     pressing together) beside two lanes (key above, recording below) on a
+     chart-recorder tape: a still pen at the right, the tape scrolling left
+     without end and fading out at its left edge; opening it ends a shortcut
+     recording and closes the model picker
   ├── Pick a card (click, Enter, Space) -> Saves Shortcut mode
   ├── Hold -> Double-tap to lock row: switch + striped hands-free lane
-  ├── Toggle -> No lock row
+  ├── Toggle -> No lock row; it folds inside its own slot and the panel's
+  │   bottom edge rises with it (the top stays put)
   ├── Tab -> Hold, Toggle, lock switch, Close; focus stays inside
   ├── Close, Escape, or a press outside -> Closes; focus returns to the link
   ├── Change pane, menu bar, or `hex window show` -> Closes
-  └── Reduce Motion -> The finished frame, no loop, no wakes
+  └── Reduce Motion -> One whole take, still, no wakes
 ```
 
 The lanes are Rune shapes drawn at their laid-out width and redrawn from the
@@ -147,13 +149,17 @@ Checks: `how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside`,
 `explainer_cards_pick_the_shortcut_mode`,
 `the_explainer_loops_on_the_poll_clock`,
 `reduce_motion_shows_the_finished_explainer_without_waking`,
+the tape's own `nothing_draws_past_the_pen`, `the_tape_scrolls_without_steps`
+and `the_still_frame_shows_a_whole_take` in `explainer.rs`,
 `the_explainer_draws_a_keycap_per_key_and_lines_up_the_lanes`, and
 `the_explainer_picker_and_shortcut_recording_never_share_the_window` in
 [tests/panes.rs](../../src/rune_ui/tests/panes.rs), plus the
 `shortcut-explainer`, `shortcut-explainer-toggle`, and
 `shortcut-explainer-chord` (Ctrl+Alt+Space) goldens (frozen at 1.8 s into the
-loop). The animation itself has been seen only in headless
-frames, not on a real window.
+tape). The animation itself has been seen only in headless
+frames, not on a real window; a headless trace of Hold, Toggle and rapid
+switching on 2026-10-25 kept every element inside the panel and clear of
+Close on every frame (no automated check yet).
 
 On Linux, `hex dictation start` and `stop` bypass Hold, Toggle, and the
 double-tap rules: start records unless something already records, stop

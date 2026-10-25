@@ -144,7 +144,7 @@ fn stack(p: Paint, rows: Vec<CardRow>) -> Vec<El> {
 /// How a folding slot's rows come and go. The slot's clip does most of the
 /// work, so they fade only partway, and leave on a slower spring than the
 /// slot closes on, so no sliver of them pops away.
-fn folds() -> Transition {
+pub(super) fn folds() -> Transition {
     let mut transition = Transition::opacity().springs(SpringPair::new(
         rune::Spring::new(0.3, 0.0),
         rune::Spring::new(0.45, 0.0),
@@ -435,22 +435,36 @@ impl KeySize {
     pub(super) const fn height(self) -> f32 {
         match self {
             Self::Small => 22.0,
-            Self::Large => 26.0,
+            Self::Large => 30.0,
         }
     }
 
+    /// A one-glyph key is square, face and lip together.
     pub(super) const fn min_width(self) -> f32 {
+        self.height()
+    }
+
+    /// How far the face stands above its base: the lip showing below it.
+    const fn depth(self) -> f32 {
         match self {
-            Self::Small => 22.0,
-            Self::Large => 28.0,
+            Self::Small => 2.5,
+            Self::Large => 4.0,
+        }
+    }
+
+    /// A press sinks the face most of the way, leaving a hairline of lip.
+    const fn travel(self) -> f32 {
+        self.depth() - 0.5
+    }
+
+    fn legend(self) -> TextStyle {
+        match self {
+            Self::Small => DESCRIPTION,
+            Self::Large => TextStyle::new(12.5, 530.0).lh(16.0),
         }
     }
 }
 
-/// How far a keycap's face stands above its base: the lip showing below it.
-const KEY_DEPTH: f32 = 2.5;
-/// A press sinks the face most of the way, leaving a hairline of lip.
-const KEY_TRAVEL: f32 = 2.0;
 /// Seconds for the face to sink; it rises on the controls' spring.
 const KEY_PRESS: f32 = 0.07;
 /// Between the keycaps of a chord.
@@ -468,50 +482,76 @@ pub(super) fn keycaps(p: Paint, key: &str, parts: &[String]) -> El {
 
 /// One key: a face on a base whose lip shows below it. A press sinks the
 /// face into the lip; the key's bounds never change.
+///
+/// A `Small` key sits inside a control, whose surface sets it off. A `Large`
+/// one stands on the bare panel, so its face is raised off the panel, lit
+/// from above, on a darker skirt, with a full-strength legend.
 pub(super) fn keycap(p: Paint, index: usize, label: &str, size: KeySize, down: bool) -> El {
-    let c = &p.k.c;
-    let face_height = size.height() - KEY_DEPTH;
+    let k = p.k;
+    let c = &k.c;
+    let face_height = size.height() - size.depth();
     // Inside a control the cap nests in the control's corners.
     let radius = match size {
-        KeySize::Small => p.k.radius.sm,
-        KeySize::Large => p.k.radius.md,
+        KeySize::Small => k.radius.sm,
+        KeySize::Large => k.radius.md,
     };
     // Each change springs with the spring of the state it heads to: in
     // fast, back up on the controls' spring.
     let spring = if down {
-        p.k.motion.control.with_duration(KEY_PRESS)
+        k.motion.control.with_duration(KEY_PRESS)
     } else {
-        p.k.motion.control
+        k.motion.control
     };
-    let base = el()
+    // The Large face is opaque, so the skirt never shows through it. Colours
+    // mix in linear light, so a little white goes a long way.
+    let solid = |top: Color| c.bg_base.mix(top.alpha(1.0), top.a);
+    let (face_fill, lip, ink) = match size {
+        KeySize::Small => (
+            c.bg_base,
+            c.border_base,
+            if down { p.text() } else { p.muted() },
+        ),
+        KeySize::Large if k.dark => (solid(c.white.alpha(0.02)), c.bg_deep, p.text()),
+        KeySize::Large => (c.bg_base, c.border_base, p.text()),
+    };
+    // A pressed face sinks toward its skirt's shade.
+    let pressed = match size {
+        KeySize::Small => face_fill.mix(c.black, 0.05),
+        KeySize::Large => face_fill.mix(solid(lip), 0.35),
+    };
+    let mut base = el()
         .key("base")
         .role("none")
-        .absolute(0.0, KEY_DEPTH)
+        .absolute(0.0, size.depth())
         .w_full()
         .h(face_height)
         .radius(radius)
-        .fill(c.border_base);
-    let face = row()
+        .fill(lip);
+    let mut face = row()
         .key("cap")
         .min_w(size.min_width())
         .h(face_height)
-        .px(6.0)
+        .px(match size {
+            KeySize::Small => 6.0,
+            KeySize::Large => 7.0,
+        })
         .center()
         .radius(radius)
-        .mt(if down { KEY_TRAVEL } else { 0.0 })
-        .fill(if down {
-            c.bg_base.mix(c.black, 0.05)
-        } else {
-            c.bg_base
-        })
+        .mt(if down { size.travel() } else { 0.0 })
+        .fill(if down { pressed } else { face_fill })
         .border(p.hair, c.border_weak)
         .motion(spring)
         .child(
             text(label.to_string())
                 .key("label")
-                .font(DESCRIPTION)
-                .color(if down { p.text() } else { p.muted() }),
+                .font(size.legend())
+                .color(ink),
         );
+    if size == KeySize::Large {
+        base = base.border(p.hair, c.border_weak);
+        // The light falls on the face from above.
+        face = face.gradient(k.light(if down { 0.02 } else { 0.07 }), k.light(0.0));
+    }
     col()
         .key(format!("keycap{index}"))
         .h(size.height())

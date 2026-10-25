@@ -394,7 +394,7 @@ fn explainer_cards_pick_the_shortcut_mode() {
     let mode = |rt: &Runtime<Ui>| rt.state.settings.shortcut_mode;
     assert_eq!(mode(&rt), crate::dictation::ShortcutMode::Hold);
     assert!(
-        rt.find("shortcut-explainer/explainer-body/double-tap")
+        rt.find("shortcut-explainer/explainer-body/lock/double-tap")
             .is_some()
     );
     tab_to(&mut rt, "mode-toggle");
@@ -403,13 +403,13 @@ fn explainer_cards_pick_the_shortcut_mode() {
     assert_eq!(mode(&rt), crate::dictation::ShortcutMode::Toggle);
     assert_eq!(saved(&rt), 1);
     assert!(
-        rt.find("shortcut-explainer/explainer-body/double-tap")
+        rt.find("shortcut-explainer/explainer-body/lock/double-tap")
             .is_none(),
         "Double-tap to lock is Hold's"
     );
     tap(&mut rt, "mode-hold");
     assert_eq!(mode(&rt), crate::dictation::ShortcutMode::Hold);
-    tap(&mut rt, "shortcut-explainer/explainer-body/double-tap");
+    tap(&mut rt, "shortcut-explainer/explainer-body/lock/double-tap");
     assert!(!rt.state.settings.double_tap_lock);
     tap(&mut rt, "close-explainer");
     assert!(!rt.state.explainer.open);
