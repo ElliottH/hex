@@ -2727,7 +2727,12 @@ fn finish_dictation_with(
             }
             return Ok(match finish {
                 Finish::Discard => FinishResult::Discarded,
-                Finish::Transcribe(_) => FinishResult::Silent,
+                Finish::Transcribe(clip) => {
+                    crate::dictation_diagnostics::persist_near_silent(
+                        &clip.into_transcription_samples(),
+                    );
+                    FinishResult::Silent
+                }
             });
         }
     };

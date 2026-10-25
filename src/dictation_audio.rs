@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 
 use crate::audio::{CaptureInstant, RecoveringAudioInput, RecoveringAudioInputEvent};
-use crate::dictation::{DictationCapture, Finish};
+use crate::dictation::{ClipSource, DictationCapture, Finish};
 use crate::feedback::{self, Tone};
 use crate::recording_environment::{CaptureMarker, RecordingEnvironmentController};
 use crate::suppression::PendingInputEvents;
@@ -291,6 +291,10 @@ struct Owner {
     engine: Option<Arc<TranscriptionEngine>>,
     /// Whether the active capture streams once it is intentional.
     stream_capture: bool,
+    /// When the stream last opened or reopened, while it is open.
+    stream_opened_at: Option<Instant>,
+    /// When the timeline last had a gap or the stream last failed.
+    discontinuity_at: Option<Instant>,
     /// The `capture` experiment's sink. While set, the microphone stays open
     /// even with release-while-idle and switches only once it closes.
     #[cfg(hex_capture)]
@@ -601,6 +605,7 @@ impl Owner {
         let (command_sender, commands) = mpsc::channel();
         let (recognition_sender, recognition) = mpsc::sync_channel(RECOGNITION_QUEUE_CAPACITY);
         let (event_sender, events) = mpsc::channel();
+        let stream_opened_at = input.is_open().then(Instant::now);
         let owner = Self {
             input,
             release_while_idle,
@@ -617,6 +622,8 @@ impl Owner {
             last_captured_through: None,
             engine,
             stream_capture: false,
+            stream_opened_at,
+            discontinuity_at: None,
             #[cfg(hex_capture)]
             capture_sink: None,
         };
@@ -729,7 +736,7 @@ impl Owner {
                         .end_recording_environment_then(|| feedback::play(Tone::DictationStop));
                 }
                 let deferred = announced.then(|| self.drain_tail(at, tail)).flatten();
-                let finish = if self.pending_capture.take().is_some() {
+                let mut finish = if self.pending_capture.take().is_some() {
                     if !self.capture_sink_open() {
                         self.input.cancel_open();
                     }
@@ -737,6 +744,9 @@ impl Owner {
                 } else {
                     self.capture.finish_with_tail(at, tail)
                 };
+                if let Finish::Transcribe(clip) = &mut finish {
+                    clip.set_source(self.clip_source());
+                }
                 self.state.recording.store(false, Ordering::Release);
                 let _ = reply.send(finish);
                 if let Some(event) = deferred {
@@ -882,6 +892,7 @@ impl Owner {
                 captured_through,
             } => {
                 if let Some(gap) = self.chunk_gap(samples.len(), captured_through) {
+                    self.discontinuity_at = Some(Instant::now());
                     let was_recording = self.capture.is_recording();
                     let capture_generation = self.state.capture_generation.load(Ordering::Acquire);
                     self.capture = new_capture(self.sample_rate(), &self.recording_environment);
@@ -924,6 +935,7 @@ impl Owner {
             }
             RecoveringAudioInputEvent::Timeout => {}
             RecoveringAudioInputEvent::Interrupted => {
+                self.discontinuity_at = Some(Instant::now());
                 self.last_captured_through = None;
                 self.next_recognition_generation();
                 // A cold stream that fails before the hold threshold has lost
@@ -961,6 +973,7 @@ impl Owner {
                 }
             }
             RecoveringAudioInputEvent::Reopened => {
+                self.stream_opened_at = Some(Instant::now());
                 self.last_captured_through = None;
                 self.next_recognition_generation();
                 let sample_rate = self.input.sample_rate();
@@ -1102,8 +1115,23 @@ impl Owner {
         self.stream_capture = matches!(kind, CaptureKind::Hotkey);
     }
 
+    fn clip_source(&self) -> ClipSource {
+        ClipSource {
+            device: self
+                .state
+                .device_name
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
+            stream_age: self.stream_opened_at.map(|at| at.elapsed()),
+            since_discontinuity: self.discontinuity_at.map(|at| at.elapsed()),
+            since_glitch: crate::audio::since_last_stream_glitch(),
+        }
+    }
+
     fn close_input(&mut self) {
         self.input.close();
+        self.stream_opened_at = None;
         self.last_captured_through = None;
         self.next_recognition_generation();
         self.state.captured_through.store(0, Ordering::Release);
@@ -1574,6 +1602,12 @@ mod tests {
         };
         assert!(!input.is_recording());
         assert_eq!(clip.duration_ms(), 610);
+        let source = clip
+            .source()
+            .expect("the owner records where a clip came from");
+        assert_eq!(source.device, "Test microphone");
+        assert!(source.stream_age.is_some());
+        assert!(source.since_discontinuity.is_none());
         let clip = clip.into_transcription_samples();
         assert!((clip[clip.len() - 400] - 0.5).abs() < 0.05);
         assert!(clip.iter().all(|sample| *sample < 0.6));

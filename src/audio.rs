@@ -1,4 +1,5 @@
 use std::ops::Add;
+use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -6,6 +7,16 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TryR
 use std::time::{Duration, Instant};
 
 static AUDIO_SERVICE_RESTART_GENERATION: AtomicU64 = AtomicU64::new(0);
+static STREAM_GLITCHED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long ago a microphone stream last reported an overload it continued
+/// through, for diagnosing captures.
+pub fn since_last_stream_glitch() -> Option<Duration> {
+    STREAM_GLITCHED_AT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .map(|at| at.elapsed())
+}
 
 pub fn notify_audio_service_restarted() {
     AUDIO_SERVICE_RESTART_GENERATION.fetch_add(1, Ordering::AcqRel);
@@ -928,6 +939,9 @@ fn report_stream_error(sender: &SyncSender<String>, error: cpal::Error) {
         // starts, without stopping the stream. Real sample gaps still surface as
         // capture discontinuities.
         tracing::warn!(%error, "microphone stream glitched; continuing");
+        *STREAM_GLITCHED_AT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(Instant::now());
         return;
     }
     tracing::error!(%error, "microphone stream failed");
