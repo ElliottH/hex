@@ -975,6 +975,11 @@ const SIDEBAR_TOP: f32 = if cfg!(target_os = "macos") {
     12.0
 };
 
+/// Sidebar rows follow OpenCode Desktop's settings navigation: 28 pt rows
+/// with a 4 pt gap, so each row's highlight stays its own.
+const NAV_ROW_HEIGHT: f32 = 28.0;
+const NAV_ROW_GAP: f32 = 4.0;
+
 /// On macOS the sidebar and the pane header stand in for the title bar the
 /// window draws none of: pressing their background moves the window.
 fn title_bar(element: El) -> El {
@@ -986,8 +991,7 @@ fn title_bar(element: El) -> El {
 }
 
 fn sidebar(ui: &Ui, p: Paint) -> El {
-    // Rows touch, so the pointer is always over one, as in a native source list.
-    let mut nav = lists::source_list(col().key("nav"));
+    let mut nav = lists::source_list(col().key("nav").gap(NAV_ROW_GAP));
     let mut experiments = false;
     for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
         if pane.experimental() && !experiments {
@@ -1115,11 +1119,11 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
         .key(pane.key())
         .role("button")
         .label(pane.title())
-        .h(28.0)
+        .h(NAV_ROW_HEIGHT)
         .px(6.0)
         .gap(8.0)
         .center_y()
-        .radius(p.k.radius.md)
+        .radius(p.k.radius.sm)
         .hover(c.hover)
         .press(c.pressed)
         // Switch on pointer down, like a native sidebar; the press keeps
@@ -1156,11 +1160,11 @@ fn quit_item(p: Paint) -> El {
         .key("quit")
         .role("button")
         .label(tr("Quit Hex"))
-        .h(28.0)
+        .h(NAV_ROW_HEIGHT)
         .px(6.0)
-        .mt(4.0)
+        .mt(NAV_ROW_GAP)
         .center_y()
-        .radius(p.k.radius.md)
+        .radius(p.k.radius.sm)
         .hover(c.hover)
         .press(c.pressed)
         .on_press(|ui: &mut Ui| ui.quit())
