@@ -3,11 +3,13 @@
 //! select-style menus, buttons, keycaps, note, and text field. Colours,
 //! type, radii, elevation, and motion come from the kit's tokens.
 
-use rune::{Color, El, LoopSpec, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune::{
+    Color, El, LoopSpec, SpringPair, TextEdit, TextStyle, Transition, Tx, col, el, row, text,
+};
 #[allow(deprecated)]
 use rune_kit::{
-    Button, ButtonSize, ButtonVariant, Kit, Menu, MenuItem, Placement, SegmentedControl, Select,
-    SelectAppearance, Switch, TextInput,
+    Button, ButtonSize, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Menu,
+    MenuItem, Placement, SegmentedControl, Select, SelectAppearance, Switch, TextInput,
 };
 
 use super::Ui;
@@ -285,6 +287,62 @@ pub(super) fn button(
         .on_press_tx(press)
         .build(p.k)
         .key(key)
+}
+
+/// A Secondary button showing a value, with a trailing chevron because it
+/// opens a sheet rather than a menu. It is as wide as its value.
+#[allow(deprecated)]
+pub(super) fn sheet_button(
+    p: Paint,
+    key: &str,
+    value: &str,
+    open: impl Fn(&mut Ui) + 'static,
+) -> El {
+    Button::new(value)
+        .variant(ButtonVariant::Neutral)
+        .size(ButtonSize::Normal)
+        .on_press(open)
+        .build(p.k)
+        .key(key)
+        .pr(6.0)
+        .child(
+            rune::icon(&rune_theme_opencode::icons::CHEVRON_RIGHT, 16.0)
+                .key("chevron")
+                .color(p.k.c.icon_muted),
+        )
+}
+
+/// An icon-only Secondary button the height of [`button`].
+pub(super) fn icon_button(
+    p: Paint,
+    key: &str,
+    icon: &'static rune::Icon,
+    label: &str,
+    press: impl Fn(&mut Ui) + 'static,
+) -> El {
+    IconButton::new(icon)
+        .variant(IconButtonVariant::Neutral)
+        .control_size(ControlSize::Large)
+        .label(label)
+        .on_press(press)
+        .build(p.k)
+        .key(key)
+}
+
+/// How a modal's surface enters and leaves: scaled from 0.96 about its
+/// centre, with a fade. Its text scales with its boxes, so the panel moves
+/// as one surface.
+pub(super) fn modal_transition(p: Paint) -> Transition {
+    Transition::scale(0.96).springs(overlay_springs(p))
+}
+
+/// The scrim behind a modal: the surface's springs, fading only.
+pub(super) fn modal_scrim_transition(p: Paint) -> Transition {
+    Transition::opacity().springs(overlay_springs(p))
+}
+
+fn overlay_springs(p: Paint) -> SpringPair {
+    SpringPair::new(p.k.motion.overlay, p.k.motion.overlay)
 }
 
 /// Keycaps for a shortcut, in the kit's keybind look at a readable size.

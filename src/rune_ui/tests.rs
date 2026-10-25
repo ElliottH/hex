@@ -748,7 +748,7 @@ fn toggle_rows_take_focus_and_flip_on_space() {
 #[test]
 fn the_picker_keeps_focus_inside_and_escape_returns_it() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tab_to(&mut rt, "transcription-control-field-trigger");
+    tab_to(&mut rt, "transcription-control");
     key(&mut rt, Key::Enter, Mods::default());
     settle(&mut rt);
     assert_eq!(rt.state.picker.language.as_deref(), Some("en"));
@@ -766,7 +766,7 @@ fn the_picker_keeps_focus_inside_and_escape_returns_it() {
     key(&mut rt, Key::Escape, Mods::default());
     settle(&mut rt);
     assert_eq!(rt.state.picker.language, None);
-    assert!(focused(&rt).ends_with("transcription-control-field-trigger"));
+    assert!(focused(&rt).ends_with("transcription-control"));
 }
 
 #[test]
@@ -782,7 +782,7 @@ fn history_rows_select_with_arrows() {
 #[test]
 fn settings_opens_the_picker_on_the_current_language() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "transcription-control-trigger");
+    tap(&mut rt, "transcription-control");
     assert_eq!(rt.state.picker.language.as_deref(), Some("en"));
 }
 

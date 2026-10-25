@@ -58,7 +58,9 @@ These live in [`rune_ui/controls.rs`](../src/rune_ui/controls.rs) and
 | Settings card, titled card | `card`, `section` |
 | Settings row (title, description, control) | `setting_row`, `described_row`, `toggle_row`; a row that toggles shows `row_switch` |
 | A few exclusive choices / a dropdown | `segmented`, `select` |
-| Main, other, and destructive actions | `button(…, ButtonKind::{Primary, Secondary, Danger}, …)`; inside a row: `small_button` |
+| A value whose choices open in a sheet, not a menu | `sheet_button` (the value and a trailing chevron) |
+| Main, other, and destructive actions | `button(…, ButtonKind::{Primary, Secondary, Danger}, …)`; inside a row: `small_button`; icon only (with an accessible label): `icon_button` |
+| How a modal enters and leaves | `modal_transition` on the surface (scale 0.96 and fade), `modal_scrim_transition` on its scrim |
 | Shortcut keycaps | `keycaps`; the recorder is `settings::hotkey_control` |
 | Status (never clickable) | `tone_tag`; a live or recorded state: `status_dot` |
 | Short message under a control | `note` |

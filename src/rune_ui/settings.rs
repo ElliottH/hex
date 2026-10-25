@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 use rune::{El, Key, KeyEvent, Tx, col, row, text};
 
 use super::controls::{
-    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, keycaps, note, pulsing_dot,
-    section, segmented, select, setting_row, status_dot, text_field, toggle_row,
+    ButtonKind, Choice, DESCRIPTION, Paint, button, described_row, icon_button, keycaps, note,
+    pulsing_dot, section, segmented, select, setting_row, sheet_button, status_dot, text_field,
+    toggle_row,
 };
 use super::host;
 use super::lists::{Tone, tone_tag};
@@ -536,12 +537,12 @@ fn shortcut_row(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         .children(super::platform_settings::side_selector(ui, p, target))
         .child(hotkey_control(ui, p, target));
     if target == ShortcutTarget::PasteLast && ui.settings.paste_last_hotkey.is_some() {
-        control = control.child(button(
+        control = control.child(icon_button(
             p,
             "clear-paste-last",
-            tr("Clear"),
-            ButtonKind::Secondary,
-            |ui: &mut Ui, _| {
+            &rune_theme_opencode::icons::TRASH,
+            tr("Clear shortcut"),
+            |ui: &mut Ui| {
                 ui.update(|settings| settings.paste_last_hotkey = None);
             },
         ));
@@ -677,15 +678,9 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         "transcription",
         tr("Speech model"),
         transcription_status(ui, p),
-        select(
-            p,
-            "transcription-control",
-            &label,
-            false,
-            Vec::new(),
-            move |ui: &mut Ui| super::picker::open(ui, language.clone()),
-            layer,
-        ),
+        sheet_button(p, "transcription-control", &label, move |ui: &mut Ui| {
+            super::picker::open(ui, language.clone())
+        }),
     ));
     let microphone = settings
         .microphone

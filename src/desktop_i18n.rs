@@ -389,7 +389,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Checking for OpenCode", ["Szukanie OpenCode", "正在查找 OpenCode", "OpenCode を確認中", "Suche nach OpenCode", "Buscando OpenCode"]),
     ("Checking…", ["Sprawdzanie…", "正在检查…", "確認中…", "Wird geprüft…", "Comprobando…"]),
     ("Choose how much reasoning the model should use", ["Wybierz, ile rozumowania ma użyć model", "选择模型应使用多少推理", "モデルが使う推論量を選択", "Lege fest, wie viel der Modell nachdenken soll", "Elige cuánto razonamiento debe usar el modelo"]),
-    ("Clear", ["Wyczyść", "清除", "クリア", "Löschen", "Borrar"]),
+    ("Clear shortcut", ["Wyczyść skrót", "清除快捷键", "ショートカットをクリア", "Kürzel löschen", "Borrar atajo"]),
     ("Click to record a new shortcut", ["Kliknij, aby nagrać nowy skrót", "点击以录制新的快捷键", "クリックして新しいショートカットを記録", "Klicken, um ein neues Kürzel aufzunehmen", "Haz clic para grabar un atajo nuevo"]),
     ("Confirm delete", ["Potwierdź usunięcie", "确认删除", "削除を確定", "Löschen bestätigen", "Confirmar eliminación"]),
     ("Could not update Voice Action:", ["Nie udało się zaktualizować Voice Action:", "无法更新 Voice Action：", "Voice Action を更新できませんでした:", "Voice Action konnte nicht aktualisiert werden:", "No se pudo actualizar Voice Action:"]),

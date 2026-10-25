@@ -5,12 +5,12 @@
 //! selection when it is ready. Downloaded models other than the active one can be deleted after a
 //! confirmation.
 
-use rune::{El, SpringPair, Transition, col, el, row, text};
+use rune::{El, col, el, row, text};
 use rune_kit::{Badge, ControlSize, IconButton, IconButtonVariant, Progress};
 
 use super::Request;
 use super::Ui;
-use super::controls::{ButtonKind, Paint, button};
+use super::controls::{ButtonKind, Paint, button, modal_scrim_transition, modal_transition};
 use super::lists::{error_panel, source_item, source_list};
 use crate::app_settings::AppSettings;
 use crate::desktop_i18n::{tr, tr_fill};
@@ -118,9 +118,8 @@ fn delete(ui: &mut Ui, model: &'static ModelDefinition) {
     }
 }
 
-/// The picker's scrim and panel over the window, when open. The scrim fades
-/// and the panel grows in from 96% as it fades, each on its own layer so the
-/// panel's scale never moves the scrim.
+/// The picker's scrim and panel over the window, when open: the scrim fades
+/// and the panel scales in as one surface ([`modal_transition`]).
 pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
     let language = ui.picker.language.clone()?;
     let c = &p.k.c;
@@ -249,7 +248,6 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
     for shadow in &p.k.elevation.overlay {
         panel = panel.box_shadow(*shadow);
     }
-    let springs = SpringPair::new(p.k.motion.overlay, p.k.motion.overlay);
     let layer = |key: &str| {
         el().key(key)
             .role("none")
@@ -261,11 +259,10 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         layer("picker-scrim")
             .fill(c.scrim)
             .on_press(close)
-            .transition(Transition::opacity().springs(springs)),
-        // Scaled about the window's centre, which is the panel's.
+            .transition(modal_scrim_transition(p)),
         layer("picker-layer")
             .center()
-            .transition(Transition::scale(0.96).springs(springs))
+            .transition(modal_transition(p))
             // Keys stay inside, Escape or a press outside closes, and focus
             // returns to the control that opened it.
             .child(panel.modal(true, close)),
