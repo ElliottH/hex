@@ -6,7 +6,7 @@
 //! confirmation.
 
 use rune::{El, SpringPair, Transition, col, el, row, text};
-use rune_kit::{Badge, ButtonSize, IconButton, IconButtonVariant, Progress};
+use rune_kit::{Badge, ControlSize, IconButton, IconButtonVariant, Progress};
 
 use super::Request;
 use super::Ui;
@@ -197,7 +197,7 @@ pub(super) fn modal(ui: &Ui, p: Paint) -> Option<[El; 2]> {
         .child(
             IconButton::new(p.k.glyph.close)
                 .variant(IconButtonVariant::Ghost)
-                .size(ButtonSize::Normal)
+                .control_size(ControlSize::Regular)
                 .label(tr("Close"))
                 .on_press(close)
                 .build(p.k)

@@ -4,6 +4,7 @@
 //! type, radii, elevation, and motion come from the kit's tokens.
 
 use rune::{Color, El, LoopSpec, TextEdit, TextStyle, Tx, col, el, row, text};
+#[allow(deprecated)]
 use rune_kit::{
     Button, ButtonSize, ButtonVariant, Kit, Menu, MenuItem, Placement, SegmentedControl, Select,
     SelectAppearance, Switch, TextInput,
@@ -263,6 +264,9 @@ pub(super) enum ButtonKind {
     Danger,
 }
 
+// Hex's push buttons keep Rune's older `ButtonSize` metrics (28 pt, 11 pt
+// padding, medium radius); `control_size` would widen and round them.
+#[allow(deprecated)]
 pub(super) fn button(
     p: Paint,
     key: &str,

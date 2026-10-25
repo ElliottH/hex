@@ -498,6 +498,7 @@ pub(super) fn allowed(p: Paint, key: &str, label: &str) -> El {
 }
 
 /// A compact secondary button for actions inside a list row.
+#[allow(deprecated)]
 pub(super) fn small_button(
     p: Paint,
     key: &str,
@@ -515,12 +516,12 @@ pub(super) fn small_button(
 /// The × that removes one item of an editable list.
 pub(super) fn remove_button(
     p: Paint,
-    size: rune_kit::ButtonSize,
+    size: rune_kit::ControlSize,
     press: impl Fn(&mut Ui) + 'static,
 ) -> El {
     rune_kit::IconButton::new(CLOSE)
         .variant(rune_kit::IconButtonVariant::Ghost)
-        .size(size)
+        .control_size(size)
         .label(tr("Remove"))
         .on_press(press)
         .build(p.k)

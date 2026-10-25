@@ -205,6 +205,7 @@ fn apply(ui: &mut Ui, effect: Effect) {
 }
 
 /// The tour over the whole window, while it shows.
+#[allow(deprecated)]
 pub(super) fn overlay(ui: &Ui, p: Paint) -> Option<El> {
     let tour = ui.tour.as_ref()?;
     let view = tour.flow.view();
@@ -236,6 +237,7 @@ pub(super) fn overlay(ui: &Ui, p: Paint) -> Option<El> {
         ),
         Some((label, false, _)) => rune_kit::Button::new(label)
             .variant(ButtonVariant::Contrast)
+            .size(rune_kit::ButtonSize::Normal)
             .disabled(true)
             .build(p.k)
             // Dark's light-grey accent still reads as live at Rune's 0.4.
@@ -331,6 +333,7 @@ fn step_dots(p: Paint, view: &View) -> Option<El> {
 
 /// The model's progress in the tour's top corner, while it downloads
 /// behind the other steps.
+#[allow(deprecated)]
 fn download(p: Paint, status: ItemStatus) -> El {
     let label = |key: &str, copy: &str| {
         text(copy)

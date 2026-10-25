@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rune::{Drag, El, Phase, TextEdit, Tx, Waker, col, edit_access, el, row, spacer, text};
-use rune_kit::{ButtonSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
+use rune_kit::{ControlSize, IconButton, IconButtonVariant, Switch, TextArea, TextInput};
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Highlight, Paint, button, card, note, setting_row};
@@ -614,7 +614,7 @@ fn provision_workspace(ui: &mut Ui) {
 pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> (Vec<El>, El) {
     let add = IconButton::new(PLUS)
         .variant(IconButtonVariant::Neutral)
-        .size(ButtonSize::Normal)
+        .control_size(ControlSize::Regular)
         .label(tr("Add mode"))
         .on_press(add_mode)
         .build(p.k)
@@ -789,7 +789,7 @@ fn basics(ui: &Ui, p: Paint, selection: Selection, current: &DictationMode) -> E
                         .font(p.k.ty.small_medium)
                         .color(p.text()),
                 )
-                .child(remove_button(p, ButtonSize::Small, move |ui: &mut Ui| {
+                .child(remove_button(p, ControlSize::Small, move |ui: &mut Ui| {
                     let remove = remove.clone();
                     update_mode(ui, |mode| {
                         mode.applications
@@ -801,7 +801,7 @@ fn basics(ui: &Ui, p: Paint, selection: Selection, current: &DictationMode) -> E
     chips = chips.child(
         IconButton::new(PLUS)
             .variant(IconButtonVariant::Neutral)
-            .size(ButtonSize::Small)
+            .control_size(ControlSize::Small)
             .label(tr("Add application"))
             .on_press(|ui: &mut Ui| {
                 ui.modes.application_picker_open = !ui.modes.application_picker_open;
@@ -1025,7 +1025,7 @@ fn card_header(p: Paint, key: &str, title: &str, action: Option<El>) -> El {
 fn corrections(ui: &Ui, p: Paint) -> El {
     let add = IconButton::new(PLUS)
         .variant(IconButtonVariant::Ghost)
-        .size(ButtonSize::Normal)
+        .control_size(ControlSize::Regular)
         .label(tr("Add correction"))
         .on_press(add_replacement)
         .build(p.k)
@@ -1076,9 +1076,11 @@ fn corrections(ui: &Ui, p: Paint) -> El {
                         .grow(1.0)
                         .shrink(),
                 )
-                .child(remove_button(p, ButtonSize::Normal, move |ui: &mut Ui| {
-                    remove_replacement(ui, index)
-                })),
+                .child(remove_button(
+                    p,
+                    ControlSize::Regular,
+                    move |ui: &mut Ui| remove_replacement(ui, index),
+                )),
         );
     }
     card(p, "corrections-card", rows)
@@ -1175,7 +1177,7 @@ fn transformations(ui: &Ui, p: Paint, current: &DictationMode) -> El {
         } else {
             IconButton::new(PLUS)
                 .variant(IconButtonVariant::Ghost)
-                .size(ButtonSize::Normal)
+                .control_size(ControlSize::Regular)
                 .label(tr("Add transformation"))
                 .on_press(|ui: &mut Ui| ui.modes.transformation_picker_open = true)
                 .build(p.k)
@@ -1226,12 +1228,16 @@ fn transformations(ui: &Ui, p: Paint, current: &DictationMode) -> El {
                     .grow(1.0)
                     .truncate(),
             )
-            .child(remove_button(p, ButtonSize::Normal, move |ui: &mut Ui| {
-                let id = remove.clone();
-                update_mode(ui, |mode| {
-                    mode.transformations.retain(|candidate| *candidate != id)
-                });
-            }));
+            .child(remove_button(
+                p,
+                ControlSize::Regular,
+                move |ui: &mut Ui| {
+                    let id = remove.clone();
+                    update_mode(ui, |mode| {
+                        mode.transformations.retain(|candidate| *candidate != id)
+                    });
+                },
+            ));
         if held {
             item = item.fill(p.k.c.layer_02);
         }

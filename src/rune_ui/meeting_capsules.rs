@@ -26,6 +26,7 @@ use rune::{
     Align, Cursor, Cx, Drag, El, OverlayHandle, OverlaySpec, Phase, ScreenEdge, Spring, Tx, col,
     row, text,
 };
+#[allow(deprecated)]
 use rune_kit::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant};
 
 use super::controls::{Paint, pulsing_dot, status_dot};
@@ -564,6 +565,7 @@ impl MeetingCapsules {
     }
 }
 
+#[allow(deprecated)]
 fn button(
     p: Paint,
     key: &str,
@@ -800,6 +802,7 @@ fn offer_choices(p: Paint, candidate: &MeetingCandidate) -> (rune::Color, String
     )
 }
 
+#[allow(deprecated)]
 fn ready(
     p: Paint,
     manifest: &MeetingManifest,
@@ -860,6 +863,7 @@ fn ready(
     (p.success(), title, subtitle, actions)
 }
 
+#[allow(deprecated)]
 fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automatic: bool) -> El {
     let live = &capsule.live;
     let elapsed = meeting::format_duration(started.elapsed().as_millis() as u64);

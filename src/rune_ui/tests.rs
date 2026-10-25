@@ -25,6 +25,9 @@ fn runtime(scene: &str, dark: bool, size: (f32, f32)) -> Runtime<Ui> {
     let mut rt = Runtime::with_text(state, view, size, env, text);
     rt.poll = Some(poll);
     rt.on_key = Some(on_key);
+    // Fixtures show the state at rest, so sequences that play on mount
+    // (a granted permission's Allowed) land before the first frame.
+    rt.settle_all();
     rt.frame(0.0);
     rt
 }
