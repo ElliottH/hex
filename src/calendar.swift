@@ -58,10 +58,15 @@ private func json<T: Encodable>(_ value: T) -> UnsafeMutablePointer<CChar>? {
 }
 
 /// Called only once access is granted, never on the window's thread, so the
-/// store is not created before Connect.
-private func startObserving() {
+/// store is not created before Connect. The store may predate the grant (a
+/// refusal, then Full Access in System Settings), so the first observation,
+/// or `resetting` after a fresh grant, drops what it cached without access.
+private func startObserving(resetting: Bool = false) {
     storeLock.lock()
     defer { storeLock.unlock() }
+    if observer == nil || resetting {
+        store.reset()
+    }
     guard observer == nil else { return }
     observer = NotificationCenter.default.addObserver(
         forName: .EKEventStoreChanged,
@@ -75,11 +80,16 @@ private func startObserving() {
 }
 
 /// EventKit's status, unless it still reports "not determined" after this
-/// process was granted access. A later refusal in System Settings wins.
+/// process was granted access. Once EventKit reports a decision it is
+/// current, so the grant is forgotten: a later reset in System Settings
+/// (back to not determined) shows Connect again.
 private func currentStatus() -> EKAuthorizationStatus {
     let status = EKEventStore.authorizationStatus(for: .event)
     changeLock.lock()
     defer { changeLock.unlock() }
+    if status != .notDetermined {
+        grantedHere = false
+    }
     return status == .notDetermined && grantedHere ? .fullAccess : status
 }
 
@@ -112,14 +122,11 @@ public func hexCalendarRequestAccess(
     semaphore.wait()
     granted.pointee = answer.granted
     error.pointee = answer.error.map { strdup($0.localizedDescription) } ?? nil
+    changeLock.lock()
+    grantedHere = answer.granted
+    changeLock.unlock()
     if answer.granted {
-        changeLock.lock()
-        grantedHere = true
-        changeLock.unlock()
-        storeLock.lock()
-        store.reset()
-        storeLock.unlock()
-        startObserving()
+        startObserving(resetting: true)
     }
     return statusCode(EKEventStore.authorizationStatus(for: .event))
 }

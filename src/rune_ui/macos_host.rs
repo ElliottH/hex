@@ -586,7 +586,7 @@ impl NativeHost for MacHost {
             PlatformRequest::Meeting(request) => self.meeting(request)?,
             PlatformRequest::Calendar(CalendarRequest::Connect) => self.calendar.connect(),
             PlatformRequest::Calendar(CalendarRequest::OpenPrivacySettings) => {
-                tracing::info!("calendar: opening Privacy & Security › Calendars");
+                self.calendar.opening_privacy_settings();
                 crate::calendar::open_privacy_settings();
             }
             PlatformRequest::CreateCommandsConfig => {
@@ -811,8 +811,13 @@ struct CalendarFeed {
     reader: Option<CalendarReader>,
     connect_error: Option<String>,
     /// macOS's last answer in this process. EventKit's status can keep
-    /// saying "not determined" after it until Hex relaunches.
+    /// saying "not determined" after it until Hex relaunches; once the reader
+    /// sees a decision, that is current and this is forgotten.
     answered: Option<CalendarAccess>,
+    /// The person asked Hex to connect (Connect, or Open settings from the
+    /// blocked card) and it is not saved yet, so full access granted in System
+    /// Settings afterwards connects. A grant Hex did not start never does.
+    asked: bool,
 }
 
 struct CalendarReader {
@@ -884,6 +889,7 @@ impl CalendarFeed {
             return;
         }
         tracing::info!("calendar: connect clicked; asking macOS for full access");
+        self.asked = true;
         let (sender, receiver) = mpsc::sync_channel(1);
         let spawned = std::thread::Builder::new()
             .name("hex-calendar-connect".into())
@@ -900,6 +906,12 @@ impl CalendarFeed {
                 self.connect_error = Some(error.to_string());
             }
         }
+    }
+
+    /// Open settings on the blocked card: switching Hex on there connects.
+    fn opening_privacy_settings(&mut self) {
+        tracing::info!("calendar: opening Privacy & Security › Calendars");
+        self.asked = true;
     }
 
     /// Applies macOS's answer: a grant marks the calendar connected (through
@@ -923,16 +935,46 @@ impl CalendarFeed {
             self.answered = Some(access);
         }
         if access == CalendarAccess::FullAccess {
-            match save() {
-                Ok(()) => tracing::info!("calendar: saved connected; settings reloading"),
-                Err(error) => {
-                    tracing::warn!(%error, "calendar: could not save connected");
-                    self.connect_error = Some(error);
-                }
-            }
+            self.save_connected(save);
         }
         view.access = access;
         view.error = self.connect_error.clone();
+    }
+
+    fn save_connected(&mut self, save: impl FnOnce() -> Result<(), String>) {
+        match save() {
+            Ok(()) => {
+                tracing::info!("calendar: saved connected; settings reloading");
+                self.asked = false;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "calendar: could not save connected");
+                self.connect_error = Some(error);
+            }
+        }
+    }
+
+    /// Takes a reader snapshot: forgets the answer once EventKit reports a
+    /// decision, and connects when full access arrives after the person asked
+    /// Hex to connect (refused the prompt, then switched Hex on in System
+    /// Settings).
+    fn read(
+        &mut self,
+        snapshot: CalendarSnapshot,
+        connected: bool,
+        view: &CalendarView,
+        now_ms: i64,
+        save: impl FnOnce() -> Result<(), String>,
+    ) -> CalendarView {
+        if snapshot.access != CalendarAccess::NotDetermined {
+            self.answered = None;
+        }
+        if self.asked && !connected && snapshot.access == CalendarAccess::FullAccess {
+            tracing::info!("calendar: full access granted after connect; connecting");
+            self.connect_error = None;
+            self.save_connected(save);
+        }
+        self.shown(snapshot, view, now_ms)
     }
 
     /// A reader snapshot as the card shows it.
@@ -983,7 +1025,14 @@ impl CalendarFeed {
         if let Some(reader) = &self.reader
             && let Ok(snapshot) = reader.snapshots.try_recv()
         {
-            let shown = self.shown(snapshot, view, crate::calendar::wall_clock_ms());
+            let connected = crate::app_settings::calendar_settings().connected;
+            let shown = self.read(
+                snapshot,
+                connected,
+                view,
+                crate::calendar::wall_clock_ms(),
+                save_calendar_connected,
+            );
             changed |= update(view, shown);
         }
         changed
@@ -1658,6 +1707,66 @@ mod tests {
             feed.shown(granted, &view, 0).access,
             CalendarAccess::FullAccess
         );
+    }
+
+    fn full_access() -> CalendarSnapshot {
+        CalendarSnapshot {
+            access: CalendarAccess::FullAccess,
+            ..CalendarSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn granting_in_system_settings_after_a_refusal_connects() {
+        let mut feed = CalendarFeed::default();
+        let mut view = CalendarView::default();
+        feed.asked = true; // Connect was clicked.
+        feed.answer(
+            &calendar_answer(false, CalendarAccess::NotDetermined),
+            &mut view,
+            || panic!("a denial must not save"),
+        );
+        let denied = CalendarSnapshot {
+            access: CalendarAccess::Denied,
+            ..CalendarSnapshot::default()
+        };
+        feed.read(denied, false, &view, 0, || panic!("still denied"));
+        feed.opening_privacy_settings();
+        let mut saved = 0;
+        let shown = feed.read(full_access(), false, &view, 0, || {
+            saved += 1;
+            Ok(())
+        });
+        assert_eq!(saved, 1);
+        assert_eq!(shown.access, CalendarAccess::FullAccess);
+        // Saved once: the next read before the reload does not save again.
+        feed.read(full_access(), false, &view, 0, || panic!("saved twice"));
+    }
+
+    #[test]
+    fn a_grant_hex_did_not_ask_for_never_connects() {
+        let mut feed = CalendarFeed::default();
+        let shown = feed.read(full_access(), false, &CalendarView::default(), 0, || {
+            panic!("connecting needs the person's click")
+        });
+        assert_eq!(shown.access, CalendarAccess::FullAccess);
+    }
+
+    #[test]
+    fn a_decision_from_eventkit_replaces_the_remembered_answer() {
+        let mut feed = CalendarFeed::default();
+        let mut view = CalendarView::default();
+        feed.answer(
+            &calendar_answer(true, CalendarAccess::NotDetermined),
+            &mut view,
+            || Ok(()),
+        );
+        feed.read(full_access(), true, &view, 0, || panic!("connected"));
+        // `tccutil reset` puts it back to not determined: Connect again.
+        let reset = feed.read(CalendarSnapshot::default(), true, &view, 0, || {
+            panic!("not granted")
+        });
+        assert_eq!(reset.access, CalendarAccess::NotDetermined);
     }
 
     #[test]
