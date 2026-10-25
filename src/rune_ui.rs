@@ -992,7 +992,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     if let Some(tour) = onboarding::overlay(ui, p) {
         layer.push(tour);
     }
-    rune_kit::root(window, layer)
+    rune_kit::root(window, layer).on_window_focus(explainer::window_focused)
 }
 
 /// macOS draws the traffic lights over the sidebar (Rune's window has a

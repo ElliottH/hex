@@ -28,11 +28,13 @@ const CARD_PADDING: f32 = 12.0;
 const CARD_GAP: f32 = 10.0;
 const KEYCAP_WIDTH: f32 = KeySize::Large.min_width();
 const VISUAL_GAP: f32 = 10.0;
-/// The lanes' width with one one-glyph keycap, until layout measures them.
-const CARD_LANES: f32 =
-    (MODAL_WIDTH - 2.0 * PADDING - CARD_GAP) / 2.0 - 2.0 * CARD_PADDING - KEYCAP_WIDTH - VISUAL_GAP;
-const LOCK_LANES: f32 =
-    MODAL_WIDTH - 2.0 * PADDING - 2.0 * CARD_PADDING - KEYCAP_WIDTH - VISUAL_GAP;
+/// The lanes beside a card's keycaps are never narrower than this: a long
+/// chord widens the panel instead.
+const MIN_LANES: f32 = 64.0;
+/// How far a widened panel stays inside the window.
+const WINDOW_MARGIN: f32 = 24.0;
+/// How much Double-tap to lock adds to the panel, until it has been laid out.
+const LOCK_ESTIMATE: f32 = 102.0;
 /// The pen overhangs the lanes by 4 points above and below.
 const LANES_HEIGHT: f32 = 25.0;
 const LANE: f32 = 6.0;
@@ -97,11 +99,10 @@ pub(super) struct Explainer {
     held_ms: Option<f32>,
     /// Reduce Motion, as the last view saw it: the tape stops.
     reduced: Cell<bool>,
-    /// Where the panel's top settled when it opened, and the window height
-    /// it settled in. It stays there while Hold and Toggle change its
-    /// height, so the cards hold still under the pointer and only the bottom
-    /// edge moves; resizing the window centres it again.
-    top: Cell<Option<(f32, f32)>>,
+    /// The body's height as last laid out under Hold, with Double-tap to
+    /// lock. The panel centres at its Hold height in either mode, so
+    /// switching modes moves only its bottom edge.
+    hold_body: Cell<Option<f32>>,
 }
 
 impl Explainer {
@@ -131,7 +132,6 @@ pub(super) fn open(ui: &mut Ui) {
     ui.explainer.start = None;
     ui.explainer.elapsed_ms = 0.0;
     ui.explainer.next_frame = 0.0;
-    ui.explainer.top.set(None);
 }
 
 pub(super) fn close(ui: &mut Ui) {
@@ -157,6 +157,16 @@ pub(super) fn poll(ui: &mut Ui, clock: f64, visible: bool, tx: &mut Tx) -> bool 
         tx.wake_after(FRAME);
     }
     true
+}
+
+/// Rune reads Reduce Motion again when the window gains focus, after that
+/// frame's poll, so a stopped tape wakes once for the next poll to see it.
+pub(super) fn window_focused(ui: &mut Ui, focused: bool, tx: &mut Tx) {
+    let explainer = &mut ui.explainer;
+    if focused && explainer.open && explainer.reduced.get() {
+        explainer.next_frame = 0.0;
+        tx.wake_after(FRAME);
+    }
 }
 
 /// The "How it works" link under Shortcut mode. A focusable element rather
@@ -192,11 +202,19 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
     let colors = Colors::new(p);
     let keys = ui.settings.dictation_hotkey.keycaps();
     let hold = ui.settings.shortcut_mode == ShortcutMode::Hold;
+    let window = cx.layout("explainer-layer");
+    let keys_width = cx
+        .layout("mode-hold/visual/keys")
+        .map_or_else(|| keys_estimate(&keys), |[_, _, width, _]| width);
+    let width = panel_width(keys_width, window.map(|[_, _, width, _]| width));
     // The lanes draw at the width they lay out at, whatever the keycaps take.
     let lanes = |owner: &str, estimate: f32| {
         cx.layout(&format!("{owner}/visual/lanes"))
             .map_or(estimate, |[_, _, width, _]| width)
     };
+    let inside = width - 2.0 * PADDING;
+    let card_lanes = (inside - CARD_GAP) / 2.0 - 2.0 * CARD_PADDING - keys_width - VISUAL_GAP;
+    let lock_lanes = inside - 2.0 * CARD_PADDING - keys_width - VISUAL_GAP;
     let cards = row()
         .key("modes")
         .equal_columns(2)
@@ -212,7 +230,7 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
                 &colors,
                 &keys,
                 &HOLD,
-                lanes("mode-hold", CARD_LANES),
+                lanes("mode-hold", card_lanes),
                 t,
                 fade,
             ),
@@ -228,12 +246,12 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
                 &colors,
                 &keys,
                 &TOGGLE,
-                lanes("mode-toggle", CARD_LANES),
+                lanes("mode-toggle", card_lanes),
                 t,
                 fade,
             ),
         ));
-    let lock_lanes = lanes("double-tap", LOCK_LANES);
+    let lock_lanes = lanes("double-tap", lock_lanes);
     // Double-tap to lock is Hold's. Its slot stays and clips it, so it folds
     // away under the footer as the panel's bottom edge rises, never over it.
     let lock = col()
@@ -254,7 +272,7 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
         .key("shortcut-explainer")
         .role("dialog")
         .label(tr("How the shortcut works"))
-        .w(MODAL_WIDTH)
+        .w(width)
         .pt(PADDING)
         .px(PADDING)
         .pb(14.0)
@@ -288,21 +306,29 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
             .w_full()
             .h_full()
     };
-    // Centred as it opens, then held at that top.
-    let top = &ui.explainer.top;
-    let window = cx.layout("explainer-layer").map(|[_, _, _, height]| height);
-    if top.get().map(|(_, height)| height) != window {
-        top.set(
-            cx.layout("shortcut-explainer")
-                .zip(window)
-                .map(|([_, y, _, _], height)| (y, height)),
-        );
+    // Centred at its Hold height in either mode, so the cards hold still
+    // under the pointer and Hold and Toggle move only the bottom edge.
+    let hold_body = &ui.explainer.hold_body;
+    let laid_height = |key| cx.layout(key).map(|[_, _, _, height]| height);
+    let body_height = laid_height("shortcut-explainer/explainer-body");
+    // A pass that still sees Toggle's layout, its slot empty, measures nothing.
+    let unfolded =
+        laid_height("explainer-body/lock").is_some_and(|slot| slot > LOCK_ESTIMATE / 2.0);
+    if hold && unfolded {
+        hold_body.set(body_height);
     }
-    let placed = match top.get() {
-        Some((y, _)) => layer("explainer-layer")
-            .justify_center()
-            .items_start()
-            .pt(y),
+    let placed = match window.zip(laid_height("shortcut-explainer")) {
+        Some(([_, _, _, window], height)) => {
+            let folded = match (hold, hold_body.get(), body_height) {
+                (true, _, _) => 0.0,
+                (false, Some(full), Some(body)) => full - body,
+                (false, _, _) => LOCK_ESTIMATE,
+            };
+            layer("explainer-layer")
+                .justify_center()
+                .items_start()
+                .pt(((window - height - folded) / 2.0).max(0.0))
+        }
         None => layer("explainer-layer").center(),
     };
     Some([
@@ -316,6 +342,28 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
             // returns to the link that opened it.
             .child(panel.modal(true, close)),
     ])
+}
+
+/// The keycaps' width until layout measures them: a one-glyph legend is
+/// square, a word about 7.5 points a letter.
+fn keys_estimate(keys: &[String]) -> f32 {
+    let caps: f32 = keys
+        .iter()
+        .map(|label| match label.chars().count() {
+            0 | 1 => KEYCAP_WIDTH,
+            letters => (14.0 + 7.5 * letters as f32).max(KEYCAP_WIDTH),
+        })
+        .sum();
+    caps + KEY_GAP * keys.len().saturating_sub(1) as f32
+}
+
+/// The panel is wide enough for each card's lanes to keep `MIN_LANES`
+/// beside `keys` points of keycaps, as far as the window allows.
+fn panel_width(keys: f32, window: Option<f32>) -> f32 {
+    let card = 2.0 * CARD_PADDING + keys + VISUAL_GAP + MIN_LANES;
+    let wanted = 2.0 * card + CARD_GAP + 2.0 * PADDING;
+    let room = window.map_or(f32::INFINITY, |window| window - 2.0 * WINDOW_MARGIN);
+    wanted.min(room).max(MODAL_WIDTH)
 }
 
 /// How the panel enters and leaves: the same as the picker's.
@@ -518,9 +566,17 @@ impl Colors {
     }
 }
 
+/// Lanes too narrow to hold the pen draw nothing.
+fn too_narrow(width: f32) -> bool {
+    width <= PEN_LEAD
+}
+
 /// The empty lanes, the full width.
 fn tracks(colors: &Colors, width: f32) -> Shape {
     let mut shape = Shape::new();
+    if too_narrow(width) {
+        return shape;
+    }
     for y in [KEY_LANE_Y, RECORD_LANE_Y] {
         shape = bar(shape, 0.0, width, y, colors.track, (true, true));
     }
@@ -533,6 +589,9 @@ fn pen_x(width: f32) -> f32 {
 }
 
 fn pen(colors: &Colors, width: f32) -> Shape {
+    if too_narrow(width) {
+        return Shape::new();
+    }
     let x = pen_x(width);
     Shape::new()
         .line(
@@ -554,7 +613,7 @@ fn at(ms: f64, now: f64, width: f32) -> f32 {
 
 /// Where the stretch from `d` to `u` of the take starting at `from` lies on
 /// the tape at `now`, at least `min` wide but never past the pen, or `None`
-/// before it starts.
+/// before it starts and once it has scrolled off.
 fn drawn((d, u): (f32, f32), from: f64, now: f64, width: f32, min: f32) -> Option<(f32, f32)> {
     let d = from + f64::from(d);
     if d >= now {
@@ -562,7 +621,8 @@ fn drawn((d, u): (f32, f32), from: f64, now: f64, width: f32, min: f32) -> Optio
     }
     let start = at(d, now, width);
     let end = at((from + f64::from(u)).min(now), now, width);
-    Some((start, end.max(start + min).min(pen_x(width))))
+    let end = end.max(start + min).min(pen_x(width));
+    (end > 0.0).then_some((start, end))
 }
 
 /// The takes on the tape at `now`, from the first one.
@@ -576,6 +636,9 @@ fn takes(now: f64) -> impl Iterator<Item = f64> {
 /// keeps its place on the tape as it scrolls.
 fn tape(colors: &Colors, script: &Script, width: f32, now: f64) -> Shape {
     let mut shape = Shape::new();
+    if too_narrow(width) {
+        return shape;
+    }
     for from in takes(now) {
         let drawn = |stretch, min| drawn(stretch, from, now, width, min);
         for &press in script.presses {
@@ -659,15 +722,17 @@ fn bar(
 }
 
 /// Diagonal stripes over the hands-free stretch, anchored at its start so
-/// they ride the tape with it.
+/// they ride the tape with it. Only those still on the tape are drawn.
 fn stripes(mut shape: Shape, start: f32, end: f32, y: f32, color: Color) -> Shape {
     const PERIOD: f32 = 7.0;
     const BAND: f32 = 3.5;
-    if end <= start {
+    let shown = start.max(0.0);
+    if end <= shown {
         return shape;
     }
     let (top, bottom) = (y - LANE / 2.0, y + LANE / 2.0);
-    let mut left = start - LANE;
+    // The first band that can reach the tape, in phase with `start`.
+    let mut left = start - LANE + ((shown - start) / PERIOD).floor() * PERIOD;
     while left < end {
         let band = [
             [left, bottom],
@@ -675,7 +740,7 @@ fn stripes(mut shape: Shape, start: f32, end: f32, y: f32, color: Color) -> Shap
             [left + BAND + LANE, top],
             [left + LANE, top],
         ];
-        let clipped = clip_x(&band, start, end);
+        let clipped = clip_x(&band, shown, end);
         if clipped.len() >= 3 {
             shape = shape.fill(clipped, color);
         }
@@ -784,6 +849,38 @@ mod tests {
             }
             assert!(script.presses.iter().all(|&(_, u)| u < DONE));
         }
+    }
+
+    /// Lanes squeezed narrower than the pen's lead draw nothing at all.
+    #[test]
+    fn narrow_lanes_draw_nothing() {
+        let colors = Colors {
+            track: Color::WHITE,
+            key: Color::WHITE,
+            recording: Color::WHITE,
+            locked: Color::WHITE,
+            playhead: Color::WHITE,
+        };
+        for width in [-20.0, 0.0, PEN_LEAD] {
+            assert!(tracks(&colors, width).is_empty());
+            assert!(pen(&colors, width).is_empty());
+            assert!(tape(&colors, &LOCK, width, 1800.0).is_empty());
+        }
+        assert!(!tape(&colors, &LOCK, PEN_LEAD + 20.0, 1800.0).is_empty());
+    }
+
+    /// A stretch that has scrolled off the tape is no longer drawn, and
+    /// stripes start no further left than the tape.
+    #[test]
+    fn the_past_leaves_the_tape() {
+        let width = 60.0;
+        let now = f64::from(HOLD.recording.1) + WINDOW + 1.0;
+        assert_eq!(drawn(HOLD.recording, 0.0, now, width, 0.0), None);
+        // Fifteen periods to the left, in the same phase: only the part on
+        // the tape is drawn, the same as a stretch starting at its edge.
+        let stripes = |start| stripes(Shape::new(), start, 20.0, 10.0, Color::WHITE);
+        assert!(!stripes(0.0).is_empty());
+        assert_eq!(stripes(-15.0 * 7.0), stripes(0.0));
     }
 
     #[test]

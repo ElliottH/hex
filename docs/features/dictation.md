@@ -133,6 +133,10 @@ General > Shortcut mode > How it works                // dictate.shortcut-explai
      chart-recorder tape: a still pen at the right, the tape scrolling left
      without end and fading out at its left edge; opening it ends a shortcut
      recording and closes the model picker
+  ├── Opens centred at its Hold height in either mode; a window resize
+  │   centres it again
+  ├── Long chord -> The panel widens (up to the window) so each card's lanes
+  │   keep at least 64 pt beside the keycaps
   ├── Pick a card (click, Enter, Space) -> Saves Shortcut mode
   ├── Hold -> Double-tap to lock row: switch + striped hands-free lane
   ├── Toggle -> No lock row; it folds inside its own slot and the panel's
@@ -140,7 +144,8 @@ General > Shortcut mode > How it works                // dictate.shortcut-explai
   ├── Tab -> Hold, Toggle, lock switch, Close; focus stays inside
   ├── Close, Escape, or a press outside -> Closes; focus returns to the link
   ├── Change pane, menu bar, or `hex window show` -> Closes
-  └── Reduce Motion -> One whole take, still, no wakes
+  └── Reduce Motion -> One whole take, still, no wakes; turned off while
+      open, the tape starts again when the window regains focus
 ```
 
 The lanes are Rune shapes drawn at their laid-out width and redrawn from the
@@ -149,8 +154,12 @@ Checks: `how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside`,
 `explainer_cards_pick_the_shortcut_mode`,
 `the_explainer_loops_on_the_poll_clock`,
 `reduce_motion_shows_the_finished_explainer_without_waking`,
-the tape's own `nothing_draws_past_the_pen`, `the_tape_scrolls_without_steps`
-and `the_still_frame_shows_a_whole_take` in `explainer.rs`,
+`the_explainer_restarts_when_reduce_motion_turns_off`,
+`the_explainer_centres_at_its_hold_height_in_either_mode`,
+`a_long_chord_widens_the_explainer` (five keys),
+the tape's own `nothing_draws_past_the_pen`, `the_tape_scrolls_without_steps`,
+`the_still_frame_shows_a_whole_take`, `narrow_lanes_draw_nothing` and
+`the_past_leaves_the_tape` in `explainer.rs`,
 `the_explainer_draws_a_keycap_per_key_and_lines_up_the_lanes`, and
 `the_explainer_picker_and_shortcut_recording_never_share_the_window` in
 [tests/panes.rs](../../src/rune_ui/tests/panes.rs), plus the

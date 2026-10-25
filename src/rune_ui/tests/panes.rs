@@ -605,6 +605,125 @@ fn the_explainer_draws_a_keycap_per_key_and_lines_up_the_lanes() {
     }
 }
 
+/// Opened in either mode, the panel centres at its Hold height, so Hold and
+/// Toggle move only its bottom edge; resizing the window centres it again.
+#[test]
+fn the_explainer_centres_at_its_hold_height_in_either_mode() {
+    fn panel(rt: &Runtime<Ui>) -> [f32; 4] {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("shortcut-explainer"))
+            .map(|e| e.target)
+            .expect("the panel")
+    }
+    for (size, scene) in [
+        (PANE_SIZE, "shortcut-explainer-toggle"),
+        (PANE_SIZE, "shortcut-explainer"),
+        ((900.0, 620.0), "shortcut-explainer-toggle"),
+    ] {
+        let mut rt = runtime(scene, true, size);
+        settle(&mut rt);
+        let opened = panel(&rt);
+        tap(&mut rt, "mode-hold");
+        settle(&mut rt);
+        let hold = panel(&rt);
+        assert!(
+            (hold[1] - opened[1]).abs() < 0.5,
+            "{scene}: the top moved from {} to {}",
+            opened[1],
+            hold[1]
+        );
+        assert!(
+            (hold[1] + hold[3] / 2.0 - size.1 / 2.0).abs() < 0.5,
+            "{scene}: Hold is centred in {size:?}: {hold:?}"
+        );
+        tap(&mut rt, "mode-toggle");
+        settle(&mut rt);
+        let toggle = panel(&rt);
+        assert!(
+            (toggle[1] - opened[1]).abs() < 0.5,
+            "{scene}: Toggle {opened:?} {hold:?} {toggle:?}"
+        );
+        rt.set_viewport((size.0, size.1 + 100.0), 1.0);
+        settle(&mut rt);
+        assert!(
+            (panel(&rt)[1] - opened[1] - 50.0).abs() < 0.5,
+            "{scene}: a taller window centres it again"
+        );
+    }
+}
+
+/// A five-key chord widens the panel so every card's lanes keep room, and
+/// the keycaps stay inside their cards.
+#[test]
+fn a_long_chord_widens_the_explainer() {
+    use crate::app_settings::{HotkeyBinding, HotkeyKey, HotkeyModifiers, ModifierSide};
+    let mut rt = runtime("shortcut-explainer-chord", true, PANE_SIZE);
+    let side = Some(ModifierSide::Either);
+    rt.state.settings.dictation_hotkey = HotkeyBinding {
+        modifiers: HotkeyModifiers {
+            control: side,
+            option: side,
+            shift: side,
+            command: side,
+            ..HotkeyModifiers::default()
+        },
+        key: Some(HotkeyKey::named("space")),
+    };
+    refresh(&mut rt);
+    let elements = rt.elements();
+    let rect = |suffix: &str| {
+        elements
+            .iter()
+            .find(|e| e.path.ends_with(suffix))
+            .map(|e| e.target)
+            .unwrap_or_else(|| panic!("no {suffix}"))
+    };
+    let panel = rect("shortcut-explainer");
+    assert!(panel[0] >= 0.0 && panel[0] + panel[2] <= PANE_SIZE.0);
+    for owner in ["modes/mode-hold", "modes/mode-toggle", "lock/double-tap"] {
+        let (card, keys, lanes) = (
+            rect(&format!("explainer-body/{owner}")),
+            rect(&format!("{owner}/visual/keys")),
+            rect(&format!("{owner}/visual/lanes")),
+        );
+        assert!(lanes[2] >= 63.5, "{owner}'s lanes keep room: {lanes:?}");
+        assert!(
+            keys[0] >= card[0] && lanes[0] >= keys[0] + keys[2],
+            "{owner}: {card:?} {keys:?} {lanes:?} {panel:?}"
+        );
+        assert!(
+            lanes[0] + lanes[2] <= card[0] + card[2],
+            "{owner}'s lanes stay in the card"
+        );
+    }
+}
+
+/// Reduce Motion is read again when the window gains focus, after that
+/// frame's poll; the tape starts again on the next.
+#[test]
+fn the_explainer_restarts_when_reduce_motion_turns_off() {
+    let mut rt = runtime("shortcut-explainer-motion", true, PANE_SIZE);
+    rt.set_system_reduced_motion(true);
+    settle(&mut rt);
+    assert_eq!(rt.state.explainer.time(), explainer::DONE);
+    assert_eq!(rt.wake_deadline(), None);
+    rt.window_focus(false);
+    settle(&mut rt);
+    rt.set_system_reduced_motion(false);
+    rt.window_focus(true);
+    // A host draws no further frame unless one is asked for.
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.wake_deadline().is_some(),
+        "the focus frame asks for another"
+    );
+    settle(&mut rt);
+    let before = rt.state.explainer.time();
+    rt.frame(0.25);
+    assert_ne!(rt.state.explainer.time(), before, "and moves");
+}
+
 #[test]
 fn the_explainer_picker_and_shortcut_recording_never_share_the_window() {
     let mut rt = runtime("mac-settings", true, PANE_SIZE);
