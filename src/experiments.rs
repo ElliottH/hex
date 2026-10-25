@@ -7,9 +7,9 @@
 //! name per line, `#` comments). The process reads them once, on first use,
 //! so changes apply at the next launch. Unknown names are logged and ignored.
 //! Debug builds read the same sources; `DEVELOPER_FEATURES_ENABLED` turns
-//! nothing on. A developer-only experiment exists only in debug builds:
-//! release builds do not list it, cannot enable it, and treat its name as
-//! unknown.
+//! nothing on. An experiment behind a build option (`capture`) exists only
+//! in builds with that option: others do not list it, cannot enable it, and
+//! treat its name as unknown.
 //!
 //! Gate an experiment where it starts (the worker, thread, or capture that
 //! does its work), not only where its UI shows: a hidden pane whose worker
@@ -37,7 +37,7 @@ pub enum Experiment {
 }
 
 impl Experiment {
-    /// Every experiment this build knows, including developer-only ones;
+    /// Every experiment, including those behind a build option;
     /// [`Self::available`] lists the ones this build offers.
     const ALL: [Self; 5] = [
         Self::Capture,
@@ -47,20 +47,18 @@ impl Experiment {
         Self::VoiceFilter,
     ];
 
-    /// The experiments this build offers: developer-only ones only in
-    /// debug builds.
+    /// The experiments this build offers: one behind a build option only
+    /// when built with it.
     pub fn available() -> impl Iterator<Item = Self> {
         Self::ALL
             .into_iter()
             .filter(|experiment| experiment.offered())
     }
 
-    const fn developer_only(self) -> bool {
-        matches!(self, Self::Capture)
-    }
-
-    fn offered(self) -> bool {
-        !self.developer_only() || crate::DEVELOPER_FEATURES_ENABLED
+    /// Whether this build has the experiment's code: `capture` only with
+    /// the `capture` build option on macOS.
+    const fn offered(self) -> bool {
+        !matches!(self, Self::Capture) || cfg!(hex_capture)
     }
 
     /// The stable name the env variable, the file, and the CLI use.
@@ -77,7 +75,7 @@ impl Experiment {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Capture => {
-                "Developer only: Scrawl's capture engine (`hex capture`, macOS, `--features capture`)."
+                "Scrawl's capture engine (`hex capture`; macOS, the `capture` build option)."
             }
             Self::LiveChapters => "Chapter a meeting's transcript live while it records.",
             Self::SmartTurn => {
@@ -90,8 +88,8 @@ impl Experiment {
         }
     }
 
-    /// The offered experiment called `name`; a developer-only name is
-    /// unknown in release builds.
+    /// The offered experiment called `name`; one this build lacks is
+    /// unknown.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::available().find(|experiment| experiment.name() == name)
     }
@@ -542,30 +540,24 @@ mod tests {
     }
 
     #[test]
-    fn capture_exists_only_in_debug_builds() {
-        assert!(Experiment::Capture.developer_only());
+    fn capture_exists_only_with_its_build_option() {
+        let built = cfg!(hex_capture);
         let offered = Experiment::available().any(|experiment| experiment == Experiment::Capture);
-        assert_eq!(offered, crate::DEVELOPER_FEATURES_ENABLED);
-        assert_eq!(
-            Experiment::from_name("capture").is_some(),
-            crate::DEVELOPER_FEATURES_ENABLED
-        );
+        assert_eq!(offered, built);
+        assert_eq!(Experiment::from_name("capture").is_some(), built);
 
         let snapshot = Snapshot::parse(Some("capture"), Some("capture\n"));
-        assert_eq!(
-            snapshot.enabled(Experiment::Capture),
-            crate::DEVELOPER_FEATURES_ENABLED
-        );
+        assert_eq!(snapshot.enabled(Experiment::Capture), built);
         assert_eq!(
             snapshot.unknown.is_empty(),
-            crate::DEVELOPER_FEATURES_ENABLED,
-            "release builds treat `capture` as unknown"
+            built,
+            "builds without the option treat `capture` as unknown"
         );
         let listed = list_json(&snapshot, Path::new("/x"))
             .experiments
             .iter()
             .any(|experiment| experiment.name == "capture");
-        assert_eq!(listed, crate::DEVELOPER_FEATURES_ENABLED);
+        assert_eq!(listed, built);
     }
 
     #[test]
@@ -665,7 +657,7 @@ mod tests {
         let snapshot = Snapshot::parse(Some("vocabulary"), Some("vocabulary\nmystery\n"));
         let path = Path::new("/home/kit/.config/hex/experiments");
         let mut json = serde_json::to_value(list_json(&snapshot, path)).unwrap();
-        if crate::DEVELOPER_FEATURES_ENABLED {
+        if cfg!(hex_capture) {
             let first = json["experiments"].as_array_mut().unwrap().remove(0);
             assert_eq!(first["name"], "capture");
             assert_eq!(first["enabled"], false);

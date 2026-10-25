@@ -18,8 +18,9 @@ embed-resource = "3"
 
 [features]
 onnx-benchmark = ["dep:transcribe-rs"]
-# The debug-only `capture` experiment's engine (Scrawl's `scrawl-capture`, macOS
-# only). Off by default so release builds never compile it or its Swift helper.
+# The `capture` experiment's engine (Scrawl's `scrawl-capture`, macOS only): a
+# build option (`HEX_CAPTURE=1 scripts/build-app.sh`), off by default and in
+# every public build, which never compile it or its Swift helper.
 capture = ["dep:scrawl-capture", "dep:anyhow"]
 
 [profile.moonshine-lab]

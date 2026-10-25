@@ -1,4 +1,4 @@
-# Captures (experimental, debug builds only)
+# Captures (experimental, a build option)
 
 Scrawl's capture engine hosted inside Hex, step 3 of
 [the plan](../plans/capture-in-hex.md). It runs the real `scrawl-capture`
@@ -9,12 +9,16 @@ routing yet.
 
 ```ts
 Turn it on                               // capture.gate
-├── macOS debug build with `--features capture` (scripts/check and macOS CI build it)
-│   + `hex experiments enable capture` (or HEX_EXPERIMENTS=capture) -> restart
-├── Release build -> `capture` is not an experiment: absent from `hex experiments list`,
-│   `enable capture` is an unknown name, and a file line naming it is ignored;
-│   `hex capture` -> unsupported. The crate is not compiled at all
-├── Debug build without the feature -> `hex capture` -> feature-off
+├── macOS build with `--features capture`, debug or release; off in every public build
+│   ├── `HEX_CAPTURE=1 scripts/build-app.sh` -> Hex.app with scrawl-helper signed
+│   │   beside `hex`; scripts/check and macOS CI test with the feature
+│   └── + `hex experiments enable capture` (or HEX_EXPERIMENTS=capture) -> restart
+├── Any build without the feature (every public release, Linux, Windows, Nix) ->
+│   `capture` is not an experiment: absent from `hex experiments list`, `enable
+│   capture` is an unknown name, and a file line naming it is ignored; `hex capture`
+│   -> unsupported. The crate is not compiled at all
+├── Release path -> release-app.sh refuses HEX_CAPTURE; validate-app.sh refuses a
+│   bundle with scrawl-helper or the capture engine in `hex`
 └── Off -> no capture host, engine, sink, thread, or folder; `hex capture` -> feature-off
 
 hex capture start                        // capture.start; needs a listening Hex
@@ -51,8 +55,9 @@ hex capture stop                         // capture.stop
     ├── Past 20 min -> audio kept to 20 min, the rest one gap
     ├── recording.mp4, audio.wav, frames/, scrawl.json, summary.md; then every
     │   file 0600 and folder 0700
-    ├── Keyframes decoded from recording.mp4 by scrawl-helper (target/debug, beside
-    │   Hex, or $SCRAWL_HELPER); helper missing -> the 480 px sampled frames
+    ├── Keyframes decoded from recording.mp4 by scrawl-helper (beside `hex`: in
+    │   Hex.app's Contents/MacOS or target/<profile>; or $SCRAWL_HELPER); helper
+    │   missing -> the 480 px sampled frames
     └── Transcription fails -> logged; the bundle has no words
 
 hex capture cancel -> engine cancelled, sink closed, bundle removed
@@ -79,9 +84,11 @@ Sources: [capture_host.rs](../../src/capture_host.rs), the sink in
 
 Checks:
 
-- Gate: `capture_exists_only_in_debug_builds` in
+- Gate: `capture_exists_only_with_its_build_option` in
   [experiments.rs](../../src/experiments.rs);
-  `the_host_is_absent_while_the_experiment_is_off` in capture_host.rs.
+  `the_host_is_absent_while_the_experiment_is_off` in capture_host.rs;
+  [test-app-identity.sh](../../scripts/test-app-identity.sh) for the
+  release-path refusals.
 - Sink, in dictation_audio.rs: `capture_sink_shares_the_timeline_with_dictation`,
   `a_full_capture_sink_drops_audio_as_a_gap_and_never_stalls_dictation`,
   `capture_sink_records_microphone_gaps`,

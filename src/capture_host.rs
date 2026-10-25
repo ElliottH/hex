@@ -1,4 +1,4 @@
-//! The `capture` experiment (macOS debug builds with the `capture` feature):
+//! The `capture` experiment (macOS builds with the `capture` build option):
 //! Scrawl's capture engine, the `scrawl-capture` crate, hosted inside Hex.
 //! Step 3 of `docs/plans/capture-in-hex.md`.
 //!
@@ -411,6 +411,7 @@ impl CaptureHost {
         if !crate::experiments::enabled(crate::experiments::Experiment::Capture) {
             return None;
         }
+        // scripts/validate-app.sh refuses a binary containing this line.
         tracing::info!("capture experiment on: `hex capture` is available");
         // Before any engine exists, so nothing reaches Scrawl's log file.
         scrawl_capture::log::set_sink(Some(Arc::new(TracingLog)));
@@ -869,6 +870,7 @@ fn duration_for(samples: usize) -> Duration {
 /// fresh transcription engine with the selected model, feeding `wavs` in
 /// place of the dictation timeline, and returns the finished bundle. Scrawl's
 /// engine records the screen meanwhile, which needs Screen Recording.
+#[cfg(debug_assertions)]
 pub fn replay(wavs: &[PathBuf]) -> Result<PathBuf> {
     let mut samples = Vec::new();
     let mut sample_rate = None;
@@ -927,6 +929,7 @@ pub fn replay(wavs: &[PathBuf]) -> Result<PathBuf> {
     Err(eyre!("the capture never finished"))
 }
 
+#[cfg(debug_assertions)]
 fn started_at(host: &CaptureHost) -> Result<u64> {
     host.active
         .as_ref()
@@ -936,12 +939,14 @@ fn started_at(host: &CaptureHost) -> Result<u64> {
 
 /// Recorded audio standing in for the dictation timeline: the whole file is
 /// delivered at once, stamped as if captured from the capture's start.
+#[cfg(debug_assertions)]
 struct WavTimeline {
     samples: Arc<Vec<f32>>,
     sample_rate: u32,
     feeder: Mutex<Option<(thread::JoinHandle<()>, CaptureInstant)>>,
 }
 
+#[cfg(debug_assertions)]
 impl AudioTimeline for WavTimeline {
     fn open_sink(&self, sink: SyncSender<CaptureAudio>, since: CaptureInstant) -> Result<()> {
         let samples = self.samples.clone();

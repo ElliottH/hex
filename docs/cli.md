@@ -51,7 +51,7 @@ hex
 │   ├── list [--json]              every term and its "sounds like" spellings
 │   ├── add <term> [--sounds-like a,b]  add a term, or new spellings to an existing one
 │   └── remove <term>              any case
-├── capture start|stop|cancel|status  debug builds with the `capture` experiment (features/capture.md)
+├── capture start|stop|cancel|status  the `capture` build option + experiment (features/capture.md)
 ├── experiments list|enable|disable  edit ~/.config/hex/experiments; no running Hex (features/experiments.md)
 ├── check-for-updates              check for an update now
 ├── launch-at-login [on|off]       report or change Launch at Login (installed Hex.app only)
@@ -101,11 +101,11 @@ environment, so Hex passes each `HEX_*` variable to `open --env`. `start`
 takes them from the shell that runs it, `restart` from the running Hex. The
 values are never logged.
 
-`capture` exists only in debug builds and drives the
-[Captures](features/capture.md) experiment. A release Hex refuses
-`scrawl-capture` with `unsupported`; a debug Hex built without
-`--features capture`, or with the experiment off, refuses it with
-`feature-off`. `capture stop` replies at once with the bundle
+`capture` drives the [Captures](features/capture.md) experiment, a build
+option off in every public build; the command exists in debug builds and in
+builds with `--features capture`. A Hex built without the feature refuses
+`scrawl-capture` with `unsupported`; one with it but the experiment off
+refuses it with `feature-off`. `capture stop` replies at once with the bundle
 path while the words and files are written in the background; `capture status`
 lists bundles still writing and the last outcome. A start while two captures
 are still writing is refused with `busy`. Every action is idempotent.
@@ -165,7 +165,7 @@ model-list | model-use {model, language?} | model-install {model, language?} | m
 window-show {pane?} | window-hide
 history-clear | check-for-updates | launch-at-login {enabled?}
 vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
-scrawl-capture {action}                          action: start | stop | cancel | status; debug builds
+scrawl-capture {action}                          action: start | stop | cancel | status; `capture` build option
 ```
 
 Optional fields may be left out. `hex start` and `hex logs` are local and have

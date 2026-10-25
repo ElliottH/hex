@@ -31,12 +31,14 @@ hex experiments                          // experiments.cli; macOS, Windows, Lin
 The known experiments are compiled into
 [experiments.rs](../../src/experiments.rs):
 
-- `capture`: Scrawl's capture engine hosted in Hex (macOS, **debug builds
-  only**, built with `--features capture`; see [Captures](capture.md)). A release build does not know the name:
-  `list` omits it, `enable` rejects it, and a source naming it is ignored. The
+- `capture`: Scrawl's capture engine hosted in Hex (macOS; see
+  [Captures](capture.md)). It is a build option, off in every public build:
+  only a build with `--features capture` (`HEX_CAPTURE=1
+  scripts/build-app.sh` for an app) knows the name. Any other build's `list`
+  omits it, `enable` rejects it, and a source naming it is ignored. The
   gate is where the work starts: the listener builds no capture host, so there
   is no sink, thread, or bundle folder while it is off. Check:
-  `capture_exists_only_in_debug_builds` in
+  `capture_exists_only_with_its_build_option` in
   [experiments.rs](../../src/experiments.rs).
 - `live-chapters`: chapter a meeting's transcript live while it records
   (macOS, Apple Intelligence; see

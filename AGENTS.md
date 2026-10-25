@@ -325,12 +325,14 @@ substitute for source inspection or a second roadmap.
   read as nothing chosen.
 - `experiments`: the compiled list of unsupported experiments and the
   launch snapshot of `HEX_EXPERIMENTS` and `~/.config/hex/experiments`
-  behind `experiments::enabled` and `hex experiments`. Developer-only
-  experiments (`capture`) exist only in debug builds.
+  behind `experiments::enabled` and `hex experiments`. `capture` exists
+  only in builds with its build option.
 - `capture_host`: Scrawl's capture engine (the `scrawl-capture` crate)
-  hosted in Hex for the debug-only `capture` experiment
+  hosted in Hex for the `capture` experiment
   (`docs/plans/capture-in-hex.md`), compiled only as `cfg(hex_capture)`: a
-  macOS debug build with the `capture` Cargo feature. Hex's `Host`,
+  macOS build with the `capture` Cargo feature, a build option off in every
+  public build (`HEX_CAPTURE=1 scripts/build-app.sh` bundles and signs
+  `scrawl-helper` beside `hex`). Hex's `Host`,
   `ConfigSource`, and Parakeet `Transcriber` for the engine, the
   listener-owned `CaptureHost` behind `hex capture`, and its 16 kHz
   gap-padded timeline handed to the engine as `AudioIn::External`.
@@ -591,11 +593,16 @@ CoreAudio formats, AppleScript details, or event serialization.
   total deadline. Failures record `notes_error` and leave the Markdown
   untouched. Notes never rename the file and rewrite only the heading HEX wrote
   and the `<!-- hex:notes -->` block.
-- Captures (the `capture` experiment) exist only in debug builds; a release
+- Captures (the `capture` experiment) are a build option, off in every
+  public build: only a macOS build with `--features capture` (debug, or
+  release through `HEX_CAPTURE=1 scripts/build-app.sh`) has them. Any other
   build does not know the experiment, never compiles `scrawl-capture`, and
-  refuses `scrawl-capture` with `unsupported`. Linux, Windows, and Nix never
-  compile it either. With the experiment off, the listener builds no capture
-  host: no engine, sink, thread, bundle folder, or work. Scrawl's engine
+  refuses `scrawl-capture` with `unsupported`; Linux, Windows, and Nix never
+  compile it. The Release and test-build workflows never pass the feature;
+  `release-app.sh` refuses `HEX_CAPTURE` and `validate-app.sh` refuses a
+  bundle with `scrawl-helper` or the capture engine. With the experiment
+  off, the listener builds no capture host: no engine, sink, thread, bundle
+  folder, or work. Scrawl's engine
   records the screen, runs with `SharedResources::none()` (Hex never calls
   `install_shared_resources`: no ingest server, ingest token, delivery
   retries, or global shortcuts), logs to tracing, and writes only to Hex's

@@ -120,15 +120,10 @@ impl Pump {
                 });
                 None
             }
-            #[cfg(all(debug_assertions, not(hex_capture)))]
-            ControlCommand::ScrawlCapture { .. } => Some(ControlReply::error(
-                "feature-off",
-                "this build has no capture engine; build Hex with `--features capture`",
-            )),
-            #[cfg(not(debug_assertions))]
+            #[cfg(not(hex_capture))]
             ControlCommand::ScrawlCapture { .. } => Some(ControlReply::error(
                 "unsupported",
-                "captures exist only in debug builds",
+                "this build has no capture engine: it is a build option (`--features capture`), off in public builds",
             )),
             ControlCommand::PasteLast => {
                 background(reply, move || {

@@ -1,6 +1,7 @@
 # Captures In Hex
 
-Status: step 3 is built on `dev` as a debug-only experiment on Scrawl's real
+Status: step 3 is built on `dev` as an experiment behind a build option
+(off in every public build) on Scrawl's real
 engine, the `scrawl-capture` crate as a Git dependency (see
 [Built so far](#built-so-far)); nothing ships, and Kit decides later whether
 the fold happens. This is the Hex side of ROADMAP "Fold Scrawl Into Hex": how
@@ -12,7 +13,7 @@ Step 3 on `scrawl-capture` (Scrawl's `crates/capture`, branch `engine/split`,
 pinned by rev in `Cargo.toml`), without importing the crate (step 2):
 
 ```ts
-hex capture start|stop|cancel|status     // debug + `--features capture`; POST /control `scrawl-capture`
+hex capture start|stop|cancel|status     // `--features capture`; POST /control `scrawl-capture`
 └── listener thread -> capture_host::CaptureHost (exists only with the experiment on)
     ├── start -> owner-only <captures>/<unix ms>.scrawl -> reply at once
     │   ├── DictationAudio::open_capture_sink(bounded 512 chunks, since = t0)
@@ -59,9 +60,9 @@ hex capture start|stop|cancel|status     // debug + `--features capture`; POST /
   capture's clock.
 - `hex dev capture-replay <wav>…` runs the same `CaptureHost` headlessly on a
   fresh transcription engine, feeding WAV files instead of the microphone; it
-  records the screen too.
+  records the screen too (debug builds only, like every `hex dev` command).
 - Not built yet: the shortcut, input and Escape, overlays, routing, the pane,
-  settings import, coexistence, an app-bundled helper, and the crate import.
+  settings import, coexistence, and the crate import.
 
 ### Features and gating
 
@@ -69,11 +70,15 @@ hex capture start|stop|cancel|status     // debug + `--features capture`; POST /
   macOS-only dependencies `scrawl-capture` (`default-features = false,
   features = ["screen", "helper"]`) and `anyhow` (the crate's traits return
   `anyhow::Result`).
-- `build.rs` sets `cfg(hex_capture)` only for a macOS debug build with the
-  feature on, and every line of capture code is behind it. Release, Linux, Nix
-  and Windows builds never compile the crate or its Swift helper. A release
-  build refuses `scrawl-capture` with `unsupported`; a debug build without
-  the feature with `feature-off`.
+- `build.rs` sets `cfg(hex_capture)` for a macOS build, debug or release,
+  with the feature on, and every line of capture code is behind it. Builds
+  without it (every public release, Linux, Nix, Windows) never compile the
+  crate or its Swift helper and refuse `scrawl-capture` with `unsupported`.
+- The Release, test-build, and Nix builds never pass the feature.
+  `scripts/release-app.sh` refuses `HEX_CAPTURE`, and
+  `scripts/validate-app.sh` (run on every macOS release artifact) refuses a
+  bundle with `Contents/MacOS/scrawl-helper` or a `hex` containing the
+  capture host's start-up log line.
 - `scripts/check` and macOS CI test with `--features capture`; clippy uses
   `--all-features`. The Nix package still vendors the Git source, so
   `nix/package.nix` carries `outputHashes."scrawl-capture-0.3.13"`; bump it
@@ -86,14 +91,19 @@ hex capture start|stop|cancel|status     // debug + `--features capture`; POST /
 ### Helper and permissions
 
 - `scrawl-helper` is built by the crate's `build.rs` beside the binary
-  (`target/debug`, three levels above `OUT_DIR`; checked in the HiveMind
-  target on the mini), where the engine finds it; `$SCRAWL_HELPER` overrides.
-  Missing, finish keeps the 480 px candidate frames as keyframes.
+  (`target/<profile>`, three levels above `OUT_DIR`), and the engine looks
+  for it beside its own executable (`helper::path`); `$SCRAWL_HELPER`
+  overrides. Missing, finish keeps the 480 px candidate frames as keyframes.
   Hex's capture path uses it only for movie decoding, which needs no TCC.
+- `HEX_CAPTURE=1 scripts/build-app.sh` builds with `--features capture` and
+  `SCRAWL_HELPER_PLIST=packaging/macos/scrawl-helper-Info.plist` (embedded
+  bundle ID `anomaly.hex.scrawl-helper`, name Hex), copies the helper to
+  `Hex.app/Contents/MacOS/scrawl-helper`, and signs it before the app, with
+  the app's identity, hardened runtime, a timestamp, identifier
+  `<bundle id>.scrawl-helper`, and no entitlements.
 - Screen Recording belongs to the process that runs ScreenCaptureKit: Hex
-  itself (or the terminal running a dev build), so no helper with a Hex
-  bundle ID is needed for permissions. Packaging it into `Hex.app` waits for
-  a release-capable capture; `scripts/build-app.sh` is unchanged.
+  itself (or the terminal running a dev build). The helper is Hex's child, so
+  anything it touches is attributed to Hex, its responsible process.
 
 ## Shape
 
@@ -135,8 +145,8 @@ own inside Hex.
   so the Scrawl app can depend on it by Git revision until it retires.
 - macOS CI adds `cargo test -p scrawl-capture --locked`.
 - `crates/capture/build.rs` compiles the engine's Swift helper. Hex builds it
-  with a Hex identity and Hex usage strings (a build-script input), and
-  `scripts/build-app.sh` copies and signs it into `Contents/MacOS/`.
+  with a Hex identity (`SCRAWL_HELPER_PLIST`), and `scripts/build-app.sh`
+  copies and signs it into `Contents/MacOS/` (built for `HEX_CAPTURE=1`).
 
 ## Experiment gate
 
@@ -233,7 +243,7 @@ where the work starts (the `capture_host` worker), not only in the window.
 ## CLI
 
 Through `POST /control`, like everything else: `hex capture start|stop|cancel|
-status` (built, debug only), `hex capture list|show`, `hex capture send <id> [--to <session>]`,
+status` (built, behind the build option), `hex capture list|show`, `hex capture send <id> [--to <session>]`,
 and `hex capture route <id> --explain`. Engine tools (autocrop eval, capture
 simulation, reprocess) mount under `hex dev capture` in debug builds.
 
@@ -275,8 +285,9 @@ Left from hosting the real engine:
   Recording. Hex's narration-only tests use a fake engine.
 - `Engine::start` blocks on target discovery and ScreenCaptureKit; Hex runs it
   off the listener thread. Say so in its docs, or split it.
-- `finish` launches `scrawl-helper` to decode the movie; a library host has
-  to ship that executable or lose full-quality keyframes.
+- `finish` launches `scrawl-helper` to decode the movie, so a library host
+  ships and signs a second executable (Hex does, with `HEX_CAPTURE=1`) or
+  loses full-quality keyframes. Decoding in-process would drop it.
 - Bundle files are written with the process umask (0644); Hex tightens them
   after `finish`. A `0600` writer would keep them private while recording too.
 - `phone`, `routing`, `delivery`, and the ingest HTTP code compile

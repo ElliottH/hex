@@ -17,6 +17,18 @@ else
   app_name=Hex
   bundle_id=anomaly.hex
 fi
+# HEX_CAPTURE=1 builds the `capture` experiment in (`--features capture`)
+# with Scrawl's `scrawl-helper` beside `hex`, where the engine looks for
+# it. Never for a public build: release-app.sh and validate-app.sh refuse it.
+capture=${HEX_CAPTURE:-}
+case "$capture" in
+  '' | 0) capture= ;;
+  1) ;;
+  *)
+    echo "HEX_CAPTURE must be 1 or unset" >&2
+    exit 1
+    ;;
+esac
 icon_output="$root/target/AppIcon.assets"
 icon_info="$root/target/AppIcon-info.plist"
 version=$(hex_version "$root")
@@ -37,10 +49,19 @@ sign() {
 }
 
 export MACOSX_DEPLOYMENT_TARGET=15.0
-cargo build --locked --release --manifest-path "$root/Cargo.toml"
+if [ -n "$capture" ]; then
+  # The helper's embedded Info.plist names Hex, not Scrawl.
+  SCRAWL_HELPER_PLIST="$root/packaging/macos/scrawl-helper-Info.plist" \
+    cargo build --locked --release --features capture --manifest-path "$root/Cargo.toml"
+else
+  cargo build --locked --release --manifest-path "$root/Cargo.toml"
+fi
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" "$bundle/Contents/Library" "$frameworks"
 cp "$root/target/release/voice-control" "$executable"
+if [ -n "$capture" ]; then
+  cp "$root/target/release/scrawl-helper" "$bundle/Contents/MacOS/scrawl-helper"
+fi
 cp "$root/app/Info.plist" "$bundle/Contents/Info.plist"
 cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$bundle/Contents/Resources/"
 HEX_VERSION="$version" HEX_BUILD_NUMBER="$build_number" VOICE_CONTROL_TEAM_ID="$team_id" VOICE_CONTROL_CODESIGN_IDENTITY="${identity#-}" HEX_SKIP_INSTALL_SCRIPT=1 \
@@ -81,6 +102,12 @@ cp "$moonshine_dir/libonnxruntime.1.23.2.dylib" "$frameworks/"
 sign "$frameworks/libonnxruntime.1.23.2.dylib"
 sign "$frameworks/libmoonshine.dylib"
 sign "$bundle/Contents/Library/HexMicrophone.driver"
+if [ -n "$capture" ]; then
+  # Hex runs it only to decode the capture's movie, which needs no
+  # entitlement; anything it touches is attributed to Hex, its responsible
+  # process.
+  sign --identifier "$bundle_id.scrawl-helper" "$bundle/Contents/MacOS/scrawl-helper"
+fi
 sign --entitlements "$root/app/VoiceControl.entitlements" "$bundle"
 codesign --verify --deep --strict --verbose=2 "$bundle"
 echo "$bundle"

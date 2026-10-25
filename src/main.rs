@@ -280,9 +280,9 @@ enum Command {
         #[command(subcommand)]
         command: DevCommand,
     },
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, hex_capture))]
     /// Start, stop, or cancel a Scrawl capture in the running Hex (the
-    /// `capture` experiment; debug builds only).
+    /// `capture` experiment, a build option).
     Capture {
         #[arg(value_enum)]
         action: control::ScrawlCaptureAction,
@@ -387,7 +387,7 @@ enum DevCommand {
         #[arg(value_enum)]
         state: DevToggle,
     },
-    #[cfg(hex_capture)]
+    #[cfg(all(debug_assertions, hex_capture))]
     /// Run a capture headlessly, feeding WAV files in place of the
     /// microphone, and write its bundle (needs the `capture` experiment).
     CaptureReplay {
@@ -497,7 +497,7 @@ fn main() -> Result<()> {
             action: Some(transcript_cli::HistoryAction::Clear { yes, output }),
             ..
         })) => control::cli::finish(control::cli::clear_history(yes, output)),
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, hex_capture))]
         Some(Command::Capture { action, output }) => control::cli::finish(control::cli::send(
             control::ControlCommand::ScrawlCapture { action },
             output,
@@ -718,7 +718,7 @@ fn main() -> Result<()> {
         } => {
             unreachable!("handled before startup")
         }
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, hex_capture))]
         Command::Capture { .. } => unreachable!("handled before startup"),
         Command::Commands {
             command: CommandsCommand::Init,
@@ -741,7 +741,7 @@ fn main() -> Result<()> {
                     DevCommand::Commands { state } => DeveloperCommand::SetCommandsEnabled {
                         enabled: matches!(state, DevToggle::On),
                     },
-                    #[cfg(hex_capture)]
+                    #[cfg(all(debug_assertions, hex_capture))]
                     DevCommand::CaptureReplay { wavs } => {
                         experiments::log_launch();
                         app_settings::AppSettings::load()?;

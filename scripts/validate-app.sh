@@ -12,6 +12,8 @@ version=$3
 build_number=$4
 team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Developer signing team}
 plist="$bundle/Contents/Info.plist"
+# Logged only by a build with the `capture` feature (src/capture_host.rs).
+capture_marker='capture experiment on: `hex capture` is available'
 
 fail() {
   echo "Rust HEX bundle validation failed: $*" >&2
@@ -35,7 +37,10 @@ plist_value() {
 ! plist_value SUFeedURL >/dev/null 2>&1 || fail "a Sparkle feed is still configured"
 [ ! -e "$bundle/Contents/Frameworks/Sparkle.framework" ] || fail "Sparkle.framework is still bundled"
 [ "$(plist_value LSUIElement)" = true ] || fail "menu-bar application policy is disabled"
+# The capture build option is never released (scripts/build-app.sh HEX_CAPTURE).
+[ ! -e "$bundle/Contents/MacOS/scrawl-helper" ] || fail "built with the capture build option: scrawl-helper is bundled"
 [ -x "$bundle/Contents/MacOS/hex" ] || fail "packaged executable is missing"
+! LC_ALL=C grep -aqF "$capture_marker" "$bundle/Contents/MacOS/hex" || fail "built with the capture build option: hex has the capture engine"
 [ "$(lipo -archs "$bundle/Contents/MacOS/hex")" = arm64 ] || fail "packaged executable is not arm64-only"
 [ -x "$bundle/Contents/Library/HexMicrophone.driver/Contents/MacOS/HexMicrophoneDriver" ] || fail "bundled HexMicrophone.driver is missing"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Contents/Library/HexMicrophone.driver/Contents/Info.plist")" = anomaly.hex.microphone.driver ] || fail "bundled driver has wrong bundle identifier"

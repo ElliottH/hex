@@ -3,11 +3,11 @@ use std::process::Command;
 
 fn main() {
     test_build_commit();
-    // `hex_capture`: the `capture` experiment's code, only in macOS debug
-    // builds with the `capture` feature (which brings in `scrawl-capture`).
+    // `hex_capture`: the `capture` experiment's code, only in macOS builds
+    // with the `capture` feature (which brings in `scrawl-capture`), a build
+    // option that is off in every public build.
     println!("cargo::rustc-check-cfg=cfg(hex_capture)");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
-        && std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some()
         && std::env::var_os("CARGO_FEATURE_CAPTURE").is_some()
     {
         println!("cargo::rustc-cfg=hex_capture");
