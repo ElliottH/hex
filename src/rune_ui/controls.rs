@@ -6,10 +6,9 @@
 use rune::{
     Color, El, LoopSpec, SpringPair, TextEdit, TextStyle, Transition, Tx, col, el, row, text,
 };
-#[allow(deprecated)]
 use rune_kit::{
-    Button, ButtonSize, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Menu,
-    MenuItem, Placement, SegmentedControl, Select, SelectAppearance, Switch, TextInput,
+    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem,
+    Placement, SegmentedControl, Select, SelectAppearance, Switch, TextInput,
 };
 
 use super::Ui;
@@ -344,9 +343,31 @@ pub(super) enum ButtonKind {
     Danger,
 }
 
-// Hex's push buttons keep Rune's older `ButtonSize` metrics (28 pt, 11 pt
-// padding, medium radius); `control_size` would widen and round them.
-#[allow(deprecated)]
+/// Builds push buttons at Hex's sizes, which keep tighter padding and
+/// corners than the kit's `ControlSize`s of the same height.
+pub(super) trait PushSize {
+    /// 28 pt, the kit's Large height.
+    fn build_push(self, k: &Kit) -> El;
+    /// 24 pt, for actions inside list rows.
+    fn build_small_push(self, k: &Kit) -> El;
+}
+
+impl PushSize for Button {
+    fn build_push(self, k: &Kit) -> El {
+        self.control_size(ControlSize::Large)
+            .build(k)
+            .px(11.0)
+            .radius(k.radius.md)
+    }
+
+    fn build_small_push(self, k: &Kit) -> El {
+        self.control_size(ControlSize::Regular)
+            .build(k)
+            .px(9.0)
+            .radius(k.radius.sm)
+    }
+}
+
 pub(super) fn button(
     p: Paint,
     key: &str,
@@ -361,15 +382,13 @@ pub(super) fn button(
     };
     Button::new(label)
         .variant(variant)
-        .size(ButtonSize::Normal)
         .on_press_tx(press)
-        .build(p.k)
+        .build_push(p.k)
         .key(key)
 }
 
 /// A Secondary button showing a value, with a trailing chevron because it
 /// opens a sheet rather than a menu. It is as wide as its value.
-#[allow(deprecated)]
 pub(super) fn sheet_button(
     p: Paint,
     key: &str,
@@ -378,9 +397,8 @@ pub(super) fn sheet_button(
 ) -> El {
     Button::new(value)
         .variant(ButtonVariant::Neutral)
-        .size(ButtonSize::Normal)
         .on_press(open)
-        .build(p.k)
+        .build_push(p.k)
         .key(key)
         .pr(6.0)
         .child(

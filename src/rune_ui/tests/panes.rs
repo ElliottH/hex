@@ -365,7 +365,7 @@ fn double_tap_to_lock_shows_only_for_hold() {
 fn how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside() {
     let mut rt = runtime("mac-settings", true, PANE_SIZE);
     tab_to(&mut rt, "shortcut-help");
-    key(&mut rt, Key::Enter, Mods::default());
+    key(&mut rt, Key::Text(" ".into()), Mods::default());
     settle(&mut rt);
     assert!(rt.state.explainer.open);
     tab_to(&mut rt, "mode-hold");
@@ -386,6 +386,16 @@ fn how_it_works_opens_the_shortcut_explainer_and_keeps_focus_inside() {
         "focus went to {}",
         focused(&rt)
     );
+
+    // Return presses Close, the default button, even from a focused card.
+    let mode = rt.state.settings.shortcut_mode;
+    key(&mut rt, Key::Text(" ".into()), Mods::default());
+    settle(&mut rt);
+    tab_to(&mut rt, "mode-toggle");
+    key(&mut rt, Key::Enter, Mods::default());
+    settle(&mut rt);
+    assert!(!rt.state.explainer.open);
+    assert_eq!(rt.state.settings.shortcut_mode, mode);
 }
 
 #[test]
@@ -1078,6 +1088,16 @@ fn deleting_a_meeting_takes_the_menu_then_a_confirmation() {
     let mut rt = runtime("meetings-delete", true, PANE_SIZE);
     key(&mut rt, Key::Escape, Mods::default());
     assert!(rt.state.meetings.delete_armed.is_none(), "Escape cancels");
+
+    let mut rt = runtime("meetings-delete", true, PANE_SIZE);
+    key(&mut rt, Key::Enter, Mods::default());
+    assert_eq!(
+        asked(&rt),
+        [PlatformRequest::Meeting(MeetingRequest::Trash(
+            "preview-notes".into()
+        ))],
+        "Return confirms"
+    );
 }
 
 #[test]

@@ -289,13 +289,18 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
                 .color(p.text()),
         )
         .child(body)
-        .child(row().key("footer").justify_end().child(button(
-            p,
-            "close-explainer",
-            tr("Close"),
-            ButtonKind::Secondary,
-            |ui: &mut Ui, _| close(ui),
-        )));
+        .child(
+            row().key("footer").justify_end().child(
+                button(
+                    p,
+                    "close-explainer",
+                    tr("Close"),
+                    ButtonKind::Secondary,
+                    |ui: &mut Ui, _| close(ui),
+                )
+                .default_button(),
+            ),
+        );
     for shadow in &p.k.elevation.overlay {
         panel = panel.box_shadow(*shadow);
     }

@@ -26,10 +26,9 @@ use rune::{
     Align, Cursor, Cx, Drag, El, OverlayHandle, OverlaySpec, Phase, ScreenEdge, Spring, Tx, col,
     row, text,
 };
-#[allow(deprecated)]
-use rune_kit::{Badge, BadgeVariant, Button, ButtonSize, ButtonVariant};
+use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant};
 
-use super::controls::{Paint, pulsing_dot, status_dot};
+use super::controls::{Paint, PushSize, pulsing_dot, status_dot};
 use crate::app_settings::{MeetingIndicatorCorner, MeetingPolicy, MeetingProviderChoice};
 use crate::calendar::CalendarMeeting;
 use crate::desktop_i18n::{tr, tr_fill};
@@ -565,7 +564,6 @@ impl MeetingCapsules {
     }
 }
 
-#[allow(deprecated)]
 fn button(
     p: Paint,
     key: &str,
@@ -579,9 +577,8 @@ fn button(
         } else {
             ButtonVariant::Neutral
         })
-        .size(ButtonSize::Normal)
         .on_press(press)
-        .build(p.k)
+        .build_push(p.k)
         .key(key)
 }
 
@@ -802,7 +799,6 @@ fn offer_choices(p: Paint, candidate: &MeetingCandidate) -> (rune::Color, String
     )
 }
 
-#[allow(deprecated)]
 fn ready(
     p: Paint,
     manifest: &MeetingManifest,
@@ -834,7 +830,6 @@ fn ready(
     };
     let copy = Button::new(tr(if copied { "Copied" } else { "Copy" }))
         .variant(ButtonVariant::Neutral)
-        .size(ButtonSize::Normal)
         .on_press_tx(|c: &mut Capsule, tx: &mut Tx| {
             let Some(Kind::Ready(manifest)) = &c.kind else {
                 return;
@@ -847,7 +842,7 @@ fn ready(
                 Err(error) => tracing::warn!(%error, "could not copy meeting transcript"),
             }
         })
-        .build(p.k)
+        .build_push(p.k)
         .key("copy-transcript");
     let mut actions = vec![copy];
     if manifest.export_path.is_some() {
@@ -863,7 +858,6 @@ fn ready(
     (p.success(), title, subtitle, actions)
 }
 
-#[allow(deprecated)]
 fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automatic: bool) -> El {
     let live = &capsule.live;
     let elapsed = meeting::format_duration(started.elapsed().as_millis() as u64);
@@ -881,7 +875,6 @@ fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automat
         tr("Copy new").to_owned()
     })
     .variant(ButtonVariant::Neutral)
-    .size(ButtonSize::Normal)
     .disabled(live.pending == 0 && !copied_new)
     .on_press_tx(|c: &mut Capsule, tx: &mut Tx| {
         let Some(Kind::Recording { id, .. }) = &c.kind else {
@@ -900,13 +893,12 @@ fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automat
             Err(error) => tracing::warn!(%error, "could not copy new meeting transcript turns"),
         }
     })
-    .build(p.k)
+    .build_push(p.k)
     .min_w(COPY_NEW_WIDTH)
     .key("copy-new");
     let copied_all = live.copied(LiveCopy::All);
     let copy_all = Button::new(tr(if copied_all { "Copied" } else { "Copy all" }))
         .variant(ButtonVariant::Neutral)
-        .size(ButtonSize::Normal)
         .disabled(live.entries.is_empty() && !copied_all)
         .on_press_tx(|c: &mut Capsule, tx: &mut Tx| {
             if c.live.entries.is_empty() {
@@ -915,7 +907,7 @@ fn recording(p: Paint, capsule: &Capsule, title: &str, started: Instant, automat
             tx.copy(meeting::transcript_markdown(&c.live.entries));
             c.live.copied = Some((LiveCopy::All, Instant::now()));
         })
-        .build(p.k)
+        .build_push(p.k)
         .key("copy-all");
     let actions = vec![
         copy_new,

@@ -796,7 +796,7 @@ fn toggle_rows_take_focus_and_flip_on_space() {
 fn the_picker_keeps_focus_inside_and_escape_returns_it() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     tab_to(&mut rt, "transcription-control");
-    key(&mut rt, Key::Enter, Mods::default());
+    key(&mut rt, Key::Text(" ".into()), Mods::default());
     settle(&mut rt);
     assert_eq!(rt.state.picker.language.as_deref(), Some("en"));
     for _ in 0..12 {

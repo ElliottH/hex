@@ -17,7 +17,9 @@ use rune_kit::{ButtonVariant, Progress, TextInput};
 
 use super::Request;
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, card, keycaps, setting_row};
+use super::controls::{
+    ButtonKind, DESCRIPTION, Paint, PushSize, button, card, keycaps, setting_row,
+};
 use super::lists::{PermissionControl, allowed, permission_control};
 use super::platform::{Os, PlatformRequest, PlatformState};
 use crate::app_settings::AppSettings;
@@ -205,7 +207,6 @@ fn apply(ui: &mut Ui, effect: Effect) {
 }
 
 /// The tour over the whole window, while it shows.
-#[allow(deprecated)]
 pub(super) fn overlay(ui: &Ui, p: Paint) -> Option<El> {
     let tour = ui.tour.as_ref()?;
     let view = tour.flow.view();
@@ -234,12 +235,12 @@ pub(super) fn overlay(ui: &Ui, p: Paint) -> Option<El> {
             label,
             ButtonKind::Primary,
             move |ui: &mut Ui, _| input(ui, action),
-        ),
+        )
+        .default_button(),
         Some((label, false, _)) => rune_kit::Button::new(label)
             .variant(ButtonVariant::Contrast)
-            .size(rune_kit::ButtonSize::Normal)
             .disabled(true)
-            .build(p.k)
+            .build_push(p.k)
             // Dark's light-grey accent still reads as live at Rune's 0.4.
             .opacity(if p.k.dark { 0.3 } else { 1.0 })
             .key("tour-continue"),
@@ -333,7 +334,6 @@ fn step_dots(p: Paint, view: &View) -> Option<El> {
 
 /// The model's progress in the tour's top corner, while it downloads
 /// behind the other steps.
-#[allow(deprecated)]
 fn download(p: Paint, status: ItemStatus) -> El {
     let label = |key: &str, copy: &str| {
         text(copy)
@@ -350,9 +350,8 @@ fn download(p: Paint, status: ItemStatus) -> El {
             .child(label("label", tr("Download stopped")))
             .child(
                 rune_kit::Button::new(tr("Retry"))
-                    .size(rune_kit::ButtonSize::Small)
                     .on_press(|ui: &mut Ui| input(ui, Input::Grant(SetupItem::Model)))
-                    .build(p.k)
+                    .build_small_push(p.k)
                     .key("tour-download-retry"),
             ),
         ItemStatus::Downloading(fraction) => row()

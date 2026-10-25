@@ -10,7 +10,7 @@ use rune::{
 };
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot, status_dot};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, PushSize, button, pulsing_dot, status_dot};
 use crate::desktop_i18n::tr;
 
 const LIST_WIDTH: f32 = 320.0;
@@ -498,7 +498,6 @@ pub(super) fn allowed(p: Paint, key: &str, label: &str) -> El {
 }
 
 /// A compact secondary button for actions inside a list row.
-#[allow(deprecated)]
 pub(super) fn small_button(
     p: Paint,
     key: &str,
@@ -507,9 +506,8 @@ pub(super) fn small_button(
 ) -> El {
     rune_kit::Button::new(label)
         .variant(rune_kit::ButtonVariant::Neutral)
-        .size(rune_kit::ButtonSize::Small)
         .on_press_tx(press)
-        .build(p.k)
+        .build_small_push(p.k)
         .key(key)
 }
 

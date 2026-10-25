@@ -367,7 +367,7 @@ fn model_card(
                 } else {
                     tr("Delete").into()
                 };
-                actions = actions.child(button(
+                let delete_button = button(
                     p,
                     "delete-model",
                     &label,
@@ -377,7 +377,12 @@ fn model_card(
                         ButtonKind::Secondary
                     },
                     move |ui: &mut Ui, _| delete(ui, model),
-                ));
+                );
+                actions = actions.child(if confirming {
+                    delete_button.default_button()
+                } else {
+                    delete_button
+                });
             }
             let lang = language.to_string();
             actions = actions.child(button(

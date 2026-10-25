@@ -751,17 +751,20 @@ fn detail(ui: &Ui, p: Paint, meeting: &Meeting, layer: &mut Vec<El>) -> El {
     } else if armed && !active && !meeting.notes_running {
         // The confirmation takes the whole row until it is answered.
         let id = meeting.id.clone();
-        actions.push(button(
-            p,
-            "meeting-confirm-delete",
-            if meeting.has_markdown {
-                tr("Trash recording & Markdown")
-            } else {
-                tr("Trash recording")
-            },
-            ButtonKind::Danger,
-            move |ui: &mut Ui, _| trash(ui, id.clone()),
-        ));
+        actions.push(
+            button(
+                p,
+                "meeting-confirm-delete",
+                if meeting.has_markdown {
+                    tr("Trash recording & Markdown")
+                } else {
+                    tr("Trash recording")
+                },
+                ButtonKind::Danger,
+                move |ui: &mut Ui, _| trash(ui, id.clone()),
+            )
+            .default_button(),
+        );
         actions.push(button(
             p,
             "meeting-cancel-delete",

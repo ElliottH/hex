@@ -1293,17 +1293,20 @@ fn release_confirmation(ui: &Ui, p: Paint) -> El {
                     ui.confirm_release = false;
                 },
             ))
-            .child(button(
-                p,
-                "confirm-release",
-                tr("Release microphone"),
-                ButtonKind::Primary,
-                |ui: &mut Ui, _| {
-                    if ui.update(AppSettings::disable_commands_and_release_microphone) {
-                        ui.confirm_release = false;
-                    }
-                },
-            )),
+            .child(
+                button(
+                    p,
+                    "confirm-release",
+                    tr("Release microphone"),
+                    ButtonKind::Primary,
+                    |ui: &mut Ui, _| {
+                        if ui.update(AppSettings::disable_commands_and_release_microphone) {
+                            ui.confirm_release = false;
+                        }
+                    },
+                )
+                .default_button(),
+            ),
     )
     .fill(p.k.c.hover)
 }

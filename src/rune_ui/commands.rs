@@ -284,13 +284,16 @@ fn enable_card(ui: &Ui, p: Paint) -> El {
                         ButtonKind::Secondary,
                         |ui: &mut Ui, _| ui.commands.confirm_enable = false,
                     ))
-                    .child(button(
-                        p,
-                        "confirm-enable-commands",
-                        tr("Keep microphone ready & enable commands"),
-                        ButtonKind::Primary,
-                        |ui: &mut Ui, _| keep_ready_and_enable(ui),
-                    )),
+                    .child(
+                        button(
+                            p,
+                            "confirm-enable-commands",
+                            tr("Keep microphone ready & enable commands"),
+                            ButtonKind::Primary,
+                            |ui: &mut Ui, _| keep_ready_and_enable(ui),
+                        )
+                        .default_button(),
+                    ),
             )
             .fill(p.k.c.hover),
         );

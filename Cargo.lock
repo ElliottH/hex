@@ -641,6 +641,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width",
 ]
 
@@ -708,6 +710,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
 dependencies = [
  "crossbeam-utils",
+]
+
+[[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -3560,7 +3572,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -4394,16 +4406,18 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=6f9f85e5af75c6a29fb44316a363c8fa86b0790f#6f9f85e5af75c6a29fb44316a363c8fa86b0790f"
+source = "git+https://github.com/anomalyco/rune.git?rev=d0849e0506b34fe54e49f4d587b131a7ae886384#d0849e0506b34fe54e49f4d587b131a7ae886384"
 dependencies = [
  "arboard",
  "blake3",
  "block2 0.5.1",
  "block2 0.6.2",
  "bytemuck",
+ "console_error_panic_hook",
  "futures-util",
  "half",
  "image",
+ "js-sys",
  "libc",
  "libloading 0.8.9",
  "objc2 0.5.3",
@@ -4433,10 +4447,14 @@ dependencies = [
  "taffy",
  "tokio",
  "unicode-segmentation",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-wlr",
+ "web-sys",
+ "web-time",
  "wgpu",
  "windows-sys 0.59.0",
  "winit",
@@ -4449,7 +4467,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=6f9f85e5af75c6a29fb44316a363c8fa86b0790f#6f9f85e5af75c6a29fb44316a363c8fa86b0790f"
+source = "git+https://github.com/anomalyco/rune.git?rev=d0849e0506b34fe54e49f4d587b131a7ae886384#d0849e0506b34fe54e49f4d587b131a7ae886384"
 dependencies = [
  "rune",
  "rune-motion",
@@ -4459,12 +4477,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune.git?rev=6f9f85e5af75c6a29fb44316a363c8fa86b0790f#6f9f85e5af75c6a29fb44316a363c8fa86b0790f"
+source = "git+https://github.com/anomalyco/rune.git?rev=d0849e0506b34fe54e49f4d587b131a7ae886384#d0849e0506b34fe54e49f4d587b131a7ae886384"
 
 [[package]]
 name = "rune-theme-opencode"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune.git?rev=6f9f85e5af75c6a29fb44316a363c8fa86b0790f#6f9f85e5af75c6a29fb44316a363c8fa86b0790f"
+source = "git+https://github.com/anomalyco/rune.git?rev=d0849e0506b34fe54e49f4d587b131a7ae886384#d0849e0506b34fe54e49f4d587b131a7ae886384"
 dependencies = [
  "rune",
  "rune-kit",
@@ -6289,6 +6307,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "portable-atomic",
  "profiling",

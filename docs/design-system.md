@@ -45,6 +45,10 @@ either appearance.
 4. **Few visible actions.** A detail header shows its one to three most common
    actions; the rest go in an overflow menu, with the destructive choice last.
    A destructive choice ends in "…" and keeps its two-step confirmation.
+   Space presses the focused button; Return presses only a `.default_button()`.
+   Make one the confirming action of a dialog, a tour step, or a recoverable
+   confirmation once it shows, never a pane's standing action, and never an
+   irreversible one (Clear all history, Confirm delete of a mode).
 5. **Verify by looking.** Render every view you touched with a `--snap` scene
    in light and dark (see [Verification](#verification)).
 
