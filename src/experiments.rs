@@ -7,7 +7,9 @@
 //! name per line, `#` comments). The process reads them once, on first use,
 //! so changes apply at the next launch. Unknown names are logged and ignored.
 //! Debug builds read the same sources; `DEVELOPER_FEATURES_ENABLED` turns
-//! nothing on.
+//! nothing on. A developer-only experiment exists only in debug builds:
+//! release builds do not list it, cannot enable it, and treat its name as
+//! unknown.
 //!
 //! Gate an experiment where it starts (the worker, thread, or capture that
 //! does its work), not only where its UI shows: a hidden pane whose worker
@@ -27,6 +29,7 @@ pub const ENV: &str = "HEX_EXPERIMENTS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Experiment {
+    Capture,
     LiveChapters,
     SmartTurn,
     Vocabulary,
@@ -34,16 +37,36 @@ pub enum Experiment {
 }
 
 impl Experiment {
-    pub const ALL: [Self; 4] = [
+    /// Every experiment this build knows, including developer-only ones;
+    /// [`Self::available`] lists the ones this build offers.
+    const ALL: [Self; 5] = [
+        Self::Capture,
         Self::LiveChapters,
         Self::SmartTurn,
         Self::Vocabulary,
         Self::VoiceFilter,
     ];
 
+    /// The experiments this build offers: developer-only ones only in
+    /// debug builds.
+    pub fn available() -> impl Iterator<Item = Self> {
+        Self::ALL
+            .into_iter()
+            .filter(|experiment| experiment.offered())
+    }
+
+    const fn developer_only(self) -> bool {
+        matches!(self, Self::Capture)
+    }
+
+    fn offered(self) -> bool {
+        !self.developer_only() || crate::DEVELOPER_FEATURES_ENABLED
+    }
+
     /// The stable name the env variable, the file, and the CLI use.
     pub const fn name(self) -> &'static str {
         match self {
+            Self::Capture => "capture",
             Self::LiveChapters => "live-chapters",
             Self::SmartTurn => "smart-turn",
             Self::Vocabulary => "vocabulary",
@@ -53,6 +76,9 @@ impl Experiment {
 
     pub const fn description(self) -> &'static str {
         match self {
+            Self::Capture => {
+                "Developer only: Scrawl-style capture with word timestamps (`hex capture`, macOS)."
+            }
             Self::LiveChapters => "Chapter a meeting's transcript live while it records.",
             Self::SmartTurn => {
                 "Stop hands-free dictation when Smart Turn hears you finish (macOS)."
@@ -64,10 +90,10 @@ impl Experiment {
         }
     }
 
+    /// The offered experiment called `name`; a developer-only name is
+    /// unknown in release builds.
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|experiment| experiment.name() == name)
+        Self::available().find(|experiment| experiment.name() == name)
     }
 
     fn index(self) -> usize {
@@ -212,13 +238,11 @@ impl Snapshot {
     }
 
     fn enabled(&self, experiment: Experiment) -> bool {
-        self.sources[experiment.index()].any()
+        experiment.offered() && self.sources[experiment.index()].any()
     }
 
     fn active(&self) -> impl Iterator<Item = Experiment> + '_ {
-        Experiment::ALL
-            .into_iter()
-            .filter(|experiment| self.enabled(*experiment))
+        Experiment::available().filter(|experiment| self.enabled(*experiment))
     }
 }
 
@@ -339,7 +363,10 @@ pub fn run(command: &ExperimentsCommand) -> Result<()> {
             let experiment = Experiment::from_name(name).ok_or_else(|| {
                 eyre!(
                     "unknown experiment {name:?}; known experiments: {}",
-                    Experiment::ALL.map(Experiment::name).join(", ")
+                    Experiment::available()
+                        .map(Experiment::name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             })?;
             let state = if on { "on" } else { "off" };
@@ -374,12 +401,11 @@ const RESTART_HINT: &str = "Restart Hex to apply it: hex restart";
 const RESTART_HINT: &str = "Quit and reopen Hex to apply it.";
 
 fn print_list(out: &mut impl std::io::Write, snapshot: &Snapshot, path: &Path) -> Result<()> {
-    let width = Experiment::ALL
+    let width = Experiment::available()
         .map(|experiment| experiment.name().len())
-        .into_iter()
         .max()
         .unwrap_or_default();
-    for experiment in Experiment::ALL {
+    for experiment in Experiment::available() {
         let sources = snapshot.sources[experiment.index()];
         let source = match sources.labels().join("+") {
             labels if labels.is_empty() => "-".to_string(),
@@ -430,8 +456,7 @@ fn list_json<'a>(snapshot: &'a Snapshot, path: &Path) -> ListJson<'a> {
     ListJson {
         version: 1,
         file: path.to_path_buf(),
-        experiments: Experiment::ALL
-            .into_iter()
+        experiments: Experiment::available()
             .map(|experiment| {
                 let sources = snapshot.sources[experiment.index()];
                 ExperimentJson {
@@ -461,7 +486,8 @@ mod tests {
     #[test]
     fn names_round_trip_and_stay_kebab_case() {
         for experiment in Experiment::ALL {
-            assert_eq!(Experiment::from_name(experiment.name()), Some(experiment));
+            let expected = experiment.offered().then_some(experiment);
+            assert_eq!(Experiment::from_name(experiment.name()), expected);
             assert!(
                 experiment
                     .name()
@@ -513,6 +539,33 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn capture_exists_only_in_debug_builds() {
+        assert!(Experiment::Capture.developer_only());
+        let offered = Experiment::available().any(|experiment| experiment == Experiment::Capture);
+        assert_eq!(offered, crate::DEVELOPER_FEATURES_ENABLED);
+        assert_eq!(
+            Experiment::from_name("capture").is_some(),
+            crate::DEVELOPER_FEATURES_ENABLED
+        );
+
+        let snapshot = Snapshot::parse(Some("capture"), Some("capture\n"));
+        assert_eq!(
+            snapshot.enabled(Experiment::Capture),
+            crate::DEVELOPER_FEATURES_ENABLED
+        );
+        assert_eq!(
+            snapshot.unknown.is_empty(),
+            crate::DEVELOPER_FEATURES_ENABLED,
+            "release builds treat `capture` as unknown"
+        );
+        let listed = list_json(&snapshot, Path::new("/x"))
+            .experiments
+            .iter()
+            .any(|experiment| experiment.name == "capture");
+        assert_eq!(listed, crate::DEVELOPER_FEATURES_ENABLED);
     }
 
     #[test]
@@ -611,7 +664,12 @@ mod tests {
     fn list_reports_each_source() {
         let snapshot = Snapshot::parse(Some("vocabulary"), Some("vocabulary\nmystery\n"));
         let path = Path::new("/home/kit/.config/hex/experiments");
-        let json = serde_json::to_value(list_json(&snapshot, path)).unwrap();
+        let mut json = serde_json::to_value(list_json(&snapshot, path)).unwrap();
+        if crate::DEVELOPER_FEATURES_ENABLED {
+            let first = json["experiments"].as_array_mut().unwrap().remove(0);
+            assert_eq!(first["name"], "capture");
+            assert_eq!(first["enabled"], false);
+        }
         assert_eq!(
             json,
             serde_json::json!({

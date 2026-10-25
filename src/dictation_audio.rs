@@ -46,6 +46,121 @@ impl Drop for RecognitionAudio {
     }
 }
 
+/// Audio for the `capture` experiment's sink, on the dictation timeline.
+#[derive(Debug)]
+pub enum CaptureAudio {
+    Samples {
+        samples: Vec<f32>,
+        sample_rate: u32,
+        captured_through: CaptureInstant,
+    },
+    /// Audio the sink never received: dropped because the sink was full, or
+    /// missing from the microphone stream (a gap, failure, or reopen).
+    Gap {
+        from: CaptureInstant,
+        through: CaptureInstant,
+    },
+}
+
+/// What a closed capture sink could not deliver.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CaptureSinkClosed {
+    /// A gap still waiting for room in the sink when it closed.
+    pub pending_gap: Option<(CaptureInstant, CaptureInstant)>,
+    /// The end of the audio the sink accounted for, delivered or as a gap.
+    pub accounted_through: CaptureInstant,
+}
+
+/// A gap shorter than this is jitter between chunks, not missing audio.
+const GAP_TOLERANCE: Duration = Duration::from_millis(50);
+
+/// The capture sink inside the owner. It never blocks the timeline: a full
+/// sink drops audio and records the span as a gap to send once it has room.
+struct CaptureSink {
+    sender: SyncSender<CaptureAudio>,
+    accounted_through: CaptureInstant,
+    pending_gap: Option<(CaptureInstant, CaptureInstant)>,
+}
+
+impl CaptureSink {
+    fn new(sender: SyncSender<CaptureAudio>, since: CaptureInstant) -> Self {
+        Self {
+            sender,
+            accounted_through: since,
+            pending_gap: None,
+        }
+    }
+
+    /// Offers one microphone chunk; false once the receiver is gone.
+    fn offer(
+        &mut self,
+        samples: &[f32],
+        sample_rate: u32,
+        captured_through: CaptureInstant,
+    ) -> bool {
+        if captured_through <= self.accounted_through || sample_rate == 0 {
+            return true;
+        }
+        let mut from = captured_through.sub_frames(samples.len(), sample_rate);
+        let mut samples = samples;
+        if from < self.accounted_through {
+            // The first chunk starts before the capture: keep only its part.
+            let overlap = self.accounted_through.duration_since(from);
+            let frames = (overlap.as_nanos() * u128::from(sample_rate) / 1_000_000_000) as usize;
+            samples = &samples[frames.min(samples.len())..];
+            from = self.accounted_through;
+        } else if from.duration_since(self.accounted_through) > GAP_TOLERANCE {
+            self.extend_gap(self.accounted_through, from);
+        }
+        self.accounted_through = captured_through;
+        if let Some((gap_from, gap_through)) = self.pending_gap {
+            match self.sender.try_send(CaptureAudio::Gap {
+                from: gap_from,
+                through: gap_through,
+            }) {
+                Ok(()) => self.pending_gap = None,
+                Err(TrySendError::Full(_)) => {
+                    self.extend_gap(from, captured_through);
+                    return true;
+                }
+                Err(TrySendError::Disconnected(_)) => return false,
+            }
+        }
+        if samples.is_empty() {
+            return true;
+        }
+        match self.sender.try_send(CaptureAudio::Samples {
+            samples: samples.to_vec(),
+            sample_rate,
+            captured_through,
+        }) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                if self.pending_gap.is_none() {
+                    tracing::warn!("capture sink is full; dropping its audio as a gap");
+                }
+                self.extend_gap(from, captured_through);
+                true
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+
+    fn extend_gap(&mut self, from: CaptureInstant, through: CaptureInstant) {
+        self.pending_gap = Some(match self.pending_gap {
+            Some((start, _)) => (start, through),
+            None => (from, through),
+        });
+    }
+
+    fn close(self) -> CaptureSinkClosed {
+        CaptureSinkClosed {
+            pending_gap: self.pending_gap,
+            accounted_through: self.accounted_through,
+        }
+    }
+}
+
 pub enum DictationAudioEvent {
     OpenFailed {
         capture_generation: u64,
@@ -133,6 +248,15 @@ enum Command {
         expected_generation: u64,
         reply: SyncSender<bool>,
     },
+    OpenCaptureSink {
+        sink: SyncSender<CaptureAudio>,
+        since: CaptureInstant,
+        reply: SyncSender<()>,
+    },
+    CloseCaptureSink {
+        through: CaptureInstant,
+        reply: SyncSender<Option<CaptureSinkClosed>>,
+    },
 }
 
 struct Owner {
@@ -152,6 +276,9 @@ struct Owner {
     engine: Option<Arc<TranscriptionEngine>>,
     /// Whether the active capture streams once it is intentional.
     stream_capture: bool,
+    /// The `capture` experiment's sink. While set, the microphone stays open
+    /// even with release-while-idle and switches only once it closes.
+    capture_sink: Option<CaptureSink>,
 }
 
 struct PendingCapture {
@@ -345,6 +472,23 @@ impl DictationAudio {
         self.call(|reply| Command::Cancel { reply })
     }
 
+    /// Copies the timeline's audio from `since` into `sink`, replacing any
+    /// sink already open. The sink is bounded: audio it has no room for is
+    /// dropped and reported as a gap, never waited on.
+    pub fn open_capture_sink(
+        &self,
+        sink: SyncSender<CaptureAudio>,
+        since: CaptureInstant,
+    ) -> Result<()> {
+        self.call(|reply| Command::OpenCaptureSink { sink, since, reply })
+    }
+
+    /// Closes the sink once audio through `through` arrived (bounded wait),
+    /// dropping its sender. `None` when no sink was open.
+    pub fn close_capture_sink(&self, through: CaptureInstant) -> Result<Option<CaptureSinkClosed>> {
+        self.call(|reply| Command::CloseCaptureSink { through, reply })
+    }
+
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Option<RecognitionAudio>> {
         match self.recognition.recv_timeout(timeout) {
             Ok(audio) => Ok(Some(audio)),
@@ -455,6 +599,7 @@ impl Owner {
             last_captured_through: None,
             engine,
             stream_capture: false,
+            capture_sink: None,
         };
         let audio = DictationAudio {
             commands: command_sender,
@@ -486,7 +631,7 @@ impl Owner {
                 self.reconcile_input();
                 continue;
             }
-            let capture_idle = self.capture_idle();
+            let capture_idle = self.input_idle();
             let event = self
                 .input
                 .recv_timeout(Duration::from_millis(10), capture_idle);
@@ -566,7 +711,9 @@ impl Owner {
                 }
                 let deferred = announced.then(|| self.drain_tail(at, tail)).flatten();
                 let finish = if self.pending_capture.take().is_some() {
-                    self.input.cancel_open();
+                    if self.capture_sink.is_none() {
+                        self.input.cancel_open();
+                    }
                     Finish::Discard
                 } else {
                     self.capture.finish_with_tail(at, tail)
@@ -579,7 +726,7 @@ impl Owner {
             }
             Command::Cancel { reply } => {
                 self.pending_capture = None;
-                if !self.input.is_open() {
+                if !self.input.is_open() && self.capture_sink.is_none() {
                     self.input.cancel_open();
                 }
                 self.capture.cancel();
@@ -606,6 +753,19 @@ impl Owner {
                 }
                 let _ = reply.send(current);
             }
+            Command::OpenCaptureSink { sink, since, reply } => {
+                self.capture_sink = Some(CaptureSink::new(sink, since));
+                if !self.input.is_active() {
+                    self.input.request_open();
+                }
+                let _ = reply.send(());
+            }
+            Command::CloseCaptureSink { through, reply } => {
+                if self.capture_sink.is_some() && self.input.is_open() {
+                    self.drain_through(through);
+                }
+                let _ = reply.send(self.capture_sink.take().map(CaptureSink::close));
+            }
             Command::Shutdown => return false,
         }
         true
@@ -618,7 +778,7 @@ impl Owner {
             if remaining.is_zero() {
                 break;
             }
-            let capture_idle = self.capture_idle();
+            let capture_idle = self.input_idle();
             if !self.input.is_open() {
                 break;
             }
@@ -645,7 +805,7 @@ impl Owner {
                 tracing::debug!("finished before the post-release tail arrived");
                 break;
             }
-            let capture_idle = self.capture_idle();
+            let capture_idle = self.input_idle();
             let event = self
                 .input
                 .recv_timeout(remaining.min(Duration::from_millis(10)), capture_idle);
@@ -679,6 +839,12 @@ impl Owner {
         !self.capture.is_recording()
             && self.pending_capture.is_none()
             && self.pending_input.oldest().is_none()
+    }
+
+    /// Whether the microphone may switch or close: no dictation capture and
+    /// no capture sink depends on it.
+    fn input_idle(&self) -> bool {
+        self.capture_idle() && self.capture_sink.is_none()
     }
 
     fn handle_input(&mut self, event: RecoveringAudioInputEvent) {
@@ -716,6 +882,13 @@ impl Owner {
                 {
                     self.capture.begin_stream(engine);
                 }
+                let sample_rate = self.sample_rate();
+                if let Some(sink) = &mut self.capture_sink
+                    && !sink.offer(&samples, sample_rate, captured_through)
+                {
+                    tracing::info!("capture sink disconnected; closing it");
+                    self.capture_sink = None;
+                }
                 self.forward_recognition(samples, captured_through);
             }
             RecoveringAudioInputEvent::Timeout => {}
@@ -752,7 +925,7 @@ impl Owner {
                     was_recording,
                     capture_generation,
                 });
-                if self.release_while_idle {
+                if self.release_while_idle && self.capture_sink.is_none() {
                     self.close_input();
                 }
             }
@@ -785,7 +958,7 @@ impl Owner {
                     }
                 } else {
                     self.state.recording.store(false, Ordering::Release);
-                    if self.release_while_idle {
+                    if self.release_while_idle && self.capture_sink.is_none() {
                         self.close_input();
                     }
                 }
@@ -875,7 +1048,7 @@ impl Owner {
     }
 
     fn reconcile_input(&mut self) {
-        if self.release_while_idle {
+        if self.release_while_idle && self.capture_sink.is_none() {
             if self.capture_idle() && self.input.is_active() {
                 self.close_input();
             }
@@ -1807,5 +1980,231 @@ mod tests {
             pending.intentional_at,
             Some(pressed_at + crate::dictation::MINIMUM_HOLD_DURATION)
         );
+    }
+
+    fn chunk_at(owner: &mut Owner, through: CaptureInstant) {
+        owner.handle_input(RecoveringAudioInputEvent::Chunk {
+            samples: vec![0.25; 480],
+            captured_through: through,
+        });
+    }
+
+    fn open_sink(
+        owner: &mut Owner,
+        capacity: usize,
+        since: CaptureInstant,
+    ) -> Receiver<CaptureAudio> {
+        let (sink, audio) = mpsc::sync_channel(capacity);
+        control(owner, |reply| Command::OpenCaptureSink {
+            sink,
+            since,
+            reply,
+        });
+        audio
+    }
+
+    /// Drains the events; a hold reports readiness and nothing reads
+    /// recognition here, but dictation must see no failure or gap.
+    fn assert_no_capture_failure(input: &DictationAudio) {
+        while let Some(event) = input.try_recv_event() {
+            assert!(
+                !matches!(
+                    event,
+                    DictationAudioEvent::OpenFailed { .. }
+                        | DictationAudioEvent::Interrupted { .. }
+                        | DictationAudioEvent::CaptureDiscontinuity { .. }
+                ),
+                "dictation saw a failure or gap"
+            );
+        }
+    }
+
+    fn sample_frames(
+        audio: &Receiver<CaptureAudio>,
+    ) -> (usize, Vec<(CaptureInstant, CaptureInstant)>) {
+        let mut frames = 0;
+        let mut gaps = Vec::new();
+        for item in audio.try_iter() {
+            match item {
+                CaptureAudio::Samples {
+                    samples,
+                    sample_rate,
+                    ..
+                } => {
+                    assert_eq!(sample_rate, 48_000);
+                    frames += samples.len();
+                }
+                CaptureAudio::Gap { from, through } => gaps.push((from, through)),
+            }
+        }
+        (frames, gaps)
+    }
+
+    #[test]
+    fn capture_sink_shares_the_timeline_with_dictation() {
+        let (mut owner, input, _samples) = owner_for_test(true);
+        let at = capture_time();
+        chunk_at(&mut owner, at);
+        // The sink starts 5 ms into the next chunk and keeps only that part.
+        let since = at + Duration::from_millis(5);
+        let audio = open_sink(&mut owner, 1_024, since);
+        let mut through = at;
+        for _ in 0..20 {
+            through = through + Duration::from_millis(10);
+            chunk_at(&mut owner, through);
+        }
+        start(&mut owner, through);
+        for _ in 0..50 {
+            through = through + Duration::from_millis(10);
+            chunk_at(&mut owner, through);
+        }
+        let Finish::Transcribe(clip) = control(&mut owner, |reply| Command::Finish {
+            tail: Duration::ZERO,
+            at: through,
+            reply,
+        }) else {
+            panic!("dictation still transcribes while a capture records");
+        };
+        assert!(clip.duration_ms() >= 450, "{}", clip.duration_ms());
+        for _ in 0..10 {
+            through = through + Duration::from_millis(10);
+            chunk_at(&mut owner, through);
+        }
+        assert_eq!(
+            control(&mut owner, |reply| Command::CloseCaptureSink {
+                through,
+                reply
+            }),
+            Some(CaptureSinkClosed {
+                pending_gap: None,
+                accounted_through: through,
+            })
+        );
+        let (frames, gaps) = sample_frames(&audio);
+        assert_eq!(frames, 240 + 79 * 480, "every frame from `since`, once");
+        assert!(gaps.is_empty());
+        assert_no_capture_failure(&input);
+        // Closed: later audio goes nowhere, and a second close is a no-op.
+        chunk_at(&mut owner, through + Duration::from_millis(10));
+        assert!(audio.try_recv().is_err());
+        assert_eq!(
+            control(&mut owner, |reply| Command::CloseCaptureSink {
+                through,
+                reply
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn a_full_capture_sink_drops_audio_as_a_gap_and_never_stalls_dictation() {
+        let (mut owner, input, _samples) = owner_for_test(true);
+        let at = capture_time();
+        let audio = open_sink(&mut owner, 2, at);
+        start(&mut owner, at);
+        let mut through = at;
+        for _ in 0..100 {
+            through = through + Duration::from_millis(10);
+            chunk_at(&mut owner, through);
+        }
+        let dropped_from = at + Duration::from_millis(20);
+        let Finish::Transcribe(clip) = control(&mut owner, |reply| Command::Finish {
+            tail: Duration::ZERO,
+            at: through,
+            reply,
+        }) else {
+            panic!("a full sink must not stop dictation");
+        };
+        assert!(clip.duration_ms() >= 990, "{}", clip.duration_ms());
+
+        // The sink drains; the next chunk sends the gap, then its own audio.
+        assert_eq!(sample_frames(&audio), (960, Vec::new()));
+        through = through + Duration::from_millis(10);
+        chunk_at(&mut owner, through);
+        let (frames, gaps) = sample_frames(&audio);
+        assert_eq!(frames, 480);
+        assert_eq!(
+            gaps,
+            [(
+                dropped_from,
+                through.checked_sub(Duration::from_millis(10)).unwrap()
+            )]
+        );
+
+        // A gap still pending when the sink closes comes back to the caller.
+        for _ in 0..5 {
+            through = through + Duration::from_millis(10);
+            chunk_at(&mut owner, through);
+        }
+        let closed = control(&mut owner, |reply| Command::CloseCaptureSink {
+            through,
+            reply,
+        })
+        .expect("the sink was open");
+        assert_eq!(
+            closed.pending_gap,
+            Some((
+                through.checked_sub(Duration::from_millis(30)).unwrap(),
+                through
+            ))
+        );
+        assert_no_capture_failure(&input);
+    }
+
+    #[test]
+    fn capture_sink_records_microphone_gaps() {
+        let (mut owner, _input, _samples) = owner_for_test(true);
+        let at = capture_time();
+        let audio = open_sink(&mut owner, 64, at);
+        chunk_at(&mut owner, at + Duration::from_millis(10));
+        // 200 ms of audio never arrived.
+        let resumed = at + Duration::from_millis(220);
+        chunk_at(&mut owner, resumed);
+        let (frames, gaps) = sample_frames(&audio);
+        assert_eq!(frames, 960);
+        assert_eq!(
+            gaps,
+            [(
+                at + Duration::from_millis(10),
+                resumed.checked_sub(Duration::from_millis(10)).unwrap()
+            )]
+        );
+    }
+
+    #[test]
+    fn capture_sink_holds_a_released_microphone_open_until_it_closes() {
+        let (mut owner, _input, _samples) = owner_for_test(true);
+        owner.release_while_idle = true;
+        let at = capture_time();
+        let audio = open_sink(&mut owner, 64, at);
+        owner.reconcile_input();
+        assert!(owner.input.is_open(), "the capture keeps the stream open");
+        start(&mut owner, at);
+        chunk_at(&mut owner, at + Duration::from_millis(10));
+        control(&mut owner, |reply| Command::Cancel { reply });
+        owner.reconcile_input();
+        assert!(owner.input.is_open(), "dictation ending does not close it");
+
+        // A stream failure keeps recovering instead of closing.
+        owner.handle_input(RecoveringAudioInputEvent::Interrupted);
+        owner.reconcile_input();
+        assert!(owner.input.is_active());
+
+        drop(audio);
+        control(&mut owner, |reply| Command::CloseCaptureSink {
+            through: at,
+            reply,
+        });
+        owner.reconcile_input();
+        assert!(!owner.input.is_active(), "released once the capture ends");
+    }
+
+    #[test]
+    fn a_dropped_capture_receiver_closes_the_sink() {
+        let (mut owner, _input, _samples) = owner_for_test(true);
+        let at = capture_time();
+        drop(open_sink(&mut owner, 4, at));
+        chunk_at(&mut owner, at + Duration::from_millis(10));
+        assert!(owner.capture_sink.is_none());
     }
 }

@@ -30,7 +30,8 @@ have detailed maps.
 Agents can [read retained transcripts](transcript-cli.md) and
 [control the running app](control-cli.md) with the release CLI.
 [Experiments](experiments.md) turn unfinished features on per person with a flag;
-the [vocabulary](vocabulary.md) is one.
+the [vocabulary](vocabulary.md) is one, and debug builds add
+[Captures](capture.md), Scrawl's capture engine hosted in Hex.
 The other capabilities stay here until they need their own verification recipe.
 
 ## Get Ready

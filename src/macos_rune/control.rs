@@ -109,6 +109,22 @@ impl Pump {
                 });
                 None
             }
+            ControlCommand::ScrawlCapture { action } => {
+                background(reply, move || {
+                    if !crate::DEVELOPER_FEATURES_ENABLED {
+                        return Err(ControlError::new(
+                            "unsupported",
+                            "captures exist only in debug builds",
+                        ));
+                    }
+                    listener_ready(&runtime)?;
+                    ask(&runtime, |reply| RecognitionControl::ScrawlCapture {
+                        action,
+                        reply,
+                    })
+                });
+                None
+            }
             ControlCommand::PasteLast => {
                 background(reply, move || {
                     listener_ready(&runtime)?;

@@ -338,6 +338,12 @@ pub fn logs_dir() -> Result<PathBuf> {
     Ok(support_dir()?.join("logs"))
 }
 
+/// Where the `capture` experiment writes its bundles.
+#[cfg(target_os = "macos")]
+pub fn captures_dir() -> Result<PathBuf> {
+    Ok(support_dir()?.join("captures"))
+}
+
 /// Creates the logs directory, appends process diagnostics to `process.log`
 /// alongside stderr, installs the global tracing subscriber, and routes Ctrl-C
 /// to `shutdown`. Returns the logs directory.

@@ -614,9 +614,48 @@ fn print(reply: ControlReply, output: Output) -> u8 {
         ControlReply::Settings { settings } => print!("{}", human_settings(&settings)),
         ControlReply::Models { models } => print!("{}", human_models(&models)),
         ControlReply::Vocabulary { entries } => print!("{}", human_vocabulary(&entries)),
+        ControlReply::ScrawlCapture(report) => print!("{}", human_scrawl_capture(&report)),
         ControlReply::Error { message, .. } => eprintln!("hex: {message}"),
     }
     code
+}
+
+fn human_scrawl_capture(report: &super::ScrawlCaptureReport) -> String {
+    use super::ScrawlCaptureState;
+    let mut out = String::new();
+    let bundle = |bundle: &Option<std::path::PathBuf>| {
+        bundle
+            .as_ref()
+            .map_or_else(String::new, |bundle| bundle.display().to_string())
+    };
+    match (report.state, report.changed) {
+        (ScrawlCaptureState::Recording, true) => {
+            out.push_str(&format!("Capturing into {}\n", bundle(&report.bundle)));
+        }
+        (ScrawlCaptureState::Recording, false) => out.push_str(&format!(
+            "Capturing into {} ({} ms)\n",
+            bundle(&report.bundle),
+            report.elapsed_ms.unwrap_or_default()
+        )),
+        (ScrawlCaptureState::Idle, true) => {
+            out.push_str(&format!("Ended the capture {}\n", bundle(&report.bundle)));
+        }
+        (ScrawlCaptureState::Idle, false) => out.push_str("No capture is recording\n"),
+    }
+    for finishing in &report.finishing {
+        out.push_str(&format!("Writing {}\n", finishing.display()));
+    }
+    if let Some(last) = &report.last {
+        let words = last
+            .words
+            .map_or_else(String::new, |words| format!(", {words} words"));
+        out.push_str(&format!(
+            "Last: {} {}{words}\n",
+            last.stage,
+            last.bundle.display()
+        ));
+    }
+    out
 }
 
 pub fn exit_code(reply: &ControlReply) -> u8 {
