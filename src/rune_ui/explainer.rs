@@ -14,7 +14,9 @@ use rune::{
 };
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, row_switch};
+use super::controls::{
+    ButtonKind, DESCRIPTION, KEY_GAP, KeySize, Paint, button, keycap, row_switch,
+};
 use crate::desktop_i18n::tr;
 use crate::dictation::ShortcutMode;
 
@@ -22,16 +24,7 @@ const MODAL_WIDTH: f32 = 440.0;
 const PADDING: f32 = 18.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_GAP: f32 = 10.0;
-const KEYCAP_WIDTH: f32 = 28.0;
-const KEY_HEIGHT: f32 = 26.0;
-/// How far the face stands above its base: the lip showing below it.
-const KEY_DEPTH: f32 = 2.5;
-/// A press sinks the face most of the way, leaving a hairline of lip.
-const KEY_TRAVEL: f32 = 2.0;
-/// Seconds for the face to sink; it rises on the controls' spring.
-const KEY_PRESS: f32 = 0.07;
-/// Between the keycaps of a chord.
-const KEY_GAP: f32 = 3.0;
+const KEYCAP_WIDTH: f32 = KeySize::Large.min_width();
 const VISUAL_GAP: f32 = 10.0;
 /// The lanes' width with one one-glyph keycap, until layout measures them.
 const CARD_LANES: f32 =
@@ -243,7 +236,6 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
     for shadow in &p.k.elevation.overlay {
         panel = panel.box_shadow(*shadow);
     }
-    let springs = SpringPair::new(p.k.motion.overlay, p.k.motion.overlay);
     let layer = |key: &str| {
         el().key(key)
             .role("none")
@@ -255,14 +247,24 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
         layer("explainer-scrim")
             .fill(c.scrim)
             .on_press(close)
-            .transition(Transition::opacity().springs(springs)),
+            .transition(Transition::opacity().springs(overlay_springs(p))),
         layer("explainer-layer")
             .center()
-            .transition(Transition::scale(0.96).springs(springs))
+            .transition(panel_transition(p))
             // Keys stay inside, Escape or a press outside closes, and focus
             // returns to the link that opened it.
             .child(panel.modal(true, close)),
     ])
+}
+
+/// How the panel enters and leaves: the one place to swap for a shared
+/// modal transition.
+fn panel_transition(p: Paint) -> Transition {
+    Transition::scale(0.96).springs(overlay_springs(p))
+}
+
+fn overlay_springs(p: Paint) -> SpringPair {
+    SpringPair::new(p.k.motion.overlay, p.k.motion.overlay)
 }
 
 fn card(ui: &Ui, p: Paint, mode: ShortcutMode, title: &str, caption: &str, visual: El) -> El {
@@ -391,7 +393,7 @@ fn visual(p: Paint, colors: &Colors, keys: &[String], script: &Script, width: f3
             row().key("keys").gap(KEY_GAP).children(
                 keys.iter()
                     .enumerate()
-                    .map(|(index, label)| keycap(p, index, label, down)),
+                    .map(|(index, label)| keycap(p, index, label, KeySize::Large, down)),
             ),
         )
         .child(
@@ -401,55 +403,6 @@ fn visual(p: Paint, colors: &Colors, keys: &[String], script: &Script, width: f3
                 .shrink()
                 .h(LANES_HEIGHT),
         )
-}
-
-/// One key of the shortcut, pressed while the script holds it: a face on a
-/// base whose lip shows below it. A press sinks the face into the lip; the
-/// key's bounds never change.
-fn keycap(p: Paint, index: usize, label: &str, down: bool) -> El {
-    let c = &p.k.c;
-    let face_height = KEY_HEIGHT - KEY_DEPTH;
-    // Each change springs with the spring of the state it heads to: in
-    // fast, back up on the controls' spring.
-    let spring = if down {
-        p.k.motion.control.with_duration(KEY_PRESS)
-    } else {
-        p.k.motion.control
-    };
-    let base = el()
-        .key("base")
-        .role("none")
-        .absolute(0.0, KEY_DEPTH)
-        .w_full()
-        .h(face_height)
-        .radius(p.k.radius.md)
-        .fill(c.border_base);
-    let face = row()
-        .key("cap")
-        .min_w(KEYCAP_WIDTH)
-        .h(face_height)
-        .px(6.0)
-        .center()
-        .radius(p.k.radius.md)
-        .mt(if down { KEY_TRAVEL } else { 0.0 })
-        .fill(if down {
-            c.bg_base.mix(c.black, 0.05)
-        } else {
-            c.bg_base
-        })
-        .border(p.hair, c.border_weak)
-        .motion(spring)
-        .child(
-            text(label.to_string())
-                .key("label")
-                .font(DESCRIPTION)
-                .color(if down { p.text() } else { p.muted() }),
-        );
-    col()
-        .key(format!("keycap{index}"))
-        .h(KEY_HEIGHT)
-        .child(base)
-        .child(face)
 }
 
 /// Opaque lane colours over the panel, so overlapping pieces never darken.

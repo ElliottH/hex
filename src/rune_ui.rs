@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use rune::{AppSpec, Cx, El, Icon, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, text};
 
-use crate::app_settings::{AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers};
+use crate::app_settings::{AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, ModifierSide};
 use crate::desktop_host::{
     DesktopAction, DesktopGrantedShortcut, DesktopListenerSnapshot, DesktopShortcuts,
     DesktopTranscriptionSnapshot, DesktopUpdateStatus,
@@ -934,7 +934,7 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed |= onboarding::poll(ui);
     let visible = ui.window.as_ref().is_none_or(rune::AppHandle::is_visible);
     changed |= explainer::poll(ui, clock, visible, tx);
-    changed | settings::advance_capture(ui)
+    changed | settings::advance_capture(ui, clock, tx)
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,6 +1368,37 @@ const SCENES: &[Scene] = &[
         ui.settings.shortcut_mode = crate::dictation::ShortcutMode::Toggle;
         explainer::fixture(ui, Some(explainer::SNAPSHOT_MS));
     }),
+    // The Shortcut row with a modifier-only shortcut, Left Option, beside
+    // its side picker (macOS), in each face of the recorder.
+    ("shortcut-row", |ui| shortcut_row(ui, Capture::Idle)),
+    ("shortcut-row-right", |ui| {
+        shortcut_row(ui, Capture::Idle);
+        ui.settings.dictation_hotkey.modifiers.option = Some(ModifierSide::Right);
+    }),
+    // Two sided modifiers have no side picker, so their keycaps name the side.
+    ("shortcut-row-sided-chord", |ui| {
+        shortcut_row(ui, Capture::Idle);
+        ui.settings.dictation_hotkey.modifiers.command = Some(ModifierSide::Right);
+    }),
+    ("shortcut-row-recording", |ui| {
+        shortcut_row(ui, listening(None, HotkeyModifiers::default()));
+    }),
+    ("shortcut-row-held", |ui| {
+        shortcut_row(ui, listening(None, HotkeyModifiers::option_command()));
+    }),
+    ("shortcut-row-rejected", |ui| {
+        let message = crate::desktop_i18n::tr("Add a modifier");
+        shortcut_row(ui, listening(Some(message), HotkeyModifiers::default()));
+    }),
+    ("shortcut-row-saved", |ui| {
+        shortcut_row(
+            ui,
+            Capture::Saved {
+                target: ShortcutTarget::Dictation,
+                until: None,
+            },
+        );
+    }),
     // A three-key chord: Control-Option-Space.
     ("shortcut-explainer-chord", |ui| {
         *ui = mac_fixture();
@@ -1635,6 +1666,26 @@ fn mac_fixture() -> Ui {
     ui.settings.experimental.hex_microphone = true;
     ui.meetings = meetings::MeetingsPane::fixture();
     ui
+}
+
+fn shortcut_row(ui: &mut Ui, capture: Capture) {
+    *ui = mac_fixture();
+    ui.settings.dictation_hotkey = HotkeyBinding {
+        modifiers: HotkeyModifiers {
+            option: Some(ModifierSide::Left),
+            ..HotkeyModifiers::default()
+        },
+        key: None,
+    };
+    ui.capture = capture;
+}
+
+fn listening(message: Option<&'static str>, held: HotkeyModifiers) -> Capture {
+    Capture::Listening {
+        target: ShortcutTarget::Dictation,
+        message,
+        held,
+    }
 }
 
 fn mac_tour(ui: &mut Ui, step: onboarding::MacStep) {

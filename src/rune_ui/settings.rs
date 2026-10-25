@@ -4,14 +4,13 @@
 
 use std::time::{Duration, Instant};
 
-use rune::{El, Key, KeyEvent, Tx, col, row, text};
+use rune::{Edge, El, Key, KeyEvent, Transition, Tx, col, row, spacer, text};
 
 use super::controls::{
-    ButtonKind, CardRow, Choice, DESCRIPTION, Paint, button, described_row, folding,
-    icon_button, keycaps, link_row, note, pulsing_dot, section, segmented, select, setting_row,
-    sheet_button, status_dot, text_field, toggle_row,
+    ButtonKind, CardRow, Choice, DESCRIPTION, KeySize, Paint, button, described_row, folding,
+    icon_button, keycap, keycaps, link_row, note, pulsing_dot, section, segmented, select,
+    setting_row, sheet_button, status_dot, text_field, toggle_row,
 };
-use super::lists::{Tone, tone_tag};
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use super::{explainer, host};
 use crate::app_settings::{
@@ -25,6 +24,8 @@ use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
 use crate::transcription_models::{self, ModelPreparationStage};
 
+static CHECK: &rune::Icon = &rune_theme_opencode::icons::CHECK_SMALL;
+
 const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
     ("Off", 0.0),
     ("25%", 0.25),
@@ -33,7 +34,7 @@ const SOUND_VOLUME_STEPS: [(&str, f32); 5] = [
     ("100%", 1.0),
 ];
 /// How long a newly saved shortcut shows "Saved".
-const SAVED_FOR: Duration = Duration::from_millis(700);
+const SAVED_FOR: Duration = Duration::from_secs(1);
 /// How long to wait for the service to start a requested shortcut edit.
 const EDIT_START_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -53,9 +54,10 @@ pub(super) enum Capture {
         since: Instant,
         seen_edit: bool,
     },
+    /// `until` is on the poll clock, set by the first poll that sees it.
     Saved {
         target: ShortcutTarget,
-        at: Instant,
+        until: Option<f64>,
     },
 }
 
@@ -70,7 +72,7 @@ pub(super) enum Chord {
 }
 
 /// Follows the host's side of a shortcut edit.
-pub(super) fn advance_capture(ui: &mut Ui) -> bool {
+pub(super) fn advance_capture(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     let mut changed = false;
     loop {
         let chord = match &mut ui.service {
@@ -120,12 +122,25 @@ pub(super) fn advance_capture(ui: &mut Ui) -> bool {
             if finished {
                 ui.capture = Capture::Saved {
                     target,
-                    at: Instant::now(),
+                    until: None,
                 };
             }
             finished
         }
-        Capture::Saved { at, .. } if at.elapsed() >= SAVED_FOR => {
+        Capture::Saved {
+            target,
+            until: None,
+        } => {
+            ui.capture = Capture::Saved {
+                target,
+                until: Some(clock + SAVED_FOR.as_secs_f64()),
+            };
+            tx.wake_after(SAVED_FOR);
+            false
+        }
+        Capture::Saved {
+            until: Some(until), ..
+        } if clock >= until => {
             ui.capture = Capture::Idle;
             true
         }
@@ -178,7 +193,7 @@ fn record(ui: &mut Ui, target: ShortcutTarget, binding: Result<HotkeyBinding, &'
             if ui.update(|settings| set_binding(settings, target, binding)) {
                 ui.capture = Capture::Saved {
                     target,
-                    at: Instant::now(),
+                    until: None,
                 };
             }
             return;
@@ -530,12 +545,45 @@ fn shortcut_row(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         ShortcutTarget::PasteLast => ("paste-last", tr("Paste last dictation")),
         ShortcutTarget::VoiceAction => ("voice-action-shortcut", tr("Voice Action")),
     };
+    described_row(
+        p,
+        key,
+        title,
+        granted(ui, p, target),
+        shortcut_control(ui, p, target),
+    )
+}
+
+/// The side picker (macOS), the recorder, and Clear for Paste last. The
+/// recorder keeps one width through every state, so the picker holds still;
+/// a new shortcut of another width moves them together on one spring.
+const CONTROL_GAP: f32 = 8.0;
+
+pub(super) fn shortcut_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
+    let key = match target {
+        ShortcutTarget::Dictation => "dictation-shortcut-control",
+        ShortcutTarget::PasteLast => "paste-last-control",
+        ShortcutTarget::VoiceAction => "voice-action-shortcut-control",
+    };
+    let picker = super::platform_settings::side_selector(ui, p, target);
+    // The picker hangs off the recorder's left edge in the room its margin
+    // keeps, so both stay put while either changes; a leaving picker fades
+    // where it stands.
+    let room = picker.as_ref().map_or(0.0, |_| {
+        super::platform_settings::SIDE_PICKER_WIDTH + CONTROL_GAP
+    });
     let mut control = row()
-        .key(format!("{key}-control"))
-        .gap(8.0)
+        .key(key)
+        .gap(CONTROL_GAP)
         .center_y()
-        .children(super::platform_settings::side_selector(ui, p, target))
-        .child(hotkey_control(ui, p, target));
+        .motion(p.k.motion.control)
+        .child(
+            row()
+                .key("recorder-slot")
+                .ml(room)
+                .children(picker.map(|picker| picker.pin(Some(-room), Some(0.0), None, None)))
+                .child(hotkey_control(ui, p, target)),
+        );
     if target == ShortcutTarget::PasteLast && ui.settings.paste_last_hotkey.is_some() {
         control = control.child(icon_button(
             p,
@@ -547,7 +595,7 @@ fn shortcut_row(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
             },
         ));
     }
-    described_row(p, key, title, granted(ui, p, target), control)
+    control
 }
 
 /// Without a shortcuts portal the desktop's keybindings own every shortcut:
@@ -805,94 +853,216 @@ fn transcription_status(ui: &Ui, p: Paint) -> Option<(String, rune::Color)> {
     Some((format!("{name} · {stage}"), p.accent()))
 }
 
+/// What a recorder shows; each change rolls up into it from below.
+#[derive(Clone, Copy, PartialEq)]
+enum Face {
+    /// The shortcut's keycaps and what pressing does, or that it just saved.
+    Shortcut {
+        saved: bool,
+    },
+    Listening(Prompt),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Prompt {
+    Press,
+    /// Why the last chord was rejected.
+    Rejected(&'static str),
+    /// The modifiers held so far.
+    Held(HotkeyModifiers),
+    Saving,
+}
+
+const RECORDER_HEIGHT: f32 = 28.0;
+/// Between the recorder's edge and a keycap at that edge.
+const RECORDER_CAP_INSET: f32 = 3.0;
+
+/// The shortcut's recorder: a button that keeps the width of its widest
+/// face, so nothing beside it moves while it records, and swaps faces
+/// inside its own rounded clip.
 pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
-    let binding = binding(&ui.settings, target);
-    let caps = binding.map_or_else(|| vec![tr("Off").to_string()], HotkeyBinding::keycaps);
+    let caps = match binding(&ui.settings, target) {
+        Some(binding) => shortcut_caps(
+            binding,
+            super::platform_settings::picked_side(ui, target).is_some(),
+        ),
+        None => vec![tr("Off").to_string()],
+    };
     let key = match target {
         ShortcutTarget::Dictation => "dictation-hotkey",
         ShortcutTarget::PasteLast => "paste-last-hotkey",
         ShortcutTarget::VoiceAction => "voice-action-hotkey",
     };
-    let c = &p.k.c;
-    let label_style = p.k.ty.ui_medium.lh(16.0);
-    let mut frame = row()
-        .key(key)
-        .role("button")
-        .h(28.0)
-        .pl(4.0)
-        .pr(11.0)
-        .gap(8.0)
-        .center_y()
-        .radius(p.k.radius.md)
-        .motion(p.k.motion.control)
-        .on_press(move |ui: &mut Ui| begin_capture(ui, target));
-    let listening =
-        matches!(ui.capture, Capture::Listening { target: active, .. } if active == target);
-    // While listening, keys reach the recorder rather than pressing it again.
-    frame = frame
-        .focusable(!listening)
-        .focus_ring(2.0, 2.5, c.border_focus);
-    if !listening {
-        frame = frame.fill(c.bg_button_neutral);
-        for shadow in &p.k.elevation.button_neutral {
-            frame = frame.box_shadow(*shadow);
-        }
-    }
-    match ui.capture {
+    let face = match ui.capture {
         Capture::Listening {
             target: active,
             message,
             held,
-        } if active == target => {
-            let frame = frame
-                .fill(c.danger.bg)
-                .border(p.hair.max(0.5), c.danger.border)
-                .child(pulsing_dot(p.danger()).ml(8.0));
-            let frame = if held.is_empty() {
-                frame.child(
-                    text(message.unwrap_or(tr("Press shortcut")))
-                        .key("prompt")
-                        .font(label_style)
-                        .color(p.text()),
-                )
-            } else {
-                let held = HotkeyBinding {
-                    modifiers: held,
-                    key: None,
-                };
-                frame
-                    .child(keycaps(p, "held", &held.keycaps()))
-                    .child(text("…").key("prompt").font(label_style).color(p.muted()))
-            };
-            frame.child(
-                text(tr("Esc to cancel"))
-                    .key("cancel")
-                    .font(DESCRIPTION)
-                    .color(p.muted()),
-            )
-        }
+        } if active == target => Face::Listening(match message {
+            Some(message) => Prompt::Rejected(message),
+            None if held.is_empty() => Prompt::Press,
+            None => Prompt::Held(held),
+        }),
         Capture::Saving { target: active, .. } if active == target => {
-            frame.child(keycaps(p, "keys", &caps)).child(
-                text(tr("Saving…"))
-                    .key("label")
-                    .font(label_style)
-                    .color(p.muted()),
+            Face::Listening(Prompt::Saving)
+        }
+        Capture::Saved { target: active, .. } if active == target => Face::Shortcut { saved: true },
+        _ => Face::Shortcut { saved: false },
+    };
+    // The widths it reserves: every face but held modifiers, which clip.
+    let mut sizes = vec![
+        Face::Shortcut { saved: false },
+        Face::Shortcut { saved: true },
+        Face::Listening(Prompt::Press),
+        Face::Listening(Prompt::Saving),
+    ];
+    sizes.extend(
+        ["Unsupported key", "Add a modifier", "Already in use"]
+            .map(|message| Face::Listening(Prompt::Rejected(tr(message)))),
+    );
+    if matches!(face, Face::Listening(Prompt::Rejected(_))) && !sizes.contains(&face) {
+        sizes.push(face);
+    }
+    let c = &p.k.c;
+    let listening =
+        matches!(ui.capture, Capture::Listening { target: active, .. } if active == target);
+    let mut frame = row()
+        .key(key)
+        .role("button")
+        .label(face_label(face))
+        .h(RECORDER_HEIGHT)
+        .radius(p.k.radius.md)
+        .fill(c.bg_button_neutral)
+        // While listening, keys reach the recorder rather than pressing it again.
+        .focusable(!listening)
+        .focus_ring(2.0, 2.5, c.border_focus)
+        .on_press(move |ui: &mut Ui| begin_capture(ui, target));
+    for shadow in &p.k.elevation.button_neutral {
+        frame = frame.box_shadow(*shadow);
+    }
+    if face == (Face::Shortcut { saved: false }) {
+        frame = frame.hover(c.hover).press(c.pressed);
+    }
+    frame.child(
+        col()
+            .key("faces")
+            .equal_columns(1)
+            .clip_rounded(p.k.radius.md)
+            .children(sizes.into_iter().enumerate().map(|(index, size)| {
+                recorder_face(p, &caps, size, false)
+                    .key(format!("size{index}"))
+                    .role("none")
+                    .grid_cell(0)
+                    .opacity(0.0)
+            }))
+            .child(
+                recorder_face(p, &caps, face, true)
+                    .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                    .transition(roll()),
+            ),
+    )
+}
+
+/// In from below, out through the top, both inside the recorder's clip.
+fn roll() -> Transition {
+    Transition::push(Edge::Bottom)
+}
+
+fn face_label(face: Face) -> &'static str {
+    match face {
+        Face::Shortcut { saved: false } => tr("Change shortcut"),
+        Face::Shortcut { saved: true } => tr("Saved"),
+        Face::Listening(Prompt::Press | Prompt::Held(_)) => tr("Press shortcut"),
+        Face::Listening(Prompt::Rejected(message)) => message,
+        Face::Listening(Prompt::Saving) => tr("Saving…"),
+    }
+}
+
+/// One face of the recorder at its full height. Only the shown face
+/// (`live`) pulses.
+fn recorder_face(p: Paint, caps: &[String], face: Face, live: bool) -> El {
+    let label_style = p.k.ty.ui_medium.lh(16.0);
+    let label = |key: &str, copy: &str, color| text(copy).key(key).font(label_style).color(color);
+    let face_row = |key: &str| row().key(key).h(RECORDER_HEIGHT).gap(8.0).center_y();
+    match face {
+        Face::Shortcut { saved } => {
+            let what = if saved {
+                row()
+                    .key("saved")
+                    .gap(2.0)
+                    .center_y()
+                    .child(rune::icon(CHECK, 16.0).key("check").color(p.success()))
+                    .child(label("label", tr("Saved"), p.text()))
+            } else {
+                row()
+                    .key("change")
+                    .child(label("label", tr("Change shortcut"), p.text()))
+            };
+            face_row("shortcut")
+                .pl(RECORDER_CAP_INSET)
+                .pr(11.0)
+                .child(keycaps(p, "keys", caps))
+                .child(what.transition(roll()))
+        }
+        Face::Listening(prompt) => {
+            let dot = match prompt {
+                Prompt::Saving => status_dot(p.muted()),
+                _ if live => pulsing_dot(p.danger()),
+                _ => status_dot(p.danger()),
+            };
+            let prompt_el = match prompt {
+                Prompt::Press => label("prompt", tr("Press shortcut"), p.text()),
+                Prompt::Rejected(message) => label("rejected", message, p.danger()),
+                Prompt::Held(held) => {
+                    let held = HotkeyBinding {
+                        modifiers: held.without_side_constraints(),
+                        key: None,
+                    };
+                    row()
+                        .key("held")
+                        .gap(4.0)
+                        .center_y()
+                        .child(keycaps(p, "keys", &held.keycaps()))
+                        .child(label("ellipsis", "…", p.muted()))
+                }
+                Prompt::Saving => label("saving", tr("Saving…"), p.muted()),
+            };
+            let face = face_row("listening")
+                .pl(11.0)
+                .pr(RECORDER_CAP_INSET)
+                .child(dot)
+                .child(prompt_el.transition(roll()));
+            if prompt == Prompt::Saving {
+                return face;
+            }
+            face.child(spacer()).child(
+                keycap(p, 0, ESCAPE_KEYCAP, KeySize::Small, false)
+                    .key("escape")
+                    .label(tr("Esc to cancel")),
             )
         }
-        Capture::Saved { target: active, .. } if active == target => frame
-            .child(keycaps(p, "keys", &caps))
-            .child(tone_tag(p, "saved", tr("Saved"), Tone::Success)),
-        _ => frame
-            .hover(c.hover)
-            .press(c.pressed)
-            .child(keycaps(p, "keys", &caps))
-            .child(
-                text(tr("Change shortcut"))
-                    .key("label")
-                    .font(label_style)
-                    .color(p.text()),
-            ),
     }
+}
+
+/// The Escape key's legend, as the keyboard prints it.
+const ESCAPE_KEYCAP: &str = if cfg!(target_os = "macos") {
+    "esc"
+} else {
+    "Esc"
+};
+
+/// A shortcut's keycaps, naming the side a modifier must be pressed on
+/// unless a side picker beside them already shows it.
+pub(super) fn shortcut_caps(binding: &HotkeyBinding, side_picker: bool) -> Vec<String> {
+    binding
+        .sided_keycaps()
+        .into_iter()
+        .map(|(cap, side)| match side {
+            ModifierSide::Left if !side_picker => format!("{} {cap}", tr("Left")),
+            ModifierSide::Right if !side_picker => format!("{} {cap}", tr("Right")),
+            _ => cap,
+        })
+        .collect()
 }
 
 /// Where dictation goes and what happens around it.

@@ -423,28 +423,100 @@ fn overlay_springs(p: Paint) -> SpringPair {
     SpringPair::new(p.k.motion.overlay, p.k.motion.overlay)
 }
 
-/// Keycaps for a shortcut, in the kit's keybind look at a readable size.
+/// How big a keycap is: `Small` inside a control, `Large` on its own.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum KeySize {
+    Small,
+    Large,
+}
+
+impl KeySize {
+    /// Height, including the lip below the face.
+    pub(super) const fn height(self) -> f32 {
+        match self {
+            Self::Small => 22.0,
+            Self::Large => 26.0,
+        }
+    }
+
+    pub(super) const fn min_width(self) -> f32 {
+        match self {
+            Self::Small => 22.0,
+            Self::Large => 28.0,
+        }
+    }
+}
+
+/// How far a keycap's face stands above its base: the lip showing below it.
+const KEY_DEPTH: f32 = 2.5;
+/// A press sinks the face most of the way, leaving a hairline of lip.
+const KEY_TRAVEL: f32 = 2.0;
+/// Seconds for the face to sink; it rises on the controls' spring.
+const KEY_PRESS: f32 = 0.07;
+/// Between the keycaps of a chord.
+pub(super) const KEY_GAP: f32 = 3.0;
+
+/// One keycap per key of a shortcut.
 pub(super) fn keycaps(p: Paint, key: &str, parts: &[String]) -> El {
+    row().key(key).gap(KEY_GAP).children(
+        parts
+            .iter()
+            .enumerate()
+            .map(|(index, part)| keycap(p, index, part, KeySize::Small, false)),
+    )
+}
+
+/// One key: a face on a base whose lip shows below it. A press sinks the
+/// face into the lip; the key's bounds never change.
+pub(super) fn keycap(p: Paint, index: usize, label: &str, size: KeySize, down: bool) -> El {
     let c = &p.k.c;
-    row()
-        .key(key)
-        .gap(2.0)
-        .children(parts.iter().enumerate().map(|(index, part)| {
-            row()
-                .key(format!("cap{index}"))
-                .min_w(20.0)
-                .h(20.0)
-                .px(6.0)
-                .center()
-                .radius(p.k.radius.sm)
-                .fill(c.layer_03)
-                .child(
-                    text(part.clone())
-                        .key("label")
-                        .font(p.k.ty.small_medium.lh(12.0))
-                        .color(c.text_base),
-                )
-        }))
+    let face_height = size.height() - KEY_DEPTH;
+    // Inside a control the cap nests in the control's corners.
+    let radius = match size {
+        KeySize::Small => p.k.radius.sm,
+        KeySize::Large => p.k.radius.md,
+    };
+    // Each change springs with the spring of the state it heads to: in
+    // fast, back up on the controls' spring.
+    let spring = if down {
+        p.k.motion.control.with_duration(KEY_PRESS)
+    } else {
+        p.k.motion.control
+    };
+    let base = el()
+        .key("base")
+        .role("none")
+        .absolute(0.0, KEY_DEPTH)
+        .w_full()
+        .h(face_height)
+        .radius(radius)
+        .fill(c.border_base);
+    let face = row()
+        .key("cap")
+        .min_w(size.min_width())
+        .h(face_height)
+        .px(6.0)
+        .center()
+        .radius(radius)
+        .mt(if down { KEY_TRAVEL } else { 0.0 })
+        .fill(if down {
+            c.bg_base.mix(c.black, 0.05)
+        } else {
+            c.bg_base
+        })
+        .border(p.hair, c.border_weak)
+        .motion(spring)
+        .child(
+            text(label.to_string())
+                .key("label")
+                .font(DESCRIPTION)
+                .color(if down { p.text() } else { p.muted() }),
+        );
+    col()
+        .key(format!("keycap{index}"))
+        .h(size.height())
+        .child(base)
+        .child(face)
 }
 
 pub(super) fn status_dot(color: Color) -> El {

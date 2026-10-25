@@ -454,6 +454,99 @@ fn reduce_motion_shows_the_finished_explainer_without_waking() {
     assert_eq!(rt.wake_deadline(), None, "the loop never ticks");
 }
 
+/// The side picker and the recorder's right edge never move, whatever the
+/// recorder shows, and with Reduce Motion its faces change in place.
+#[test]
+fn the_shortcut_row_holds_still_through_every_face_and_side() {
+    use crate::app_settings::HotkeyModifiers;
+    use settings::Capture;
+    fn rect(rt: &Runtime<Ui>, key: &str) -> [f32; 4] {
+        let found = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key));
+        found.unwrap_or_else(|| panic!("no {key}")).rect
+    }
+    fn place(rt: &Runtime<Ui>) -> ([f32; 4], f32) {
+        let recorder = rect(rt, "dictation-hotkey");
+        (rect(rt, "dictation-side"), recorder[0] + recorder[2])
+    }
+    fn watch(rt: &mut Runtime<Ui>, at_rest: ([f32; 4], f32), reduced: bool) {
+        for _ in 0..45 {
+            rt.frame(1.0 / 60.0);
+            assert_eq!(place(rt), at_rest, "the row moved");
+            if !reduced {
+                continue;
+            }
+            let elements = rt.elements();
+            let faces = elements
+                .iter()
+                .find(|e| e.path.ends_with("dictation-hotkey/faces"))
+                .unwrap()
+                .rect;
+            for face in elements {
+                let shown = face.path.contains("dictation-hotkey/faces/")
+                    && !face.path.contains("/faces/size")
+                    && matches!(face.key.as_deref(), Some("shortcut" | "listening"));
+                if shown {
+                    assert_eq!(face.rect[1], faces[1], "{} travelled", face.path);
+                }
+            }
+        }
+    }
+    for reduced in [false, true] {
+        let mut rt = runtime("shortcut-row", true, PANE_SIZE);
+        rt.set_system_reduced_motion(reduced);
+        settle(&mut rt);
+        let at_rest = place(&rt);
+        for segment in ["segment1", "segment2", "segment0"] {
+            let (x, y) = rt.find(&format!("dictation-side/{segment}")).unwrap();
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            watch(&mut rt, at_rest, reduced);
+        }
+        let (x, y) = rt.find("dictation-hotkey").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        watch(&mut rt, at_rest, reduced);
+        assert!(matches!(rt.state.capture, Capture::Listening { .. }));
+        settings::hold(&mut rt.state, HotkeyModifiers::option_command());
+        rt.invalidate();
+        watch(&mut rt, at_rest, reduced);
+        settings::hold(&mut rt.state, HotkeyModifiers::default());
+        key(&mut rt, Key::Text("d".into()), Mods::default());
+        watch(&mut rt, at_rest, reduced);
+        rt.state.capture = Capture::Saved {
+            target: ShortcutTarget::Dictation,
+            until: None,
+        };
+        rt.invalidate();
+        watch(&mut rt, at_rest, reduced);
+        rt.state.capture = Capture::Idle;
+        rt.invalidate();
+        watch(&mut rt, at_rest, reduced);
+        // A chord has no side: the picker leaves beside the recorder, never
+        // under it, and the recorder keeps its right edge.
+        let (x, y) = rt.find("dictation-hotkey").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        settle(&mut rt);
+        let ctrl_alt = Mods {
+            ctrl: true,
+            alt: true,
+            ..Mods::default()
+        };
+        key(&mut rt, Key::Text("d".into()), ctrl_alt);
+        while rt.find("dictation-side").is_some() {
+            let recorder = rect(&rt, "dictation-hotkey");
+            let side = rect(&rt, "dictation-side");
+            assert_eq!(recorder[0] + recorder[2], at_rest.1, "the recorder moved");
+            assert!(side[0] + side[2] <= recorder[0], "the picker slid under");
+            rt.frame(1.0 / 60.0);
+        }
+    }
+}
+
 #[test]
 fn the_explainer_draws_a_keycap_per_key_and_lines_up_the_lanes() {
     use crate::app_settings::{HotkeyBinding, HotkeyModifiers};

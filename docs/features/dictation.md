@@ -23,8 +23,14 @@ Shortcut accepts modifier-only, modifier-plus-key, standalone Fn/Globe, and
 standalone function-key bindings. Capturing a replacement suspends global matching.
 On macOS and Windows the recorder shows the modifiers held so far (`⌥ ⌘ …`);
 a key records them at once, and releasing them all records the most held.
-Checks: `a_recorder_shows_the_modifiers_held_so_far` in `rune_ui/tests.rs` and
-the `ChordCapture` tests in `rune_ui/macos_host.rs` (no native end-to-end run).
+Saved shows for a second, then the recorder returns to Change shortcut. The
+recorder keeps one width in every state, so it and the macOS side picker beside
+it never move; with the picker showing, keycaps leave the side to it, and
+otherwise they name it (`Left ⌥`).
+Checks: `a_recorder_shows_the_modifiers_held_so_far` in `rune_ui/tests.rs`,
+`the_shortcut_row_holds_still_through_every_face_and_side` in
+`rune_ui/tests/panes.rs`, the `shortcut-row*` scenes, and the `ChordCapture`
+tests in `rune_ui/macos_host.rs` (no native end-to-end run).
 
 **CLI:** `hex listen` uses saved settings; `--device` is authoritative. This is
 the CLI listener, not Settings. Do not run it beside an existing listener.

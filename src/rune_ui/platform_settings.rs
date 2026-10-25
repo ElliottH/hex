@@ -759,13 +759,21 @@ const SIDES: [ModifierSide; 3] = [
     ModifierSide::Right,
 ];
 
-/// Left, Either, or Right for a modifier-only shortcut (macOS), before its
-/// recorder; sides that would collide with another shortcut are disabled.
-pub(super) fn side_selector(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<El> {
+/// The side [`side_selector`] shows for `target`, if it shows one: the
+/// keycaps beside it then leave the side to it.
+pub(super) fn picked_side(ui: &Ui, target: ShortcutTarget) -> Option<ModifierSide> {
     if !ui.platform.caps.modifier_sides {
         return None;
     }
-    let side = super::settings::binding(&ui.settings, target)?.standalone_side()?;
+    super::settings::binding(&ui.settings, target)?.standalone_side()
+}
+
+/// Left, Either, or Right for a modifier-only shortcut (macOS), before its
+/// recorder; sides that would collide with another shortcut are disabled.
+pub(super) const SIDE_PICKER_WIDTH: f32 = 180.0;
+
+pub(super) fn side_selector(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<El> {
+    let side = picked_side(ui, target)?;
     let key = match target {
         ShortcutTarget::Dictation => "dictation-side",
         ShortcutTarget::PasteLast => "paste-last-side",
@@ -774,7 +782,7 @@ pub(super) fn side_selector(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option
     let labels = [tr("Left"), tr("Either"), tr("Right")];
     let selected = SIDES.iter().position(|s| *s == side).unwrap_or(1);
     let mut control = rune_kit::SegmentedControl::new(&labels, Some(selected))
-        .width(Some(180.0))
+        .width(Some(SIDE_PICKER_WIDTH))
         .on_pick(move |ui: &mut Ui, index: usize, _: &mut rune::Tx| {
             if let Some(candidate) = side_binding(&ui.settings, target, SIDES[index]) {
                 ui.update(|settings| super::settings::set_binding(settings, target, candidate));

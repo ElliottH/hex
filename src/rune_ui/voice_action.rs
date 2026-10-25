@@ -2,13 +2,13 @@
 //! that turns spoken instructions into paste-ready text. Enabling checks the
 //! saved shortcut against the others first.
 
-use rune::{El, col, row};
+use rune::{El, col};
 
 use super::ShortcutTarget;
 use super::Ui;
 use super::controls::{Paint, card, described_row, folding, note, section, toggle_row};
 use super::models::{self, Target};
-use super::settings::{cancel_capture, hotkey_control};
+use super::settings::{cancel_capture, shortcut_control};
 use crate::app_settings::AppSettings;
 use crate::desktop_i18n::tr;
 use crate::opencode_catalog::OpenCodeFeature;
@@ -91,16 +91,7 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
                     (purpose.to_string(), p.muted())
                 }),
             ),
-            row()
-                .key("voice-action-shortcut-control")
-                .gap(8.0)
-                .center_y()
-                .children(super::platform_settings::side_selector(
-                    ui,
-                    p,
-                    ShortcutTarget::VoiceAction,
-                ))
-                .child(hotkey_control(ui, p, ShortcutTarget::VoiceAction)),
+            shortcut_control(ui, p, ShortcutTarget::VoiceAction),
         )];
         rows.extend(super::settings::refused_note(
             ui,

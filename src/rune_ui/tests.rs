@@ -43,8 +43,13 @@ fn saved(rt: &Runtime<Ui>) -> usize {
     rt.state.saved
 }
 
+/// The text shown, without the recorder's invisible sizing faces.
 fn texts(rt: &Runtime<Ui>) -> Vec<String> {
-    rt.elements().into_iter().filter_map(|e| e.text).collect()
+    rt.elements()
+        .into_iter()
+        .filter(|e| !e.path.contains("/faces/size"))
+        .filter_map(|e| e.text)
+        .collect()
 }
 
 /// Presses an element by key and lets every animation settle.

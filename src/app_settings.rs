@@ -188,15 +188,28 @@ impl HotkeyModifiers {
 
     #[cfg(target_os = "macos")]
     fn keycaps(self) -> impl Iterator<Item = &'static str> {
+        self.sided_keycaps()
+            .map(|(label, side)| side_keycap(side, label))
+    }
+
+    /// Each modifier's keycap and the side it must be pressed on.
+    #[cfg(target_os = "macos")]
+    fn sided_keycaps(self) -> impl Iterator<Item = (&'static str, ModifierSide)> {
         [
-            (self.function, "fn"),
-            (self.control.is_some(), side_keycap(self.control, "⌃")),
-            (self.option.is_some(), side_keycap(self.option, "⌥")),
-            (self.shift.is_some(), side_keycap(self.shift, "⇧")),
-            (self.command.is_some(), side_keycap(self.command, "⌘")),
+            (self.function.then_some(ModifierSide::Either), "fn"),
+            (self.control, "⌃"),
+            (self.option, "⌥"),
+            (self.shift, "⇧"),
+            (self.command, "⌘"),
         ]
         .into_iter()
-        .filter_map(|(enabled, label)| enabled.then_some(label))
+        .filter_map(|(side, label)| Some((label, side?)))
+    }
+
+    /// Windows and Linux keycaps never name a side.
+    #[cfg(not(target_os = "macos"))]
+    fn sided_keycaps(self) -> impl Iterator<Item = (&'static str, ModifierSide)> {
+        self.keycaps().map(|label| (label, ModifierSide::Either))
     }
 
     /// Windows names Command the Windows key and Option Alt.
@@ -243,16 +256,16 @@ fn modifier_contains(candidate: Option<ModifierSide>, required: Option<ModifierS
 }
 
 #[cfg(target_os = "macos")]
-fn side_keycap(side: Option<ModifierSide>, symbol: &'static str) -> &'static str {
+fn side_keycap(side: ModifierSide, symbol: &'static str) -> &'static str {
     match (side, symbol) {
-        (Some(ModifierSide::Left), "⌃") => "L⌃",
-        (Some(ModifierSide::Right), "⌃") => "R⌃",
-        (Some(ModifierSide::Left), "⌥") => "L⌥",
-        (Some(ModifierSide::Right), "⌥") => "R⌥",
-        (Some(ModifierSide::Left), "⇧") => "L⇧",
-        (Some(ModifierSide::Right), "⇧") => "R⇧",
-        (Some(ModifierSide::Left), "⌘") => "L⌘",
-        (Some(ModifierSide::Right), "⌘") => "R⌘",
+        (ModifierSide::Left, "⌃") => "L⌃",
+        (ModifierSide::Right, "⌃") => "R⌃",
+        (ModifierSide::Left, "⌥") => "L⌥",
+        (ModifierSide::Right, "⌥") => "R⌥",
+        (ModifierSide::Left, "⇧") => "L⇧",
+        (ModifierSide::Right, "⇧") => "R⇧",
+        (ModifierSide::Left, "⌘") => "L⌘",
+        (ModifierSide::Right, "⌘") => "R⌘",
         _ => symbol,
     }
 }
@@ -417,6 +430,20 @@ impl HotkeyBinding {
             .keycaps()
             .map(str::to_string)
             .chain(self.key.iter().map(|key| key.label.clone()))
+            .collect()
+    }
+
+    /// Each keycap with the side it must be pressed on: `Either` for the
+    /// key, and for every modifier but on macOS.
+    pub fn sided_keycaps(&self) -> Vec<(String, ModifierSide)> {
+        self.modifiers
+            .sided_keycaps()
+            .map(|(label, side)| (label.to_string(), side))
+            .chain(
+                self.key
+                    .iter()
+                    .map(|key| (key.label.clone(), ModifierSide::Either)),
+            )
             .collect()
     }
 
