@@ -345,6 +345,48 @@ fn flush(rt: &mut Runtime<Ui>) {
     settle(rt);
 }
 
+/// A shown window keeps drawing while its runtime animates, has input queued
+/// or has live values pending (Rune's `Host::redraw`). Five seconds after
+/// mounting, with nothing changing, the only motion left in any scene is the
+/// pulsing dot of something live or the shortcut explainer's looping demo,
+/// and under Reduce Motion, which stills both, no scene asks for another
+/// frame.
+#[test]
+fn every_scene_stops_asking_for_frames() {
+    const FRAME: f64 = 1.0 / 60.0;
+    let wants_frame =
+        |rt: &mut Runtime<Ui>| rt.frame(FRAME) || rt.has_pending_input() || rt.live_pending();
+    let mut moving = Vec::new();
+    let mut drawing = Vec::new();
+    for (scene, _) in SCENES.iter().filter(|(name, _)| *name != "live") {
+        let mut rt = runtime(scene, true, PANE_SIZE);
+        for _ in 0..150 {
+            rt.frame(1.0 / 30.0);
+        }
+        if *scene != "shortcut-explainer-motion" {
+            moving.extend(
+                rt.elements()
+                    .into_iter()
+                    .filter(|e| e.moving && e.key.as_deref() != Some("dot"))
+                    .map(|e| format!("{scene}: {}", e.path)),
+            );
+        }
+        // Stilling a loop may land a spring or two first.
+        rt.set_system_reduced_motion(true);
+        for _ in 0..30 {
+            rt.frame(1.0 / 30.0);
+        }
+        if (0..30).any(|_| wants_frame(&mut rt)) {
+            drawing.push(*scene);
+        }
+    }
+    assert!(moving.is_empty(), "still moving after 5 s: {moving:#?}");
+    assert!(
+        drawing.is_empty(),
+        "still asking for frames under Reduce Motion: {drawing:?}"
+    );
+}
+
 #[test]
 fn the_sidebar_switches_panes_and_keeps_settings() {
     let mut rt = runtime("portal", true, PANE_SIZE);
