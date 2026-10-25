@@ -4733,6 +4733,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scrawl-router"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 7.0.0",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "screencapturekit"
 version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

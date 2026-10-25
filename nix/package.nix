@@ -73,6 +73,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
       ../Cargo.toml
       ../Cargo.lock
       ../build.rs
+      ../crates
       ../src
       ../tests
       ../native

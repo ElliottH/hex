@@ -6,6 +6,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "build.rs"
+      - "crates/**"
       - "src/**"
       - "native/**"
       - "macos/HexMicrophoneDriver/Info.plist"
@@ -26,6 +27,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "build.rs"
+      - "crates/**"
       - "src/**"
       - "native/**"
       - "macos/HexMicrophoneDriver/Info.plist"
@@ -83,6 +85,7 @@ jobs:
             pulseaudio pulseaudio-utils libasound2-plugins xdotool
       - run: cargo fmt --all --check
       - run: cargo nextest run --locked --profile ci --bin voice-control
+      - run: cargo nextest run --locked --profile ci -p scrawl-router
       - name: Upload renders that missed their goldens
         if: failure()
         uses: actions/upload-artifact@v7
@@ -126,6 +129,7 @@ jobs:
       - name: Exercise service IPC and client-independent lifecycle
         run: python3 scripts/test-linux-service.py target/debug/voice-control
       - run: cargo clippy --locked --bin voice-control --tests -- -D warnings
+      - run: cargo clippy --locked -p scrawl-router --all-targets -- -D warnings
 
   nix:
     runs-on: ubuntu-24.04

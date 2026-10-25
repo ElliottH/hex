@@ -6,6 +6,11 @@ default-run = "voice-control"
 license = "MIT"
 repository = "https://github.com/anomalyco/hex"
 
+# Crates imported from Scrawl live under `crates/`. Plain `cargo build` and
+# `cargo test` still select only Hex; pass `--workspace` or `-p` for the others.
+[workspace]
+members = [".", "crates/router"]
+
 [[test]]
 name = "keyboard_layout"
 harness = false
