@@ -257,10 +257,9 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
     ])
 }
 
-/// How the panel enters and leaves: the one place to swap for a shared
-/// modal transition.
+/// How the panel enters and leaves: the same as the picker's.
 fn panel_transition(p: Paint) -> Transition {
-    Transition::scale(0.96).springs(overlay_springs(p))
+    super::controls::modal_transition(p)
 }
 
 fn overlay_springs(p: Paint) -> SpringPair {
