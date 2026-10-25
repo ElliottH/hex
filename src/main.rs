@@ -12,7 +12,7 @@ mod application_catalog;
 mod audio;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod calendar;
-#[cfg(target_os = "macos")]
+#[cfg(all(debug_assertions, target_os = "macos"))]
 mod capture_host;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod command_grammar;
@@ -387,7 +387,7 @@ enum DevCommand {
         #[arg(value_enum)]
         state: DevToggle,
     },
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, target_os = "macos"))]
     /// Run a capture headlessly, feeding WAV files in place of the
     /// microphone, and write its bundle (needs the `capture` experiment).
     CaptureReplay {
@@ -741,6 +741,7 @@ fn main() -> Result<()> {
                     DevCommand::Commands { state } => DeveloperCommand::SetCommandsEnabled {
                         enabled: matches!(state, DevToggle::On),
                     },
+                    #[cfg(all(debug_assertions, target_os = "macos"))]
                     DevCommand::CaptureReplay { wavs } => {
                         experiments::log_launch();
                         app_settings::AppSettings::load()?;

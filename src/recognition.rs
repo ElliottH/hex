@@ -116,6 +116,7 @@ pub enum RecognitionControl {
         reply: SyncSender<CaptureSnapshot>,
     },
     /// `hex capture` (the `capture` experiment, debug builds only).
+    #[cfg(debug_assertions)]
     ScrawlCapture {
         action: crate::control::ScrawlCaptureAction,
         reply: SyncSender<ControlReply>,
@@ -377,6 +378,7 @@ pub fn listen(
         microphone_policy.release_while_idle,
         dictation_worker.engine(),
     )?;
+    #[cfg(debug_assertions)]
     let mut capture_host = crate::capture_host::CaptureHost::start(dictation_worker.engine());
     let (mut transcription_revision, _) = crate::app_settings::transcription_selection();
     let mut smart_turn = crate::smart_turn::SmartTurn::start(project_root);
@@ -477,6 +479,7 @@ pub fn listen(
                             let _ = reply.send(answer);
                         }
                     }
+                    #[cfg(debug_assertions)]
                     RecognitionControl::ScrawlCapture { action, reply } => {
                         let answer = match capture_host.as_mut() {
                             Some(host) => host.control(action, &input),
@@ -1588,6 +1591,7 @@ pub fn listen(
         }
     }
 
+    #[cfg(debug_assertions)]
     if let Some(host) = &mut capture_host {
         host.shutdown(&input);
     }

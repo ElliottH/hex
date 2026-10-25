@@ -600,9 +600,13 @@ CoreAudio formats, AppleScript details, or event serialization.
   release-while-idle close waits for it. One capture engine per process, one
   capture at a time. Its words are foreground requests on the dictation
   engine's loaded model in 30 s chunks: after dictation already sent, before
-  meeting chunks, never a second model, and dictation output is unchanged.
-  `stop` replies at once; the bundle is written on the capture's own thread,
-  and quitting cancels a recording capture.
+  meeting chunks, never a second model, and dictation output is unchanged. A
+  chunk waits while dictation captures or transcribes and never interrupts a
+  live stream; the engine holds it until the stream ends. `stop` replies at
+  once; one thread writes stopped captures one at a time, at most two wait,
+  and a start beyond that is refused `busy`. Bundles are owner-only. Quitting
+  cancels a recording capture, stops transcription between chunks, and waits
+  at most 2 s for capture threads.
 - `hex mcp` is read-only and available in release builds regardless of the
   Meetings opt-in. It dispatches before process logging, the instance lock,
   GUI, or permission setup; never writes, recovers, or indexes on disk inside

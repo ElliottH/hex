@@ -109,14 +109,9 @@ impl Pump {
                 });
                 None
             }
+            #[cfg(debug_assertions)]
             ControlCommand::ScrawlCapture { action } => {
                 background(reply, move || {
-                    if !crate::DEVELOPER_FEATURES_ENABLED {
-                        return Err(ControlError::new(
-                            "unsupported",
-                            "captures exist only in debug builds",
-                        ));
-                    }
                     listener_ready(&runtime)?;
                     ask(&runtime, |reply| RecognitionControl::ScrawlCapture {
                         action,
@@ -125,6 +120,11 @@ impl Pump {
                 });
                 None
             }
+            #[cfg(not(debug_assertions))]
+            ControlCommand::ScrawlCapture { .. } => Some(ControlReply::error(
+                "unsupported",
+                "captures exist only in debug builds",
+            )),
             ControlCommand::PasteLast => {
                 background(reply, move || {
                     listener_ready(&runtime)?;

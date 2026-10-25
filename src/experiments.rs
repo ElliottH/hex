@@ -1,4 +1,4 @@
-//! Experiments: unfinished features that stay dormant on `main` until a
+//! Experiments: unfinished features that stay dormant on `dev` until a
 //! person turns them on for their own Hex. They are unsupported and may
 //! change or disappear without notice.
 //!
