@@ -20,7 +20,7 @@ Sidebar > Meetings (always listed on macOS)          // meetings.opt-in; off by 
 │   │   ├── Allow -> macOS prompt the first time (tour's permission_control)
 │   │   ├── Decided before -> Privacy pane + drag guide ("System Audio Recording Only")
 │   │   ├── Asked -> pulse; TCC preflight re-read on each poll, no reopen needed
-│   │   └── Granted -> Allowed
+│   │   └── Granted -> the Allow pill morphs into a green Allowed
 │   ├── Show recording indicator -> on by default; corner-snapping floating capsule
 │   ├── Transcript folder -> ~/Documents/Hex Meetings by default; Reveal / choose
 │   ├── Summarize with Apple Intelligence -> on by default; one-line availability

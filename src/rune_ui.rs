@@ -680,9 +680,15 @@ impl Ui {
             platform::PlatformRequest::Permission(
                 crate::onboarding::PermissionAction::ShowGuide(kind),
             ) => self.platform.note_asked(*kind),
-            platform::PlatformRequest::SystemAudio => self
-                .platform
-                .note_asked(crate::onboarding::PermissionKind::SystemAudio),
+            platform::PlatformRequest::SystemAudio => {
+                let kind = crate::onboarding::PermissionKind::SystemAudio;
+                // Previews grant on the second ask, so a scene can play
+                // Allow, waiting, and Allowed in turn.
+                if self.host.is_fixture() && self.platform.asked(kind) {
+                    self.platform.system_audio = true;
+                }
+                self.platform.note_asked(kind);
+            }
             platform::PlatformRequest::SetLaunchAtLogin(enabled) => match &self.host {
                 // Windows writes its Run key from the window's own process.
                 platform::PlatformHost::None => {
@@ -1402,6 +1408,13 @@ const SCENES: &[Scene] = &[
     }),
     ("meetings-settings", |ui| {
         *ui = mac_fixture();
+        ui.meetings.view = meetings::View::Settings;
+        ui.pane = Pane::Meetings;
+    }),
+    // System Audio not yet allowed: tap Allow to wait, again to grant.
+    ("meetings-allow", |ui| {
+        *ui = mac_fixture();
+        ui.platform.system_audio = false;
         ui.meetings.view = meetings::View::Settings;
         ui.pane = Pane::Meetings;
     }),

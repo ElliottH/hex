@@ -122,6 +122,8 @@ Launch Hex, setup incomplete              // setup.tour; full-window, own column
 ├── Welcome -> Get started                // looping keycap + listening rings
 ├── Setup: one screen, every permission   // setup.checklist; skipped when granted
 │   ├── Every row -> Allow; asked -> pulse + Allow; granted -> Allowed  // setup.permission-control
+│   │   └── Grant: the pill narrows into the green label, the dot shrinks into
+│   │       the check as it draws on (0.3 s, no bounce; Reduce Motion: no travel)
 │   ├── Microphone -> macOS prompt; refused -> Privacy pane + "switch Hex on" guide
 │   ├── Input Monitoring / Accessibility -> Privacy pane + drag guide
 │   │   ├── The app tile lifts out of the row and flies, blurred, into the guide
@@ -216,7 +218,8 @@ The tour is the pure `onboarding::Flow` (steps, row states, background
 download, practice hints, one-relaunch guard) drawn by
 [rune_ui/onboarding.rs](../../src/rune_ui/onboarding.rs); `permission_control`
 in [rune_ui/lists.rs](../../src/rune_ui/lists.rs) is the one Allow / dot /
-Allowed control Settings and the tour share. The guide
+Allowed control Settings and the tour share (`a_grant_morphs_allow_into_allowed`,
+`reduce_motion_swaps_allow_for_allowed_at_once`; scene `meetings-allow`). The guide
 beside System Settings is [permission_guide.m](../../native/permission_guide.m).
 Unit tests (`onboarding::tests`) cover step order, the download starting on the
 welcome screen and retrying from any step, permissions-only setup with the

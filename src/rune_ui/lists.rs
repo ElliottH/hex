@@ -2,10 +2,10 @@
 //! Settings rows share: list rows and group labels, the detail header and
 //! facts, tinted status tags, and the permission control.
 
-use rune::{El, col, el, row, text};
+use rune::{Color, Edge, El, Shadow, Spring, SpringPair, Transition, col, el, row, text};
 
 use super::Ui;
-use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot};
+use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot, status_dot};
 use crate::desktop_i18n::tr;
 
 const LIST_WIDTH: f32 = 320.0;
@@ -266,8 +266,22 @@ pub(super) enum PermissionControl {
     Allowed,
 }
 
+/// How long the control takes to change state: no bounce, as a control
+/// settling rather than playing.
+const PERMISSION_MOTION: Spring = Spring::new(0.3, 0.0);
+/// The check's ink inside its 16-point icon: OpenCode's `check-small` path
+/// (6.5,6.5)–(13.5,13.5) of 20, scaled to 16, plus the stroke's half-width.
+const CHECK_INK: [f32; 4] = [4.6, 4.6, 6.8, 6.8];
+/// Where the stroke starts, the end the waiting dot shrinks into.
+const CHECK_START: [f32; 2] = [5.2, 9.15];
+
 /// The one control every permission uses, in the tour and in Settings:
 /// Allow, a pulsing dot while macOS is asked, then a green Allowed.
+///
+/// Every state is the same keyed button, so a grant morphs instead of
+/// cross-fading: its pill sheds fill and padding and narrows into the
+/// label, the label turns green and grows "ed", and the waiting dot glides
+/// into the start of the check as the check draws on.
 pub(super) fn permission_control(
     p: Paint,
     key: &str,
@@ -275,23 +289,118 @@ pub(super) fn permission_control(
     kind: ButtonKind,
     allow: impl Fn(&mut Ui) + 'static,
 ) -> El {
-    match control {
-        PermissionControl::Allowed => allowed(p, key, tr("Allowed")),
-        PermissionControl::Allow => {
-            button(p, key, tr("Allow"), kind, move |ui: &mut Ui, _| allow(ui))
-        }
-        PermissionControl::Waiting => row()
-            .key(format!("{key}-waiting"))
-            .gap(12.0)
-            .center_y()
-            .child(pulsing_dot(p.accent()))
-            .child(button(
+    let (mark, gap, pill) = match control {
+        PermissionControl::Allow => (
+            None,
+            12.0,
+            button(p, key, tr("Allow"), kind, move |ui: &mut Ui, _| allow(ui)),
+        ),
+        PermissionControl::Waiting => (
+            Some(
+                el().key("mark")
+                    .size(8.0, 8.0)
+                    .child(pulsing_dot(p.accent()).absolute(0.0, 0.0)),
+            ),
+            12.0,
+            button(
                 p,
                 key,
                 tr("Allow"),
                 ButtonKind::Secondary,
                 move |ui: &mut Ui, _| allow(ui),
-            )),
+            ),
+        ),
+        PermissionControl::Allowed => (Some(check_mark(p)), 6.0, allowed_pill(p, key, kind)),
+    };
+    row()
+        .key(format!("{key}-control"))
+        .gap(gap)
+        .center_y()
+        .motion(PERMISSION_MOTION)
+        .children(mark)
+        .child(pill)
+}
+
+/// The check, drawn on left to right, with the waiting dot shrunk to the
+/// start of its stroke.
+fn check_mark(p: Paint) -> El {
+    let [x, y, w, h] = CHECK_INK;
+    let mut draw = Transition::reveal(Edge::Leading)
+        .springs(SpringPair::new(PERMISSION_MOTION, Spring::new(0.24, 0.0)));
+    for reveal in [&mut draw.insertion.reveal, &mut draw.removal.reveal]
+        .into_iter()
+        .flatten()
+    {
+        reveal.feather = 3.0;
+    }
+    el().key("mark")
+        .size(16.0, 16.0)
+        .child(
+            status_dot(p.success())
+                .absolute(CHECK_START[0] - 1.0, CHECK_START[1] - 1.0)
+                .size(2.0, 2.0)
+                .radius(1.0)
+                .opacity(0.0),
+        )
+        .child(
+            el().key("ink")
+                .absolute(x, y)
+                .size(w, h)
+                .transition(draw)
+                .child(
+                    rune::icon(p.k.glyph.check_small, 16.0)
+                        .key("check")
+                        .absolute(-x, -y)
+                        .color(p.success()),
+                ),
+        )
+}
+
+/// The Allow button with its chrome faded out: the same pill, fill, and
+/// shadows at zero alpha, no padding, and the label in green.
+fn allowed_pill(p: Paint, key: &str, kind: ButtonKind) -> El {
+    let k = p.k;
+    let (fill, shadows) = match kind {
+        ButtonKind::Primary => (k.c.bg_contrast, &k.elevation.button_contrast),
+        ButtonKind::Secondary | ButtonKind::Danger => {
+            (k.c.bg_button_neutral, &k.elevation.button_neutral)
+        }
+    };
+    let font = k.ty.ui_medium;
+    let ink = p.success();
+    let (allow, allowed) = (tr("Allow"), tr("Allowed"));
+    let mut pill = row()
+        .key(key)
+        .label(allowed)
+        .h(28.0)
+        .center()
+        .width_leads()
+        .radius(k.radius.md)
+        .fill(fill.alpha(0.0));
+    for shadow in k.shadow_layers(shadows) {
+        pill = pill.box_shadow(Shadow {
+            color: shadow.color.alpha(0.0),
+            ..shadow
+        });
+    }
+    if kind == ButtonKind::Primary {
+        pill = pill.gradient(Color::TRANSPARENT, Color::TRANSPARENT);
+    }
+    match allowed
+        .strip_prefix(allow)
+        .filter(|suffix| !suffix.is_empty())
+    {
+        // "Allow" stays and gains "ed".
+        Some(suffix) => {
+            pill.child(text(allow).key("label").font(font).color(ink))
+                .child(
+                    text(suffix).key("suffix").font(font).color(ink).transition(
+                        Transition::reveal(Edge::Leading).combined(Transition::opacity()),
+                    ),
+                )
+        }
+        // Languages whose word changes cross-fade it.
+        None => pill.child(text(allowed).key("allowed").font(font).color(ink)),
     }
 }
 

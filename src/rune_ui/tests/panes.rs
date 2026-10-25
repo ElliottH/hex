@@ -101,10 +101,66 @@ fn missing_permissions_lead_settings_and_open_the_guide() {
     );
     assert!(rt.state.platform.asked(PermissionKind::InputMonitoring));
     assert!(
-        rt.find("permission-input-monitoring-allow-waiting")
+        rt.find("permission-input-monitoring-allow-control/mark/dot")
             .is_some(),
         "asked permissions wait with a dot"
     );
+}
+
+#[test]
+fn a_grant_morphs_allow_into_allowed() {
+    let mut rt = runtime("meetings-allow", true, PANE_SIZE);
+    let pill = "meeting-system-audio-allow";
+    tap(&mut rt, pill);
+    assert_eq!(asked(&rt), [PlatformRequest::SystemAudio]);
+    assert!(
+        rt.find(&format!("{pill}-control/mark/dot")).is_some(),
+        "waits with a dot"
+    );
+    let width = |rt: &Runtime<Ui>| rt.presented(pill).unwrap().0[2];
+    let allow = width(&rt);
+
+    // The fixture grants on the second ask.
+    let (x, y) = rt.find(pill).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    for _ in 0..5 {
+        rt.frame(1.0 / 60.0);
+    }
+    let between = width(&rt);
+    settle(&mut rt);
+    let allowed = width(&rt);
+    assert!(rt.state.platform.system_audio);
+    assert!(allowed < allow, "the pill sheds its padding");
+    assert!(
+        allowed < between && between < allow,
+        "the same pill narrows rather than swapping: {allow} → {between} → {allowed}"
+    );
+    assert!(rt.find(&format!("{pill}-control/mark/ink/check")).is_some());
+    let shown = texts(&rt);
+    assert!(shown.iter().any(|text| text == "Allow"));
+    assert!(shown.iter().any(|text| text == "ed"));
+
+    tap(&mut rt, pill);
+    assert_eq!(asked(&rt).len(), 2, "Allowed is not a button");
+}
+
+#[test]
+fn reduce_motion_swaps_allow_for_allowed_at_once() {
+    let mut rt = runtime("meetings-allow", true, PANE_SIZE);
+    let pill = "meeting-system-audio-allow";
+    tap(&mut rt, pill);
+    let mut settled = runtime("meetings-allow", true, PANE_SIZE);
+    settled.state.platform.system_audio = true;
+    refresh(&mut settled);
+    let allowed = settled.presented(pill).unwrap().0;
+
+    rt.set_system_reduced_motion(true);
+    let (x, y) = rt.find(pill).unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.presented(pill).unwrap().0, allowed, "no travel");
 }
 
 #[test]
@@ -531,7 +587,7 @@ fn the_mac_tour_asks_each_permission_then_practices() {
         matches!(sent(&rt), [Request::ChooseModel { .. }]),
         "the model downloads behind the permissions"
     );
-    tap(&mut rt, "setup-microphone/setup-grant");
+    tap(&mut rt, "setup-microphone/setup-grant-control/setup-grant");
     assert_eq!(
         asked(&rt),
         [PlatformRequest::Permission(
@@ -594,7 +650,7 @@ fn a_refused_microphone_points_to_system_settings() {
             .iter()
             .any(|text| text == "Turned off earlier. Switch Hex on in System Settings.")
     );
-    tap(&mut rt, "setup-microphone/setup-grant");
+    tap(&mut rt, "setup-microphone/setup-grant-control/setup-grant");
     assert_eq!(
         asked(&rt),
         [PlatformRequest::Permission(PermissionAction::ShowGuide(
