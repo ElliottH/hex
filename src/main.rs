@@ -635,8 +635,6 @@ fn main() -> Result<()> {
                     None
                 }
             };
-            #[cfg(hex_capture)]
-            capture_host::prepare_on_main_thread();
             recognition::listen(
                 &root,
                 events,

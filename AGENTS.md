@@ -604,15 +604,16 @@ CoreAudio formats, AppleScript details, or event serialization.
   timeline through a bounded sink that records a gap rather than block, so a
   stalled capture never stalls dictation, and while a sink is open the
   release-while-idle close waits for it. One capture engine per process, one
-  capture at a time, including its finish: a start while the previous capture
-  is starting, writing, or cancelling is refused `busy`. Its words are
-  foreground requests on the dictation engine's loaded model in 30 s chunks:
-  after dictation already sent, before meeting chunks, never a second model,
-  and dictation output is unchanged. A chunk waits while dictation captures or
-  transcribes and never interrupts a live stream; the engine holds it until
-  the stream ends. `stop` replies at once and one thread writes the capture.
-  The engine's process-wide log sink and keyboard-layout map (TIS) are
-  claimed on the main thread before any engine exists. Bundles are
+  capture recording at a time. Its words are foreground requests on the
+  dictation engine's loaded model in 30 s chunks: after dictation already
+  sent, before meeting chunks, never a second model, and dictation output is
+  unchanged. A chunk waits while dictation captures or transcribes and never
+  interrupts a live stream; the engine holds it until the stream ends. `stop`
+  replies at once and the screen recording stops then (`Capture::stop`), not
+  when the capture is written; one thread writes stopped captures one at a
+  time, at most two wait, and a start beyond that is refused `busy`. The
+  engine's log goes to tracing from before it is built, and its settings come
+  from Hex (`ConfigSource`), never `~/.config/scrawl`. Bundles are
   owner-only. Quitting
   cancels a recording capture, stops transcription between chunks, and waits
   at most 2 s for capture threads.

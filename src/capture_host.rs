@@ -5,17 +5,16 @@
 //! The engine records the screen and writes the bundle; Hex owns the
 //! microphone and the model. A capture copies audio from the dictation
 //! timeline through a bounded sink (no second stream) and hands it to
-//! `Capture::finish` ([`AudioIn::External`]), and its words come from the
-//! dictation engine's loaded model as foreground work. The engine runs with
-//! [`SharedResources::none`]: no ingest server, delivery retries, or global
-//! shortcuts. [`CaptureHost::start`] does nothing unless the experiment is on
-//! and [`prepare_on_main_thread`] ran.
+//! `SealedCapture::finish` ([`AudioIn::External`]), and its words come from
+//! the dictation engine's loaded model as foreground work. The engine runs
+//! with [`SharedResources::none`]: no ingest server, delivery retries, or
+//! global shortcuts. [`CaptureHost::start`] does nothing unless the
+//! experiment is on.
 
 use std::fs;
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
@@ -49,6 +48,9 @@ const MAX_CAPTURE: Duration = Duration::from_secs(20 * 60);
 const GAP_TOLERANCE: Duration = Duration::from_millis(50);
 /// How long shutdown waits for capture threads, inside the quit deadline.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+/// Captures being written at once: the one finishing plus those queued
+/// behind it. A start beyond this is refused.
+const MAX_FINISHING: usize = 2;
 
 // ---------------------------------------------------------------------------
 // The engine, as Hex runs it.
@@ -65,8 +67,17 @@ trait CaptureEngine: Send + Sync + 'static {
 trait Recording: Send {
     /// Stops recording and removes the bundle.
     fn cancel(self: Box<Self>);
-    /// Blocking: stops recording, transcribes `audio`, picks keyframes, and
-    /// writes the bundle. Returns its word count.
+    /// Stops recording the screen, its windows, and input now, keeping what
+    /// was recorded for [`Sealed::finish`].
+    fn stop(self: Box<Self>) -> Box<dyn Sealed>;
+}
+
+/// A stopped capture, waiting to be written.
+trait Sealed: Send {
+    /// Removes the bundle.
+    fn cancel(self: Box<Self>);
+    /// Blocking: transcribes `audio`, picks keyframes, and writes the
+    /// bundle. Returns its word count.
     fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<usize>;
 }
 
@@ -83,8 +94,18 @@ impl Recording for scrawl_capture::capture::Capture {
         scrawl_capture::capture::Capture::cancel(*self);
     }
 
+    fn stop(self: Box<Self>) -> Box<dyn Sealed> {
+        Box::new(scrawl_capture::capture::Capture::stop(*self))
+    }
+}
+
+impl Sealed for scrawl_capture::capture::SealedCapture {
+    fn cancel(self: Box<Self>) {
+        scrawl_capture::capture::SealedCapture::cancel(*self);
+    }
+
     fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<usize> {
-        let finished = scrawl_capture::capture::Capture::finish(*self, Some(audio))?;
+        let finished = scrawl_capture::capture::SealedCapture::finish(*self, Some(audio))?;
         tracing::info!(
             bundle = %finished.dir.display(),
             duration_ms = finished.duration_ms,
@@ -93,29 +114,6 @@ impl Recording for scrawl_capture::capture::Capture {
         );
         Ok(finished.words)
     }
-}
-
-/// Whether [`prepare_on_main_thread`] claimed the engine's process-wide
-/// state, so an engine may be built on a worker thread.
-static PREPARED: AtomicBool = AtomicBool::new(false);
-
-/// Claims the engine's process-wide state on the main thread, before any
-/// worker can build an engine, when the experiment is on: its log goes to
-/// tracing, and its keyboard-layout map is built here, because
-/// `Engine::new` reads it (for shortcuts Hex never registers) and building
-/// it calls TIS, which Hex touches only on the main thread. Later reads hit
-/// the map's cache.
-pub fn prepare_on_main_thread() {
-    if !crate::experiments::enabled(crate::experiments::Experiment::Capture) {
-        return;
-    }
-    if objc2_foundation::MainThreadMarker::new().is_none() {
-        tracing::warn!("the capture engine must be prepared on the main thread");
-        return;
-    }
-    scrawl_capture::log::set_sink(Some(Arc::new(TracingLog)));
-    let _ = scrawl_capture::capture::init_keyboard_layout_map();
-    PREPARED.store(true, Ordering::Release);
 }
 
 /// Scrawl's engine with nothing machine-wide: no ingest server (port
@@ -182,12 +180,25 @@ impl scrawl_capture::log::Sink for TracingLog {
 
 /// Scrawl's defaults. Hex passes every bundle folder itself, so the
 /// configured captures folder is never consulted.
+/// The engine's settings, from Hex rather than `~/.config/scrawl`. Hex has
+/// no capture settings yet, so these are Scrawl's defaults, chosen here:
+/// auto-crop on (it applies to display captures), and the `agentContext`
+/// summary format off.
 struct HexConfig;
 
 impl ConfigSource for HexConfig {
     fn engine_config(&self) -> anyhow::Result<EngineConfig> {
-        Ok(EngineConfig::default())
+        Ok(hex_engine_config())
     }
+}
+
+fn hex_engine_config() -> EngineConfig {
+    let mut config = EngineConfig::default();
+    config.autocrop = Some(serde_json::Value::Bool(true));
+    config
+        .experiments
+        .insert(scrawl_capture::handoff::AGENT_CONTEXT.into(), false);
+    config
 }
 
 /// Word-timed transcription on the dictation engine's loaded model. It holds
@@ -344,18 +355,18 @@ struct Active {
     collector: JoinHandle<()>,
 }
 
-/// A stopped capture's audio, handed to the finisher.
+/// A stopped capture and its audio, waiting for the finisher.
 struct FinishJob {
     bundle: PathBuf,
-    capture: Box<dyn Recording>,
+    capture: Box<dyn Sealed>,
     audio: RecordedAudio,
 }
 
 #[derive(Default)]
 struct Outcomes {
-    /// Every capture from its start until its outcome is settled: recording,
-    /// starting, finishing, or cancelling. Each is settled exactly once, by
-    /// its collector or by the finisher.
+    /// Every capture from its start until its outcome is settled: starting,
+    /// recording, waiting to be written, writing, or cancelling. Each is
+    /// settled exactly once, by its collector or by the finisher.
     unfinished: Vec<PathBuf>,
     last: Option<ScrawlCaptureOutcome>,
 }
@@ -380,10 +391,9 @@ fn lock(outcomes: &Mutex<Outcomes>) -> std::sync::MutexGuard<'_, Outcomes> {
 /// The `hex capture` controller, owned by the listener beside its
 /// `DictationAudio`. The recording capture gets a `capture-audio` thread
 /// that starts the engine (off the listener's thread) and collects its
-/// audio; the `capture-finish` thread then writes it. One capture exists at
-/// a time, including its finish: Scrawl's engine stops recording the screen
-/// only inside `Capture::finish`, and captures share its input telemetry,
-/// so a start is refused until the previous capture is settled.
+/// audio, and stops recording the screen the moment the capture is sealed;
+/// one `capture-finish` thread then writes stopped captures one at a time.
+/// One capture records at a time.
 pub struct CaptureHost {
     engine: Arc<dyn CaptureEngine>,
     captures_dir: PathBuf,
@@ -401,11 +411,9 @@ impl CaptureHost {
         if !crate::experiments::enabled(crate::experiments::Experiment::Capture) {
             return None;
         }
-        if !PREPARED.load(Ordering::Acquire) {
-            tracing::warn!("the capture engine was not prepared on the main thread");
-            return None;
-        }
         tracing::info!("capture experiment on: `hex capture` is available");
+        // Before any engine exists, so nothing reaches Scrawl's log file.
+        scrawl_capture::log::set_sink(Some(Arc::new(TracingLog)));
         let transcriber = Arc::new(HexTranscriber {
             engine: engine.as_ref().map(Arc::downgrade),
         });
@@ -422,8 +430,7 @@ impl CaptureHost {
 
     fn with(engine: Arc<dyn CaptureEngine>, captures_dir: PathBuf) -> Result<Self> {
         let outcomes = SharedOutcomes::default();
-        // One capture at a time, so the finisher has at most one job.
-        let (jobs, queued) = mpsc::sync_channel(1);
+        let (jobs, queued) = mpsc::sync_channel(MAX_FINISHING);
         let finisher = {
             let outcomes = outcomes.clone();
             thread::Builder::new()
@@ -495,10 +502,13 @@ impl CaptureHost {
         let Some((jobs, _)) = &self.finisher else {
             return Ok(ControlReply::error("busy", "Hex is stopping"));
         };
-        if !lock(&self.outcomes).unfinished.is_empty() {
+        // Nothing records here, so every unfinished capture is stopped and
+        // writing or about to be.
+        let writing = lock(&self.outcomes).unfinished.len();
+        if writing >= MAX_FINISHING {
             return Ok(ControlReply::error(
                 "busy",
-                "the previous capture is still being written; try again shortly",
+                format!("{writing} captures are still being written; try again shortly"),
             ));
         }
         self.ended.retain(|collector| !collector.is_finished());
@@ -618,8 +628,8 @@ fn log_events(events: Receiver<Event>) {
     }
 }
 
-/// The `capture-finish` thread: writes each stopped capture and settles its
-/// outcome.
+/// The `capture-finish` thread: writes stopped captures in order, one at a
+/// time, and settles each outcome.
 fn finish_captures(jobs: Receiver<FinishJob>, outcomes: &Mutex<Outcomes>) {
     for FinishJob {
         bundle,
@@ -644,9 +654,9 @@ fn finish_captures(jobs: Receiver<FinishJob>, outcomes: &Mutex<Outcomes>) {
 }
 
 /// One capture's audio thread: starts the engine, collects until the sink
-/// closes, then hands the capture to the finisher or cancels it, as
-/// sealed. If the engine cannot start, it removes the bundle and settles
-/// the failure; dropping `chunks` closes the sink.
+/// closes, then, as sealed, stops the capture at once and queues it for the
+/// finisher, or cancels it. If the engine cannot start, it removes the
+/// bundle and settles the failure; dropping `chunks` closes the sink.
 fn collect(
     engine: &dyn CaptureEngine,
     start: Start,
@@ -678,11 +688,13 @@ fn collect(
             CaptureAudio::Gap { from, through } => timeline.gap(from, through),
         }
     }
-    let capture = match sealed.recv() {
+    match sealed.recv() {
         Ok(Seal::Finish { through, closed }) => {
+            // The screen stops now, not when the finisher gets to it.
+            let capture = capture.stop();
             let audio = timeline.finish(through, closed);
-            // No start is accepted until this capture settles, so the queue
-            // is empty unless Hex is stopping.
+            // Starts are refused while the queue is full, so it has room
+            // unless Hex is stopping.
             let job = FinishJob {
                 bundle: bundle.clone(),
                 capture,
@@ -692,13 +704,12 @@ fn collect(
                 Ok(()) => return,
                 Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
                     tracing::warn!("no room to write the capture; discarding it");
-                    job.capture
+                    job.capture.cancel();
                 }
             }
         }
-        Ok(Seal::Cancel) | Err(_) => capture,
-    };
-    capture.cancel();
+        Ok(Seal::Cancel) | Err(_) => capture.cancel(),
+    }
     lock(outcomes).settle(bundle, Stage::Cancelled, None);
 }
 
@@ -859,7 +870,6 @@ fn duration_for(samples: usize) -> Duration {
 /// place of the dictation timeline, and returns the finished bundle. Scrawl's
 /// engine records the screen meanwhile, which needs Screen Recording.
 pub fn replay(wavs: &[PathBuf]) -> Result<PathBuf> {
-    prepare_on_main_thread();
     let mut samples = Vec::new();
     let mut sample_rate = None;
     for wav in wavs {
@@ -1128,14 +1138,20 @@ mod tests {
     struct FakeEngine {
         transcriber: Arc<dyn Transcriber>,
         starts: Mutex<Vec<Start>>,
+        steps: Steps,
         refuse: bool,
     }
+
+    /// What each capture did, in order: `stop`, then `finish` once its
+    /// write begins.
+    type Steps = Arc<Mutex<Vec<(&'static str, PathBuf)>>>;
 
     impl FakeEngine {
         fn new(transcriber: Arc<dyn Transcriber>) -> Arc<Self> {
             Arc::new(Self {
                 transcriber,
                 starts: Mutex::default(),
+                steps: Steps::default(),
                 refuse: false,
             })
         }
@@ -1150,6 +1166,7 @@ mod tests {
             Ok(Box::new(FakeRecording {
                 dir: start.bundle_dir.unwrap(),
                 transcriber: self.transcriber.clone(),
+                steps: self.steps.clone(),
             }))
         }
     }
@@ -1157,6 +1174,7 @@ mod tests {
     struct FakeRecording {
         dir: PathBuf,
         transcriber: Arc<dyn Transcriber>,
+        steps: Steps,
     }
 
     impl Recording for FakeRecording {
@@ -1164,8 +1182,23 @@ mod tests {
             fs::remove_dir_all(&self.dir).unwrap();
         }
 
+        fn stop(self: Box<Self>) -> Box<dyn Sealed> {
+            self.steps.lock().unwrap().push(("stop", self.dir.clone()));
+            self
+        }
+    }
+
+    impl Sealed for FakeRecording {
+        fn cancel(self: Box<Self>) {
+            fs::remove_dir_all(&self.dir).unwrap();
+        }
+
         fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<usize> {
             use scrawl_capture::model::{CaptureMode, TargetFrame, TargetInfo};
+            self.steps
+                .lock()
+                .unwrap()
+                .push(("finish", self.dir.clone()));
             let duration_ms = audio.duration_ms();
             let target = TargetInfo {
                 mode: CaptureMode::Window,
@@ -1333,6 +1366,7 @@ mod tests {
         let engine = Arc::new(FakeEngine {
             transcriber: Arc::new(FakeTranscriber),
             starts: Mutex::default(),
+            steps: Steps::default(),
             refuse: true,
         });
         let mut host = CaptureHost::with(engine, dir.clone()).unwrap();
@@ -1356,6 +1390,18 @@ mod tests {
         let (events, _received) = mpsc::sync_channel(1);
         let engine = scrawl_engine(events, Arc::new(FakeTranscriber));
         assert_eq!(engine.resources(), SharedResources::none());
+    }
+
+    #[test]
+    fn the_engine_config_comes_from_hex() {
+        let config = HexConfig.engine_config().unwrap();
+        assert_eq!(
+            scrawl_capture::autocrop::Settings::from_engine_config(&config),
+            Some(Default::default()),
+            "display captures crop with Scrawl's defaults"
+        );
+        assert!(!config.experiment(scrawl_capture::handoff::AGENT_CONTEXT));
+        assert_eq!(config.transcriber, None);
     }
 
     #[test]
@@ -1395,38 +1441,100 @@ mod tests {
     }
 
     #[test]
-    fn a_start_waits_until_the_previous_capture_is_written() {
-        let dir = temp_dir("one-at-a-time");
+    fn captures_finish_one_at_a_time_and_starts_wait_for_room() {
+        let dir = temp_dir("bounded");
         let audio = FakeTimeline::default();
         let (gate, gated) = mpsc::channel();
         let engine = FakeEngine::new(Arc::new(GatedTranscriber(Mutex::new(gated))));
         let mut host = CaptureHost::with(engine, dir.clone()).unwrap();
-        let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
-            .bundle
-            .unwrap();
-        // Some audio, so the capture has something to transcribe.
-        audio.feed(
-            160,
-            host.active.as_ref().unwrap().t0 + Duration::from_millis(10),
+        let mut bundles = Vec::new();
+        for _ in 0..MAX_FINISHING {
+            let started = report(host.control(ScrawlCaptureAction::Start, &audio));
+            let bundle = started.bundle.unwrap();
+            // Some audio, so each capture has something to transcribe.
+            audio.feed(
+                160,
+                host.active.as_ref().unwrap().t0 + Duration::from_millis(10),
+            );
+            thread::sleep(Duration::from_millis(20));
+            bundles.push(bundle);
+            host.control(ScrawlCaptureAction::Stop, &audio);
+        }
+        assert_eq!(
+            report(host.control(ScrawlCaptureAction::Status, &audio)).finishing,
+            bundles
         );
-        host.control(ScrawlCaptureAction::Stop, &audio);
-        let status = report(host.control(ScrawlCaptureAction::Status, &audio));
-        assert_eq!(status.state, ScrawlCaptureState::Idle);
-        assert_eq!(status.finishing, std::slice::from_ref(&bundle));
-        // Scrawl's engine records the screen until its finish, so no other
-        // capture may start meanwhile.
         let ControlReply::Error { code, .. } = host.control(ScrawlCaptureAction::Start, &audio)
         else {
-            panic!("a start while a capture is written must be refused");
+            panic!("a start past the bound must be refused");
         };
         assert_eq!(code, "busy");
-        assert!(audio.open.lock().unwrap().is_none(), "no sink was opened");
+        // One finishes at a time, in order; the outcome is recorded directly.
+        gate.send(()).unwrap();
+        let first = wait_for_last(&mut host, &audio, &bundles[0], false);
+        assert_eq!(first.stage, "done");
+        assert_eq!(
+            report(host.control(ScrawlCaptureAction::Status, &audio)).finishing,
+            bundles[1..]
+        );
         gate.send(()).unwrap();
         assert_eq!(
-            wait_for_last(&mut host, &audio, &bundle, true).stage,
+            wait_for_last(&mut host, &audio, &bundles[1], true).stage,
             "done"
         );
         assert!(report(host.control(ScrawlCaptureAction::Start, &audio)).changed);
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_capture_queued_behind_a_slow_finish_has_already_stopped() {
+        let dir = temp_dir("stopped");
+        let audio = FakeTimeline::default();
+        let (gate, gated) = mpsc::channel();
+        let engine = FakeEngine::new(Arc::new(GatedTranscriber(Mutex::new(gated))));
+        let mut host = CaptureHost::with(engine.clone(), dir.clone()).unwrap();
+        let steps = |engine: &FakeEngine| engine.steps.lock().unwrap().clone();
+        let mut bundles = Vec::new();
+        for _ in 0..2 {
+            let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
+                .bundle
+                .unwrap();
+            audio.feed(
+                160,
+                host.active.as_ref().unwrap().t0 + Duration::from_millis(10),
+            );
+            host.control(ScrawlCaptureAction::Stop, &audio);
+            bundles.push(bundle);
+        }
+        // The first is stuck transcribing; the second waits behind it, its
+        // screen already stopped.
+        let (first, second) = (&bundles[0], &bundles[1]);
+        let mut expected = vec![
+            ("finish", first.clone()),
+            ("stop", first.clone()),
+            ("stop", second.clone()),
+        ];
+        expected.sort();
+        let sorted = |mut steps: Vec<_>| {
+            steps.sort();
+            steps
+        };
+        for _ in 0..1_000 {
+            if sorted(steps(&engine)) == expected {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(sorted(steps(&engine)), expected);
+        assert_eq!(
+            report(host.control(ScrawlCaptureAction::Status, &audio)).finishing,
+            bundles
+        );
+        gate.send(()).unwrap();
+        gate.send(()).unwrap();
+        assert_eq!(wait_for_last(&mut host, &audio, second, true).stage, "done");
+        assert_eq!(steps(&engine).last(), Some(&("finish", second.clone())));
         host.shutdown(&audio);
         fs::remove_dir_all(dir).unwrap();
     }

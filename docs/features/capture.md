@@ -19,8 +19,7 @@ Turn it on                               // capture.gate
 
 hex capture start                        // capture.start; needs a listening Hex
 ├── Creates <support>/captures/<unix ms>.scrawl (owner-only) -> reply: recording + bundle path
-├── The previous capture still starting, writing, or cancelling -> refused `busy`
-│   (Scrawl's engine records the screen until its finish, so one at a time)
+├── Two stopped captures still writing -> refused `busy`
 ├── Copies the dictation timeline from now into a bounded sink (no second stream)
 ├── In the background: Scrawl's engine starts on the active display
 │   ├── Needs Screen Recording for Hex (or the terminal running it)
@@ -36,14 +35,16 @@ While it records                         // capture.audio
 Never on Hex's path                      // capture.isolation
 ├── No microphone, event tap, global shortcut, or model of its own
 ├── No ingest server (47777), delivery retries, retention or recovery workers
-├── No ingest token read or written; nothing written under ~/.config/scrawl or
-│   Scrawl's Application Support or logs (its log goes to Hex's tracing)
-└── Reads ~/.config/scrawl/config.json if present (autocrop, summary; see the plan)
+├── No ingest token read or written; nothing read or written under ~/.config/scrawl
+│   or Scrawl's Application Support or logs (its log goes to Hex's tracing)
+└── Settings from Hex, not ~/.config/scrawl/config.json: auto-crop on (display
+    captures), the agentContext summary format off; no Hex settings for them yet
 
 hex capture stop                         // capture.stop
 ├── Closes the sink (≤ 100 ms wait) -> reply: idle + the bundle path, at once
-└── In the background, on the capture-finish thread:
-    ├── 16 kHz audio with its start offset and gaps -> Capture::finish
+├── The screen recording, window log, and input stop at once (Capture::stop)
+└── In the background, on one capture-finish thread, one capture at a time:
+    ├── 16 kHz audio with its start offset and gaps -> SealedCapture::finish
     ├── Words: 30 s chunks, each a foreground job on the dictation engine's model,
     │   after queued dictation, before meeting chunks; waits while dictation records
     │   or transcribes; never interrupts a live stream
@@ -55,7 +56,7 @@ hex capture stop                         // capture.stop
     └── Transcription fails -> logged; the bundle has no words
 
 hex capture cancel -> engine cancelled, sink closed, bundle removed
-hex capture status -> recording (bundle, elapsed), a capture still writing, last outcome
+hex capture status -> recording (bundle, elapsed), bundles still writing, last outcome
 Hex quits mid-capture -> cancelled, bundle removed; captures still writing stop
 transcribing between chunks and keep their audio (shutdown waits ≤ 2 s)
 ```
@@ -99,8 +100,10 @@ Checks:
   `the_timeline_resamples_pads_gaps_and_ends_at_the_stop`,
   `a_pending_gap_and_a_stalled_tail_come_back_from_the_closed_sink`,
   `padding_past_the_length_limit_stays_bounded`,
-  `a_start_waits_until_the_previous_capture_is_written`,
-  `a_failed_start_raced_by_stop_never_wedges_later_starts`, and
+  `captures_finish_one_at_a_time_and_starts_wait_for_room`,
+  `a_capture_queued_behind_a_slow_finish_has_already_stopped`,
+  `a_failed_start_raced_by_stop_never_wedges_later_starts`,
+  `the_engine_config_comes_from_hex`, and
   `shutdown_cancels_the_recording_capture_and_waits_for_its_cleanup`.
 
 Observed 2026-10-25 on pro (M2 Max), before the real engine, with the

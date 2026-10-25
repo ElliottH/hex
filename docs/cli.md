@@ -106,9 +106,9 @@ values are never logged.
 `scrawl-capture` with `unsupported`; a debug Hex built without
 `--features capture`, or with the experiment off, refuses it with
 `feature-off`. `capture stop` replies at once with the bundle
-path while the words and files are written in the background, and `capture
-start` is refused with `busy` until that finishes; `capture status` lists the
-capture still writing and the last outcome. Every action is idempotent.
+path while the words and files are written in the background; `capture status`
+lists bundles still writing and the last outcome. A start while two captures
+are still writing is refused with `busy`. Every action is idempotent.
 
 A CLI-started meeting is the same recording the menu bar starts: the menu-bar
 state, the recording capsule, and Stop & Transcribe all apply to it.

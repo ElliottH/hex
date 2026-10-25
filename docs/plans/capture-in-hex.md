@@ -19,9 +19,11 @@ hex capture start|stop|cancel|status     // debug + `--features capture`; POST /
     │   └── capture-audio thread -> Engine::start(Start { t0_boot_ns, ActiveDisplay,
     │       AudioIn::External, bundle_dir }) (blocks: target lookup, ScreenCaptureKit)
     ├── capture-audio thread -> Timeline: 16 kHz, gaps padded, start offset kept
-    ├── start while the last capture is unfinished (starting, writing, cancelling) -> busy
+    ├── start while two stopped captures are still writing -> busy
     ├── stop -> close_capture_sink(through) (≤ 100 ms wait) -> reply with the bundle path
-    │   └── capture-finish thread -> Capture::finish(Some(RecordedAudio { start_offset_ms, gaps }))
+    │   ├── capture-audio thread -> Capture::stop: screen, window log, and input end now
+    │   └── capture-finish thread, one at a time, ≤ 2 waiting ->
+    │       SealedCapture::finish(Some(RecordedAudio { start_offset_ms, gaps }))
     │       ├── HexTranscriber -> parakeet::transcribe_with_words, 30 s chunks,
     │       │   each a foreground job on the dictation engine's loaded model
     │       ├── Scrawl writes recording.mp4, audio.wav, frames/, scrawl.json, summary.md
@@ -29,28 +31,29 @@ hex capture start|stop|cancel|status     // debug + `--features capture`; POST /
     └── cancel -> Capture::cancel, remove the bundle
 ```
 
-- Hex's seam is two small traits in `src/capture_host.rs`, `CaptureEngine`
-  and `Recording`, implemented for `scrawl_capture::capture::{Engine, Capture}`
-  so the host's tests run without a screen. Hex implements the crate's `Host`
-  (bounded `try_send` events, logs and metrics to tracing), `ConfigSource`
-  (`EngineConfig::default()`), and `Transcriber`.
+- Hex's seam is three small traits in `src/capture_host.rs`, `CaptureEngine`,
+  `Recording`, and `Sealed`, implemented for
+  `scrawl_capture::capture::{Engine, Capture, SealedCapture}` so the host's
+  tests run without a screen. Hex implements the crate's `Host` (bounded
+  `try_send` events, logs and metrics to tracing), `ConfigSource`, and
+  `Transcriber`.
+- `ConfigSource` is the engine's only settings source; nothing on Hex's path
+  reads `~/.config/scrawl/config.json`. Hex has no capture settings yet, so
+  `HexConfig` sets Scrawl's defaults deliberately: auto-crop on (display
+  captures) and the `agentContext` summary format off.
 - The engine is `Engine::new(..).with_resources(SharedResources::none())`;
   Hex never calls `install_shared_resources`, so no ingest server (47777),
-  delivery retries, or global shortcuts. `capture_host::prepare_on_main_thread`
-  runs on the main thread at startup, only with the experiment on, before any
-  engine exists: `scrawl_capture::log::set_sink` routes the crate's
-  process-wide log to tracing instead of `~/Library/Logs/Scrawl/scrawl.log`,
-  and it builds the crate's keyboard-layout map, because `Engine::new` reads
-  `ShortcutConfig::defaults()` (for shortcuts Hex never registers) and
-  building that map calls TIS, which Hex calls only on the main thread.
-  `CaptureHost::start` builds no host unless that ran.
-- One capture at a time, including its finish: a start while the previous
-  capture is starting, writing, or cancelling is refused `busy`. Scrawl's
-  engine stops recording the screen only inside `Capture::finish`, and every
-  capture shares the engine's `SharedCaptureTelemetry`, so a second capture
-  during a finish would record two screens and drain the first's input.
-  This narrows back to a short write queue once Scrawl splits stop from
-  finish (asked below).
+  delivery retries, or global shortcuts. `scrawl_capture::log::set_sink`
+  routes the crate's process-wide log to tracing instead of
+  `~/Library/Logs/Scrawl/scrawl.log`; `CaptureHost::start` installs it before
+  building the engine. `Engine::new` and `Engine::start` call no TIS/TSM
+  (layout-aware shortcuts are resolved only in `install_shared_resources`).
+- One capture records at a time. `stop` seals it and the capture-audio
+  thread calls `Capture::stop` at once, ending ScreenCaptureKit, the window
+  log, and input; the `SealedCapture` then waits for the one writer, at most
+  two at a time. With `SharedResources::none()` each capture has its own
+  input telemetry, so a capture recording while an earlier one is written
+  shares nothing with it.
 - Bundles go to `<support>/captures/<unix ms>.scrawl` (`hex-test` for
   `Hex Test.app`): Scrawl's own `scrawl.json` format, words in ms on the
   capture's clock.
@@ -257,24 +260,17 @@ Answered by `engine/split`: `Start::t0_boot_ns`, `RecordedAudio` with
 `start_offset_ms` and `gaps`, words relative to the first sample, and
 `SharedResources::none()` by default.
 
+Then answered at `86d7d6c`: `Capture::stop` returning a `SealedCapture`
+(the screen stops at seal, `finish` only writes), per-capture telemetry
+without global shortcuts, no TIS/TSM in `Engine::new`, and autocrop and
+`agentContext` from `ConfigSource`.
+
 Left from hosting the real engine:
 
-- The engine still reads `~/.config/scrawl/config.json` through the global
-  `handoff::engine_config()`, bypassing `ConfigSource`: autocrop settings
-  (Display captures), `sketch::summary_markdown`, and the agent-context
-  experiment check. Reads only, but Hex's settings should be the only source.
 - `scrawl_log` writes to Scrawl's log file unless a host installs a sink;
   make the sink part of `Engine` (or default to none in a library).
-- Recording the screen stops only inside `Capture::finish`, after the
-  transcriber, so a stopped capture holds ScreenCaptureKit until its words are
-  done. Split stop (end the stream, return the recording) from finish (write
-  the bundle), so Hex can queue writes and start the next capture.
-- `SharedCaptureTelemetry` is one per engine and drained by each capture;
-  overlapping captures steal each other's input. Make it per capture.
-- `Engine::new` calls `ShortcutConfig::defaults()`, which builds the
-  keyboard-layout map through TIS on whatever thread constructs the engine.
-  A host with `SharedResources::none()` needs no shortcuts; build them only
-  with the shortcut resource.
+  `log::set_sink`'s doc says `Engine::new` bridges to `Host::log` when no
+  sink is set, but at `86d7d6c` nothing does, so Hex sets the sink itself.
 - No audio-only target: every capture records the screen and needs Screen
   Recording. Hex's narration-only tests use a fake engine.
 - `Engine::start` blocks on target discovery and ScreenCaptureKit; Hex runs it

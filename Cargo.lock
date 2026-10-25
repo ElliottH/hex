@@ -4708,7 +4708,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scrawl-capture"
 version = "0.3.13"
-source = "git+https://github.com/kitlangton/scrawl?rev=ce741eeec55edff8097a080bf667597b6e7b3bcb#ce741eeec55edff8097a080bf667597b6e7b3bcb"
+source = "git+https://github.com/kitlangton/scrawl?rev=86d7d6c212ad5e464e0b3242194c34386bb4caf4#86d7d6c212ad5e464e0b3242194c34386bb4caf4"
 dependencies = [
  "ab_glyph",
  "anyhow",

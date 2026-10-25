@@ -73,7 +73,7 @@ ratatui = "0.30.2"
 realfft = "3.5.0"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
 screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
-scrawl-capture = { git = "https://github.com/kitlangton/scrawl", rev = "ce741eeec55edff8097a080bf667597b6e7b3bcb", default-features = false, features = ["screen", "helper"], optional = true }
+scrawl-capture = { git = "https://github.com/kitlangton/scrawl", rev = "86d7d6c212ad5e464e0b3242194c34386bb4caf4", default-features = false, features = ["screen", "helper"], optional = true }
 tokio = { version = "1.53.1", features = ["rt", "io-std"] }
 unicode-normalization = "0.1.25"
 
