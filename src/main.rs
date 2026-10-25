@@ -12,6 +12,8 @@ mod application_catalog;
 mod audio;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod calendar;
+#[cfg(target_os = "macos")]
+mod capture_host;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod command_grammar;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
@@ -279,6 +281,15 @@ enum Command {
         command: DevCommand,
     },
     #[cfg(debug_assertions)]
+    /// Start, stop, or cancel a Scrawl capture in the running Hex (the
+    /// `capture` experiment; debug builds only).
+    Capture {
+        #[arg(value_enum)]
+        action: control::ScrawlCaptureAction,
+        #[command(flatten)]
+        output: control::cli::Output,
+    },
+    #[cfg(debug_assertions)]
     /// Record, transcribe, and browse local meetings.
     Meeting {
         #[command(subcommand)]
@@ -375,6 +386,14 @@ enum DevCommand {
     Commands {
         #[arg(value_enum)]
         state: DevToggle,
+    },
+    #[cfg(debug_assertions)]
+    /// Run a capture headlessly, feeding WAV files in place of the
+    /// microphone, and write its bundle (needs the `capture` experiment).
+    CaptureReplay {
+        /// WAV files, joined with 300 ms of silence.
+        #[arg(required = true)]
+        wavs: Vec<PathBuf>,
     },
     /// Render offline audio through the Hex Microphone voice filter.
     VoiceFilter {
@@ -478,6 +497,11 @@ fn main() -> Result<()> {
             action: Some(transcript_cli::HistoryAction::Clear { yes, output }),
             ..
         })) => control::cli::finish(control::cli::clear_history(yes, output)),
+        #[cfg(debug_assertions)]
+        Some(Command::Capture { action, output }) => control::cli::finish(control::cli::send(
+            control::ControlCommand::ScrawlCapture { action },
+            output,
+        )),
         Some(Command::Commands { command }) => match command {
             CommandsCommand::Enable { yes, output } => {
                 control::cli::finish(control::cli::commands(
@@ -694,6 +718,8 @@ fn main() -> Result<()> {
         } => {
             unreachable!("handled before startup")
         }
+        #[cfg(debug_assertions)]
+        Command::Capture { .. } => unreachable!("handled before startup"),
         Command::Commands {
             command: CommandsCommand::Init,
         } => {
@@ -715,6 +741,13 @@ fn main() -> Result<()> {
                     DevCommand::Commands { state } => DeveloperCommand::SetCommandsEnabled {
                         enabled: matches!(state, DevToggle::On),
                     },
+                    DevCommand::CaptureReplay { wavs } => {
+                        experiments::log_launch();
+                        app_settings::AppSettings::load()?;
+                        let bundle = capture_host::replay(&wavs)?;
+                        println!("{}", bundle.display());
+                        return Ok(());
+                    }
                     DevCommand::VoiceFilter { .. } => unreachable!("handled before startup"),
                 };
                 let reply = local_api::call_developer(&command)?;

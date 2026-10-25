@@ -65,8 +65,10 @@ substitute for source inspection or a second roadmap.
 - `pause_segmenter`: pure 16 kHz pause detection that cuts meeting audio into
   rolling transcription chunks.
 - `dictation_audio`: the authoritative microphone timeline, lazy stream
-  lifecycle, recording owner, exact shortcut boundaries, recovery handoff, and
-  disposable bounded command audio projection.
+  lifecycle, recording owner, exact shortcut boundaries, recovery handoff,
+  disposable bounded command audio projection, and the bounded capture sink
+  (`open_capture_sink`/`close_capture_sink`) that copies the same timeline to
+  a Scrawl capture.
 - `recording_environment`: serialized RAII ownership of idle-sleep prevention,
   output muting, and supported media-player pause/resume behavior.
 - `dictation_processor`: the one OpenCode client and ordered processing policy
@@ -82,7 +84,9 @@ substitute for source inspection or a second roadmap.
   object.
 - `parakeet`: the strict-Metal `transcribe.cpp` adapter plus the dictation
   worker that hands clips to the transcription engine and runs bounded,
-  ordered processing, output, paste, last-result, and meeting-delta work.
+  ordered processing, output, paste, last-result, and meeting-delta work, plus
+  `transcribe_with_words`, the capture path's word-timestamped foreground
+  requests on the same engine.
 - `apple_speech`: the Swift `SpeechAnalyzer` bridge with per-locale support
   checks, asset reservation, and batch transcription.
 - `transcription`, `transcription_benchmark`: runtime selection, transactional
@@ -318,7 +322,14 @@ substitute for source inspection or a second roadmap.
   read as nothing chosen.
 - `experiments`: the compiled list of unsupported experiments and the
   launch snapshot of `HEX_EXPERIMENTS` and `~/.config/hex/experiments`
-  behind `experiments::enabled` and `hex experiments`.
+  behind `experiments::enabled` and `hex experiments`. Developer-only
+  experiments (`capture`) exist only in debug builds.
+- `capture_host`: Scrawl's capture engine hosted in Hex (the debug-only
+  `capture` experiment, `docs/plans/capture-in-hex.md`): the engine seam
+  (`Host`, `Transcriber`, `ConfigSource`, `Engine`, `Capture`,
+  `RecordedAudio`, `InputSink`) with a stand-in engine until the
+  `scrawl-capture` crate exists, the listener-owned `CaptureHost` behind
+  `hex capture`, its 16 kHz gap-padded timeline, and the bundle writer.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
 - `process_exit`: how the macOS app ends. Every quit path (menu, `hex quit`
@@ -576,6 +587,19 @@ CoreAudio formats, AppleScript details, or event serialization.
   total deadline. Failures record `notes_error` and leave the Markdown
   untouched. Notes never rename the file and rewrite only the heading HEX wrote
   and the `<!-- hex:notes -->` block.
+- Captures (the `capture` experiment) exist only in debug builds; a release
+  build does not know the experiment and refuses `scrawl-capture` with
+  `unsupported`. With the experiment off, the listener builds no capture host:
+  no sink, thread, bundle folder, or work. A capture never opens a
+  microphone, installs a tap, or loads a model: it copies the dictation
+  timeline through a bounded sink that records a gap rather than block, so a
+  stalled capture never stalls dictation, and while a sink is open the
+  release-while-idle close waits for it. One capture engine per process, one
+  capture at a time. Its words are foreground requests on the dictation
+  engine's loaded model in 30 s chunks: after dictation already sent, before
+  meeting chunks, never a second model, and dictation output is unchanged.
+  `stop` replies at once; the bundle is written on the capture's own thread,
+  and quitting cancels a recording capture.
 - `hex mcp` is read-only and available in release builds regardless of the
   Meetings opt-in. It dispatches before process logging, the instance lock,
   GUI, or permission setup; never writes, recovers, or indexes on disk inside

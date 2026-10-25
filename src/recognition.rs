@@ -115,6 +115,11 @@ pub enum RecognitionControl {
     CaptureStatus {
         reply: SyncSender<CaptureSnapshot>,
     },
+    /// `hex capture` (the `capture` experiment, debug builds only).
+    ScrawlCapture {
+        action: crate::control::ScrawlCaptureAction,
+        reply: SyncSender<ControlReply>,
+    },
     StartDictation {
         source: String,
         owner_token: String,
@@ -372,6 +377,7 @@ pub fn listen(
         microphone_policy.release_while_idle,
         dictation_worker.engine(),
     )?;
+    let mut capture_host = crate::capture_host::CaptureHost::start(dictation_worker.engine());
     let (mut transcription_revision, _) = crate::app_settings::transcription_selection();
     let mut smart_turn = crate::smart_turn::SmartTurn::start(project_root);
     let mut action_executor: Option<ActionExecutor> = None;
@@ -470,6 +476,17 @@ pub fn listen(
                         if let Some(reply) = reply {
                             let _ = reply.send(answer);
                         }
+                    }
+                    RecognitionControl::ScrawlCapture { action, reply } => {
+                        let answer = match capture_host.as_mut() {
+                            Some(host) => host.control(action, &input),
+                            None => ControlReply::error(
+                                "feature-off",
+                                "captures need the `capture` experiment in a debug build; \
+                                 run `hex experiments enable capture` and restart Hex",
+                            ),
+                        };
+                        let _ = reply.send(answer);
                     }
                     RecognitionControl::CaptureStatus { reply } => {
                         let recording = if programmatic.is_some() {
@@ -1571,6 +1588,9 @@ pub fn listen(
         }
     }
 
+    if let Some(host) = &mut capture_host {
+        host.shutdown(&input);
+    }
     events.emit(&VoiceEvent::State {
         timestamp_ms: now_ms(),
         state: VoiceState::Stopping,

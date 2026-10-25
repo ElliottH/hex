@@ -680,6 +680,84 @@ fn process_job_text(
     }
 }
 
+/// The longest audio the capture path hands the model at once; longer
+/// captures are transcribed in consecutive chunks with their times offset.
+const WORD_CHUNK_SAMPLES: usize = 30 * 16_000;
+
+/// Transcribes a capture's 16 kHz audio with word timestamps on the engine's
+/// warm model (the `capture` experiment). Each chunk is its own foreground
+/// request: it runs after the dictation already sent and before meeting
+/// chunks, a dictation sent meanwhile runs before the next chunk, and no
+/// second copy of the model is loaded. A dictation live stream open when a
+/// chunk arrives is closed, so that dictation transcribes its whole clip.
+pub fn transcribe_with_words(
+    engine: &TranscriptionEngine,
+    samples: Vec<f32>,
+) -> Result<crate::transcription::Transcript> {
+    if samples.is_empty() {
+        return Ok(crate::transcription::Transcript::default());
+    }
+    let (_, selection) = crate::app_settings::transcription_selection();
+    transcribe_in_chunks(samples, WORD_CHUNK_SAMPLES, |chunk| {
+        let selection = selection.clone();
+        let (send, transcript) = mpsc::sync_channel(1);
+        let offline: crate::transcription_engine::Offline = Box::new(move |model, samples| {
+            let _busy = DictationInference::begin();
+            let transcriber = model
+                .activate(&selection)
+                .map_err(|error| format!("{error:#}"))?;
+            let result = transcriber
+                .transcribe_segments(samples)
+                .map_err(|error| format!("{error:#}"))?;
+            let text = result.text.clone();
+            let _ = send.send(result);
+            Ok(text)
+        });
+        engine
+            .finish_with(None, chunk, offline)?
+            .wait()
+            .map_err(|error| eyre!(error))?;
+        transcript
+            .try_recv()
+            .map_err(|_| eyre!("the transcription returned no words"))
+    })
+}
+
+/// Transcribes `samples` in chunks of at most `chunk_samples`, offsetting
+/// each chunk's segment and word times by where it starts.
+fn transcribe_in_chunks(
+    samples: Vec<f32>,
+    chunk_samples: usize,
+    mut transcribe: impl FnMut(Vec<f32>) -> Result<crate::transcription::Transcript>,
+) -> Result<crate::transcription::Transcript> {
+    use crate::transcription::{Transcript, TranscriptSegment};
+    let shift = |spans: Vec<TranscriptSegment>, offset_ms: i64| {
+        spans.into_iter().filter_map(move |span| {
+            let text = span.text.trim();
+            let start_ms = span.start_ms.max(0);
+            (!text.is_empty()).then(|| TranscriptSegment {
+                start_ms: start_ms + offset_ms,
+                end_ms: span.end_ms.max(start_ms) + offset_ms,
+                text: text.to_string(),
+            })
+        })
+    };
+    let mut merged = Transcript::default();
+    let mut texts = Vec::new();
+    for (index, chunk) in samples.chunks(chunk_samples.max(1)).enumerate() {
+        let offset_ms = (index * chunk_samples / TRANSCRIPTION_SAMPLES_PER_MS) as i64;
+        let result = transcribe(chunk.to_vec())?;
+        let text = result.text.trim();
+        if !text.is_empty() {
+            texts.push(text.to_string());
+        }
+        merged.segments.extend(shift(result.segments, offset_ms));
+        merged.words.extend(shift(result.words, offset_ms));
+    }
+    merged.text = texts.join(" ");
+    Ok(merged)
+}
+
 /// Waits for each accepted job's transcript in submission order, then hands
 /// it to processing. The engine thread runs the inference itself.
 fn run_inference_worker(
@@ -1895,6 +1973,92 @@ mod tests {
             assert_eq!(streamed.source, Source::Stream);
             assert!(differences * 20 <= reference.len().max(20));
         }
+    }
+
+    #[test]
+    fn chunked_word_transcription_keeps_word_times_across_chunks() {
+        use crate::transcription::{Transcript, TranscriptSegment};
+        let span = |start_ms, end_ms, text: &str| TranscriptSegment {
+            start_ms,
+            end_ms,
+            text: text.into(),
+        };
+        let mut calls = Vec::new();
+        let merged = transcribe_in_chunks(vec![0.0; 16_000 * 25], 16_000 * 10, |chunk| {
+            calls.push(chunk.len());
+            let chunk_index = calls.len();
+            Ok(Transcript {
+                text: format!(" part {chunk_index} "),
+                segments: vec![span(0, 900, " part ")],
+                words: vec![
+                    span(-5, 400, " part"),
+                    span(450, 300, "two"),
+                    span(500, 600, "  "),
+                ],
+            })
+        })
+        .unwrap();
+        assert_eq!(calls, [160_000, 160_000, 80_000]);
+        assert_eq!(merged.text, "part 1 part 2 part 3");
+        let words = merged
+            .words
+            .iter()
+            .map(|word| (word.start_ms, word.end_ms, word.text.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words,
+            [
+                (0, 400, "part"),
+                (450, 450, "two"),
+                (10_000, 10_400, "part"),
+                (10_450, 10_450, "two"),
+                (20_000, 20_400, "part"),
+                (20_450, 20_450, "two"),
+            ]
+        );
+        assert_eq!(merged.segments[2].start_ms, 20_000);
+    }
+
+    #[test]
+    fn word_transcription_is_a_foreground_request_on_the_shared_engine() {
+        use crate::transcription_engine::Command as EngineCommand;
+        let (engine, commands) = TranscriptionEngine::for_test();
+        assert!(
+            transcribe_with_words(&engine, Vec::new())
+                .unwrap()
+                .words
+                .is_empty()
+        );
+        assert!(
+            commands.try_recv().is_err(),
+            "silence never reaches the model"
+        );
+
+        let engine = Arc::new(engine);
+        let request = {
+            let engine = engine.clone();
+            thread::spawn(move || {
+                transcribe_with_words(&engine, vec![0.1; WORD_CHUNK_SAMPLES + 1_600])
+            })
+        };
+        let command = commands
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        // A finish without a stream: after dictation already sent, and
+        // counted as a request so meeting chunks yield to it.
+        assert!(matches!(
+            command,
+            EngineCommand::Finish { stream: None, ref clip, .. } if clip.len() == WORD_CHUNK_SAMPLES
+        ));
+        // The next chunk waits for this one, so a dictation sent meanwhile
+        // runs first.
+        assert!(
+            commands
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err()
+        );
+        drop(command);
+        assert!(request.join().unwrap().is_err());
     }
 
     #[test]

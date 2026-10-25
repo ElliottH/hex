@@ -51,6 +51,7 @@ hex
 │   ├── list [--json]              every term and its "sounds like" spellings
 │   ├── add <term> [--sounds-like a,b]  add a term, or new spellings to an existing one
 │   └── remove <term>              any case
+├── capture start|stop|cancel|status  debug builds with the `capture` experiment (features/capture.md)
 ├── experiments list|enable|disable  edit ~/.config/hex/experiments; no running Hex (features/experiments.md)
 ├── check-for-updates              check for an update now
 ├── launch-at-login [on|off]       report or change Launch at Login (installed Hex.app only)
@@ -100,6 +101,13 @@ environment, so Hex passes each `HEX_*` variable to `open --env`. `start`
 takes them from the shell that runs it, `restart` from the running Hex. The
 values are never logged.
 
+`capture` exists only in debug builds and drives the
+[Captures](features/capture.md) experiment. A release Hex refuses
+`scrawl-capture` with `unsupported`; a debug Hex with the experiment off
+refuses it with `feature-off`. `capture stop` replies at once with the bundle
+path while the words and files are written in the background; `capture status`
+lists bundles still writing and the last outcome. Every action is idempotent.
+
 A CLI-started meeting is the same recording the menu bar starts: the menu-bar
 state, the recording capsule, and Stop & Transcribe all apply to it.
 `meetings record` replies once the recording has started (or after 8 s);
@@ -134,14 +142,14 @@ offer it.
   `504 control-timeout`. Bad or missing tokens get `401` like every other
   route.
 
-## Wire format (version 1)
+## Wire format (version 2)
 
 Requests are flat objects tagged by `command` (kebab-case):
 
 ```json
-{"version": 1, "command": "meeting-record", "title": "Design sync"}
-{"version": 1, "command": "settings-set", "key": "sound_effects", "value": "off", "confirm": false}
-{"version": 1, "command": "dictation", "action": "start"}
+{"version": 2, "command": "meeting-record", "title": "Design sync"}
+{"version": 2, "command": "settings-set", "key": "sound_effects", "value": "off", "confirm": false}
+{"version": 2, "command": "dictation", "action": "start"}
 ```
 
 ```ts
@@ -155,6 +163,7 @@ model-list | model-use {model, language?} | model-install {model, language?} | m
 window-show {pane?} | window-hide
 history-clear | check-for-updates | launch-at-login {enabled?}
 vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
+scrawl-capture {action}                          action: start | stop | cancel | status; debug builds
 ```
 
 Optional fields may be left out. `hex start` and `hex logs` are local and have
@@ -164,15 +173,18 @@ no wire form. `history-clear` has no confirmation field: the CLI asks for
 Replies are tagged by `status`:
 
 ```json
-{"version": 1, "status": "done", "message": "Recording “Design sync”; …", "changed": true}
-{"version": 1, "status": "error", "code": "feature-off", "message": "Meetings are off; …"}
-{"version": 1, "status": "settings", "settings": [{"key": "sound_effects", "value": true,
+{"version": 2, "status": "done", "message": "Recording “Design sync”; …", "changed": true}
+{"version": 2, "status": "error", "code": "feature-off", "message": "Meetings are off; …"}
+{"version": 2, "status": "settings", "settings": [{"key": "sound_effects", "value": true,
   "kind": "bool", "writable": true, "about": "Play recording, cancellation, and error tones"}]}
-{"version": 1, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
+{"version": 2, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
   "languages": ["en", "…"], "size": "…", "installed": true, "selected": true,
   "streams": true, "supports_recognition_hints": false}]}
-{"version": 1, "status": "vocabulary", "entries": [{"term": "OpenCode",
+{"version": 2, "status": "vocabulary", "entries": [{"term": "OpenCode",
   "sounds_like": ["open code"]}, {"term": "Rune"}]}
+{"version": 2, "status": "scrawl-capture", "changed": true, "state": "idle",
+  "bundle": "…/captures/1792933491953.capture", "elapsed_ms": null,
+  "finishing": ["…/captures/1792933491953.capture"], "last": null}
 ```
 
 `done.changed` is `false` when the command found things already so ("Already
@@ -184,7 +196,7 @@ recording", "The window isn't open"). Setting `kind` is one of `bool`,
 
 ```json
 {
-  "version": 1, "status": "status",
+  "version": 2, "status": "status",
   "app_version": "2.3.1", "pid": 31708, "memory_footprint_bytes": 412000000,
   "listener": {"running": true, "status": "Listening"},
   "capture": {"state": "idle", "recording": null, "pending_jobs": 0},
@@ -288,7 +300,7 @@ fails when a new persisted setting has no key here.
 
 ## Compatibility
 
-`CONTROL_VERSION` is 1. A change that breaks a request or reply shape
+`CONTROL_VERSION` is 2. A change that breaks a request or reply shape
 increments it; adding a command, an optional request field, or a reply field
 does not. A `hex` from a different version gets `version-mismatch`; use the
 `hex` inside the running Hex.app, or restart Hex after updating.
