@@ -97,7 +97,7 @@ pub(crate) enum Command {
     /// An offline run that waits for an open live stream to end instead of
     /// interrupting it, such as a capture's word chunk. Like a finish it is
     /// a dictation request, so background work sent before it yields.
-    #[cfg_attr(not(all(debug_assertions, target_os = "macos")), allow(dead_code))]
+    #[cfg_attr(not(hex_capture), allow(dead_code))]
     Foreground {
         clip: Vec<f32>,
         offline: Offline,
@@ -456,7 +456,7 @@ impl TranscriptionEngine {
     /// Transcribes `clip` offline after every command already sent, without
     /// ever interrupting a live stream: one open when it arrives finishes
     /// first. Background work sent before it yields, as to a finish.
-    #[cfg_attr(not(all(debug_assertions, target_os = "macos")), allow(dead_code))]
+    #[cfg_attr(not(hex_capture), allow(dead_code))]
     pub fn foreground(&self, clip: Vec<f32>, offline: Offline) -> Result<PendingTranscript> {
         self.request(clip.len(), None, |job| Command::Foreground {
             clip,

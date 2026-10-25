@@ -682,11 +682,11 @@ fn process_job_text(
 
 /// The longest audio the capture path hands the model at once; longer
 /// captures are transcribed in consecutive chunks with their times offset.
-#[cfg(debug_assertions)]
+#[cfg(hex_capture)]
 const WORD_CHUNK_SAMPLES: usize = 30 * 16_000;
 /// How long a capture chunk waits for dictation to go idle before it is
 /// queued anyway; the engine still never runs it inside a live stream.
-#[cfg(debug_assertions)]
+#[cfg(hex_capture)]
 const WORD_DICTATION_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Transcribes a capture's 16 kHz audio with word timestamps on the engine's
@@ -696,7 +696,7 @@ const WORD_DICTATION_WAIT: std::time::Duration = std::time::Duration::from_secs(
 /// meeting chunks, and never inside a dictation live stream, which finishes
 /// first. No second copy of the model is loaded, and only a weak reference
 /// to the engine is kept between chunks. Quitting stops it between chunks.
-#[cfg(debug_assertions)]
+#[cfg(hex_capture)]
 pub fn transcribe_with_words(
     engine: &std::sync::Weak<TranscriptionEngine>,
     samples: Vec<f32>,
@@ -732,7 +732,7 @@ pub fn transcribe_with_words(
     })
 }
 
-#[cfg(debug_assertions)]
+#[cfg(hex_capture)]
 fn wait_for_dictation_idle() -> Result<()> {
     let started = Instant::now();
     while dictation_busy()
@@ -749,7 +749,7 @@ fn wait_for_dictation_idle() -> Result<()> {
 
 /// Transcribes `samples` in chunks of at most `chunk_samples`, offsetting
 /// each chunk's segment and word times by where it starts.
-#[cfg(debug_assertions)]
+#[cfg(hex_capture)]
 fn transcribe_in_chunks(
     samples: Vec<f32>,
     chunk_samples: usize,
@@ -2000,7 +2000,7 @@ mod tests {
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(hex_capture)]
     #[test]
     fn chunked_word_transcription_keeps_word_times_across_chunks() {
         use crate::transcription::{Transcript, TranscriptSegment};
@@ -2045,7 +2045,7 @@ mod tests {
         assert_eq!(merged.segments[2].start_ms, 20_000);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(hex_capture)]
     #[test]
     fn word_transcription_is_a_foreground_request_on_the_shared_engine() {
         use crate::transcription_engine::Command as EngineCommand;

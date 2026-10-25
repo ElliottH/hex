@@ -77,7 +77,7 @@ impl Experiment {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Capture => {
-                "Developer only: Scrawl-style capture with word timestamps (`hex capture`, macOS)."
+                "Developer only: Scrawl's capture engine (`hex capture`, macOS, `--features capture`)."
             }
             Self::LiveChapters => "Chapter a meeting's transcript live while it records.",
             Self::SmartTurn => {

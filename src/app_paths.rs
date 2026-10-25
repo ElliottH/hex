@@ -339,7 +339,7 @@ pub fn logs_dir() -> Result<PathBuf> {
 }
 
 /// Where the `capture` experiment writes its bundles.
-#[cfg(all(debug_assertions, target_os = "macos"))]
+#[cfg(hex_capture)]
 pub fn captures_dir() -> Result<PathBuf> {
     Ok(support_dir()?.join("captures"))
 }

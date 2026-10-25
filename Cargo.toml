@@ -18,6 +18,9 @@ embed-resource = "3"
 
 [features]
 onnx-benchmark = ["dep:transcribe-rs"]
+# The debug-only `capture` experiment's engine (Scrawl's `scrawl-capture`, macOS
+# only). Off by default so release builds never compile it or its Swift helper.
+capture = ["dep:scrawl-capture", "dep:anyhow"]
 
 [profile.moonshine-lab]
 inherits = "release"
@@ -49,6 +52,7 @@ unicode-segmentation = "1.13.3"
 url = "2.5.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+anyhow = { version = "1.0.104", optional = true }
 arboard = { version = "3.6.1", default-features = false }
 block2 = "0.6.2"
 core-graphics-types = "0.1.3"
@@ -69,6 +73,7 @@ ratatui = "0.30.2"
 realfft = "3.5.0"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
 screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
+scrawl-capture = { git = "https://github.com/kitlangton/scrawl", rev = "ce741eeec55edff8097a080bf667597b6e7b3bcb", default-features = false, features = ["screen", "helper"], optional = true }
 tokio = { version = "1.53.1", features = ["rt", "io-std"] }
 unicode-normalization = "0.1.25"
 

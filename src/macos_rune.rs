@@ -235,6 +235,8 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     }
     shutdown.store(false, Ordering::Relaxed);
     crate::keyboard::initialize_layout()?;
+    #[cfg(hex_capture)]
+    crate::capture_host::prepare_on_main_thread();
     crate::updater::finish_on_launch();
     let _ = UPDATER.set(crate::updater::Updater::start());
     let settings = AppSettings::load()?;

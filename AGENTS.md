@@ -327,12 +327,13 @@ substitute for source inspection or a second roadmap.
   launch snapshot of `HEX_EXPERIMENTS` and `~/.config/hex/experiments`
   behind `experiments::enabled` and `hex experiments`. Developer-only
   experiments (`capture`) exist only in debug builds.
-- `capture_host`: Scrawl's capture engine hosted in Hex (the debug-only
-  `capture` experiment, `docs/plans/capture-in-hex.md`): the engine seam
-  (`Host`, `Transcriber`, `ConfigSource`, `Engine`, `Capture`,
-  `RecordedAudio`, `InputSink`) with a stand-in engine until the
-  `scrawl-capture` crate exists, the listener-owned `CaptureHost` behind
-  `hex capture`, its 16 kHz gap-padded timeline, and the bundle writer.
+- `capture_host`: Scrawl's capture engine (the `scrawl-capture` crate)
+  hosted in Hex for the debug-only `capture` experiment
+  (`docs/plans/capture-in-hex.md`), compiled only as `cfg(hex_capture)`: a
+  macOS debug build with the `capture` Cargo feature. Hex's `Host`,
+  `ConfigSource`, and Parakeet `Transcriber` for the engine, the
+  listener-owned `CaptureHost` behind `hex capture`, and its 16 kHz
+  gap-padded timeline handed to the engine as `AudioIn::External`.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
 - `process_exit`: how the macOS app ends. Every quit path (menu, `hex quit`
@@ -591,20 +592,28 @@ CoreAudio formats, AppleScript details, or event serialization.
   untouched. Notes never rename the file and rewrite only the heading HEX wrote
   and the `<!-- hex:notes -->` block.
 - Captures (the `capture` experiment) exist only in debug builds; a release
-  build does not know the experiment and refuses `scrawl-capture` with
-  `unsupported`. With the experiment off, the listener builds no capture host:
-  no sink, thread, bundle folder, or work. A capture never opens a
+  build does not know the experiment, never compiles `scrawl-capture`, and
+  refuses `scrawl-capture` with `unsupported`. Linux, Windows, and Nix never
+  compile it either. With the experiment off, the listener builds no capture
+  host: no engine, sink, thread, bundle folder, or work. Scrawl's engine
+  records the screen, runs with `SharedResources::none()` (Hex never calls
+  `install_shared_resources`: no ingest server, ingest token, delivery
+  retries, or global shortcuts), logs to tracing, and writes only to Hex's
+  captures folder. A capture never opens a
   microphone, installs a tap, or loads a model: it copies the dictation
   timeline through a bounded sink that records a gap rather than block, so a
   stalled capture never stalls dictation, and while a sink is open the
   release-while-idle close waits for it. One capture engine per process, one
-  capture at a time. Its words are foreground requests on the dictation
-  engine's loaded model in 30 s chunks: after dictation already sent, before
-  meeting chunks, never a second model, and dictation output is unchanged. A
-  chunk waits while dictation captures or transcribes and never interrupts a
-  live stream; the engine holds it until the stream ends. `stop` replies at
-  once; one thread writes stopped captures one at a time, at most two wait,
-  and a start beyond that is refused `busy`. Bundles are owner-only. Quitting
+  capture at a time, including its finish: a start while the previous capture
+  is starting, writing, or cancelling is refused `busy`. Its words are
+  foreground requests on the dictation engine's loaded model in 30 s chunks:
+  after dictation already sent, before meeting chunks, never a second model,
+  and dictation output is unchanged. A chunk waits while dictation captures or
+  transcribes and never interrupts a live stream; the engine holds it until
+  the stream ends. `stop` replies at once and one thread writes the capture.
+  The engine's process-wide log sink and keyboard-layout map (TIS) are
+  claimed on the main thread before any engine exists. Bundles are
+  owner-only. Quitting
   cancels a recording capture, stops transcription between chunks, and waits
   at most 2 s for capture threads.
 - `hex mcp` is read-only and available in release builds regardless of the
@@ -670,6 +679,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   crates.io; never run `cargo publish`. Hex depends on `rune`, `rune-kit`, and
   `rune-theme-opencode` at one pinned Git rev in `Cargo.toml`; every pin bump
   must also update `cargoLock.outputHashes."rune-0.0.1"` in `nix/package.nix`
+  (likewise `"scrawl-capture-0.3.13"` for the `scrawl-capture` rev)
   and keep `windows` 0.62.2 for `gpu-allocator` in `Cargo.lock`.
 - At the start of each work round, bump Hex's Rune pin to Rune's `dev` head:
   read the `## dev` section of Rune's `CHANGELOG.md` since the current pin,

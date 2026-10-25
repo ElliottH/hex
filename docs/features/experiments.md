@@ -32,7 +32,7 @@ The known experiments are compiled into
 [experiments.rs](../../src/experiments.rs):
 
 - `capture`: Scrawl's capture engine hosted in Hex (macOS, **debug builds
-  only**; see [Captures](capture.md)). A release build does not know the name:
+  only**, built with `--features capture`; see [Captures](capture.md)). A release build does not know the name:
   `list` omits it, `enable` rejects it, and a source naming it is ignored. The
   gate is where the work starts: the listener builds no capture host, so there
   is no sink, thread, or bundle folder while it is off. Check:

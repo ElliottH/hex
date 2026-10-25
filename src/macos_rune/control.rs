@@ -109,7 +109,7 @@ impl Pump {
                 });
                 None
             }
-            #[cfg(debug_assertions)]
+            #[cfg(hex_capture)]
             ControlCommand::ScrawlCapture { action } => {
                 background(reply, move || {
                     listener_ready(&runtime)?;
@@ -120,6 +120,11 @@ impl Pump {
                 });
                 None
             }
+            #[cfg(all(debug_assertions, not(hex_capture)))]
+            ControlCommand::ScrawlCapture { .. } => Some(ControlReply::error(
+                "feature-off",
+                "this build has no capture engine; build Hex with `--features capture`",
+            )),
             #[cfg(not(debug_assertions))]
             ControlCommand::ScrawlCapture { .. } => Some(ControlReply::error(
                 "unsupported",

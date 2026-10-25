@@ -103,10 +103,12 @@ values are never logged.
 
 `capture` exists only in debug builds and drives the
 [Captures](features/capture.md) experiment. A release Hex refuses
-`scrawl-capture` with `unsupported`; a debug Hex with the experiment off
-refuses it with `feature-off`. `capture stop` replies at once with the bundle
-path while the words and files are written in the background; `capture status`
-lists bundles still writing and the last outcome. Every action is idempotent.
+`scrawl-capture` with `unsupported`; a debug Hex built without
+`--features capture`, or with the experiment off, refuses it with
+`feature-off`. `capture stop` replies at once with the bundle
+path while the words and files are written in the background, and `capture
+start` is refused with `busy` until that finishes; `capture status` lists the
+capture still writing and the last outcome. Every action is idempotent.
 
 A CLI-started meeting is the same recording the menu bar starts: the menu-bar
 state, the recording capsule, and Stop & Transcribe all apply to it.
@@ -183,8 +185,8 @@ Replies are tagged by `status`:
 {"version": 1, "status": "vocabulary", "entries": [{"term": "OpenCode",
   "sounds_like": ["open code"]}, {"term": "Rune"}]}
 {"version": 1, "status": "scrawl-capture", "changed": true, "state": "idle",
-  "bundle": "…/captures/1792933491953.capture", "elapsed_ms": null,
-  "finishing": ["…/captures/1792933491953.capture"], "last": null}
+  "bundle": "…/captures/1792933491953.scrawl", "elapsed_ms": null,
+  "finishing": ["…/captures/1792933491953.scrawl"], "last": null}
 ```
 
 `done.changed` is `false` when the command found things already so ("Already
