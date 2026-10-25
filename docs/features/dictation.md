@@ -75,6 +75,13 @@ Checks in [suppression.rs](../../src/suppression.rs):
 `callback_press_reaches_intentional_hold_on_the_audio_clock`.
 These cover constructed callback/reducer timing, not physical event delivery.
 
+A chord discard logs its cause to `process.log` (`dictation press discarded as
+a chord`, or `dictation press dropped` when HID evidence overtook the press)
+with the key code, the milliseconds after the press, and for HID evidence the
+raw timestamp, how it was read, and its arrival delay. The `discarded` event in
+`live.ndjson` carries the same cause as `reason`: `key`, `hid-key`, `mouse`, or
+`extra-modifier`. Short taps have no `reason`.
+
 **Fixed October 22, 2026:** a global shortcut registered with Carbon (Spaceman's
 Option-1 to Option-0 workspace keys, for example) consumes its key before the
 session taps, so Hex saw only the Option press and release. Holding Option past

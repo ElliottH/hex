@@ -1538,6 +1538,7 @@ mod tests {
                 phase,
                 text: String::new(),
                 processing: None,
+                reason: None,
             })
             .unwrap()
                 + "\n"

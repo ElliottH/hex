@@ -82,12 +82,14 @@ impl ActivityPane {
                     latency_ms: 910,
                     fallback: None,
                 }),
+                reason: None,
             },
             VoiceEvent::Dictation {
                 timestamp_ms: at(6),
                 phase: DictationPhase::Transcribing,
                 text: String::new(),
                 processing: None,
+                reason: None,
             },
             VoiceEvent::Transcript {
                 timestamp_ms: at(6),
@@ -100,6 +102,7 @@ impl ActivityPane {
                 phase: DictationPhase::Started,
                 text: String::new(),
                 processing: None,
+                reason: None,
             },
             VoiceEvent::Context {
                 timestamp_ms: at(12),

@@ -28,7 +28,9 @@ use crate::parakeet::{
 };
 use crate::recording_environment::RecordingEnvironmentController;
 use crate::spoken_text::normalize;
-use crate::suppression::{DictationHotkey, HotkeyAction, InputActivity, InputEvent, InputMonitor};
+use crate::suppression::{
+    DictationHotkey, DiscardCause, HotkeyAction, InputActivity, InputEvent, InputMonitor,
+};
 
 const UPDATE_INTERVAL: Duration = Duration::from_millis(200);
 const ACTIVATION_STABILITY_WINDOW: Duration = Duration::from_millis(750);
@@ -1101,7 +1103,7 @@ pub fn listen(
                     Some(_) => {
                         edit_context = None;
                         end_capture(
-                            CaptureEnd::Discarded,
+                            CaptureEnd::Discarded(action.discard_cause()),
                             &input,
                             &mut recognizer,
                             mode,
@@ -1782,13 +1784,13 @@ fn handle_hotkey_action(
             release_while_idle,
         )
         .map(drop),
-        HotkeyAction::Discard | HotkeyAction::Cancel => {
+        HotkeyAction::Discard(_) | HotkeyAction::Cancel => {
             feedback::retract_start();
             end_capture(
                 if matches!(action, HotkeyAction::Cancel) {
                     CaptureEnd::Cancelled
                 } else {
-                    CaptureEnd::Discarded
+                    CaptureEnd::Discarded(action.discard_cause())
                 },
                 dictation,
                 recognizer,
@@ -2314,13 +2316,13 @@ fn handle_edit_hotkey_action(
             indicator,
         )?
         .is_some()),
-        HotkeyAction::Discard | HotkeyAction::Cancel => {
+        HotkeyAction::Discard(_) | HotkeyAction::Cancel => {
             *edit_context = None;
             end_capture(
                 if matches!(action, HotkeyAction::Cancel) {
                     CaptureEnd::Cancelled
                 } else {
-                    CaptureEnd::Discarded
+                    CaptureEnd::Discarded(action.discard_cause())
                 },
                 dictation,
                 recognizer,
@@ -2415,7 +2417,7 @@ fn fail_capture(
 #[derive(Clone, Copy)]
 enum CaptureEnd {
     /// The capture never became a dictation; no feedback tone.
-    Discarded,
+    Discarded(Option<DiscardCause>),
     /// The user cancelled an intentional capture; plays the cancel tone.
     Cancelled,
 }
@@ -2443,20 +2445,17 @@ fn report_capture_end(
     events: &mut EventLog,
     indicator: Option<&DictationIndicatorSender>,
 ) -> Result<()> {
-    let (phase, indicator_event) = match end {
-        CaptureEnd::Discarded => (
-            DictationPhase::Discarded,
-            DictationIndicatorEvent::Discarded,
-        ),
+    let indicator_event = match end {
+        CaptureEnd::Discarded(cause) => {
+            events.discarded_dictation(cause.map(DiscardCause::as_str))?;
+            DictationIndicatorEvent::Discarded
+        }
         CaptureEnd::Cancelled => {
             feedback::play(Tone::Cancel);
-            (
-                DictationPhase::Cancelled,
-                DictationIndicatorEvent::Cancelled,
-            )
+            events.dictation(DictationPhase::Cancelled, "")?;
+            DictationIndicatorEvent::Cancelled
         }
     };
-    events.dictation(phase, "")?;
     if let Some(indicator) = indicator {
         indicator.send(indicator_event);
     }
@@ -3361,7 +3360,7 @@ mod tests {
         assert!(!pending_voice_action_is_intentional(
             started_at,
             started_at + Duration::from_secs(1),
-            HotkeyAction::Discard,
+            HotkeyAction::Discard(DiscardCause::Key),
         ));
     }
 

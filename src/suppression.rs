@@ -96,9 +96,57 @@ pub enum InputEvent {
     /// `Key` events, when they arrive, remain the source of key state.
     PhysicalKeyDown {
         code: u16,
+        timing: HidTiming,
     },
     MouseDown,
     TapDisabled,
+}
+
+/// How a HID-tap timestamp was read, kept only for diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HidTiming {
+    pub raw: u64,
+    pub clock: HidClock,
+    /// When the tap callback ran.
+    pub received_at: CaptureInstant,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HidClock {
+    MachTicks,
+    Nanos,
+    /// Neither reading was recent, so the event took its arrival time.
+    Arrival,
+}
+
+impl HidClock {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::MachTicks => "mach",
+            Self::Nanos => "nanos",
+            Self::Arrival => "arrival",
+        }
+    }
+}
+
+/// What ended a press as a chord before it became a dictation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiscardCause {
+    Key,
+    HidKey,
+    Mouse,
+    ExtraModifier,
+}
+
+impl DiscardCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Key => "key",
+            Self::HidKey => "hid-key",
+            Self::Mouse => "mouse",
+            Self::ExtraModifier => "extra-modifier",
+        }
+    }
 }
 
 impl InputEvent {
@@ -473,10 +521,19 @@ unsafe extern "C" fn physical_event_callback(
     }
     // SAFETY: CoreGraphics supplied a valid event.
     let raw = unsafe { CGEventGetTimestamp(event) };
+    let received_at = CaptureInstant::now();
+    let (at, clock) = physical_event_instant(raw, received_at);
     send_input(
         context,
-        InputEvent::PhysicalKeyDown { code },
-        physical_event_instant(raw, CaptureInstant::now()),
+        InputEvent::PhysicalKeyDown {
+            code,
+            timing: HidTiming {
+                raw,
+                clock,
+                received_at,
+            },
+        },
+        at,
     );
     event
 }
@@ -498,18 +555,23 @@ fn is_chord_evidence(code: u16, flags: u64, hotkeys: RuntimeHotkeys) -> bool {
 
 /// HID-tap timestamps arrive as Mach ticks on Apple Silicon and as
 /// nanoseconds on some events; keep whichever reading is recent, else `now`.
-fn physical_event_instant(raw: u64, now: CaptureInstant) -> CaptureInstant {
+fn physical_event_instant(raw: u64, now: CaptureInstant) -> (CaptureInstant, HidClock) {
     const RECENT: Duration = Duration::from_secs(5);
     [
-        CaptureInstant::from_mach_ticks(raw),
-        CaptureInstant::from_nanos(raw),
+        (CaptureInstant::from_mach_ticks(raw), HidClock::MachTicks),
+        (CaptureInstant::from_nanos(raw), HidClock::Nanos),
     ]
     .into_iter()
-    .find(|at| {
+    .find(|(at, _)| {
         now.checked_duration_since(*at)
             .is_some_and(|age| age <= RECENT)
     })
-    .unwrap_or(now)
+    .unwrap_or((now, HidClock::Arrival))
+}
+
+/// Signed milliseconds from `from` to `to`.
+fn signed_ms(to: CaptureInstant, from: CaptureInstant) -> f64 {
+    (i128::from(to.as_nanos()) - i128::from(from.as_nanos())) as f64 / 1e6
 }
 
 unsafe extern "C" fn event_callback(
@@ -722,10 +784,19 @@ fn paste_action_with_meetings(
 pub enum HotkeyAction {
     Start,
     Finish,
-    Discard,
+    Discard(DiscardCause),
     Cancel,
     PasteLast,
     PasteMeeting,
+}
+
+impl HotkeyAction {
+    pub fn discard_cause(self) -> Option<DiscardCause> {
+        match self {
+            Self::Discard(cause) => Some(cause),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -781,7 +852,7 @@ pub struct DictationHotkey {
     // The timestamp prevents delayed events from restoring invalidated evidence.
     function_modifier: (CaptureInstant, Option<bool>),
     // Recent HID key presses, which another app's shortcut may have hidden.
-    physical_key_downs: VecDeque<CaptureInstant>,
+    physical_key_downs: VecDeque<(CaptureInstant, u16, HidTiming)>,
 }
 
 impl DictationHotkey {
@@ -1049,6 +1120,36 @@ impl DictationHotkey {
         })
     }
 
+    fn shortcut_name(&self) -> &'static str {
+        // Only the Voice Action hotkey is built without paste actions.
+        if self.paste_actions_enabled {
+            "dictation"
+        } else {
+            "voice-action"
+        }
+    }
+
+    fn log_hid(
+        &self,
+        message: &'static str,
+        code: u16,
+        at: CaptureInstant,
+        timing: HidTiming,
+        press_at: CaptureInstant,
+    ) {
+        tracing::info!(
+            shortcut = self.shortcut_name(),
+            cause = DiscardCause::HidKey.as_str(),
+            key_code = code,
+            after_press_ms = signed_ms(at, press_at),
+            hid_raw = timing.raw,
+            hid_clock = timing.clock.as_str(),
+            hid_received_after_press_ms = signed_ms(timing.received_at, press_at),
+            hid_arrival_delay_ms = signed_ms(timing.received_at, at),
+            "{message}"
+        );
+    }
+
     pub fn process(&mut self, event: InputEvent, now: CaptureInstant) -> Option<HotkeyAction> {
         self.stale_keys_neutral_since = None;
         if matches!(event, InputEvent::TapDisabled) {
@@ -1097,13 +1198,13 @@ impl DictationHotkey {
         }
 
         let trigger_pressed = self.trigger_pressed(event, fresh_key_down);
-        if let InputEvent::PhysicalKeyDown { code } = event
+        if let InputEvent::PhysicalKeyDown { code, timing } = event
             && self.binding.key_code != Some(code)
         {
             if self.physical_key_downs.len() == PHYSICAL_KEY_DOWN_HISTORY {
                 self.physical_key_downs.pop_front();
             }
-            self.physical_key_downs.push_back(now);
+            self.physical_key_downs.push_back((now, code, timing));
         }
         // HID evidence can overtake the session event of the press it follows.
         if trigger_pressed
@@ -1111,11 +1212,18 @@ impl DictationHotkey {
                 self.state,
                 State::Idle { .. } | State::AwaitingSecondTap { .. }
             )
-            && self.physical_key_downs.iter().any(|at| {
+            && let Some(&(at, code, timing)) = self.physical_key_downs.iter().find(|(at, ..)| {
                 at.checked_duration_since(now)
                     .is_some_and(|after| after > Duration::ZERO && after < MINIMUM_HOLD_DURATION)
             })
         {
+            self.log_hid(
+                "dictation press dropped: HID key evidence overtook it",
+                code,
+                at,
+                timing,
+                now,
+            );
             self.state = State::Dirty;
             return None;
         }
@@ -1139,7 +1247,7 @@ impl DictationHotkey {
                 code,
                 down: true,
                 ..
-            } | InputEvent::PhysicalKeyDown { code } if self.binding.key_code != Some(code)
+            } | InputEvent::PhysicalKeyDown { code, .. } if self.binding.key_code != Some(code)
         );
         let extra_modifiers = flags.is_some_and(|flags| {
             self.binding.required_modifiers_down(flags) && !self.binding.exact_modifiers(flags)
@@ -1237,7 +1345,45 @@ impl DictationHotkey {
                             && !self.toggle)) =>
             {
                 self.state = State::Dirty;
-                Some(HotkeyAction::Discard)
+                let cause = match event {
+                    InputEvent::PhysicalKeyDown { code, timing } => {
+                        self.log_hid(
+                            "dictation press discarded as a chord",
+                            code,
+                            now,
+                            timing,
+                            started_at,
+                        );
+                        DiscardCause::HidKey
+                    }
+                    InputEvent::Key { code, .. } if unrelated_key_down => {
+                        tracing::info!(
+                            shortcut = self.shortcut_name(),
+                            cause = DiscardCause::Key.as_str(),
+                            key_code = code,
+                            after_press_ms = signed_ms(now, started_at),
+                            "dictation press discarded as a chord"
+                        );
+                        DiscardCause::Key
+                    }
+                    _ => {
+                        let cause = if matches!(event, InputEvent::MouseDown) {
+                            DiscardCause::Mouse
+                        } else {
+                            DiscardCause::ExtraModifier
+                        };
+                        tracing::info!(
+                            shortcut = self.shortcut_name(),
+                            cause = cause.as_str(),
+                            modifier_flags =
+                                format_args!("{:#x}", flags.unwrap_or(0) & HOTKEY_MODIFIERS_MASK),
+                            after_press_ms = signed_ms(now, started_at),
+                            "dictation press discarded as a chord"
+                        );
+                        cause
+                    }
+                };
+                Some(HotkeyAction::Discard(cause))
             }
             State::Dirty
                 if flags.is_some_and(|flags| flags & HOTKEY_MODIFIERS_MASK == 0)
@@ -1893,7 +2039,7 @@ mod tests {
                         (
                             50,
                             OPTION_KEY_MASK | SHIFT_KEY_MASK,
-                            Some(HotkeyAction::Discard),
+                            Some(HotkeyAction::Discard(DiscardCause::ExtraModifier)),
                         ),
                         (100, SHIFT_KEY_MASK, None),
                     ]);
@@ -1973,7 +2119,13 @@ mod tests {
                 .into_iter()
                 .filter_map(|edge| hotkey.process(edge.event, edge.capture_at))
                 .collect::<Vec<_>>();
-            assert_eq!(actions, [HotkeyAction::Start, HotkeyAction::Discard]);
+            assert_eq!(
+                actions,
+                [
+                    HotkeyAction::Start,
+                    HotkeyAction::Discard(DiscardCause::ExtraModifier)
+                ]
+            );
             assert!(matches!(hotkey.state, State::Dirty));
             assert!(hotkey.pressed_keys.is_empty());
 
@@ -2316,7 +2468,7 @@ mod tests {
                 InputEvent::Flags(OPTION_KEY_MASK | SHIFT_KEY_MASK),
                 now + Duration::from_millis(50)
             ),
-            Some(HotkeyAction::Discard)
+            Some(HotkeyAction::Discard(DiscardCause::ExtraModifier))
         );
         hotkey.disarm_pending_gesture();
         let later = now + Duration::from_secs(1);
@@ -3064,7 +3216,7 @@ mod tests {
         let chord = InputEvent::Flags(OPTION_KEY_MASK | COMMAND_KEY_MASK);
         assert_eq!(
             dictation.process(chord, now + Duration::from_millis(40)),
-            Some(HotkeyAction::Discard)
+            Some(HotkeyAction::Discard(DiscardCause::ExtraModifier))
         );
         assert_eq!(
             edit.process(chord, now + Duration::from_millis(40)),
@@ -3260,7 +3412,7 @@ mod tests {
                 },
                 now + Duration::from_millis(100),
             ),
-            Some(HotkeyAction::Discard)
+            Some(HotkeyAction::Discard(DiscardCause::Key))
         );
         assert_eq!(
             hotkey.process(
@@ -3287,6 +3439,17 @@ mod tests {
         InputEvent::Key { code, down, flags }
     }
 
+    fn hid_key(code: u16) -> InputEvent {
+        InputEvent::PhysicalKeyDown {
+            code,
+            timing: HidTiming {
+                raw: 0,
+                clock: HidClock::Nanos,
+                received_at: CaptureInstant::from_nanos(0),
+            },
+        }
+    }
+
     // Another app's global Option-1 hides the digit from the session tap, so
     // the HID press is the only sign of the chord.
     #[test]
@@ -3299,11 +3462,8 @@ mod tests {
                 Some(HotkeyAction::Start)
             );
             assert_eq!(
-                hotkey.process(
-                    InputEvent::PhysicalKeyDown { code: key },
-                    now + Duration::from_millis(chord_ms)
-                ),
-                Some(HotkeyAction::Discard),
+                hotkey.process(hid_key(key), now + Duration::from_millis(chord_ms)),
+                Some(HotkeyAction::Discard(DiscardCause::HidKey)),
                 "key {key} at {chord_ms} ms"
             );
             for release_ms in [chord_ms + 50, 1_500] {
@@ -3337,8 +3497,8 @@ mod tests {
             hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
             let chord = now + Duration::from_millis(60);
             assert_eq!(
-                hotkey.process(InputEvent::PhysicalKeyDown { code: 18 }, chord),
-                Some(HotkeyAction::Discard)
+                hotkey.process(hid_key(18), chord),
+                Some(HotkeyAction::Discard(DiscardCause::HidKey))
             );
             assert_eq!(
                 hotkey.process(option_key(18, true, OPTION_KEY_MASK), chord),
@@ -3375,10 +3535,10 @@ mod tests {
         let mut actions = Vec::new();
         for (at_ms, event) in [
             (0, InputEvent::Flags(OPTION_KEY_MASK)),
-            (40, InputEvent::PhysicalKeyDown { code: 18 }),
+            (40, hid_key(18)),
             (160, InputEvent::Flags(NO_FLAGS)),
             (280, InputEvent::Flags(OPTION_KEY_MASK)),
-            (310, InputEvent::PhysicalKeyDown { code: 19 }),
+            (310, hid_key(19)),
             (400, InputEvent::Flags(NO_FLAGS)),
         ] {
             actions.extend(hotkey.process(event, now + Duration::from_millis(at_ms)));
@@ -3387,9 +3547,9 @@ mod tests {
             actions,
             [
                 HotkeyAction::Start,
-                HotkeyAction::Discard,
+                HotkeyAction::Discard(DiscardCause::HidKey),
                 HotkeyAction::Start,
-                HotkeyAction::Discard
+                HotkeyAction::Discard(DiscardCause::HidKey)
             ]
         );
         assert!(!hotkey.is_recording());
@@ -3400,10 +3560,7 @@ mod tests {
         let now = capture_time();
         let mut hotkey = test_hotkey(false, now);
         let chord = now + Duration::from_millis(15);
-        assert_eq!(
-            hotkey.process(InputEvent::PhysicalKeyDown { code: 18 }, chord),
-            None
-        );
+        assert_eq!(hotkey.process(hid_key(18), chord), None);
         assert_eq!(
             hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now),
             None
@@ -3420,10 +3577,7 @@ mod tests {
         // A later overtaking press must not hide the early one.
         let mut hotkey = test_hotkey(false, now);
         for chord_ms in [20, 400] {
-            hotkey.process(
-                InputEvent::PhysicalKeyDown { code: 18 },
-                now + Duration::from_millis(chord_ms),
-            );
+            hotkey.process(hid_key(18), now + Duration::from_millis(chord_ms));
         }
         assert_eq!(
             hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now),
@@ -3435,7 +3589,7 @@ mod tests {
         hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
         assert_eq!(
             hotkey.process(
-                InputEvent::PhysicalKeyDown { code: 0 },
+                hid_key(0),
                 now.checked_sub(Duration::from_millis(5)).unwrap()
             ),
             None
@@ -3445,13 +3599,64 @@ mod tests {
         // A key pressed before the shortcut does not block it.
         let mut hotkey = test_hotkey(false, now);
         let later = now + Duration::from_secs(2);
-        hotkey.process(InputEvent::PhysicalKeyDown { code: 0 }, later);
+        hotkey.process(hid_key(0), later);
         assert_eq!(
             hotkey.process(
                 InputEvent::Flags(OPTION_KEY_MASK),
                 later + Duration::from_millis(5)
             ),
             Some(HotkeyAction::Start)
+        );
+    }
+
+    // Kit's Studio, 2026-10-25: holds discarded ~20 ms after the press. Suspect:
+    // the HID press of a key typed just before Option, delivered late in Mach
+    // ticks, reads as a chord. The conversion and the guard keep it a hold.
+    #[test]
+    fn late_hid_evidence_in_mach_ticks_of_a_key_before_the_press_keeps_the_hold() {
+        let now = CaptureInstant::now();
+        let press = now.checked_sub(Duration::from_millis(100)).unwrap();
+        for typed_before_ms in [1, 5, 30] {
+            let typed = press
+                .checked_sub(Duration::from_millis(typed_before_ms))
+                .unwrap();
+            for delivered_after_press_ms in [1, 20, 60] {
+                let received = press + Duration::from_millis(delivered_after_press_ms);
+                let raw = mach_ticks_for(typed);
+                let (at, clock) = physical_event_instant(raw, received);
+                assert_eq!(clock, HidClock::MachTicks);
+                assert!(signed_ms(at, typed).abs() < 0.001);
+                let mut hotkey = test_hotkey(false, press);
+                assert_eq!(
+                    hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), press),
+                    Some(HotkeyAction::Start)
+                );
+                let event = InputEvent::PhysicalKeyDown {
+                    code: 0,
+                    timing: HidTiming {
+                        raw,
+                        clock,
+                        received_at: received,
+                    },
+                };
+                assert_eq!(hotkey.process(event, at), None);
+                assert!(hotkey.is_recording());
+                assert_eq!(
+                    hotkey.process(InputEvent::Flags(NO_FLAGS), press + Duration::from_secs(1)),
+                    Some(HotkeyAction::Finish)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn early_mouse_down_discards_with_its_cause() {
+        let now = capture_time();
+        let mut hotkey = test_hotkey(false, now);
+        hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        assert_eq!(
+            hotkey.process(InputEvent::MouseDown, now + Duration::from_millis(20)),
+            Some(HotkeyAction::Discard(DiscardCause::Mouse))
         );
     }
 
@@ -3464,13 +3669,17 @@ mod tests {
                 hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
                 let chord = now + Duration::from_millis(chord_ms);
                 let event = if hidden {
-                    InputEvent::PhysicalKeyDown { code: key }
+                    hid_key(key)
                 } else {
                     option_key(key, true, OPTION_KEY_MASK)
                 };
                 assert_eq!(
                     hotkey.process(event, chord),
-                    Some(HotkeyAction::Discard),
+                    Some(HotkeyAction::Discard(if hidden {
+                        DiscardCause::HidKey
+                    } else {
+                        DiscardCause::Key
+                    })),
                     "key {key} hidden={hidden} at {chord_ms} ms"
                 );
                 if !hidden {
@@ -3492,10 +3701,7 @@ mod tests {
         hotkey.set_toggle(true);
         hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
         assert_eq!(
-            hotkey.process(
-                InputEvent::PhysicalKeyDown { code: 18 },
-                now + Duration::from_millis(500)
-            ),
+            hotkey.process(hid_key(18), now + Duration::from_millis(500)),
             None
         );
         assert!(hotkey.is_recording());
@@ -3531,10 +3737,7 @@ mod tests {
         );
         assert!(hotkey.is_recording());
         assert_eq!(
-            hotkey.process(
-                InputEvent::PhysicalKeyDown { code: 18 },
-                now + Duration::from_millis(400)
-            ),
+            hotkey.process(hid_key(18), now + Duration::from_millis(400)),
             None
         );
         assert!(hotkey.is_recording());
@@ -3566,11 +3769,24 @@ mod tests {
     fn physical_event_instants_accept_mach_ticks_or_nanoseconds() {
         let now = CaptureInstant::now();
         let earlier = now.checked_sub(Duration::from_millis(8)).unwrap();
-        assert_eq!(physical_event_instant(earlier.as_nanos(), now), earlier);
-        let converted = physical_event_instant(mach_ticks_for(earlier), now);
+        let (converted, clock) = physical_event_instant(earlier.as_nanos(), now);
+        assert_eq!(converted, earlier);
+        // With a 1:1 timebase (Intel) both readings agree and Mach wins.
+        let unit_timebase =
+            CaptureInstant::from_mach_ticks(1_000) == CaptureInstant::from_nanos(1_000);
+        assert_eq!(
+            clock,
+            if unit_timebase {
+                HidClock::MachTicks
+            } else {
+                HidClock::Nanos
+            }
+        );
+        let (converted, clock) = physical_event_instant(mach_ticks_for(earlier), now);
+        assert_eq!(clock, HidClock::MachTicks);
         assert!(now.duration_since(converted) < Duration::from_millis(9));
         assert!(converted <= now);
-        assert_eq!(physical_event_instant(1, now), now);
+        assert_eq!(physical_event_instant(1, now), (now, HidClock::Arrival));
     }
 
     fn mach_ticks_for(instant: CaptureInstant) -> u64 {
@@ -3747,7 +3963,7 @@ mod tests {
             if crate::DEVELOPER_FEATURES_ENABLED {
                 Some(HotkeyAction::PasteMeeting)
             } else {
-                Some(HotkeyAction::Discard)
+                Some(HotkeyAction::Discard(DiscardCause::Key))
             }
         );
         assert!(!hotkey.is_recording());
