@@ -67,14 +67,13 @@ pub enum LoginItemRequest {
     OpenSettings,
 }
 
-#[cfg(target_os = "macos")]
+#[derive(Debug)]
 pub struct LoginItemFailure {
     pub status: Option<LoginItemStatus>,
     pub message: String,
 }
 
 /// A request's outcome.
-#[cfg(target_os = "macos")]
 pub type LoginItemResult = Result<LoginItemStatus, LoginItemFailure>;
 
 /// One worker per Settings window. Polling never queues behind an active request;
@@ -151,6 +150,11 @@ impl LoginItemWorker {
         Ok(())
     }
 
+    /// No request is running: the last outcome answered every action asked.
+    pub fn idle(&self) -> bool {
+        self.active.is_none()
+    }
+
     /// The finished request's outcome, once it has one.
     pub fn poll(&mut self) -> Result<Option<LoginItemResult>, String> {
         let result = match self.responses.try_recv() {
@@ -210,12 +214,14 @@ mod tests {
         }
         release.send(()).unwrap();
         assert!(completed(&mut worker).is_ok());
+        assert!(!worker.idle(), "the last action runs next");
         assert_eq!(
             observed.recv_timeout(Duration::from_secs(5)).unwrap(),
             (LoginItemRequest::SetEnabled(false), thread)
         );
         release.send(()).unwrap();
         assert!(completed(&mut worker).is_ok());
+        assert!(worker.idle());
         worker.request(LoginItemRequest::OpenSettings).unwrap();
         assert_eq!(
             observed.recv_timeout(Duration::from_secs(5)).unwrap(),

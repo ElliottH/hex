@@ -37,7 +37,7 @@ use crate::calendar::{AccessAnswer, CalendarAccess, CalendarSnapshot};
 use crate::commands::{CommandInfo, CommandScope};
 use crate::desktop_host::DesktopAction;
 use crate::desktop_i18n::tr;
-use crate::login_item::{LoginItemRequest, LoginItemWorker};
+use crate::login_item::{LoginItemFailure, LoginItemRequest, LoginItemWorker};
 use crate::macos_rune::RuntimeHandle;
 pub(super) use crate::macos_rune::{Request, ShortcutTarget};
 use crate::onboarding::{Input, Observation, PermissionAction, PermissionKind, PermissionState};
@@ -491,17 +491,20 @@ impl MacHost {
             folder_choice: None,
             calendar: CalendarFeed::default(),
         };
-        host.request_login(LoginItemRequest::Status);
+        let _ = host.request_login(LoginItemRequest::Status);
         host
     }
 
-    fn request_login(&mut self, request: LoginItemRequest) {
-        if let Some(login) = &mut self.login {
-            match login.request(request) {
-                Ok(()) => self.login_checking = true,
-                Err(error) => tracing::warn!(%error, "could not ask for the login item"),
-            }
-        }
+    fn request_login(&mut self, request: LoginItemRequest) -> Result<(), String> {
+        let login = self
+            .login
+            .as_mut()
+            .ok_or("Launch at login is unavailable")?;
+        login.request(request).inspect_err(|error| {
+            tracing::warn!(%error, "could not ask for the login item");
+        })?;
+        self.login_checking = true;
+        Ok(())
     }
 
     fn runtime(&self) -> Result<RuntimeHandle, String> {
@@ -574,10 +577,10 @@ impl NativeHost for MacHost {
                 }
             }
             PlatformRequest::SetLaunchAtLogin(enabled) => {
-                self.request_login(LoginItemRequest::SetEnabled(enabled));
+                self.request_login(LoginItemRequest::SetEnabled(enabled))?;
             }
             PlatformRequest::OpenLoginItemSettings => {
-                self.request_login(LoginItemRequest::OpenSettings);
+                let _ = self.request_login(LoginItemRequest::OpenSettings);
             }
             PlatformRequest::InstallHexMicrophone => crate::hex_microphone::install_driver_async(),
             PlatformRequest::UninstallHexMicrophone => {
@@ -638,27 +641,22 @@ impl NativeHost for MacHost {
         let mut changed = false;
         if let Some(login) = &mut self.login {
             match login.poll() {
-                Ok(Some(result)) => {
-                    self.login_checking = false;
-                    match result {
-                        Ok(status) => {
-                            state.login_item = Some(status);
-                            state.login_item_error = None;
-                        }
-                        Err(failure) => {
-                            if failure.status.is_some() {
-                                state.login_item = failure.status;
-                            }
-                            state.login_item_error = Some(failure.message);
-                        }
-                    }
+                Ok(Some(answer)) => {
+                    // A later click may already be running behind this answer.
+                    let settled = login.idle();
+                    self.login_checking = !settled;
+                    state.login_item_answered(answer, settled);
                     changed = true;
                 }
                 Ok(None) => {}
-                Err(error) => {
+                Err(message) => {
                     self.login = None;
                     self.login_checking = false;
-                    state.login_item_error = Some(error);
+                    let failure = LoginItemFailure {
+                        status: None,
+                        message,
+                    };
+                    state.login_item_answered(Err(failure), true);
                     changed = true;
                 }
             }

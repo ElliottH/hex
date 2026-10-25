@@ -580,7 +580,7 @@ pub(super) fn launch_at_login_rows(ui: &Ui, p: Paint) -> Vec<El> {
             ButtonKind::Secondary,
             |ui: &mut Ui, _| ui.ask(PlatformRequest::OpenLoginItemSettings),
         ),
-        Some(status) => row_switch(p, status == LoginItemStatus::Enabled),
+        Some(_) => row_switch(p, ui.platform.login_item_on()),
     };
     let mut row = setting_row(p, "launch-at-login", tr("Launch at login"), None, control);
     if matches!(
@@ -593,7 +593,7 @@ pub(super) fn launch_at_login_rows(ui: &Ui, p: Paint) -> Vec<El> {
             .hover(p.k.c.hover)
             .press(p.k.c.pressed)
             .on_press(|ui: &mut Ui| {
-                let enabled = ui.platform.login_item != Some(LoginItemStatus::Enabled);
+                let enabled = !ui.platform.login_item_on();
                 ui.ask(PlatformRequest::SetLaunchAtLogin(enabled));
             });
     }

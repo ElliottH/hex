@@ -86,6 +86,129 @@ fn launch_at_login_asks_the_login_item_and_needs_approval_first() {
     assert_eq!(asked(&rt), [PlatformRequest::OpenLoginItemSettings]);
 }
 
+/// The macOS login item switch's state before macOS has answered a click.
+fn login_item(status: LoginItemStatus) -> platform::PlatformState {
+    let mut state = platform::PlatformState::new(platform::Capabilities::MACOS);
+    state.login_item = Some(status);
+    state
+}
+
+fn login_failed(status: Option<LoginItemStatus>) -> crate::login_item::LoginItemResult {
+    Err(crate::login_item::LoginItemFailure {
+        status,
+        message: "Operation not permitted".into(),
+    })
+}
+
+#[test]
+fn login_item_switch_moves_on_click_and_stays_when_macos_agrees() {
+    let mut state = login_item(LoginItemStatus::Disabled);
+    state.request_login_item(true);
+    assert!(
+        state.login_item_on(),
+        "the thumb moves before macOS answers"
+    );
+    assert_eq!(state.login_item, Some(LoginItemStatus::Disabled));
+    state.login_item_answered(Ok(LoginItemStatus::Enabled), true);
+    assert!(state.login_item_on());
+    assert_eq!(state.login_item_requested, None);
+    assert_eq!(state.login_item, Some(LoginItemStatus::Enabled));
+    assert_eq!(state.login_item_error, None);
+}
+
+#[test]
+fn login_item_switch_springs_back_beside_the_error_when_macos_refuses() {
+    let mut state = login_item(LoginItemStatus::Disabled);
+    state.request_login_item(true);
+    state.login_item_answered(login_failed(Some(LoginItemStatus::Disabled)), true);
+    assert!(!state.login_item_on());
+    assert_eq!(
+        state.login_item_error.as_deref(),
+        Some("Operation not permitted")
+    );
+    // A failure that could not read the status keeps the last known one.
+    state.request_login_item(true);
+    assert_eq!(state.login_item_error, None, "a new click clears the error");
+    state.login_item_answered(login_failed(None), true);
+    assert!(!state.login_item_on());
+    assert!(state.login_item_error.is_some());
+    // macOS answering with the other state, without an error, also springs back.
+    state.request_login_item(true);
+    state.login_item_answered(Ok(LoginItemStatus::Disabled), true);
+    assert!(!state.login_item_on());
+}
+
+#[test]
+fn login_item_status_answer_never_flips_a_pending_click() {
+    let mut state = login_item(LoginItemStatus::Disabled);
+    // The status check from opening Settings was still running at the click.
+    state.request_login_item(true);
+    state.login_item_answered(Ok(LoginItemStatus::Disabled), false);
+    assert!(state.login_item_on());
+    // Even a failed check behind the click leaves it, with no stale error.
+    state.login_item_answered(login_failed(Some(LoginItemStatus::Disabled)), false);
+    assert!(state.login_item_on());
+    assert_eq!(state.login_item_error, None);
+    state.login_item_answered(Ok(LoginItemStatus::Enabled), true);
+    assert!(state.login_item_on());
+    // Without a click, a status answer is simply adopted.
+    state.login_item_answered(Ok(LoginItemStatus::Disabled), false);
+    assert!(!state.login_item_on());
+}
+
+#[test]
+fn login_item_double_click_keeps_the_last_click() {
+    let mut state = login_item(LoginItemStatus::Disabled);
+    state.request_login_item(true);
+    state.request_login_item(false);
+    assert!(!state.login_item_on());
+    // The first request's answer arrives while the second still runs.
+    state.login_item_answered(Ok(LoginItemStatus::Enabled), false);
+    assert!(!state.login_item_on(), "the last click wins");
+    assert_eq!(state.login_item, Some(LoginItemStatus::Enabled));
+    state.login_item_answered(Ok(LoginItemStatus::Disabled), true);
+    assert!(!state.login_item_on());
+    assert_eq!(state.login_item_requested, None);
+}
+
+/// A native host whose login item answers only when the test says so.
+struct SlowLoginItem(std::rc::Rc<std::cell::RefCell<Vec<PlatformRequest>>>);
+
+impl platform::NativeHost for SlowLoginItem {
+    fn send(&mut self, request: PlatformRequest) -> Result<(), String> {
+        self.0.borrow_mut().push(request);
+        Ok(())
+    }
+    fn poll(&mut self, _: &mut platform::PlatformState) -> bool {
+        false
+    }
+    fn meetings(&mut self) -> Option<Result<Vec<meetings::Meeting>, String>> {
+        None
+    }
+    fn tour_inputs(&mut self, _: bool) -> Vec<Input> {
+        Vec::new()
+    }
+}
+
+#[test]
+fn login_item_row_moves_its_switch_before_macos_answers() {
+    let mut rt = runtime("mac-settings", true, (980.0, 2400.0));
+    let sent = std::rc::Rc::default();
+    rt.state.host = PlatformHost::Native(Box::new(SlowLoginItem(std::rc::Rc::clone(&sent))));
+    tap(&mut rt, "launch-at-login");
+    tap(&mut rt, "launch-at-login");
+    tap(&mut rt, "launch-at-login");
+    assert_eq!(
+        *sent.borrow(),
+        [true, false, true].map(PlatformRequest::SetLaunchAtLogin)
+    );
+    assert!(rt.state.platform.login_item_on());
+    assert_eq!(
+        rt.state.platform.login_item,
+        Some(LoginItemStatus::Disabled)
+    );
+}
+
 #[test]
 fn missing_permissions_lead_settings_and_open_the_guide() {
     let mut rt = runtime("mac-settings-permissions", true, (980.0, 2400.0));

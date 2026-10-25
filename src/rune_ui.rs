@@ -696,11 +696,22 @@ impl Ui {
                     self.platform.set_login_item(Some(result));
                     return;
                 }
-                // macOS stays the source of truth; previews flip at once.
+                // Previews flip at once.
                 platform::PlatformHost::Fixture(_) => {
                     self.platform.set_login_item(Some(Ok(*enabled)));
                 }
-                platform::PlatformHost::Native(_) => {}
+                // The switch moves now; macOS's answer settles it.
+                platform::PlatformHost::Native(_) => {
+                    self.platform.request_login_item(*enabled);
+                    if let Err(message) = self.host.send(request) {
+                        let failure = crate::login_item::LoginItemFailure {
+                            status: None,
+                            message,
+                        };
+                        self.platform.login_item_answered(Err(failure), true);
+                    }
+                    return;
+                }
             },
             _ => {}
         }

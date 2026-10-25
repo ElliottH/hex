@@ -15,7 +15,7 @@ use crate::commands::CommandScope;
 use crate::hex_microphone::{
     DemoPlaybackTrack, DemoSnapshot, DemoSourceKind, HexMicrophoneStatus, TunedFilterConfig,
 };
-use crate::login_item::LoginItemStatus;
+use crate::login_item::{LoginItemResult, LoginItemStatus};
 use crate::onboarding::{Input, PermissionAction, PermissionKind, PermissionState, SetupStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,6 +266,10 @@ pub(super) struct PlatformState {
     pub(super) login_item: Option<LoginItemStatus>,
     pub(super) login_item_checking: bool,
     pub(super) login_item_error: Option<String>,
+    /// The last Launch at login click while macOS registers or unregisters
+    /// the login item, so the switch moves at once. Memory only: macOS's
+    /// answer replaces it.
+    pub(super) login_item_requested: Option<bool>,
     pub(super) hex_microphone: Option<HexMicrophoneStatus>,
     pub(super) command_model: CommandModel,
     pub(super) commands: Vec<CatalogCommand>,
@@ -380,6 +384,7 @@ impl PlatformState {
             login_item: None,
             login_item_checking: false,
             login_item_error: None,
+            login_item_requested: None,
             hex_microphone: None,
             command_model: CommandModel::Disabled,
             commands: Vec::new(),
@@ -432,6 +437,45 @@ impl PlatformState {
                 self.login_item.get_or_insert(LoginItemStatus::Disabled);
                 self.login_item_error = Some(error);
             }
+        }
+    }
+
+    /// Whether the Launch at login switch shows on: the pending click, else
+    /// what macOS last reported.
+    pub(super) fn login_item_on(&self) -> bool {
+        self.login_item_requested
+            .unwrap_or(self.login_item == Some(LoginItemStatus::Enabled))
+    }
+
+    /// The switch was pressed: it shows `enabled` while the host asks macOS.
+    pub(super) fn request_login_item(&mut self, enabled: bool) {
+        self.login_item_requested = Some(enabled);
+        self.login_item_error = None;
+    }
+
+    /// Adopts the login item worker's answer. `settled` is false while a
+    /// later click still waits behind it: the switch keeps that click and
+    /// only the reported status is remembered. Once settled, the switch
+    /// shows macOS's state, springing back beside the error if the request
+    /// failed or macOS kept the other state.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(super) fn login_item_answered(&mut self, answer: LoginItemResult, settled: bool) {
+        let current = settled || self.login_item_requested.is_none();
+        let error = match answer {
+            Ok(status) => {
+                self.login_item = Some(status);
+                None
+            }
+            Err(failure) => {
+                if failure.status.is_some() {
+                    self.login_item = failure.status;
+                }
+                Some(failure.message)
+            }
+        };
+        if current {
+            self.login_item_requested = None;
+            self.login_item_error = error;
         }
     }
 

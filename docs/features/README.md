@@ -618,22 +618,30 @@ General > Launch at login                // maintain.login-item
 ├── Open -> Checking until macOS returns the initial state
 ├── Refresh / toggle / Open settings -> One persistent background worker
 │   └── One active request; latest pending user action precedes the next refresh
+├── Toggle -> Switch moves at once; macOS's answer settles it
+│   ├── Answers behind a later click -> Switch keeps the last click
+│   └── Settled answer differs -> Switch springs back
 ├── Failed toggle -> Show error and reconcile with actual macOS state when available
 └── Close Settings -> Release channels without waiting for an active native call
 ```
 
 [login_item.rs](../../src/login_item.rs) serializes ServiceManagement calls on one
 window-owned worker, with bounded request and response channels and an autorelease
-pool per operation. Settings reads responses without blocking every 500 ms;
+pool per operation. Settings reads responses without blocking on its 250 ms tick;
 refreshes do not accumulate while macOS is busy. The toggle is unavailable until
-the first successful status lookup. macOS owns registration state; no login
+the first successful status lookup. A click is held in memory
+(`PlatformState::login_item_requested`) only until the worker is idle again, so
+the switch need not wait for `SMAppService` (about 120 ms per toggle, measured
+October 24, 2026, plus up to one tick). macOS owns registration state; no login
 Boolean is persisted. Scenes never start the worker or call macOS.
 
 The worker tests in `login_item.rs` exercise thread reuse, nonblocking polling,
 latest-action coalescing, action priority, and closing during a blocked call.
 `launch_at_login_asks_the_login_item_and_needs_approval_first` in
 [rune_ui/tests/panes.rs](../../src/rune_ui/tests/panes.rs) checks the Rune row's
-requests and the approval state; the GPUI regression for error rollback and
+requests and the approval state, and the `login_item_*` tests there check the
+switch while macOS answers: confirmed, refused, a status answer behind a click,
+and rapid clicks. The GPUI regression for error rollback and
 external enablement went with GPUI. Native `RequiresApproval` and error transitions remain unverified;
 the simulated checks do not establish Developer ID signed distribution behavior.
 
