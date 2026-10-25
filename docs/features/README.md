@@ -218,7 +218,7 @@ The tour is the pure `onboarding::Flow` (steps, row states, background
 download, practice hints, one-relaunch guard) drawn by
 [rune_ui/onboarding.rs](../../src/rune_ui/onboarding.rs); `permission_control`
 in [rune_ui/lists.rs](../../src/rune_ui/lists.rs) is the one Allow / dot /
-Allowed control Settings and the tour share (`a_grant_morphs_allow_into_allowed`,
+Allowed control Settings and the tour share (`a_grant_gathers_then_releases_into_allowed`,
 `reduce_motion_swaps_allow_for_allowed_at_once`; scene `meetings-allow`). The guide
 beside System Settings is [permission_guide.m](../../native/permission_guide.m).
 Unit tests (`onboarding::tests`) cover step order, the download starting on the

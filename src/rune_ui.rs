@@ -765,12 +765,13 @@ impl Ui {
         }
     }
 
-    /// Switches panes at once: the new pane replaces the old without a fade.
+    /// Switches panes at once: the new pane replaces the old without a fade,
+    /// already at rest (a grant's morph doesn't replay).
     fn select_pane(&mut self, pane: Pane, tx: &mut Tx) {
         if self.pane == pane {
             return;
         }
-        tx.instant();
+        tx.settle();
         self.flush_drafts();
         settings::cancel_capture(self);
         self.open = None;

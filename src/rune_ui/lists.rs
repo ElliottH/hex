@@ -2,7 +2,12 @@
 //! Settings rows share: list rows and group labels, the detail header and
 //! facts, tinted status tags, and the permission control.
 
-use rune::{Color, Edge, El, Shadow, Spring, SpringPair, Transition, col, el, row, text};
+use std::sync::LazyLock;
+
+use rune::{
+    Beat, Color, Easing, Edge, El, Sequence, Shadow, Spring, SpringPair, Transition, col, el, row,
+    text,
+};
 
 use super::Ui;
 use super::controls::{ButtonKind, DESCRIPTION, Paint, button, pulsing_dot, status_dot};
@@ -266,22 +271,49 @@ pub(super) enum PermissionControl {
     Allowed,
 }
 
-/// How long the control takes to change state: no bounce, as a control
-/// settling rather than playing.
-const PERMISSION_MOTION: Spring = Spring::new(0.3, 0.0);
+/// A grant's first beat, the gather: the control dips to `DIP` while the
+/// pill's chrome drains and the waiting dot contracts to a point. Every
+/// layout move rides this spring and lands inside the beat, so nothing that
+/// snaps to pixels is still creeping when the control comes to rest.
+const GATHER: Spring = Spring::new(0.16, 0.0);
+const GATHER_SECS: f64 = 0.14;
+const DIP: f32 = 0.94;
+/// The second beat, the release: the control springs back to full size as
+/// the check draws on and "ed" wipes in.
+const RELEASE: Spring = Spring::new(0.3, 0.2);
+/// Long enough for `RELEASE` to come within a hundredth of a point of rest,
+/// so the sequence's last keyframe is no step.
+const RELEASE_SECS: f64 = 0.45;
+const DRAW: Spring = Spring::new(0.42, 0.0);
+const SUFFIX: Spring = Spring::new(0.4, 0.0);
+/// The label's colour, green by the time "ed" has arrived.
+const INK: Spring = Spring::new(0.3, 0.0);
+/// The check and "ed" stay hidden through the gather (masks can't wait, so
+/// their wipes start with it), then appear quickly: the dot has gone.
+const APPEAR: &[Beat] = &[
+    Beat::new(0.0).opacity(0.0),
+    Beat::new(0.1).opacity(0.0),
+    Beat::new(0.15).opacity(1.0).easing(Easing::EASE_OUT),
+];
+/// The Allow button's padding, which Allowed keeps on the left so "Allow"
+/// keeps its place in the pill and "ed" follows it.
+const PILL_PADDING: f32 = 11.0;
 /// The check's ink inside its 16-point icon: OpenCode's `check-small` path
 /// (6.5,6.5)–(13.5,13.5) of 20, scaled to 16, plus the stroke's half-width.
 const CHECK_INK: [f32; 4] = [4.6, 4.6, 6.8, 6.8];
-/// Where the stroke starts, the end the waiting dot shrinks into.
+/// Where the stroke starts, the point the waiting dot contracts into.
 const CHECK_START: [f32; 2] = [5.2, 9.15];
+/// The icon's place in its 9-point mark; the ink overhangs into the gap.
+const CHECK_X: f32 = 4.0;
 
 /// The one control every permission uses, in the tour and in Settings:
 /// Allow, a pulsing dot while macOS is asked, then a green Allowed.
 ///
 /// Every state is the same keyed button, so a grant morphs instead of
-/// cross-fading: its pill sheds fill and padding and narrows into the
-/// label, the label turns green and grows "ed", and the waiting dot glides
-/// into the start of the check as the check draws on.
+/// cross-fading, in two beats. The control gathers (dips, drains its
+/// chrome, contracts the dot to the start of the check), then releases:
+/// it springs back as the check draws on from that point and "ed" wipes in
+/// after "Allow", whose glyphs never change.
 pub(super) fn permission_control(
     p: Paint,
     key: &str,
@@ -312,41 +344,67 @@ pub(super) fn permission_control(
         ),
         PermissionControl::Allowed => (Some(check_mark(p)), 6.0, allowed_pill(p, key, kind)),
     };
-    row()
+    let control_row = row()
         .key(format!("{key}-control"))
         .gap(gap)
         .center_y()
-        .motion(PERMISSION_MOTION)
+        .motion(GATHER)
         .children(mark)
-        .child(pill)
+        .child(pill.motion(GATHER));
+    if control == PermissionControl::Allowed {
+        control_row.sequence(Sequence::new(grant_beats()))
+    } else {
+        control_row
+    }
 }
 
-/// The check, drawn on left to right, with the waiting dot shrunk to the
-/// start of its stroke.
+/// The control's scale through a grant: an eased dip, then `RELEASE`
+/// baked into the sequence's last segment, which only takes easings.
+fn grant_beats() -> &'static [Beat] {
+    static BEATS: LazyLock<[Beat; 3]> = LazyLock::new(|| {
+        static CURVE: LazyLock<Vec<[f32; 2]>> = LazyLock::new(|| {
+            const STOPS: usize = 48;
+            (0..=STOPS)
+                .map(|i| {
+                    let x = i as f32 / STOPS as f32;
+                    let t = x * RELEASE_SECS as f32;
+                    let y = if i == STOPS {
+                        1.0
+                    } else {
+                        RELEASE.sample(0.0, 0.0, 1.0, t).0
+                    };
+                    [x, y]
+                })
+                .collect()
+        });
+        [
+            Beat::new(0.0),
+            Beat::new(GATHER_SECS).scale(DIP).easing(Easing::EASE_IN),
+            Beat::new(GATHER_SECS + RELEASE_SECS).easing(Easing::Piecewise(&CURVE)),
+        ]
+    });
+    &*BEATS
+}
+
+/// The check, drawn on left to right from the point the dot contracted to.
 fn check_mark(p: Paint) -> El {
     let [x, y, w, h] = CHECK_INK;
-    let mut draw = Transition::reveal(Edge::Leading)
-        .springs(SpringPair::new(PERMISSION_MOTION, Spring::new(0.24, 0.0)));
-    for reveal in [&mut draw.insertion.reveal, &mut draw.removal.reveal]
-        .into_iter()
-        .flatten()
-    {
-        reveal.feather = 3.0;
-    }
     el().key("mark")
-        .size(16.0, 16.0)
+        .size(9.0, 16.0)
         .child(
             status_dot(p.success())
-                .absolute(CHECK_START[0] - 1.0, CHECK_START[1] - 1.0)
-                .size(2.0, 2.0)
-                .radius(1.0)
-                .opacity(0.0),
+                .absolute(CHECK_X + CHECK_START[0], CHECK_START[1])
+                .size(0.0, 0.0)
+                .radius(0.0)
+                .opacity(0.0)
+                .motion(GATHER),
         )
         .child(
             el().key("ink")
-                .absolute(x, y)
+                .absolute(CHECK_X + x, y)
                 .size(w, h)
-                .transition(draw)
+                .transition(wipe(DRAW, 3.0))
+                .sequence(Sequence::new(APPEAR))
                 .child(
                     rune::icon(p.k.glyph.check_small, 16.0)
                         .key("check")
@@ -356,8 +414,22 @@ fn check_mark(p: Paint) -> El {
         )
 }
 
+/// A left-to-right mask reveal with a soft edge.
+fn wipe(spring: Spring, feather: f32) -> Transition {
+    let mut wipe = Transition::reveal(Edge::Leading).springs(SpringPair::new(spring, spring));
+    for reveal in [&mut wipe.insertion.reveal, &mut wipe.removal.reveal]
+        .into_iter()
+        .flatten()
+    {
+        reveal.feather = feather;
+    }
+    wipe
+}
+
 /// The Allow button with its chrome faded out: the same pill, fill, and
-/// shadows at zero alpha, no padding, and the label in green.
+/// shadows at zero alpha, and the label in green. It keeps the button's
+/// left padding so "Allow" stays put inside it and "ed" lands right after,
+/// never over it.
 fn allowed_pill(p: Paint, key: &str, kind: ButtonKind) -> El {
     let k = p.k;
     let (fill, shadows) = match kind {
@@ -373,8 +445,8 @@ fn allowed_pill(p: Paint, key: &str, kind: ButtonKind) -> El {
         .key(key)
         .label(allowed)
         .h(28.0)
-        .center()
-        .width_leads()
+        .pl(PILL_PADDING)
+        .center_y()
         .radius(k.radius.md)
         .fill(fill.alpha(0.0));
     for shadow in k.shadow_layers(shadows) {
@@ -390,15 +462,17 @@ fn allowed_pill(p: Paint, key: &str, kind: ButtonKind) -> El {
         .strip_prefix(allow)
         .filter(|suffix| !suffix.is_empty())
     {
-        // "Allow" stays and gains "ed".
-        Some(suffix) => {
-            pill.child(text(allow).key("label").font(font).color(ink))
-                .child(
-                    text(suffix).key("suffix").font(font).color(ink).transition(
-                        Transition::reveal(Edge::Leading).combined(Transition::opacity()),
-                    ),
-                )
-        }
+        // "Allow" stays and "ed" wipes in after it.
+        Some(suffix) => pill
+            .child(text(allow).key("label").font(font).color(ink).motion(INK))
+            .child(
+                text(suffix)
+                    .key("suffix")
+                    .font(font)
+                    .color(ink)
+                    .transition(wipe(SUFFIX, 2.0))
+                    .sequence(Sequence::new(APPEAR)),
+            ),
         // Languages whose word changes cross-fade it.
         None => pill.child(text(allowed).key("allowed").font(font).color(ink)),
     }

@@ -552,7 +552,7 @@ pub(super) fn view_switch(ui: &Ui, p: Paint) -> Option<El> {
                 View::Settings
             };
             if ui.meetings.view != view {
-                tx.instant();
+                tx.settle();
                 ui.flush_drafts();
                 ui.open = None;
                 ui.meetings.view = view;

@@ -107,42 +107,81 @@ fn missing_permissions_lead_settings_and_open_the_guide() {
     );
 }
 
+/// The drawn rect and effective opacity of the element whose path ends
+/// with `path`.
+fn drawn(rt: &Runtime<Ui>, path: &str) -> Option<([f32; 4], f32)> {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.path.ends_with(path) && !e.exiting)
+        .map(|e| (e.rect, e.opacity))
+}
+
 #[test]
-fn a_grant_morphs_allow_into_allowed() {
+fn a_grant_gathers_then_releases_into_allowed() {
     let mut rt = runtime("meetings-allow", true, PANE_SIZE);
     let pill = "meeting-system-audio-allow";
+    let control = format!("{pill}-control");
     tap(&mut rt, pill);
     assert_eq!(asked(&rt), [PlatformRequest::SystemAudio]);
     assert!(
-        rt.find(&format!("{pill}-control/mark/dot")).is_some(),
+        rt.find(&format!("{control}/mark/dot")).is_some(),
         "waits with a dot"
     );
-    let width = |rt: &Runtime<Ui>| rt.presented(pill).unwrap().0[2];
-    let allow = width(&rt);
+    let at_rest = drawn(&rt, &control).unwrap().0;
 
     // The fixture grants on the second ask.
     let (x, y) = rt.find(pill).unwrap();
     rt.pointer_down(x, y);
     rt.pointer_up(x, y);
-    for _ in 0..5 {
-        rt.frame(1.0 / 60.0);
+    let mut smallest = f32::MAX;
+    for _ in 0..120 {
+        rt.frame(1.0 / 120.0);
+        smallest = smallest.min(drawn(&rt, &control).unwrap().0[2]);
+        let label = drawn(&rt, &format!("{pill}/label")).unwrap().0;
+        let (suffix, _) = drawn(&rt, &format!("{pill}/suffix")).unwrap();
+        assert!(
+            suffix[0] >= label[0] + label[2] - 0.5,
+            "\"ed\" follows \"Allow\" without overlapping it: {label:?} {suffix:?}"
+        );
+        let (dot, _) = drawn(&rt, &format!("{control}/mark/dot")).unwrap();
+        let (_, ink) = drawn(&rt, &format!("{control}/mark/ink")).unwrap();
+        assert!(
+            ink < 0.05 || dot[2] < 1.0,
+            "the check appears once the dot has gone: dot {dot:?}, check opacity {ink}"
+        );
     }
-    let between = width(&rt);
-    settle(&mut rt);
-    let allowed = width(&rt);
     assert!(rt.state.platform.system_audio);
-    assert!(allowed < allow, "the pill sheds its padding");
     assert!(
-        allowed < between && between < allow,
-        "the same pill narrows rather than swapping: {allow} → {between} → {allowed}"
+        smallest < at_rest[2] * 0.97,
+        "the control gathers: {smallest} of {}",
+        at_rest[2]
     );
-    assert!(rt.find(&format!("{pill}-control/mark/ink/check")).is_some());
+    let allowed = drawn(&rt, &control).unwrap().0;
+    assert!(
+        (allowed[2] - at_rest[2]).abs() < 2.0,
+        "and releases to its size: {at_rest:?} → {allowed:?}"
+    );
+    assert!(rt.find(&format!("{control}/mark/ink/check")).is_some());
     let shown = texts(&rt);
     assert!(shown.iter().any(|text| text == "Allow"));
     assert!(shown.iter().any(|text| text == "ed"));
 
     tap(&mut rt, pill);
     assert_eq!(asked(&rt).len(), 2, "Allowed is not a button");
+
+    // Coming back to the pane shows Allowed at rest, without replaying.
+    tap(&mut rt, "nav-general");
+    let (x, y) = rt.find("nav-meetings").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
+    let moving: Vec<_> = rt
+        .elements()
+        .into_iter()
+        .filter(|e| e.path.contains(&control) && e.moving)
+        .map(|e| e.path)
+        .collect();
+    assert!(moving.is_empty(), "replayed: {moving:?}");
 }
 
 #[test]
