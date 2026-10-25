@@ -142,14 +142,14 @@ offer it.
   `504 control-timeout`. Bad or missing tokens get `401` like every other
   route.
 
-## Wire format (version 2)
+## Wire format (version 1)
 
 Requests are flat objects tagged by `command` (kebab-case):
 
 ```json
-{"version": 2, "command": "meeting-record", "title": "Design sync"}
-{"version": 2, "command": "settings-set", "key": "sound_effects", "value": "off", "confirm": false}
-{"version": 2, "command": "dictation", "action": "start"}
+{"version": 1, "command": "meeting-record", "title": "Design sync"}
+{"version": 1, "command": "settings-set", "key": "sound_effects", "value": "off", "confirm": false}
+{"version": 1, "command": "dictation", "action": "start"}
 ```
 
 ```ts
@@ -173,16 +173,16 @@ no wire form. `history-clear` has no confirmation field: the CLI asks for
 Replies are tagged by `status`:
 
 ```json
-{"version": 2, "status": "done", "message": "Recording “Design sync”; …", "changed": true}
-{"version": 2, "status": "error", "code": "feature-off", "message": "Meetings are off; …"}
-{"version": 2, "status": "settings", "settings": [{"key": "sound_effects", "value": true,
+{"version": 1, "status": "done", "message": "Recording “Design sync”; …", "changed": true}
+{"version": 1, "status": "error", "code": "feature-off", "message": "Meetings are off; …"}
+{"version": 1, "status": "settings", "settings": [{"key": "sound_effects", "value": true,
   "kind": "bool", "writable": true, "about": "Play recording, cancellation, and error tones"}]}
-{"version": 2, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
+{"version": 1, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
   "languages": ["en", "…"], "size": "…", "installed": true, "selected": true,
   "streams": true, "supports_recognition_hints": false}]}
-{"version": 2, "status": "vocabulary", "entries": [{"term": "OpenCode",
+{"version": 1, "status": "vocabulary", "entries": [{"term": "OpenCode",
   "sounds_like": ["open code"]}, {"term": "Rune"}]}
-{"version": 2, "status": "scrawl-capture", "changed": true, "state": "idle",
+{"version": 1, "status": "scrawl-capture", "changed": true, "state": "idle",
   "bundle": "…/captures/1792933491953.capture", "elapsed_ms": null,
   "finishing": ["…/captures/1792933491953.capture"], "last": null}
 ```
@@ -196,7 +196,7 @@ recording", "The window isn't open"). Setting `kind` is one of `bool`,
 
 ```json
 {
-  "version": 2, "status": "status",
+  "version": 1, "status": "status",
   "app_version": "2.3.1", "pid": 31708, "memory_footprint_bytes": 412000000,
   "listener": {"running": true, "status": "Listening"},
   "capture": {"state": "idle", "recording": null, "pending_jobs": 0},
@@ -300,7 +300,7 @@ fails when a new persisted setting has no key here.
 
 ## Compatibility
 
-`CONTROL_VERSION` is 2. A change that breaks a request or reply shape
+`CONTROL_VERSION` is 1. A change that breaks a request or reply shape
 increments it; adding a command, an optional request field, or a reply field
 does not. A `hex` from a different version gets `version-mismatch`; use the
 `hex` inside the running Hex.app, or restart Hex after updating.

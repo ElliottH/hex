@@ -122,8 +122,9 @@ where the work starts (the `capture_host` worker), not only in the window.
 - A finished capture's clip is foreground work: it runs after dictation that
   was already queued and before meeting chunks. It never loads a second model.
   It goes to the engine in 30 s chunks, one job each, so a dictation sent
-  meanwhile waits for one chunk at most. A chunk closes an open dictation live
-  stream, which then transcribes its whole clip.
+  meanwhile waits for one chunk at most. A chunk waits while dictation
+  captures or transcribes, and the engine holds one that arrives during a live
+  stream until the stream ends, so it never interrupts one.
 - Scrawl's spoken cues need measured word times. Until Parakeet's word times
   are compared with SpeechAnalyzer's on recorded captures, the engine's Apple
   helper path stays selectable (`hex settings set capture.transcriber apple`).

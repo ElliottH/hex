@@ -14,7 +14,8 @@ Turn it on                               // capture.gate
 └── Off -> no capture host, sink, thread, or folder; `hex capture` -> feature-off
 
 hex capture start                        // capture.start; needs a listening Hex
-├── Creates <support>/captures/<unix ms>.capture -> reply: recording + bundle path
+├── Creates <support>/captures/<unix ms>.capture (owner-only) -> reply: recording + bundle path
+├── Two stopped captures still writing -> refused `busy`
 ├── Copies the dictation timeline from now into a bounded sink (no second stream)
 ├── Release microphone while idle -> the capture keeps the microphone open
 └── Already recording -> unchanged, same bundle
@@ -27,13 +28,17 @@ While it records                         // capture.audio
 hex capture stop                         // capture.stop
 ├── Closes the sink (≤ 100 ms wait) -> reply: idle + the bundle path, at once
 └── In the background: 16 kHz audio -> words on the dictation engine's model
+    ├── One capture at a time, on one capture-finish thread
     ├── 30 s chunks, each a foreground job: after queued dictation, before meeting chunks
+    ├── Each chunk waits while dictation records or transcribes; never interrupts a live stream
+    ├── Past 20 min -> audio kept to 20 min, the rest one gap
     ├── audio.wav, words.json, manifest.json
     └── Transcription fails -> bundle without words.json, transcriptError in the manifest
 
 hex capture cancel -> sink closed, bundle removed
 hex capture status -> recording (bundle, elapsed), bundles still writing, last outcome
-Hex quits mid-capture -> cancelled, bundle removed
+Hex quits mid-capture -> cancelled, bundle removed; captures still writing stop
+transcribing between chunks and keep their audio (shutdown waits ≤ 2 s)
 ```
 
 `words.json`:
@@ -67,13 +72,19 @@ Checks:
 - Sink, in dictation_audio.rs: `capture_sink_shares_the_timeline_with_dictation`,
   `a_full_capture_sink_drops_audio_as_a_gap_and_never_stalls_dictation`,
   `capture_sink_records_microphone_gaps`,
-  `capture_sink_holds_a_released_microphone_open_until_it_closes`, and
+  `capture_sink_holds_a_released_microphone_open_until_it_closes`,
+  `capture_sink_keeps_every_frame_through_timestamp_jitter`, and
   `a_dropped_capture_receiver_closes_the_sink`.
 - Words, in parakeet.rs: `chunked_word_transcription_keeps_word_times_across_chunks`
-  and `word_transcription_is_a_foreground_request_on_the_shared_engine`.
+  and `word_transcription_is_a_foreground_request_on_the_shared_engine`;
+  `foreground_work_waits_for_an_open_stream_instead_of_interrupting_it` in
+  [transcription_engine.rs](../../src/transcription_engine.rs).
 - Host, in capture_host.rs: `controls_are_idempotent_and_stop_writes_a_bundle`,
-  `the_timeline_resamples_pads_gaps_and_ends_at_the_stop`, and
-  `a_pending_gap_and_a_stalled_tail_come_back_from_the_closed_sink`.
+  `the_timeline_resamples_pads_gaps_and_ends_at_the_stop`,
+  `a_pending_gap_and_a_stalled_tail_come_back_from_the_closed_sink`,
+  `padding_past_the_length_limit_stays_bounded`,
+  `captures_finish_one_at_a_time_and_starts_wait_for_room`, and
+  `shutdown_cancels_the_recording_capture_and_waits_for_its_cleanup`.
 
 Observed 2026-10-25 on pro (M2 Max), debug `HEX_TEST_BUILD=1`, with
 `HEX_EXPERIMENTS=capture hex dev capture-replay` over three vocabulary

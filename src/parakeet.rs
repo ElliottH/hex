@@ -682,16 +682,23 @@ fn process_job_text(
 
 /// The longest audio the capture path hands the model at once; longer
 /// captures are transcribed in consecutive chunks with their times offset.
+#[cfg(debug_assertions)]
 const WORD_CHUNK_SAMPLES: usize = 30 * 16_000;
+/// How long a capture chunk waits for dictation to go idle before it is
+/// queued anyway; the engine still never runs it inside a live stream.
+#[cfg(debug_assertions)]
+const WORD_DICTATION_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Transcribes a capture's 16 kHz audio with word timestamps on the engine's
-/// warm model (the `capture` experiment). Each chunk is its own foreground
-/// request: it runs after the dictation already sent and before meeting
-/// chunks, a dictation sent meanwhile runs before the next chunk, and no
-/// second copy of the model is loaded. A dictation live stream open when a
-/// chunk arrives is closed, so that dictation transcribes its whole clip.
+/// warm model (the `capture` experiment). Before each chunk it waits while
+/// dictation is busy (from the shortcut press through inference); each chunk
+/// is then a foreground request: after the dictation already sent, before
+/// meeting chunks, and never inside a dictation live stream, which finishes
+/// first. No second copy of the model is loaded, and only a weak reference
+/// to the engine is kept between chunks. Quitting stops it between chunks.
+#[cfg(debug_assertions)]
 pub fn transcribe_with_words(
-    engine: &TranscriptionEngine,
+    engine: &std::sync::Weak<TranscriptionEngine>,
     samples: Vec<f32>,
 ) -> Result<crate::transcription::Transcript> {
     if samples.is_empty() {
@@ -699,6 +706,7 @@ pub fn transcribe_with_words(
     }
     let (_, selection) = crate::app_settings::transcription_selection();
     transcribe_in_chunks(samples, WORD_CHUNK_SAMPLES, |chunk| {
+        wait_for_dictation_idle()?;
         let selection = selection.clone();
         let (send, transcript) = mpsc::sync_channel(1);
         let offline: crate::transcription_engine::Offline = Box::new(move |model, samples| {
@@ -713,18 +721,35 @@ pub fn transcribe_with_words(
             let _ = send.send(result);
             Ok(text)
         });
-        engine
-            .finish_with(None, chunk, offline)?
-            .wait()
-            .map_err(|error| eyre!(error))?;
+        let pending = engine
+            .upgrade()
+            .ok_or_else(|| eyre!("the transcription engine stopped"))?
+            .foreground(chunk, offline)?;
+        pending.wait().map_err(|error| eyre!(error))?;
         transcript
             .try_recv()
             .map_err(|_| eyre!("the transcription returned no words"))
     })
 }
 
+#[cfg(debug_assertions)]
+fn wait_for_dictation_idle() -> Result<()> {
+    let started = Instant::now();
+    while dictation_busy()
+        && !crate::process_exit::quitting()
+        && started.elapsed() < WORD_DICTATION_WAIT
+    {
+        thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if crate::process_exit::quitting() {
+        return Err(eyre!("Hex is quitting"));
+    }
+    Ok(())
+}
+
 /// Transcribes `samples` in chunks of at most `chunk_samples`, offsetting
 /// each chunk's segment and word times by where it starts.
+#[cfg(debug_assertions)]
 fn transcribe_in_chunks(
     samples: Vec<f32>,
     chunk_samples: usize,
@@ -1975,6 +2000,7 @@ mod tests {
         }
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn chunked_word_transcription_keeps_word_times_across_chunks() {
         use crate::transcription::{Transcript, TranscriptSegment};
@@ -2019,12 +2045,15 @@ mod tests {
         assert_eq!(merged.segments[2].start_ms, 20_000);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     fn word_transcription_is_a_foreground_request_on_the_shared_engine() {
         use crate::transcription_engine::Command as EngineCommand;
         let (engine, commands) = TranscriptionEngine::for_test();
+        let engine = Arc::new(engine);
+        let weak = Arc::downgrade(&engine);
         assert!(
-            transcribe_with_words(&engine, Vec::new())
+            transcribe_with_words(&weak, Vec::new())
                 .unwrap()
                 .words
                 .is_empty()
@@ -2034,21 +2063,28 @@ mod tests {
             "silence never reaches the model"
         );
 
-        let engine = Arc::new(engine);
+        // A busy dictation holds the chunk back until it is idle.
+        let busy = DictationInference::begin();
         let request = {
-            let engine = engine.clone();
+            let weak = weak.clone();
             thread::spawn(move || {
-                transcribe_with_words(&engine, vec![0.1; WORD_CHUNK_SAMPLES + 1_600])
+                transcribe_with_words(&weak, vec![0.1; WORD_CHUNK_SAMPLES + 1_600])
             })
         };
+        assert!(
+            commands
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err()
+        );
+        drop(busy);
         let command = commands
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
-        // A finish without a stream: after dictation already sent, and
-        // counted as a request so meeting chunks yield to it.
+        // A foreground request: after dictation already sent, counted as a
+        // request so meeting chunks yield to it, and never inside a stream.
         assert!(matches!(
             command,
-            EngineCommand::Finish { stream: None, ref clip, .. } if clip.len() == WORD_CHUNK_SAMPLES
+            EngineCommand::Foreground { ref clip, .. } if clip.len() == WORD_CHUNK_SAMPLES
         ));
         // The next chunk waits for this one, so a dictation sent meanwhile
         // runs first.
@@ -2059,6 +2095,10 @@ mod tests {
         );
         drop(command);
         assert!(request.join().unwrap().is_err());
+        // Only a weak reference is held: once the engine is gone, a capture
+        // fails instead of keeping it alive.
+        drop(engine);
+        assert!(transcribe_with_words(&weak, vec![0.1; 16]).is_err());
     }
 
     #[test]

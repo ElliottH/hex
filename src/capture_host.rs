@@ -14,11 +14,13 @@
 //! [`CaptureHost::start`] does nothing unless the experiment is on.
 
 use std::fs;
+use std::fs::{DirBuilder, OpenOptions};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, Weak};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use serde::Serialize;
@@ -40,6 +42,11 @@ const SAMPLE_RATE: u32 = 16_000;
 /// A capture keeps at most this much audio; the rest is recorded as a gap.
 const MAX_CAPTURE: Duration = Duration::from_secs(20 * 60);
 const GAP_TOLERANCE: Duration = Duration::from_millis(50);
+/// Captures being written at once: the one finishing plus those queued
+/// behind it. A start beyond this is refused.
+const MAX_FINISHING: usize = 2;
+/// How long shutdown waits for capture threads, inside the quit deadline.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // The seam: what Scrawl's engine will take from its host.
@@ -57,7 +64,7 @@ pub trait Transcriber: Send + Sync {
 }
 
 pub trait ConfigSource: Send + Sync {
-    fn engine_config(&self) -> EngineConfig;
+    fn engine_config(&self) -> Result<EngineConfig>;
 }
 
 #[derive(Clone, Debug)]
@@ -200,12 +207,11 @@ impl Engine {
     pub fn start(&self, start: Start) -> Result<Capture> {
         let dir = match start.bundle_dir {
             Some(dir) => {
-                fs::create_dir_all(dir.parent().unwrap_or(&dir))?;
-                fs::create_dir(&dir)
-                    .wrap_err_with(|| format!("could not create {}", dir.display()))?;
+                private_dirs(dir.parent().unwrap_or(&dir))?;
+                private_dir(&dir)?;
                 dir
             }
-            None => new_bundle_dir(&self.config.engine_config().captures_dir)?,
+            None => new_bundle_dir(&self.config.engine_config()?.captures_dir)?,
         };
         self.host.emit(Event::Progress {
             bundle: dir.clone(),
@@ -222,10 +228,38 @@ impl Engine {
     }
 }
 
+/// Creates `dir` and missing parents owner-only, and makes `dir` itself
+/// owner-only if it already existed.
+fn private_dirs(dir: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .wrap_err_with(|| format!("could not create {}", dir.display()))?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .wrap_err_with(|| format!("could not restrict {}", dir.display()))
+}
+
+/// Creates `dir`, owner-only; fails if it exists.
+fn private_dir(dir: &Path) -> std::io::Result<()> {
+    DirBuilder::new().mode(0o700).create(dir)
+}
+
+/// Creates or truncates an owner-only file.
+fn private_file(path: &Path) -> Result<fs::File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .wrap_err_with(|| format!("could not write {}", path.display()))
+}
+
 /// A fresh `<captures>/<unix ms>.capture` folder; never adopts one that exists.
 fn new_bundle_dir(captures_dir: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(captures_dir)
-        .wrap_err_with(|| format!("could not create {}", captures_dir.display()))?;
+    private_dirs(captures_dir)?;
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -236,7 +270,7 @@ fn new_bundle_dir(captures_dir: &Path) -> Result<PathBuf> {
             n => format!("{stamp}-{n}.capture"),
         };
         let dir = captures_dir.join(name);
-        match fs::create_dir(&dir) {
+        match private_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -390,8 +424,11 @@ struct Manifest<'a> {
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    use std::io::Write;
     let json = serde_json::to_vec_pretty(value)?;
-    fs::write(path, json).wrap_err_with(|| format!("could not write {}", path.display()))
+    private_file(path)?
+        .write_all(&json)
+        .wrap_err_with(|| format!("could not write {}", path.display()))
 }
 
 fn write_wav(path: &Path, audio: &RecordedAudio) -> Result<()> {
@@ -401,7 +438,7 @@ fn write_wav(path: &Path, audio: &RecordedAudio) -> Result<()> {
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create(path, spec)
+    let mut writer = hound::WavWriter::new(std::io::BufWriter::new(private_file(path)?), spec)
         .wrap_err_with(|| format!("could not write {}", path.display()))?;
     for sample in &audio.samples {
         writer.write_sample((sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16)?;
@@ -435,17 +472,17 @@ impl Host for HexHost {
 struct HexConfig;
 
 impl ConfigSource for HexConfig {
-    fn engine_config(&self) -> EngineConfig {
-        EngineConfig {
-            captures_dir: crate::app_paths::captures_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("hex-captures")),
-        }
+    fn engine_config(&self) -> Result<EngineConfig> {
+        Ok(EngineConfig {
+            captures_dir: crate::app_paths::captures_dir()?,
+        })
     }
 }
 
-/// Word-timed transcription on the dictation engine's loaded model.
+/// Word-timed transcription on the dictation engine's loaded model. It holds
+/// the engine weakly, so a capture still writing never keeps it alive.
 struct HexTranscriber {
-    engine: Option<Arc<TranscriptionEngine>>,
+    engine: Option<Weak<TranscriptionEngine>>,
 }
 
 impl Transcriber for HexTranscriber {
@@ -508,6 +545,13 @@ struct Active {
     bundle: PathBuf,
     t0: CaptureInstant,
     seal: SyncSender<Seal>,
+    collector: JoinHandle<()>,
+}
+
+/// A stopped capture's audio, waiting for the finisher.
+struct FinishJob {
+    capture: Capture,
+    audio: RecordedAudio,
 }
 
 #[derive(Default)]
@@ -516,13 +560,34 @@ struct Outcomes {
     last: Option<ScrawlCaptureOutcome>,
 }
 
+impl Outcomes {
+    fn settle(&mut self, bundle: PathBuf, stage: Stage, words: Option<usize>) {
+        self.finishing.retain(|finishing| finishing != &bundle);
+        self.last = Some(ScrawlCaptureOutcome {
+            bundle,
+            stage: stage.label().into(),
+            words,
+        });
+    }
+}
+
+type SharedOutcomes = Arc<Mutex<Outcomes>>;
+
+fn lock(outcomes: &Mutex<Outcomes>) -> std::sync::MutexGuard<'_, Outcomes> {
+    outcomes.lock().unwrap_or_else(|error| error.into_inner())
+}
+
 /// The `hex capture` controller, owned by the listener beside its
-/// `DictationAudio`. Each capture gets one `capture-audio` thread that
-/// collects its audio, then finishes the bundle off the listener's thread.
+/// `DictationAudio`. The recording capture gets a `capture-audio` thread
+/// that collects its audio; one `capture-finish` thread then writes stopped
+/// captures one at a time, off the listener's thread.
 pub struct CaptureHost {
     engine: Arc<Engine>,
     active: Option<Active>,
-    outcomes: Arc<Mutex<Outcomes>>,
+    outcomes: SharedOutcomes,
+    finisher: Option<(SyncSender<FinishJob>, JoinHandle<()>)>,
+    /// Collectors of ended captures, until they exit.
+    ended: Vec<JoinHandle<()>>,
 }
 
 impl CaptureHost {
@@ -533,30 +598,37 @@ impl CaptureHost {
             return None;
         }
         tracing::info!("capture experiment on: `hex capture` is available");
-        Some(Self::with(
-            Arc::new(HexConfig),
-            Arc::new(HexTranscriber { engine }),
-        ))
-    }
-
-    fn with(config: Arc<dyn ConfigSource>, transcriber: Arc<dyn Transcriber>) -> Self {
-        let (events, received) = mpsc::sync_channel(EVENT_CAPACITY);
-        let outcomes = Arc::new(Mutex::new(Outcomes::default()));
-        {
-            let outcomes = outcomes.clone();
-            let spawned = thread::Builder::new()
-                .name("capture-events".into())
-                .spawn(move || record_events(received, &outcomes));
-            if let Err(error) = spawned {
-                tracing::warn!(%error, "could not start the capture event thread");
+        let engine = engine.as_ref().map(Arc::downgrade);
+        match Self::with(Arc::new(HexConfig), Arc::new(HexTranscriber { engine })) {
+            Ok(host) => Some(host),
+            Err(error) => {
+                tracing::warn!(%error, "could not start the capture host");
+                None
             }
         }
+    }
+
+    fn with(config: Arc<dyn ConfigSource>, transcriber: Arc<dyn Transcriber>) -> Result<Self> {
+        let (events, received) = mpsc::sync_channel(EVENT_CAPACITY);
+        thread::Builder::new()
+            .name("capture-events".into())
+            .spawn(move || log_events(received))?;
+        let outcomes = SharedOutcomes::default();
+        let (jobs, queued) = mpsc::sync_channel(MAX_FINISHING);
+        let finisher = {
+            let outcomes = outcomes.clone();
+            thread::Builder::new()
+                .name("capture-finish".into())
+                .spawn(move || finish_captures(queued, &outcomes))?
+        };
         let host: Arc<dyn Host> = Arc::new(HexHost { events });
-        Self {
+        Ok(Self {
             engine: Arc::new(Engine::new(host, config).with_transcriber(transcriber)),
             active: None,
             outcomes,
-        }
+            finisher: Some((jobs, finisher)),
+            ended: Vec::new(),
+        })
     }
 
     pub fn control(
@@ -574,10 +646,21 @@ impl CaptureHost {
         result.unwrap_or_else(|error| ControlReply::error("failed", format!("{error:#}")))
     }
 
-    /// Ends a recording capture without a bundle, as when Hex quits.
+    /// Cancels a recording capture, as when Hex quits, and waits a bounded
+    /// time for its cleanup and for captures still writing. Quitting stops
+    /// their transcription, so they keep their audio without words.
     pub fn shutdown(&mut self, audio: &impl AudioTimeline) {
+        let deadline = Instant::now() + SHUTDOWN_WAIT;
         if self.active.is_some() {
             let _ = self.end(CaptureInstant::now(), audio, true);
+        }
+        for collector in std::mem::take(&mut self.ended) {
+            join_by(collector, deadline, "capture-audio");
+        }
+        // Dropping the queue's sender ends the finisher after its last job.
+        if let Some((jobs, finisher)) = self.finisher.take() {
+            drop(jobs);
+            join_by(finisher, deadline, "capture-finish");
         }
     }
 
@@ -585,6 +668,17 @@ impl CaptureHost {
         if self.active.is_some() {
             return Ok(self.report(false, None));
         }
+        let Some((jobs, _)) = &self.finisher else {
+            return Ok(ControlReply::error("busy", "Hex is stopping"));
+        };
+        let writing = lock(&self.outcomes).finishing.len();
+        if writing >= MAX_FINISHING {
+            return Ok(ControlReply::error(
+                "busy",
+                format!("{writing} captures are still being written; try again shortly"),
+            ));
+        }
+        self.ended.retain(|collector| !collector.is_finished());
         let capture = self.engine.start(Start {
             t0_boot_ns: now.as_nanos(),
             bundle_dir: None,
@@ -597,17 +691,22 @@ impl CaptureHost {
         }
         let (seal, sealed) = mpsc::sync_channel(1);
         let bundle = capture.dir().to_path_buf();
-        thread::Builder::new()
-            .name("capture-audio".into())
-            .spawn(move || collect(capture, chunks, sealed))
-            .inspect_err(|_| {
-                let _ = audio.close_sink(now);
-            })?;
+        let collector = {
+            let jobs = jobs.clone();
+            let outcomes = self.outcomes.clone();
+            thread::Builder::new()
+                .name("capture-audio".into())
+                .spawn(move || collect(capture, chunks, sealed, &jobs, &outcomes))
+                .inspect_err(|_| {
+                    let _ = audio.close_sink(now);
+                })?
+        };
         tracing::info!(bundle = %bundle.display(), "capture started");
         self.active = Some(Active {
             bundle,
             t0: now,
             seal,
+            collector,
         });
         Ok(self.report(true, None))
     }
@@ -628,19 +727,20 @@ impl CaptureHost {
         let seal = if cancel {
             Seal::Cancel
         } else {
-            self.lock().finishing.push(active.bundle.clone());
+            lock(&self.outcomes).finishing.push(active.bundle.clone());
             Seal::Finish {
                 through: now,
                 closed,
             }
         };
         let _ = active.seal.send(seal);
+        self.ended.push(active.collector);
         tracing::info!(bundle = %active.bundle.display(), cancel, "capture ended");
         Ok(self.report(true, Some(active.bundle)))
     }
 
     fn report(&self, changed: bool, ended: Option<PathBuf>) -> ControlReply {
-        let outcomes = self.lock();
+        let outcomes = lock(&self.outcomes);
         let (state, bundle, elapsed_ms) = match &self.active {
             Some(active) => (
                 ScrawlCaptureState::Recording,
@@ -658,40 +758,61 @@ impl CaptureHost {
             last: outcomes.last.clone(),
         }))
     }
+}
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Outcomes> {
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
+/// Waits for `thread` until `deadline`, then leaves it running.
+fn join_by(thread: JoinHandle<()>, deadline: Instant, name: &str) {
+    while !thread.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+    if thread.is_finished() {
+        let _ = thread.join();
+    } else {
+        tracing::warn!(
+            thread = name,
+            "capture thread did not stop in time; leaving it"
+        );
     }
 }
 
-fn record_events(events: Receiver<Event>, outcomes: &Mutex<Outcomes>) {
+fn log_events(events: Receiver<Event>) {
     for Event::Progress { bundle, stage } in events {
         tracing::info!(bundle = %bundle.display(), stage = stage.label(), "capture progress");
-        if !matches!(stage, Stage::Done | Stage::Failed | Stage::Cancelled) {
-            continue;
-        }
-        let mut outcomes = outcomes.lock().unwrap_or_else(|error| error.into_inner());
-        outcomes.finishing.retain(|finishing| finishing != &bundle);
-        let words = (stage == Stage::Done).then(|| words_in(&bundle)).flatten();
-        outcomes.last = Some(ScrawlCaptureOutcome {
-            bundle,
-            stage: stage.label().into(),
-            words,
-        });
     }
 }
 
-fn words_in(bundle: &Path) -> Option<usize> {
-    let words: serde_json::Value =
-        serde_json::from_slice(&fs::read(bundle.join("words.json")).ok()?).ok()?;
-    words["words"].as_array().map(Vec::len)
+/// The `capture-finish` thread: writes stopped captures in order, one at a
+/// time, and records each outcome.
+fn finish_captures(jobs: Receiver<FinishJob>, outcomes: &Mutex<Outcomes>) {
+    for FinishJob { capture, audio } in jobs {
+        let bundle = capture.dir().to_path_buf();
+        match capture.finish(Some(audio)) {
+            Ok(finished) => {
+                tracing::info!(
+                    bundle = %finished.dir.display(),
+                    words = finished.words,
+                    summary = %finished.summary,
+                    "capture finished"
+                );
+                lock(outcomes).settle(bundle, Stage::Done, Some(finished.words));
+            }
+            Err(error) => {
+                tracing::error!(%error, "capture failed");
+                lock(outcomes).settle(bundle, Stage::Failed, None);
+            }
+        }
+    }
 }
 
-/// One capture's audio thread: collects until the sink closes, then
-/// finishes or cancels the capture as sealed.
-fn collect(capture: Capture, chunks: Receiver<CaptureAudio>, sealed: Receiver<Seal>) {
+/// One capture's audio thread: collects until the sink closes, then queues
+/// the capture for the finisher or cancels it, as sealed.
+fn collect(
+    capture: Capture,
+    chunks: Receiver<CaptureAudio>,
+    sealed: Receiver<Seal>,
+    jobs: &SyncSender<FinishJob>,
+    outcomes: &Mutex<Outcomes>,
+) {
     let mut timeline = Timeline::new(CaptureInstant::from_nanos(capture.started_at_boot_ns()));
     for chunk in chunks {
         match chunk {
@@ -703,21 +824,24 @@ fn collect(capture: Capture, chunks: Receiver<CaptureAudio>, sealed: Receiver<Se
             CaptureAudio::Gap { from, through } => timeline.gap(from, through),
         }
     }
-    match sealed.recv() {
+    let capture = match sealed.recv() {
         Ok(Seal::Finish { through, closed }) => {
             let audio = timeline.finish(through, closed);
-            match capture.finish(Some(audio)) {
-                Ok(finished) => tracing::info!(
-                    bundle = %finished.dir.display(),
-                    words = finished.words,
-                    summary = %finished.summary,
-                    "capture finished"
-                ),
-                Err(error) => tracing::error!(%error, "capture failed"),
+            // Starts are refused while the queue is full, so it has room
+            // unless Hex is stopping.
+            match jobs.try_send(FinishJob { capture, audio }) {
+                Ok(()) => return,
+                Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
+                    tracing::warn!("no room to write the capture; discarding it");
+                    job.capture
+                }
             }
         }
-        Ok(Seal::Cancel) | Err(_) => capture.cancel(),
-    }
+        Ok(Seal::Cancel) | Err(_) => capture,
+    };
+    let bundle = capture.dir().to_path_buf();
+    capture.cancel();
+    lock(outcomes).settle(bundle, Stage::Cancelled, None);
 }
 
 /// A capture's audio at 16 kHz on its own clock: resampled as it arrives,
@@ -729,18 +853,25 @@ struct Timeline {
     samples: Vec<f32>,
     resampler: Option<(u32, StreamingResampler)>,
     gaps: Vec<GapSpan>,
-    /// Where audio past `MAX_CAPTURE` started being dropped.
+    /// The most samples kept (`MAX_CAPTURE`).
+    limit: usize,
+    /// Where audio past the limit started being dropped.
     truncated_at: Option<CaptureInstant>,
 }
 
 impl Timeline {
     fn new(t0: CaptureInstant) -> Self {
+        Self::with_limit(t0, MAX_CAPTURE)
+    }
+
+    fn with_limit(t0: CaptureInstant, limit: Duration) -> Self {
         Self {
             t0,
             first: None,
             samples: Vec::new(),
             resampler: None,
             gaps: Vec::new(),
+            limit: (limit.as_nanos() * u128::from(SAMPLE_RATE) / 1_000_000_000) as usize,
             truncated_at: None,
         }
     }
@@ -780,12 +911,18 @@ impl Timeline {
             // Before any audio: the recording simply starts later.
             return;
         };
+        if self.truncated_at.is_some() {
+            // Past the limit: `finish` records everything after it as one gap.
+            return;
+        }
         self.flush();
+        let limit_at = first + duration_for(self.limit);
         self.gaps.push(GapSpan {
-            start_ms: self.clock_ms(from.max(first)),
-            end_ms: self.clock_ms(through),
+            start_ms: self.clock_ms(from.max(first).min(limit_at)),
+            end_ms: self.clock_ms(through.min(limit_at)),
         });
-        let end = position(first, through);
+        // Padding stops one sample past the limit, which marks the truncation.
+        let end = position(first, through).min(self.limit + 1);
         if end > self.samples.len() {
             let padding = vec![0.0; end - self.samples.len()];
             self.append(&padding, through);
@@ -841,7 +978,7 @@ impl Timeline {
     }
 
     fn append(&mut self, samples: &[f32], through: CaptureInstant) {
-        let limit = MAX_CAPTURE.as_secs() as usize * SAMPLE_RATE as usize;
+        let limit = self.limit;
         let room = limit.saturating_sub(self.samples.len());
         if samples.len() > room && self.truncated_at.is_none() {
             tracing::warn!("capture reached its length limit; dropping the rest of its audio");
@@ -895,7 +1032,7 @@ pub fn replay(wavs: &[PathBuf]) -> Result<PathBuf> {
     }
     let sample_rate = sample_rate.ok_or_else(|| eyre!("no WAV files"))?;
     let engine = Arc::new(TranscriptionEngine::start(Default::default())?);
-    let mut host = CaptureHost::start(Some(engine)).ok_or_else(|| {
+    let mut host = CaptureHost::start(Some(engine.clone())).ok_or_else(|| {
         eyre!("the `capture` experiment is off; run with HEX_EXPERIMENTS=capture")
     })?;
     let timeline = WavTimeline {
@@ -1134,11 +1271,16 @@ mod tests {
     struct Captures(PathBuf);
 
     impl ConfigSource for Captures {
-        fn engine_config(&self) -> EngineConfig {
-            EngineConfig {
+        fn engine_config(&self) -> Result<EngineConfig> {
+            Ok(EngineConfig {
                 captures_dir: self.0.clone(),
-            }
+            })
         }
+    }
+
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
     fn report(reply: ControlReply) -> ScrawlCaptureReport {
@@ -1152,10 +1294,11 @@ mod tests {
         host: &mut CaptureHost,
         audio: &FakeTimeline,
         bundle: &Path,
+        idle: bool,
     ) -> ScrawlCaptureOutcome {
         for _ in 0..500 {
             let status = report(host.control(ScrawlCaptureAction::Status, audio));
-            if status.finishing.is_empty()
+            if (!idle || status.finishing.is_empty())
                 && let Some(last) = status.last
                 && last.bundle == bundle
             {
@@ -1173,7 +1316,7 @@ mod tests {
             open: Mutex::default(),
         };
         let mut host =
-            CaptureHost::with(Arc::new(Captures(dir.clone())), Arc::new(FakeTranscriber));
+            CaptureHost::with(Arc::new(Captures(dir.clone())), Arc::new(FakeTranscriber)).unwrap();
 
         let idle = report(host.control(ScrawlCaptureAction::Stop, &audio));
         assert!(!idle.changed && idle.bundle.is_none());
@@ -1194,7 +1337,7 @@ mod tests {
         assert_eq!(stopped.bundle.as_ref(), Some(&bundle));
         assert!(!report(host.control(ScrawlCaptureAction::Stop, &audio)).changed);
 
-        let last = wait_for_last(&mut host, &audio, &bundle);
+        let last = wait_for_last(&mut host, &audio, &bundle, true);
         assert_eq!(last.stage, "done");
         assert_eq!(last.words, Some(2));
         let words: serde_json::Value =
@@ -1208,16 +1351,128 @@ mod tests {
         assert_eq!(manifest["sampleRate"], 16_000);
         assert_eq!(manifest["words"], "words.json");
         assert!(hound::WavReader::open(bundle.join("audio.wav")).is_ok());
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&bundle), 0o700);
+        for file in ["audio.wav", "words.json", "manifest.json"] {
+            assert_eq!(mode(&bundle.join(file)), 0o600, "{file}");
+        }
 
         // Cancel discards the bundle.
         let started = report(host.control(ScrawlCaptureAction::Start, &audio));
         let cancelled_bundle = started.bundle.unwrap();
         assert!(report(host.control(ScrawlCaptureAction::Cancel, &audio)).changed);
         assert!(!report(host.control(ScrawlCaptureAction::Cancel, &audio)).changed);
-        let last = wait_for_last(&mut host, &audio, &cancelled_bundle);
+        let last = wait_for_last(&mut host, &audio, &cancelled_bundle, true);
         assert_eq!(last.stage, "cancelled");
         assert!(!cancelled_bundle.exists());
         assert!(bundle.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn padding_past_the_length_limit_stays_bounded() {
+        let mut timeline = Timeline::with_limit(t(0), Duration::from_secs(1));
+        timeline.push(&[0.5; 1_600], 16_000, t(100));
+        // A gap far past the limit pads only up to it.
+        timeline.gap(t(100), t(3 * 60 * 60 * 1_000));
+        assert!(timeline.samples.len() <= 16_000);
+        timeline.gap(t(3 * 60 * 60 * 1_000), t(6 * 60 * 60 * 1_000));
+        timeline.push(&[0.5; 1_600], 16_000, t(6 * 60 * 60 * 1_000 + 100));
+        let audio = timeline.finish(t(6 * 60 * 60 * 1_000 + 100), None);
+        assert_eq!(audio.samples.len(), 16_000);
+        assert_eq!(
+            audio.gaps,
+            [
+                GapSpan {
+                    start_ms: 100,
+                    end_ms: 1_000
+                },
+                GapSpan {
+                    start_ms: 1_000,
+                    end_ms: 6 * 60 * 60 * 1_000 + 100
+                }
+            ]
+        );
+    }
+
+    /// Holds every transcription until the test lets it through.
+    struct GatedTranscriber(Mutex<Receiver<()>>);
+
+    impl Transcriber for GatedTranscriber {
+        fn transcribe(&self, _audio: &RecordedAudio) -> Result<Option<TranscriptData>> {
+            self.0.lock().unwrap().recv().ok();
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn captures_finish_one_at_a_time_and_starts_wait_for_room() {
+        let dir = temp_dir("bounded");
+        let audio = FakeTimeline {
+            open: Mutex::default(),
+        };
+        let (gate, gated) = mpsc::channel();
+        let mut host = CaptureHost::with(
+            Arc::new(Captures(dir.clone())),
+            Arc::new(GatedTranscriber(Mutex::new(gated))),
+        )
+        .unwrap();
+        let mut bundles = Vec::new();
+        for _ in 0..MAX_FINISHING {
+            let started = report(host.control(ScrawlCaptureAction::Start, &audio));
+            bundles.push(started.bundle.unwrap());
+            host.control(ScrawlCaptureAction::Stop, &audio);
+        }
+        assert_eq!(
+            report(host.control(ScrawlCaptureAction::Status, &audio)).finishing,
+            bundles
+        );
+        let ControlReply::Error { code, .. } = host.control(ScrawlCaptureAction::Start, &audio)
+        else {
+            panic!("a start past the bound must be refused");
+        };
+        assert_eq!(code, "busy");
+        // One finishes at a time, in order; the outcome is recorded directly.
+        gate.send(()).unwrap();
+        let first = wait_for_last(&mut host, &audio, &bundles[0], false);
+        assert_eq!(first.stage, "done");
+        assert_eq!(
+            report(host.control(ScrawlCaptureAction::Status, &audio)).finishing,
+            bundles[1..]
+        );
+        gate.send(()).unwrap();
+        assert_eq!(
+            wait_for_last(&mut host, &audio, &bundles[1], true).stage,
+            "done"
+        );
+        assert!(report(host.control(ScrawlCaptureAction::Start, &audio)).changed);
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn shutdown_cancels_the_recording_capture_and_waits_for_its_cleanup() {
+        let dir = temp_dir("shutdown");
+        let audio = FakeTimeline {
+            open: Mutex::default(),
+        };
+        let mut host =
+            CaptureHost::with(Arc::new(Captures(dir.clone())), Arc::new(FakeTranscriber)).unwrap();
+        let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
+            .bundle
+            .unwrap();
+        assert!(bundle.exists());
+        host.shutdown(&audio);
+        assert!(!bundle.exists());
+        let last = report(host.control(ScrawlCaptureAction::Status, &audio))
+            .last
+            .unwrap();
+        assert_eq!((last.bundle, last.stage.as_str()), (bundle, "cancelled"));
+        let ControlReply::Error { code, .. } = host.control(ScrawlCaptureAction::Start, &audio)
+        else {
+            panic!("a stopped host starts nothing");
+        };
+        assert_eq!(code, "busy");
         fs::remove_dir_all(dir).unwrap();
     }
 

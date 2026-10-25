@@ -7,6 +7,7 @@
 //! that cannot stream always takes the offline path. Commands are handled in
 //! order on one thread, because a live stream holds the model's compute lease.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -89,6 +90,15 @@ pub(crate) enum Command {
     },
     Finish {
         stream: Option<u64>,
+        clip: Vec<f32>,
+        offline: Offline,
+        job: Job,
+    },
+    /// An offline run that waits for an open live stream to end instead of
+    /// interrupting it, such as a capture's word chunk. Like a finish it is
+    /// a dictation request, so background work sent before it yields.
+    #[cfg_attr(not(all(debug_assertions, target_os = "macos")), allow(dead_code))]
+    Foreground {
         clip: Vec<f32>,
         offline: Offline,
         job: Job,
@@ -428,10 +438,6 @@ impl TranscriptionEngine {
         clip: Vec<f32>,
         offline: Offline,
     ) -> Result<PendingTranscript> {
-        let (reply, receiver) = mpsc::channel();
-        let cancel = CancelToken::new();
-        let job = self.deadlines.job_for(clip.len());
-        self.requests.fetch_add(1, Ordering::AcqRel);
         let (stream, stream_cancel) = match stream {
             Some(mut stream) => {
                 stream.finished = true;
@@ -439,16 +445,41 @@ impl TranscriptionEngine {
             }
             None => (None, None),
         };
+        self.request(clip.len(), stream_cancel, |job| Command::Finish {
+            stream,
+            clip,
+            offline,
+            job,
+        })
+    }
+
+    /// Transcribes `clip` offline after every command already sent, without
+    /// ever interrupting a live stream: one open when it arrives finishes
+    /// first. Background work sent before it yields, as to a finish.
+    #[cfg_attr(not(all(debug_assertions, target_os = "macos")), allow(dead_code))]
+    pub fn foreground(&self, clip: Vec<f32>, offline: Offline) -> Result<PendingTranscript> {
+        self.request(clip.len(), None, |job| Command::Foreground {
+            clip,
+            offline,
+            job,
+        })
+    }
+
+    fn request(
+        &self,
+        samples: usize,
+        stream_cancel: Option<CancelToken>,
+        command: impl FnOnce(Job) -> Command,
+    ) -> Result<PendingTranscript> {
+        let (reply, receiver) = mpsc::channel();
+        let cancel = CancelToken::new();
+        let job = self.deadlines.job_for(samples);
+        self.requests.fetch_add(1, Ordering::AcqRel);
         self.commands
-            .send(Command::Finish {
-                stream,
-                clip,
-                offline,
-                job: Job {
-                    cancel: cancel.clone(),
-                    reply,
-                },
-            })
+            .send(command(Job {
+                cancel: cancel.clone(),
+                reply,
+            }))
             .map_err(|_| eyre!("transcription engine stopped"))?;
         Ok(PendingTranscript {
             reply: receiver,
@@ -586,14 +617,15 @@ enum StreamEnd {
 
 impl Worker {
     fn run(mut self, commands: Receiver<Command>) {
-        let mut next = None;
+        // Commands received while a stream was open, handled before new ones.
+        let mut next = VecDeque::new();
         loop {
-            let Some(command) = next.take().or_else(|| commands.recv().ok()) else {
+            let Some(command) = next.pop_front().or_else(|| commands.recv().ok()) else {
                 return;
             };
             match command {
                 Command::Begin { stream, cancel } => {
-                    next = self.stream(stream, &cancel, &commands);
+                    self.stream(stream, &cancel, &commands, &mut next);
                 }
                 Command::Finish {
                     stream,
@@ -601,20 +633,16 @@ impl Worker {
                     offline,
                     job,
                 } => {
-                    if job.cancel.is_cancelled() {
-                        // Its waiter already gave up on it.
-                        job.finish(Err("transcription was abandoned".into()));
-                        continue;
-                    }
-                    let started = Instant::now();
-                    self.start(&job);
                     let source = match stream {
                         // The stream was already closed: its begin failed or
                         // another command interrupted it.
                         Some(_) => Source::Fallback("the live stream was not available".into()),
                         None => Source::Offline,
                     };
-                    self.offline(clip, offline, source, started, job);
+                    self.run_offline(clip, offline, source, job);
+                }
+                Command::Foreground { clip, offline, job } => {
+                    self.run_offline(clip, offline, Source::Offline, job);
                 }
                 Command::Run(work) => {
                     work(&mut self.model);
@@ -645,6 +673,17 @@ impl Worker {
         }
     }
 
+    fn run_offline(&mut self, clip: Vec<f32>, offline: Offline, source: Source, job: Job) {
+        if job.cancel.is_cancelled() {
+            // Its waiter already gave up on it.
+            job.finish(Err("transcription was abandoned".into()));
+            return;
+        }
+        let started = Instant::now();
+        self.start(&job);
+        self.offline(clip, offline, source, started, job);
+    }
+
     /// Starts a job's clock. The engine is evidently moving again.
     fn start(&self, job: &Job) {
         self.stalled.store(false, Ordering::Release);
@@ -652,68 +691,26 @@ impl Worker {
     }
 
     /// Drives one live stream until it finishes, is cancelled, or another
-    /// command interrupts it. Returns a command still to be handled.
+    /// command interrupts it. Commands still to be handled, in order, are
+    /// pushed onto `next`.
     fn stream(
         &mut self,
         id: u64,
         cancel: &CancelToken,
         commands: &Receiver<Command>,
-    ) -> Option<Command> {
-        let options = self.model.stream_options().cloned()?;
+        next: &mut VecDeque<Command>,
+    ) {
+        let Some(options) = self.model.stream_options().cloned() else {
+            return;
+        };
         self.running.enter(cancel);
         let begun = Instant::now();
-        let mut feed_ms = 0_u128;
-        let mut feeds = 0_u32;
+        let mut stats = FeedStats::default();
         let stalled = &self.stalled;
         let ended = self.model.with_stream(&options, cancel, |stream| {
-            let mut failure: Option<String> = None;
-            let mut fed = 0_usize;
-            loop {
-                let Ok(command) = commands.recv() else {
-                    return StreamEnd::Disconnected;
-                };
-                match command {
-                    Command::Feed { stream: s, samples } if s == id => {
-                        fed += samples.len();
-                        if failure.is_none() {
-                            let started = Instant::now();
-                            if let Err(error) = stream.feed(&samples) {
-                                failure = Some(format!("stream feed failed: {error}"));
-                            }
-                            feed_ms += started.elapsed().as_millis();
-                            feeds += 1;
-                        }
-                    }
-                    Command::Feed { .. } => {}
-                    // Background work never interrupts a capture.
-                    Command::Background { work, .. } => work(None),
-                    Command::Cancel { stream: s } if s == id => return StreamEnd::Cancelled,
-                    Command::Cancel { .. } => {}
-                    Command::Finish {
-                        stream: Some(s),
-                        clip,
-                        offline,
-                        job,
-                    } if s == id => {
-                        let started = Instant::now();
-                        stalled.store(false, Ordering::Release);
-                        job.start();
-                        let result = match failure {
-                            Some(failure) => Err(failure),
-                            None => finish_stream(stream, &clip, fed),
-                        };
-                        return StreamEnd::Finished {
-                            result,
-                            clip,
-                            offline,
-                            job,
-                            started,
-                        };
-                    }
-                    other => return StreamEnd::Interrupted(other),
-                }
-            }
+            drive_stream(id, stream, commands, stalled, next, &mut stats)
         });
+        let FeedStats { feed_ms, feeds } = stats;
         match ended {
             Ok(StreamEnd::Finished {
                 result,
@@ -744,14 +741,10 @@ impl Worker {
                         self.offline(clip, offline, Source::Fallback(reason), started, job);
                     }
                 }
-                None
             }
-            Ok(StreamEnd::Cancelled) | Ok(StreamEnd::Disconnected) => None,
-            Ok(StreamEnd::Interrupted(command)) => Some(command),
-            Err(error) => {
-                tracing::warn!(%error, "could not begin a live stream");
-                None
-            }
+            Ok(StreamEnd::Cancelled) | Ok(StreamEnd::Disconnected) => {}
+            Ok(StreamEnd::Interrupted(command)) => next.push_back(command),
+            Err(error) => tracing::warn!(%error, "could not begin a live stream"),
         }
     }
 
@@ -781,11 +774,94 @@ impl Worker {
 /// Feeds whatever part of the clip the stream has not seen, then finalizes.
 /// The clip is authoritative: a stream fed well past its trimmed end, or one
 /// that produced nothing, is reported unusable so the caller falls back.
-fn finish_stream(
-    stream: &mut transcribe_cpp::Stream<'_>,
-    clip: &[f32],
-    fed: usize,
-) -> Result<String, String> {
+/// The live stream as the worker drives it.
+trait StreamFeed {
+    fn feed(&mut self, samples: &[f32]) -> Result<(), String>;
+    fn finalize(&mut self) -> Result<String, String>;
+}
+
+impl StreamFeed for transcribe_cpp::Stream<'_> {
+    fn feed(&mut self, samples: &[f32]) -> Result<(), String> {
+        transcribe_cpp::Stream::feed(self, samples)
+            .map(drop)
+            .map_err(|error| error.to_string())
+    }
+
+    fn finalize(&mut self) -> Result<String, String> {
+        transcribe_cpp::Stream::finalize(self).map_err(|error| error.to_string())?;
+        Ok(self.text().full.trim().to_string())
+    }
+}
+
+#[derive(Default)]
+struct FeedStats {
+    feed_ms: u128,
+    feeds: u32,
+}
+
+/// Handles commands while stream `id` is open. Foreground work waits in
+/// `deferred` until the stream ends; background work is skipped; any other
+/// command interrupts the stream.
+fn drive_stream(
+    id: u64,
+    stream: &mut impl StreamFeed,
+    commands: &Receiver<Command>,
+    stalled: &AtomicBool,
+    deferred: &mut VecDeque<Command>,
+    stats: &mut FeedStats,
+) -> StreamEnd {
+    let mut failure: Option<String> = None;
+    let mut fed = 0_usize;
+    loop {
+        let Ok(command) = commands.recv() else {
+            return StreamEnd::Disconnected;
+        };
+        match command {
+            Command::Feed { stream: s, samples } if s == id => {
+                fed += samples.len();
+                if failure.is_none() {
+                    let started = Instant::now();
+                    if let Err(error) = stream.feed(&samples) {
+                        failure = Some(format!("stream feed failed: {error}"));
+                    }
+                    stats.feed_ms += started.elapsed().as_millis();
+                    stats.feeds += 1;
+                }
+            }
+            Command::Feed { .. } => {}
+            // Background work never interrupts a capture.
+            Command::Background { work, .. } => work(None),
+            // Nor does foreground work; it runs once the stream ends.
+            foreground @ Command::Foreground { .. } => deferred.push_back(foreground),
+            Command::Cancel { stream: s } if s == id => return StreamEnd::Cancelled,
+            Command::Cancel { .. } => {}
+            Command::Finish {
+                stream: Some(s),
+                clip,
+                offline,
+                job,
+            } if s == id => {
+                let started = Instant::now();
+                stalled.store(false, Ordering::Release);
+                job.start();
+                let result = match failure {
+                    Some(failure) => Err(failure),
+                    None => finish_stream(stream, &clip, fed),
+                };
+                return StreamEnd::Finished {
+                    result,
+                    clip,
+                    offline,
+                    job,
+                    started,
+                };
+            }
+            other => return StreamEnd::Interrupted(other),
+        }
+    }
+}
+
+fn finish_stream(stream: &mut impl StreamFeed, clip: &[f32], fed: usize) -> Result<String, String> {
     if fed > clip.len() + MAX_OVERFED_SAMPLES {
         return Err(format!(
             "the stream received {} ms past the clip's end",
@@ -797,10 +873,9 @@ fn finish_stream(
             .feed(&clip[fed..])
             .map_err(|error| format!("stream feed failed: {error}"))?;
     }
-    stream
+    let text = stream
         .finalize()
         .map_err(|error| format!("stream finalize failed: {error}"))?;
-    let text = stream.text().full.trim().to_string();
     if text.is_empty() {
         return Err("the stream returned no text".into());
     }
@@ -848,6 +923,74 @@ mod tests {
                 Command::Finish { stream: Some(2), clip, .. },
             ] if first.len() == 3 && second.len() == 2 && clip.len() == 7
         ));
+    }
+
+    #[derive(Default)]
+    struct FakeStream {
+        fed: Vec<f32>,
+    }
+
+    impl StreamFeed for FakeStream {
+        fn feed(&mut self, samples: &[f32]) -> Result<(), String> {
+            self.fed.extend_from_slice(samples);
+            Ok(())
+        }
+
+        fn finalize(&mut self) -> Result<String, String> {
+            Ok(format!("streamed {}", self.fed.len()))
+        }
+    }
+
+    #[test]
+    fn foreground_work_waits_for_an_open_stream_instead_of_interrupting_it() {
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let mut stream = engine.begin().unwrap();
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            Command::Begin { stream: 1, .. }
+        ));
+        stream.feed(&[0.1; 4]);
+        let chunk = engine
+            .foreground(vec![0.0; 9], Box::new(|_, _| Ok("chunk".into())))
+            .unwrap();
+        stream.feed(&[0.2; 4]);
+        let dictation = engine
+            .finish_with(
+                Some(stream),
+                vec![0.0; 8],
+                Box::new(|_, _| panic!("the dictation must not be retranscribed offline")),
+            )
+            .unwrap();
+
+        let mut fake = FakeStream::default();
+        let mut deferred = VecDeque::new();
+        let ended = drive_stream(
+            1,
+            &mut fake,
+            &commands,
+            &AtomicBool::new(false),
+            &mut deferred,
+            &mut FeedStats::default(),
+        );
+        let StreamEnd::Finished { result, job, .. } = ended else {
+            panic!("the stream did not finish");
+        };
+        // The stream got all its audio and finished as a stream.
+        assert_eq!(result, Ok("streamed 8".to_string()));
+        assert_eq!(fake.fed.len(), 8);
+        job.finish(Ok(Transcribed {
+            text: "streamed 8".into(),
+            source: Source::Stream,
+            finish_ms: 0,
+        }));
+        assert_eq!(dictation.wait().unwrap().source, Source::Stream);
+        // The chunk waits to run after the stream.
+        assert!(matches!(
+            deferred.as_slices().0,
+            [Command::Foreground { clip, .. }] if clip.len() == 9
+        ));
+        drop(deferred);
+        assert!(chunk.wait().is_err());
     }
 
     const SHORT: Deadlines = Deadlines {
