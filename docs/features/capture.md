@@ -47,11 +47,32 @@ First launch with the experiment on      // capture.import
 └── Scrawl's files are never written
 
 ⌥⇧S (capture.shortcut; captures on, Scrawl not running)
-├── Press -> start, as `hex capture start`        // a fresh press only, no repeats
-├── Press again -> stop, as `hex capture stop`    // ignored within 400 ms of the start
+├── Press, held as long as you like -> armed; nothing records while ⌥⇧ is down
+│   └── One of its modifiers comes up -> start on the display under the pointer,
+│       as `hex capture start`                // a fresh press only, no repeats
+├── Esc before the modifiers come up -> nothing records
+├── Press while recording -> stop, as `hex capture stop` // ignored within 400 ms
+├── Press while the capsule's picker is open -> the picker records what it is on
 ├── Esc while a capture records -> cancel it, before any dictation job
 ├── The binding is swallowed, never chord evidence for dictation
 └── Hold the dictation shortcut mid-capture -> dictation pastes as usual
+
+Switching target                         // capture.switch; the capsule's chips
+├── Started by the shortcut -> the snapshot's recording says `target: Pointer`,
+│   the only kind that shows the switch chips (Area · Window · Screen)
+├── First click, scroll, or ink stroke -> `worked`, so the chips fold
+├── Screen -> the capsule folds the chips; the capture goes on
+├── Window or Area -> CaptureCommand::Discard: bundle removed, no outcome, gone
+│   from the snapshot at once (and from MAX_FINISHING), so the capsule becomes
+│   the picker
+├── Picker open (begin_picking) -> Hex's tap hands it ⌥⇧S and Esc; it never
+│   takes focus
+├── A pick -> CaptureCommand::Start(Window | Area | Display); nothing while one
+│   records
+├── The picked window closed, or Screen Recording refused -> last outcome
+│   `failed` with its reason (`error`)
+└── iPhone -> not yet: Scrawl's phone path opens the Mac microphone and its own
+    transcriber
 
 While a capture records                  // capture.input
 ├── The existing session tap adds mouse down/up/drag/scroll and Shift (no second tap)
@@ -172,7 +193,7 @@ Checks:
 - Shortcut and input, in capture_host.rs: `the_host_is_absent_while_captures_are_off`,
   `the_shortcut_starts_and_a_later_press_stops`,
   `input_reaches_only_the_capture_that_is_recording`, `tap_flags_become_modifiers`,
-  `only_a_fresh_press_of_the_shortcut_counts`,
+  `the_shortcut_records_once_its_keys_come_up`,
   `a_failed_start_ends_before_escape_or_the_shortcut_sees_it`;
   `the_capture_shortcut_is_suppressed_and_never_chord_evidence` and
   `a_capture_logs_only_keys_that_reach_the_app` in suppression.rs;
@@ -180,6 +201,13 @@ Checks:
   `a_capture_started_by_its_shortcut_waits_for_shift_to_come_up`,
   `a_capture_started_without_shift_held_inks_from_the_first_stroke`, and
   `a_click_with_the_chords_shift_still_held_is_no_pin`.
+- Switching, in capture_host.rs:
+  `a_discarded_capture_leaves_no_trace_and_a_pick_takes_its_place`,
+  `discarded_captures_never_count_against_the_writers`,
+  `a_pick_that_cannot_start_says_why`,
+  `the_first_click_or_scroll_means_work_started`, and
+  `the_newest_picker_takes_its_keys_until_it_closes`. The chips and picker
+  themselves are the capsule's (not on this branch).
 - Pane: `captures_default_off_and_refuse_a_shortcut_in_use` and
   `retention_names_presets_and_imported_days` in rune_ui/scrawl.rs; scenes
   `mac-scrawl-off`, `mac-scrawl`, `mac-scrawl-running`, `mac-scrawl-permission`
@@ -194,5 +222,5 @@ wrote 18 words with plausible times. The real engine has not run end to end:
 the unit tests use a fake engine over Scrawl's real bundle writer, and the
 mini (the test Mac) has no Screen Recording grant for a dev build, so neither
 `hex capture` against a live app nor `capture-replay` has recorded a screen.
-The shortcut, tap input, Escape, Scrawl coexistence, and import are covered by
-unit tests only; none has run against a live Hex.
+The shortcut, tap input, Escape, switching, Scrawl coexistence, and import are
+covered by unit tests only; none has run against a live Hex.

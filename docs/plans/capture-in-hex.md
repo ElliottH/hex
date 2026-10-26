@@ -287,6 +287,17 @@ where the work starts (the `capture_host` worker), not only in the window.
   Their window ids go to the engine through `Host::own_windows` so screen
   capture leaves them out and clicks pass through.
 - Each state has a `--snap` scene and a storybook entry.
+- Scrawl's switch chips (`docs/capture.md`): a shortcut-started recording opens
+  onto Area · Window · Screen for 3.5 s (never folding while hovered) or until
+  the first click, scroll, or stroke. A chip restarts rather than retargets:
+  Window and Area discard the recording and turn the capsule into the picker.
+  The host side is built: `CaptureTarget`, `CaptureCommand::{Start, Discard}`
+  through `RecognitionControl::CaptureCommand`, `RecordingCapture::{target,
+  worked}`, `SettledCapture::error`, and `begin_picking` for ⌥⇧S and Esc while
+  the picker is open. The shortcut starts on its modifiers' release, as
+  Scrawl's does. The iPhone chip waits until the phone path can use Hex's
+  microphone timeline and transcriber (`scrawl-helper mirror` opens the
+  microphone itself).
 - A Scrawl pane under Experiments, feature-owned (D-5): opt-in, shortcut,
   Screen Recording, transcriber, captures folder, retention, and "Use Hex for
   captures" while Scrawl runs (built; iPhone joins with ingest).

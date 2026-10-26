@@ -123,6 +123,13 @@ pub enum RecognitionControl {
         action: crate::control::ScrawlCaptureAction,
         reply: SyncSender<ControlReply>,
     },
+    /// The capture capsule's switch chips and picker (`capture_host`).
+    #[cfg(hex_capture)]
+    #[expect(dead_code, reason = "the capture capsule (scrawl-capsule) sends these")]
+    CaptureCommand {
+        command: crate::capture_host::CaptureCommand,
+        reply: SyncSender<ControlReply>,
+    },
     StartDictation {
         source: String,
         owner_token: String,
@@ -505,6 +512,14 @@ pub fn listen(
                                 "captures are off; turn them on in Settings › Scrawl or \
                                  run `hex settings set capture.enabled true`",
                             ),
+                        };
+                        let _ = reply.send(answer);
+                    }
+                    #[cfg(hex_capture)]
+                    RecognitionControl::CaptureCommand { command, reply } => {
+                        let answer = match capture_host.as_mut() {
+                            Some(host) => host.command(command, &input),
+                            None => ControlReply::error("feature-off", "captures are off"),
                         };
                         let _ = reply.send(answer);
                     }
@@ -1000,10 +1015,19 @@ pub fn listen(
                 continue;
             }
             #[cfg(hex_capture)]
-            if capture_shortcut.pressed(input_event, crate::app_settings::runtime_hotkeys())
-                && let Some(host) = capture_host.as_mut()
-            {
-                host.toggle(capture_at, &input);
+            if let Some(host) = capture_host.as_mut() {
+                let activity = host.shortcut_activity(capture_at, &input);
+                let action = capture_shortcut.input(
+                    input_event,
+                    crate::app_settings::runtime_hotkeys(),
+                    activity,
+                );
+                if action == crate::capture_host::ShortcutAction::Cancel {
+                    // Escape before the shortcut's keys came up: nothing else
+                    // hears it.
+                    continue;
+                }
+                host.shortcut(action, &input);
             }
             if voice.is_some() && input_event.is_escape_down() {
                 voice = None;
@@ -1020,6 +1044,13 @@ pub fn listen(
             }
             // Escape ends what records in the foreground first: a dictation
             // or Voice Action hold, then a capture, then queued dictation.
+            #[cfg(hex_capture)]
+            if !hotkeys.any_recording()
+                && input_event.is_escape_down()
+                && crate::capture_host::picker_key(crate::capture_host::PickerKey::Escape)
+            {
+                continue;
+            }
             #[cfg(hex_capture)]
             if !hotkeys.any_recording()
                 && input_event.is_escape_down()
@@ -1245,9 +1276,11 @@ pub fn listen(
             }
         }
         #[cfg(hex_capture)]
-        let capture_recording = capture_host
-            .as_mut()
-            .is_some_and(|host| host.recording_since(&input).is_some());
+        let capture_recording = capture_host.as_mut().is_some_and(|host| {
+            host.recording_since(&input).is_some()
+                || capture_shortcut.armed()
+                || crate::capture_host::picking()
+        });
         #[cfg(not(hex_capture))]
         let capture_recording = false;
         input_monitor.set_escape_cancels(

@@ -616,7 +616,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   retries, or global shortcuts), logs to tracing, and writes only to the
   captures folder (`capture.folder`, Scrawl's own by default). Hex's capture
   shortcut (default ⌥⇧S, a key required, never overlapping another binding)
-  is a fresh press that starts or stops; while Scrawl.app
+  is a fresh press: idle, it starts once one of its modifiers comes up (Esc
+  before then records nothing); recording, it stops; with the capsule's
+  picker open, the picker records. A switch chip discards the recording
+  (no outcome) rather than retargeting it; while Scrawl.app
   (`dev.kitlangton.scrawl`) runs, Hex registers no capture shortcut and runs
   no retention, and only the pane's "Use Hex for captures" quits Scrawl.
   Escape cancels a recording capture before any dictation job. Pointer
