@@ -948,6 +948,11 @@ pub(crate) fn view(s: &PickerState, cx: &mut Cx<PickerState>) -> El {
     {
         let badge = &s.badge;
         let [bx, by, bw, bh] = badge.rect;
+        // As the capsule's text swaps: the old title softens out quickly.
+        let reduced = cx.is_reduced_motion();
+        let swap = Transition::blur(if reduced { 0.0 } else { super::PRESENCE_BLUR })
+            .combined(Transition::scale(if reduced { 1.0 } else { 0.96 }))
+            .springs(rune::SpringPair::new(FADE, super::surface::PRESENCE_EXIT));
         let mut pill = row()
             .key("badge")
             .trace_name("badge")
@@ -960,18 +965,26 @@ pub(crate) fn view(s: &PickerState, cx: &mut Cx<PickerState>) -> El {
         for shadow in &k.elevation.floating {
             pill = pill.box_shadow(*shadow);
         }
+        // The outgoing text keeps its own width as it fades, so the pill
+        // clips it rather than letting a longer title spill past its edge.
         layer = layer.child(
             pill.child(
-                el().key(format!("text:{}", badge.key))
-                    .absolute(BADGE_PX, 0.0)
-                    .size(bw - 2.0 * BADGE_PX, bh)
+                el().key("badge-clip")
+                    .absolute(0.0, 0.0)
+                    .size(bw, bh)
+                    .clip_rounded(bh * 0.5)
                     .child(
-                        row()
-                            .center()
+                        el().key(format!("text:{}", badge.key))
+                            .absolute(BADGE_PX, 0.0)
                             .size(bw - 2.0 * BADGE_PX, bh)
-                            .child(text(&badge.text).font(BADGE_TEXT).color(p.text())),
-                    )
-                    .transition(Transition::opacity().springs(rune::SpringPair::new(FADE, FADE))),
+                            .child(
+                                row()
+                                    .center()
+                                    .size(bw - 2.0 * BADGE_PX, bh)
+                                    .child(text(&badge.text).font(BADGE_TEXT).color(p.text())),
+                            )
+                            .transition(swap),
+                    ),
             ),
         );
     }
