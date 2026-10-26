@@ -76,6 +76,13 @@ hex capture start|stop|cancel|status     // `--features capture`; POST /control 
 - `hex dev capture-replay <wav>…` runs the same `CaptureHost` headlessly on a
   fresh transcription engine, feeding WAV files instead of the microphone; it
   records the screen too (debug builds only, like every `hex dev` command).
+- Views read one `CaptureSnapshot` (`capture_host::snapshot`, woken by
+  `capture_host::watch`): the recording capture (bundle, start, whether the
+  screen started), stopped captures with the engine's latest stage, and the
+  last settled one (done, failed, cancelled, with words and gaps). The host
+  publishes it on every change; engine progress moves a capture on but never
+  settles it. The capsule, the router, and `hex capture list` subscribe here
+  rather than to the host.
 - Not built yet: the capsule, the ink and laser overlays, routing, delivery,
   iPhone ingest, and moving the ingest token.
 

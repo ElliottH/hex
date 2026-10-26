@@ -16,6 +16,10 @@
 //! ([`report_input`]), which the `capture-input` thread hands to the
 //! capture's `InputSink` through the engine's pure input rules
 //! (`scrawl_capture::hosted_input`).
+//!
+//! Views never reach into the host: every change to a capture (started,
+//! the screen recording, stopped, the engine's stages, settled) publishes
+//! one [`CaptureSnapshot`], which [`snapshot`] reads and [`watch`] wakes on.
 
 use std::fs;
 use std::fs::DirBuilder;
@@ -434,27 +438,304 @@ struct FinishJob {
     audio: RecordedAudio,
 }
 
-#[derive(Default)]
+// ---------------------------------------------------------------------------
+// What views see: one snapshot of every capture, published on each change.
+
+/// Every capture Hex knows about, as one value. A view (the capture
+/// capsule, the menu bar, `hex capture`) reads it whole instead of reaching
+/// into the host, and [`watch`] says when it changed.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CaptureSnapshot {
+    /// Bumped on every change, across hosts, for the life of the process.
+    pub generation: u64,
+    pub recording: Option<RecordingCapture>,
+    /// Stopped captures still being written or cancelled, oldest first.
+    pub finishing: Vec<FinishingCapture>,
+    /// The most recent capture that finished, failed, or was cancelled.
+    pub last: Option<SettledCapture>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordingCapture {
+    pub bundle: PathBuf,
+    /// When it started, on the clock [`CaptureInstant::now`] reads.
+    pub since: CaptureInstant,
+    /// The engine started recording the screen; until then it is starting.
+    pub screen: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FinishingCapture {
+    pub bundle: PathBuf,
+    /// The engine's latest stage: `Stopping` until it reports another.
+    pub stage: Stage,
+    pub cancelling: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SettledCapture {
+    pub bundle: PathBuf,
+    /// `Done`, `Failed`, or `Cancelled`.
+    pub stage: Stage,
+    /// A written capture's words, missing spans of audio, and why it has
+    /// no transcript, if it has none.
+    pub words: Option<usize>,
+    pub gaps: Option<usize>,
+    pub missing_transcript: Option<String>,
+}
+
+impl SettledCapture {
+    fn outcome(&self) -> ScrawlCaptureOutcome {
+        ScrawlCaptureOutcome {
+            bundle: self.bundle.clone(),
+            stage: self.stage.label().into(),
+            words: self.words,
+            gaps: self.gaps,
+            missing_transcript: self.missing_transcript.clone(),
+        }
+    }
+}
+
+/// The process's capture snapshot and those watching it.
+struct Feed {
+    snapshot: Mutex<CaptureSnapshot>,
+    watchers: Mutex<Vec<SyncSender<()>>>,
+}
+
+impl Feed {
+    const fn new() -> Self {
+        Self {
+            snapshot: Mutex::new(CaptureSnapshot {
+                generation: 0,
+                recording: None,
+                finishing: Vec::new(),
+                last: None,
+            }),
+            watchers: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn publish(&self, mut next: CaptureSnapshot) {
+        {
+            let mut snapshot = self
+                .snapshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            next.generation = snapshot.generation;
+            if *snapshot == next {
+                return;
+            }
+            next.generation += 1;
+            *snapshot = next;
+        }
+        // A full wake-up is already pending; a gone watcher stops watching.
+        self.watchers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|wake| !matches!(wake.try_send(()), Err(TrySendError::Disconnected(()))));
+    }
+
+    fn snapshot(&self) -> CaptureSnapshot {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    fn watch(&'static self) -> CaptureWatch {
+        let (wake, woken) = mpsc::sync_channel(1);
+        let _ = wake.try_send(());
+        self.watchers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(wake);
+        CaptureWatch { feed: self, woken }
+    }
+}
+
+static FEED: Feed = Feed::new();
+
+/// The current capture snapshot.
+#[expect(
+    dead_code,
+    reason = "the capture capsule subscribes next (scrawl-capsule)"
+)]
+pub fn snapshot() -> CaptureSnapshot {
+    FEED.snapshot()
+}
+
+/// Watches the capture snapshot from any thread. Changes coalesce: a watcher
+/// always gets the latest snapshot, never a stale one, but may skip the ones
+/// between.
+#[expect(
+    dead_code,
+    reason = "the capture capsule subscribes next (scrawl-capsule)"
+)]
+pub fn watch() -> CaptureWatch {
+    FEED.watch()
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the capture capsule subscribes next (scrawl-capsule)"
+    )
+)]
+pub struct CaptureWatch {
+    feed: &'static Feed,
+    woken: Receiver<()>,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the capture capsule subscribes next (scrawl-capsule)"
+    )
+)]
+impl CaptureWatch {
+    /// The snapshot if it changed since the last call (the first call always
+    /// returns it), without blocking.
+    pub fn changed(&self) -> Option<CaptureSnapshot> {
+        let mut woke = false;
+        while self.woken.try_recv().is_ok() {
+            woke = true;
+        }
+        woke.then(|| self.feed.snapshot())
+    }
+
+    /// Waits up to `timeout` for a change.
+    pub fn wait(&self, timeout: Duration) -> Option<CaptureSnapshot> {
+        self.woken.recv_timeout(timeout).ok()?;
+        while self.woken.try_recv().is_ok() {}
+        Some(self.feed.snapshot())
+    }
+}
+
+/// The host's captures from start to outcome; every change publishes a
+/// snapshot to the feed.
 struct Outcomes {
     /// Every capture from its start until its outcome is settled: starting,
     /// recording, waiting to be written, writing, or cancelling. Each is
     /// settled exactly once, by its collector or by the finisher.
-    unfinished: Vec<PathBuf>,
-    last: Option<ScrawlCaptureOutcome>,
+    unfinished: Vec<Unfinished>,
+    last: Option<SettledCapture>,
+    feed: &'static Feed,
+}
+
+struct Unfinished {
+    bundle: PathBuf,
+    since: CaptureInstant,
+    /// `None` while it records; the stage once it was stopped or cancelled.
+    stopped: Option<(Stage, bool)>,
+    screen: bool,
+}
+
+impl Default for Outcomes {
+    fn default() -> Self {
+        Self::on(&FEED)
+    }
 }
 
 impl Outcomes {
-    fn settle(&mut self, bundle: PathBuf, stage: Stage, written: Option<Written>) {
-        self.unfinished.retain(|unfinished| unfinished != &bundle);
-        self.last = Some(ScrawlCaptureOutcome {
+    fn on(feed: &'static Feed) -> Self {
+        Self {
+            unfinished: Vec::new(),
+            last: None,
+            feed,
+        }
+    }
+
+    fn idle(&self) -> bool {
+        self.unfinished.is_empty()
+    }
+
+    fn started(&mut self, bundle: PathBuf, since: CaptureInstant) {
+        self.unfinished.push(Unfinished {
             bundle,
-            stage: stage.label().into(),
+            since,
+            stopped: None,
+            screen: false,
+        });
+        self.publish();
+    }
+
+    fn stopped(&mut self, bundle: &Path, cancel: bool) {
+        if let Some(unfinished) = self.find(bundle) {
+            unfinished.stopped = Some((Stage::Stopping, cancel));
+            self.publish();
+        }
+    }
+
+    /// The engine's progress, which arrives late and out of band: it moves a
+    /// capture on but never settles one (its collector or the finisher does).
+    fn progress(&mut self, bundle: &Path, stage: Stage) {
+        let Some(unfinished) = self.find(bundle) else {
+            return;
+        };
+        match (stage, &mut unfinished.stopped) {
+            (Stage::Recording, None) => unfinished.screen = true,
+            (
+                Stage::Stopping | Stage::Transcribing | Stage::Rendering | Stage::Writing,
+                Some((current, false)),
+            ) => *current = stage,
+            _ => return,
+        }
+        self.publish();
+    }
+
+    fn settle(&mut self, bundle: PathBuf, stage: Stage, written: Option<Written>) {
+        self.unfinished
+            .retain(|unfinished| unfinished.bundle != bundle);
+        self.last = Some(SettledCapture {
+            bundle,
+            stage,
             words: written.as_ref().map(|written| written.words),
             gaps: written.as_ref().map(|written| written.gaps),
             missing_transcript: written.and_then(|written| written.missing_transcript),
         });
+        self.publish();
+    }
+
+    fn find(&mut self, bundle: &Path) -> Option<&mut Unfinished> {
+        self.unfinished
+            .iter_mut()
+            .find(|unfinished| unfinished.bundle == bundle)
+    }
+
+    fn snapshot(&self) -> CaptureSnapshot {
+        let mut snapshot = CaptureSnapshot {
+            last: self.last.clone(),
+            ..CaptureSnapshot::default()
+        };
+        for unfinished in &self.unfinished {
+            match unfinished.stopped {
+                None => {
+                    snapshot.recording = Some(RecordingCapture {
+                        bundle: unfinished.bundle.clone(),
+                        since: unfinished.since,
+                        screen: unfinished.screen,
+                    });
+                }
+                Some((stage, cancelling)) => snapshot.finishing.push(FinishingCapture {
+                    bundle: unfinished.bundle.clone(),
+                    stage,
+                    cancelling,
+                }),
+            }
+        }
+        snapshot
+    }
+
+    fn publish(&self) {
+        self.feed.publish(self.snapshot());
     }
 }
+
+/// The host that last started, for engine progress, which arrives on the
+/// process-wide `capture-events` thread.
+static LIVE_OUTCOMES: Mutex<Weak<Mutex<Outcomes>>> = Mutex::new(Weak::new());
 
 type SharedOutcomes = Arc<Mutex<Outcomes>>;
 
@@ -535,6 +816,9 @@ impl CaptureHost {
 
     fn with(engine: Arc<dyn CaptureEngine>, captures_dir: Option<PathBuf>) -> Result<Self> {
         let outcomes = SharedOutcomes::default();
+        *LIVE_OUTCOMES
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::downgrade(&outcomes);
         let (jobs, queued) = mpsc::sync_channel(MAX_FINISHING);
         let finisher = {
             let outcomes = outcomes.clone();
@@ -593,9 +877,7 @@ impl CaptureHost {
                         Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Err(mpsc::RecvTimeoutError::Disconnected) => return,
                     }
-                    if !lock(&outcomes).unfinished.is_empty()
-                        || crate::app_settings::scrawl_app_running()
-                    {
+                    if !lock(&outcomes).idle() || crate::app_settings::scrawl_app_running() {
                         wait = Duration::from_secs(60);
                         continue;
                     }
@@ -699,7 +981,7 @@ impl CaptureHost {
         }
         // Unfinished from here until its collector or the finisher settles
         // it, whatever stop or cancel does meanwhile.
-        lock(&self.outcomes).unfinished.push(bundle.clone());
+        lock(&self.outcomes).started(bundle.clone(), now);
         self.input.recording(Some(&bundle));
         let (seal, sealed) = mpsc::sync_channel(1);
         let collector = {
@@ -714,9 +996,7 @@ impl CaptureHost {
                 .inspect_err(|_| {
                     let _ = audio.close_sink(now);
                     remove_bundle(&bundle);
-                    lock(&self.outcomes)
-                        .unfinished
-                        .retain(|unfinished| unfinished != &bundle);
+                    lock(&self.outcomes).settle(bundle.clone(), Stage::Failed, None);
                 })?
         };
         tracing::info!(bundle = %bundle.display(), "capture started");
@@ -752,6 +1032,7 @@ impl CaptureHost {
                 closed,
             }
         };
+        lock(&self.outcomes).stopped(&active.bundle, cancel);
         let _ = active.seal.send(seal);
         self.ended.push(active.collector);
         tracing::info!(bundle = %active.bundle.display(), cancel, "capture ended");
@@ -779,11 +1060,11 @@ impl CaptureHost {
                 .filter(|unfinished| {
                     self.active
                         .as_ref()
-                        .is_none_or(|active| &active.bundle != *unfinished)
+                        .is_none_or(|active| active.bundle != unfinished.bundle)
                 })
-                .cloned()
+                .map(|unfinished| unfinished.bundle.clone())
                 .collect(),
-            last: outcomes.last.clone(),
+            last: outcomes.last.as_ref().map(SettledCapture::outcome),
         }))
     }
 }
@@ -1060,10 +1341,19 @@ fn join_by(thread: JoinHandle<()>, deadline: Instant, name: &str) {
     }
 }
 
+/// The `capture-events` thread: logs the engine's progress and hands it to
+/// the host's outcomes, and so to the snapshot.
 fn log_events(events: Receiver<Event>) {
     for event in events {
         if let Event::Progress { bundle, stage } = event {
             tracing::info!(bundle = %bundle.display(), stage = stage.label(), "capture progress");
+            let live = LIVE_OUTCOMES
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .upgrade();
+            if let Some(outcomes) = live {
+                lock(&outcomes).progress(&bundle, stage);
+            }
         }
     }
 }
@@ -1751,6 +2041,8 @@ mod tests {
         let again = report(host.control(ScrawlCaptureAction::Start, &audio));
         assert!(!again.changed);
         assert_eq!(again.bundle.as_ref(), Some(&bundle));
+        let recording = lock(&host.outcomes).snapshot().recording.unwrap();
+        assert_eq!(recording.bundle, bundle);
 
         // Half a second of audio arrives 300 ms after the start, as from a
         // cold microphone.
@@ -1768,6 +2060,9 @@ mod tests {
         let last = wait_for_last(&mut host, &audio, &bundle, true);
         assert_eq!(last.stage, "done");
         assert_eq!(last.words, Some(2));
+        let snapshot = lock(&host.outcomes).snapshot();
+        assert!(snapshot.recording.is_none() && snapshot.finishing.is_empty());
+        assert_eq!(snapshot.last.unwrap().stage, Stage::Done);
         // The fake audio ends before the stop, so the tail may count as a gap.
         assert!(last.gaps.is_some());
         assert_eq!(last.missing_transcript, None);
@@ -2191,5 +2486,89 @@ mod tests {
         assert!(held.option && held.shift && !held.command && !held.control);
         assert!(!held.shift_only());
         assert!(modifiers(0x0002_0000).shift_only());
+    }
+
+    #[test]
+    fn the_snapshot_follows_a_capture_and_ignores_late_progress() {
+        let feed: &'static Feed = Box::leak(Box::new(Feed::new()));
+        let watch = feed.watch();
+        assert_eq!(watch.changed(), Some(CaptureSnapshot::default()));
+        assert_eq!(watch.changed(), None);
+
+        let mut outcomes = Outcomes::on(feed);
+        let (one, two) = (PathBuf::from("/c/one"), PathBuf::from("/c/two"));
+        let since = CaptureInstant::from_nanos(5);
+        outcomes.started(one.clone(), since);
+        let recording = watch.changed().unwrap();
+        assert_eq!(
+            recording.recording,
+            Some(RecordingCapture {
+                bundle: one.clone(),
+                since,
+                screen: false
+            })
+        );
+        outcomes.progress(&one, Stage::Recording);
+        // Changes coalesce into the latest snapshot.
+        outcomes.stopped(&one, false);
+        outcomes.progress(&one, Stage::Transcribing);
+        let finishing = watch.changed().unwrap();
+        assert!(finishing.generation >= recording.generation + 3);
+        assert_eq!(finishing.recording, None);
+        assert_eq!(
+            finishing.finishing,
+            [FinishingCapture {
+                bundle: one.clone(),
+                stage: Stage::Transcribing,
+                cancelling: false
+            }]
+        );
+
+        // A second capture records while the first is written.
+        outcomes.started(two.clone(), since);
+        outcomes.stopped(&two, true);
+        // A cancelled capture's stage stays put.
+        outcomes.progress(&two, Stage::Writing);
+        outcomes.settle(
+            one.clone(),
+            Stage::Done,
+            Some(Written {
+                words: 3,
+                gaps: 0,
+                missing_transcript: None,
+            }),
+        );
+        let done = watch.changed().unwrap();
+        assert_eq!(
+            done.finishing,
+            [FinishingCapture {
+                bundle: two.clone(),
+                stage: Stage::Stopping,
+                cancelling: true
+            }]
+        );
+        let last = done.last.clone().unwrap();
+        assert_eq!(
+            (last.bundle, last.stage, last.words),
+            (one.clone(), Stage::Done, Some(3))
+        );
+
+        // The engine's own Done and other late progress change nothing.
+        outcomes.progress(&one, Stage::Done);
+        outcomes.progress(&one, Stage::Writing);
+        outcomes.stopped(&one, false);
+        assert_eq!(watch.changed(), None);
+        assert_eq!(feed.snapshot(), done);
+
+        outcomes.settle(two.clone(), Stage::Cancelled, None);
+        let idle = watch.wait(Duration::from_secs(1)).unwrap();
+        assert!(idle.recording.is_none() && idle.finishing.is_empty());
+        assert_eq!(idle.last.unwrap().stage, Stage::Cancelled);
+        assert!(outcomes.idle());
+
+        // A dropped watcher stops being woken.
+        drop(watch);
+        outcomes.started(one, since);
+        assert!(feed.watchers.lock().unwrap().is_empty());
     }
 }
