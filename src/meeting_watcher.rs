@@ -16,9 +16,10 @@ use crate::calendar::{CalendarMeeting, ReminderScheduler, ReminderUpdate};
 use crate::context::ContextSnapshot;
 use crate::meeting::{self, MeetingCalendar, MeetingRequest, MeetingStart};
 use crate::meeting_detection::{
-    CallPresence, Detection, MeetingCandidate, MeetingDetector, candidate_from_microphone,
+    BrowserPageMemory, CallPresence, Detection, MeetingCandidate, MeetingDetector,
+    candidate_from_microphone,
 };
-use crate::microphone_activity::active_microphone_applications;
+use crate::microphone_activity::{ActiveMicrophoneApplication, active_microphone_applications};
 
 pub(crate) enum ControllerCommand {
     Record(MeetingCandidate),
@@ -131,6 +132,7 @@ pub(crate) fn controller_loop(
     let mut recording: Option<ActiveRecording> = None;
     let mut reminders = Reminders::default();
     let mut observed_microphone_apps = Vec::new();
+    let mut browser = BrowserWatch::new(ContextSnapshot::capture_for_meeting);
     let mut pending_finals = PendingFinals::new();
     tracing::info!("meeting watcher started");
 
@@ -163,7 +165,12 @@ pub(crate) fn controller_loop(
 
         if recording.is_none() && enabled {
             let choices = crate::app_settings::meeting_provider_choices();
-            match detect_meeting(&mut detector, &mut observed_microphone_apps, &choices) {
+            match detect_meeting(
+                &mut detector,
+                &mut observed_microphone_apps,
+                &mut browser,
+                &choices,
+            ) {
                 Err(()) => {
                     thread::sleep(Duration::from_secs(2));
                     continue;
@@ -653,10 +660,132 @@ fn poll_recording(
     Ok(())
 }
 
+/// How often a browser's tabs are queried while it holds the microphone.
+const TAB_QUERY_INTERVAL: Duration = Duration::from_secs(1);
+/// A tab query older than this no longer says what the browser shows.
+const TAB_QUERY_MAX_AGE: Duration = Duration::from_secs(5);
+
+type TabQuery = fn(&str) -> Result<ContextSnapshot>;
+
+/// Reads a browser's tabs off the controller thread, one query at a time. A
+/// query is an AppleScript round trip that can take seconds (it is killed
+/// after its own timeout), so the loop only starts one and reads the newest
+/// finished answer; it never waits for one.
+struct TabProbe {
+    query: TabQuery,
+    /// The browser being queried and the channel its answer arrives on.
+    running: Option<(String, Receiver<Option<ContextSnapshot>>)>,
+    started: Option<Instant>,
+    latest: Option<(String, ContextSnapshot, Instant)>,
+}
+
+impl TabProbe {
+    fn new(query: TabQuery) -> Self {
+        Self {
+            query,
+            running: None,
+            started: None,
+            latest: None,
+        }
+    }
+
+    /// The browser's newest answered page, or nothing yet.
+    fn page(&mut self, bundle_id: &str, now: Instant) -> ContextSnapshot {
+        if let Some((queried, running)) = &self.running {
+            match running.try_recv() {
+                Ok(answer) => {
+                    self.latest = answer.map(|page| (queried.clone(), page, now));
+                    self.running = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => self.running = None,
+            }
+        }
+        if self.running.is_none()
+            && self
+                .started
+                .is_none_or(|started| now.saturating_duration_since(started) >= TAB_QUERY_INTERVAL)
+        {
+            self.started = Some(now);
+            let (sender, receiver) = mpsc::sync_channel(1);
+            let query = self.query;
+            let queried = bundle_id.to_string();
+            let spawned = thread::Builder::new()
+                .name("meeting-browser-tabs".into())
+                .spawn(move || {
+                    let answer = query(&queried)
+                        .map_err(
+                            |error| tracing::debug!(%error, "could not read the browser's tabs"),
+                        )
+                        .ok();
+                    let _ = sender.send(answer);
+                });
+            if spawned.is_ok() {
+                self.running = Some((bundle_id.to_string(), receiver));
+            }
+        }
+        match &self.latest {
+            Some((bundle, page, at))
+                if bundle == bundle_id
+                    && now.saturating_duration_since(*at) <= TAB_QUERY_MAX_AGE =>
+            {
+                page.clone()
+            }
+            _ => ContextSnapshot::default(),
+        }
+    }
+
+    /// No browser holds the microphone: an answer, finished or still being
+    /// read, must not outlive the call.
+    fn reset(&mut self) {
+        self.latest = None;
+        self.running = None;
+    }
+}
+
+/// What the browser holding the microphone shows: the newest tab query, else
+/// a page it showed a moment ago, so a call's site survives a slow or failed
+/// query and a window in front of the browser.
+struct BrowserWatch {
+    probe: TabProbe,
+    memory: BrowserPageMemory,
+}
+
+impl BrowserWatch {
+    fn new(query: TabQuery) -> Self {
+        Self {
+            probe: TabProbe::new(query),
+            memory: BrowserPageMemory::default(),
+        }
+    }
+
+    fn context(
+        &mut self,
+        application: Option<&ActiveMicrophoneApplication>,
+        snoozed: impl Fn(&str) -> bool,
+    ) -> ContextSnapshot {
+        let browser = application.filter(|application| application.is_browser());
+        let Some((application, bundle_id)) =
+            browser.and_then(|application| Some((application, application.canonical_bundle_id()?)))
+        else {
+            self.probe.reset();
+            self.memory.forget();
+            return ContextSnapshot::default();
+        };
+        if snoozed(bundle_id) {
+            return ContextSnapshot::default();
+        }
+        let now = Instant::now();
+        let page = self.probe.page(bundle_id, now);
+        self.memory.recall(application, page, now)
+    }
+}
+
 /// One detection pass; `Err` when microphone activity could not be read.
 fn detect_meeting(
     detector: &mut MeetingDetector,
     observed_microphone_apps: &mut Vec<(i32, String)>,
+    browser: &mut BrowserWatch,
     choices: &[crate::app_settings::MeetingProviderChoice],
 ) -> Result<Option<Detection>, ()> {
     let microphone_apps = match active_microphone_applications() {
@@ -687,16 +816,9 @@ fn detect_meeting(
         .into_iter()
         .filter(|application| application.is_supported_meeting_app())
         .min_by_key(|application| application.detection_priority());
-    let context = match application.as_ref().and_then(|application| {
-        application
-            .is_browser()
-            .then(|| application.canonical_bundle_id())
-            .flatten()
-            .filter(|bundle_id| !detector.is_application_snoozed(bundle_id))
-    }) {
-        Some(bundle_id) => ContextSnapshot::capture_for_meeting(bundle_id).unwrap_or_default(),
-        None => ContextSnapshot::default(),
-    };
+    let context = browser.context(application.as_ref(), |bundle_id| {
+        detector.is_application_snoozed(bundle_id)
+    });
     let candidate =
         application.and_then(|application| candidate_from_microphone(&application, &context));
     let detection = detector.detect(candidate, choices);
@@ -779,6 +901,78 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn banshee_tab() -> ContextSnapshot {
+        ContextSnapshot {
+            application: Some("Brave Browser".into()),
+            browser_url: Some(url::Url::parse("https://banshee.app/standup").unwrap()),
+            window_title: Some("Standup".into()),
+            ..ContextSnapshot::default()
+        }
+    }
+
+    fn brave() -> ActiveMicrophoneApplication {
+        ActiveMicrophoneApplication {
+            pid: 1,
+            bundle_id: "com.brave.Browser.helper".into(),
+            name: "Brave Browser Helper".into(),
+        }
+    }
+
+    #[test]
+    fn a_slow_tab_query_never_holds_up_the_loop() {
+        fn slow(_: &str) -> Result<ContextSnapshot> {
+            thread::sleep(Duration::from_millis(400));
+            Ok(banshee_tab())
+        }
+        let mut probe = TabProbe::new(slow);
+        let started = Instant::now();
+        assert_eq!(
+            probe.page("com.brave.Browser", started),
+            ContextSnapshot::default()
+        );
+        assert!(started.elapsed() < Duration::from_millis(200));
+        // The answer is picked up on a later pass.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while probe.page("com.brave.Browser", Instant::now()) == ContextSnapshot::default() {
+            assert!(Instant::now() < deadline, "the tab query never answered");
+            thread::sleep(Duration::from_millis(20));
+        }
+        // It answered for that browser only, and is dropped with the call.
+        assert_eq!(
+            probe.latest.as_ref().map(|(bundle, ..)| bundle.as_str()),
+            Some("com.brave.Browser")
+        );
+        probe.reset();
+        assert!(probe.latest.is_none());
+    }
+
+    #[test]
+    fn a_snoozed_or_non_browser_application_is_not_queried() {
+        use std::sync::atomic::AtomicUsize;
+        static QUERIES: AtomicUsize = AtomicUsize::new(0);
+        fn counted(_: &str) -> Result<ContextSnapshot> {
+            QUERIES.fetch_add(1, Ordering::SeqCst);
+            Ok(banshee_tab())
+        }
+        let mut watch = BrowserWatch::new(counted);
+        assert_eq!(
+            watch.context(Some(&brave()), |_| true),
+            ContextSnapshot::default()
+        );
+        assert_eq!(watch.context(None, |_| false), ContextSnapshot::default());
+        let slack = ActiveMicrophoneApplication {
+            pid: 2,
+            bundle_id: "com.tinyspeck.slackmacgap.helper".into(),
+            name: "Slack Helper".into(),
+        };
+        assert_eq!(
+            watch.context(Some(&slack), |_| false),
+            ContextSnapshot::default()
+        );
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(QUERIES.load(Ordering::SeqCst), 0);
     }
 
     const MINUTE: i64 = 60_000;

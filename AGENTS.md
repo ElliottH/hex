@@ -539,7 +539,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   samples. Detection offers recording, and starts it automatically only for a
   provider (website or app) the user explicitly set to Always record in
   Meetings › Settings › Detected calls or an offer's "…"; every provider
-  defaults to Ask. An automatic start passes the same stability count and
+  defaults to Ask. An automatic start passes the same stability time and
   snooze as an offer, so a stopped or dismissed call never restarts until its
   app leaves the microphone, and it shows as visibly as a manual recording. An
   offer that times out only closes. Release builds keep the meeting controller

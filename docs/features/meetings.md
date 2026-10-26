@@ -51,8 +51,10 @@ refuses to start without either grant and asks macOS for System Audio Recording.
 ```ts
 Zoom / Teams / Slack huddle / FaceTime / browser call uses the microphone
   -> CoreAudio input process -> canonical host app   // parent PID + bundle ID
-  -> 4 stable observations (about 2 s)              // meetings.detect
-     └── Browser on a page that is not a known call site -> 40 (about 20 s),
+  -> On the microphone for 2 s by the monotonic clock // meetings.detect
+     │   Google Meet and Banshee (banshee.app) in a browser count as known
+     │   services; a slow watcher loop never stretches the time
+     └── Browser on a page that is not a known call site -> 20 s,
          so voice notes and dictation fields are not offered
   -> Provider = the website when known, else the app; the website's choice
      when it has one, else the app's (a browser's choice covers its other
@@ -72,8 +74,11 @@ Zoom / Teams / Slack huddle / FaceTime / browser call uses the microphone
          │   │   └── not offered for a browser on an unknown page
          │   └── Cancel
          └── 20 s timeout -> Close                     // never records on timeout
-  -> Same call is snoozed by key and app until off the microphone for about 60 s,
+  -> Same call is snoozed by key and app until off the microphone for 60 s,
      offered or recorded; stopping an automatic recording does not restart it
+  -> "Left the call" prompt after the call app is off the microphone for 3 s
+  -> Times are wall-clock runs: observations more than 10 s apart (sleep, a
+     stalled loop) start the run again instead of counting the gap
 
 Choices persist as `meetings.providers` (`key`, `label`, `policy`:
 `ask` / `always_record` / `never_offer`) in `settings.json`. Missing means Ask.
@@ -91,12 +96,38 @@ process to its canonical host app via parent PID lineage, CoreAudio's
 `kAudioProcessPropertyBundleID`, and `NSRunningApplication`. When Brave uses the
 microphone and is not snoozed, `ContextSnapshot::capture_for_meeting` in
 [context.rs](../../src/context.rs) inspects Brave's active and open tabs for a
-`meet.google.com` call even if Brave is behind another window or tab.
+`meet.google.com` or `banshee.app` call even if Brave is behind another window or
+tab. That query is an AppleScript round trip, so the watcher starts it on its own
+thread (at most one at a time, about once a second) and reads the newest answer,
+at most 5 s old; a slow or timed-out query (the existing 2 s limit) never holds
+up the loop. When no answer names a page, the last page a browser showed while
+it held the microphone names the call for 60 s (`BrowserPageMemory`), so the
+site survives a failed query or Hex being in front. Safari, Chrome, Firefox and
+Edge expose no URL, so their calls are unnamed unless the foreground context
+says otherwise. Banshee has no recognised room path, so any `banshee.app` page
+counts; it is not in Settings' always-listed providers, but appears under
+Detected calls once its choice is set from an offer's "…". Not observed: the
+new tab query against a live Brave with a Banshee call (the script compiles, and
+the thread and memory are unit-tested with fake queries); the Banshee URL shape
+was not available, so the host rule is a guess at "any page".
 
 On 2026-10-21 Brave opened the microphone for 3-6 s at a time on
 problems.kitlangton.com (board voice notes) and each burst got a "Browser call
 call detected" offer; that is what the 20 s browser threshold prevents.
-Checks: `a_browser_voice_note_is_not_offered_but_a_sustained_browser_call_is`,
+A second Banshee call on 2026-10-26 got no offer in the 30 s before Kit started
+recording by hand: the "about 20 s" threshold was 40 loop observations, and each
+loop took about 0.9 s (500 ms sleep plus the browser inspection), so an unknown
+browser page needed about 37 s. The thresholds are now clock time.
+Checks: `a_slow_loop_still_offers_an_unknown_browser_call_after_about_20_seconds`,
+`a_slow_loop_still_ends_a_snooze_after_a_minute`,
+`a_stalled_loop_does_not_count_the_gap_as_time_on_the_microphone`,
+`banshee_is_offered_after_about_two_seconds`,
+`the_site_is_resolved_while_hex_is_in_front`,
+`a_page_seen_minutes_ago_no_longer_names_the_call`,
+`a_remembered_page_belongs_to_its_browser_and_its_call`,
+`a_slow_tab_query_never_holds_up_the_loop` and
+`a_snoozed_or_non_browser_application_is_not_queried` (meeting_watcher.rs),
+`a_browser_voice_note_is_not_offered_but_a_sustained_browser_call_is`,
 `offer_titles_name_the_service_site_or_browser_without_repeating_call`,
 `choices_apply_to_the_site_when_known_and_the_app_otherwise`,
 `always_record_starts_after_the_same_stability_count_as_an_offer`, and

@@ -337,19 +337,25 @@ end tell
 return ""
 "#;
 
+/// Returns the active tab's URL and title, unless a tab shows a known call
+/// (Google Meet, Banshee), which is returned instead wherever it is open.
 #[cfg(target_os = "macos")]
 const BRAVE_MEETING_TAB_SCRIPT: &str = r#"
+on isCallUrl(u)
+    return (u contains "meet.google.com/") or (u starts with "https://banshee.app") or (u starts with "https://www.banshee.app")
+end isCallUrl
+
 tell application "Brave Browser"
     if (count of windows) is 0 then return ""
     set activeTab to active tab of front window
     set activeUrl to URL of activeTab
-    if activeUrl contains "meet.google.com/" then
+    if my isCallUrl(activeUrl) then
         return activeUrl & linefeed & (title of activeTab)
     end if
     repeat with w in windows
         repeat with t in tabs of w
             set u to URL of t
-            if u contains "meet.google.com/" then
+            if my isCallUrl(u) then
                 return u & linefeed & (title of t)
             end if
         end repeat
