@@ -341,7 +341,11 @@ substitute for source inspection or a second roadmap.
   the tap's pointer input forwarded to `Capture::input()`, Scrawl.app
   coexistence, the retention thread, and the `CaptureSnapshot` every view
   reads (`capture_host::snapshot`/`watch`, published on each change, so a
-  capsule never reaches into the host). `rune_ui/scrawl.rs` is its pane
+  capsule never reaches into the host), with `last.route` from
+  `capture_host::routing` (Scrawl's `crates/router` in-process: look, decide,
+  undo window, send, Undo and Redirect) and `phone` from a `capture-phone`
+  look for a cabled iPhone. `capture_host::library` reads the captures
+  folder for `hex capture list|show|send|route`. `rune_ui/scrawl.rs` is its pane
   (Experiments › Scrawl) and `CaptureSettings` its `capture.*` settings.
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
@@ -612,11 +616,24 @@ CoreAudio formats, AppleScript details, or event serialization.
   folder, or work, and the same holds with the experiment on while
   `capture.enabled` (the Scrawl pane's opt-in, default off) is off. Scrawl's engine
   records the screen, runs with `SharedResources::none()` (Hex never calls
-  `install_shared_resources`: no ingest server, ingest token, delivery
-  retries, or global shortcuts), logs to tracing, and writes only to the
-  captures folder (`capture.folder`, Scrawl's own by default). Hex's capture
+  `install_shared_resources`: no ingest server, ingest token, or global
+  shortcuts), logs to tracing, and writes only to the captures folder
+  (`capture.folder`, Scrawl's own by default) and Scrawl's router folders. A
+  written capture is copied to the clipboard (never pasted) and, with
+  `capture.routing`'s autoSend on, routed by Scrawl's router in Hex's process
+  (`capture_host::routing`): one `capture-look` thread per stop, one
+  `capture-route` thread with a bounded queue, a rule's send held 3 s for
+  Undo, guesses sent only when picked. Queued sends retry only while neither
+  Scrawl.app runs nor anything serves the ingest port, and never in tests.
+  `capture.routing` never holds a Jev key. A cabled iPhone records through
+  `scrawl-helper mirror --no-microphone`, narrated by the dictation timeline;
+  only `HEX_CAPTURE=1` bundles carry `NSCameraUsageDescription`, and
+  `validate-app.sh` refuses a release bundle with it. Hex's capture
   shortcut (default ⌥⇧S, a key required, never overlapping another binding)
-  is a fresh press that starts or stops; while Scrawl.app
+  is a fresh press: idle, it starts once one of its modifiers comes up (Esc
+  before then records nothing); recording, it stops; with the capsule's
+  picker open, the picker records. A switch chip discards the recording
+  (no outcome) rather than retargeting it; while Scrawl.app
   (`dev.kitlangton.scrawl`) runs, Hex registers no capture shortcut and runs
   no retention, and only the pane's "Use Hex for captures" quits Scrawl.
   Escape cancels a recording capture before any dictation job. Pointer

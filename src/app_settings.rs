@@ -1039,6 +1039,9 @@ pub struct CaptureSettings {
     pub media_days: Option<u32>,
     /// Days a capture is kept at all; `None` keeps it.
     pub bundle_days: Option<u32>,
+    /// Where a written capture is sent among OpenCode sessions: Scrawl's
+    /// router settings, imported once from Scrawl.
+    pub routing: CaptureRouting,
 }
 
 #[cfg(hex_capture)]
@@ -1052,7 +1055,46 @@ impl Default for CaptureSettings {
             folder: None,
             media_days: week.media_days,
             bundle_days: week.bundle_days,
+            routing: CaptureRouting::default(),
         }
+    }
+}
+
+/// Scrawl's router settings (`scrawl_capture::RouterConfig`, its
+/// camelCase JSON). Never holds a Jev key: Jev is called with
+/// `$OPENCODE_API_KEY` or OpenCode's own credential, so `hex settings`
+/// never shows one.
+#[cfg(hex_capture)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(
+    from = "scrawl_capture::RouterConfig",
+    into = "scrawl_capture::RouterConfig"
+)]
+pub struct CaptureRouting(scrawl_capture::RouterConfig);
+
+// The config's only non-`Eq` field is a JSON value, which compares totally.
+#[cfg(hex_capture)]
+impl Eq for CaptureRouting {}
+
+#[cfg(hex_capture)]
+impl From<scrawl_capture::RouterConfig> for CaptureRouting {
+    fn from(mut config: scrawl_capture::RouterConfig) -> Self {
+        config.jev_api_key = None;
+        Self(config)
+    }
+}
+
+#[cfg(hex_capture)]
+impl From<CaptureRouting> for scrawl_capture::RouterConfig {
+    fn from(routing: CaptureRouting) -> Self {
+        routing.0
+    }
+}
+
+#[cfg(hex_capture)]
+impl CaptureRouting {
+    pub fn config(&self) -> &scrawl_capture::RouterConfig {
+        &self.0
     }
 }
 
@@ -1194,6 +1236,10 @@ const MIGRATIONS: &[&str] = &[STREAMING_ENGLISH_MIGRATION];
 /// `MIGRATIONS` so new settings import them too.
 #[cfg(hex_capture)]
 const SCRAWL_IMPORT_MIGRATION: &str = "scrawl-capture-settings";
+/// Scrawl's router settings were read into `capture.routing` once: its own
+/// migration, as it came after the first import.
+#[cfg(hex_capture)]
+const SCRAWL_ROUTING_IMPORT_MIGRATION: &str = "scrawl-routing-settings";
 
 fn deserialize_edit_hotkey<'de, D>(deserializer: D) -> std::result::Result<HotkeyBinding, D::Error>
 where
@@ -1385,16 +1431,29 @@ impl AppSettings {
             }
         }
         #[cfg(hex_capture)]
-        if !settings.has_migration(SCRAWL_IMPORT_MIGRATION) && capture_available() {
+        if capture_available() {
             let read = |path: PathBuf| fs::read(path).ok();
-            settings.import_scrawl_settings(
-                read(scrawl_capture::handoff::default_config_path()).as_deref(),
-                dirs::data_dir()
-                    .and_then(|data| read(data.join("scrawl/config.json")))
-                    .as_deref(),
-            );
-            settings.migrations.push(SCRAWL_IMPORT_MIGRATION.into());
-            if path.exists()
+            let engine = read(scrawl_capture::handoff::default_config_path());
+            let mut imported = false;
+            if !settings.has_migration(SCRAWL_IMPORT_MIGRATION) {
+                settings.import_scrawl_settings(
+                    engine.as_deref(),
+                    dirs::data_dir()
+                        .and_then(|data| read(data.join("scrawl/config.json")))
+                        .as_deref(),
+                );
+                settings.migrations.push(SCRAWL_IMPORT_MIGRATION.into());
+                imported = true;
+            }
+            if !settings.has_migration(SCRAWL_ROUTING_IMPORT_MIGRATION) {
+                settings.import_scrawl_routing(engine.as_deref());
+                settings
+                    .migrations
+                    .push(SCRAWL_ROUTING_IMPORT_MIGRATION.into());
+                imported = true;
+            }
+            if imported
+                && path.exists()
                 && let Err(error) = settings.write_to(&path)
             {
                 tracing::warn!(%error, "could not record the Scrawl settings import");
@@ -1446,6 +1505,29 @@ impl AppSettings {
             && !self.hotkey_in_use(HotkeySlot::Capture, &binding)
         {
             self.capture.hotkey = binding;
+        }
+    }
+
+    /// Reads the router's settings from Scrawl's `config.json` (`engine`):
+    /// its rules, `autoSend`, and the `smartRouting` and `jevRouting`
+    /// experiments, leniently as Scrawl reads them, leaving out the Jev key.
+    /// A missing or unreadable file keeps the defaults.
+    #[cfg(hex_capture)]
+    fn import_scrawl_routing(&mut self, engine: Option<&[u8]>) {
+        let Some(serde_json::Value::Object(root)) =
+            engine.and_then(|bytes| serde_json::from_slice(bytes).ok())
+        else {
+            return;
+        };
+        let mut warnings = Vec::new();
+        self.capture.routing =
+            scrawl_capture::router_config_from_scrawl(&root, &mut warnings).into();
+        // A warning quotes the value it dropped, which may be the Jev key.
+        if !warnings.is_empty() {
+            tracing::info!(
+                count = warnings.len(),
+                "Scrawl routing settings were left out"
+            );
         }
     }
 
@@ -3209,5 +3291,50 @@ mod tests {
         assert_eq!(chord.standalone_side(), None);
         chord.set_standalone_side(ModifierSide::Right);
         assert_eq!(chord.modifiers.option, Some(ModifierSide::Left));
+    }
+
+    #[cfg(hex_capture)]
+    #[test]
+    fn scrawls_routing_imports_without_its_jev_key() {
+        let engine = br#"{
+            "autoSend": false,
+            "jevApiKey": "not-a-real-key",
+            "experiments": { "smartRouting": true, "jevRouting": "on" },
+            "routing": {
+                "sites": { "http://localhost:5173": "~/code/site" },
+                "undoWindowSec": 120
+            }
+        }"#;
+        let mut settings = AppSettings::default();
+        settings.import_scrawl_routing(Some(engine));
+        let config = settings.capture.routing.config();
+        assert!(!config.send_captures);
+        assert!(config.smart_routing && config.jev_routing);
+        assert_eq!(config.undo_window_sec, Some(120));
+        assert_eq!(
+            config
+                .sites
+                .get("http://localhost:5173")
+                .map(String::as_str),
+            Some("~/code/site")
+        );
+        assert_eq!(config.jev_api_key, None);
+
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert!(!saved.contains("not-a-real-key"));
+        let read: AppSettings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(read.capture.routing, settings.capture.routing);
+
+        // A key typed into settings.json is dropped on read.
+        let typed = saved.replace("\"jevApiKey\":null", "\"jevApiKey\":\"x\"");
+        assert_ne!(typed, saved);
+        let read: AppSettings = serde_json::from_str(&typed).unwrap();
+        assert_eq!(read.capture.routing.config().jev_api_key, None);
+
+        // Nothing to read keeps the defaults.
+        let mut settings = AppSettings::default();
+        settings.import_scrawl_routing(None);
+        settings.import_scrawl_routing(Some(b"not json"));
+        assert_eq!(settings.capture.routing, CaptureRouting::default());
     }
 }

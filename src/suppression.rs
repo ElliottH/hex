@@ -88,6 +88,13 @@ unsafe extern "C" {
     fn CGEventGetIntegerValueField(event: EventRef, field: u32) -> i64;
     #[cfg(hex_capture)]
     fn CGEventGetLocation(event: EventRef) -> CgPoint;
+    #[cfg(hex_capture)]
+    fn CGEventKeyboardGetUnicodeString(
+        event: EventRef,
+        max_length: usize,
+        actual_length: *mut usize,
+        buffer: *mut u16,
+    );
 }
 
 #[cfg(hex_capture)]
@@ -655,6 +662,14 @@ unsafe extern "C" fn event_callback(
         return event;
     }
     #[cfg(hex_capture)]
+    let list_swallows = match list_tap(event_type, event) {
+        ListSwallow::No => false,
+        ListSwallow::Only => return ptr::null_mut(),
+        ListSwallow::AfterListener => true,
+    };
+    #[cfg(not(hex_capture))]
+    let list_swallows = false;
+    #[cfg(hex_capture)]
     let capture_key = if crate::capture_host::wants_input() {
         match report_capture_input(event_type, event) {
             CaptureTap::Only => return event,
@@ -664,6 +679,16 @@ unsafe extern "C" fn event_callback(
     } else {
         None
     };
+    // A press anywhere while the list is open may close it; the click still
+    // goes to the app and to the listener as chord evidence.
+    #[cfg(hex_capture)]
+    if matches!(
+        event_type,
+        EVENT_LEFT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_DOWN | EVENT_OTHER_MOUSE_DOWN
+    ) && crate::capture_host::list_open()
+    {
+        crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::Press);
+    }
     let input = match event_type {
         EVENT_FLAGS_CHANGED => {
             // SAFETY: CoreGraphics supplied a valid event to this callback.
@@ -710,10 +735,93 @@ unsafe extern "C" fn event_callback(
     #[cfg(hex_capture)]
     if let Some(key) = capture_key
         && !suppress
+        && !list_swallows
     {
         crate::capture_host::report_input(capture_at, key);
     }
-    if suppress { ptr::null_mut() } else { event }
+    if suppress || list_swallows {
+        ptr::null_mut()
+    } else {
+        event
+    }
+}
+
+/// What the session tap does with a key while the capture capsule's list
+/// is open (`capture_host::list_open`).
+#[cfg(hex_capture)]
+enum ListSwallow {
+    /// Not the list's.
+    No,
+    /// The list's Escape: kept from the app and from the listener, so it
+    /// cancels nothing else.
+    Only,
+    /// The list's, or the release of a key it took: kept from the app, but
+    /// the listener still sees it, so a held ⌥ typing a character stays a
+    /// chord rather than a dictation.
+    AfterListener,
+}
+
+/// Hands the open list its keys (`capture_host::list_key`) on the tap's
+/// thread; their releases stay with it even after it closes.
+#[cfg(hex_capture)]
+fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
+    use crate::capture_host::{CapsuleKey, ListTap, capsule_key, list_key, list_open};
+    static TAKEN: Mutex<u128> = Mutex::new(0);
+    if !matches!(event_type, EVENT_KEY_DOWN | EVENT_KEY_UP) {
+        return ListSwallow::No;
+    }
+    // SAFETY: CoreGraphics supplied a valid keyboard event.
+    let code = unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) } as u16;
+    let Some(bit) = 1u128.checked_shl(u32::from(code)) else {
+        return ListSwallow::No;
+    };
+    let mut taken = TAKEN.lock().unwrap_or_else(|error| error.into_inner());
+    if event_type == EVENT_KEY_UP {
+        let ours = *taken & bit != 0;
+        *taken &= !bit;
+        return if ours {
+            ListSwallow::AfterListener
+        } else {
+            ListSwallow::No
+        };
+    }
+    if !list_open() || crate::app_settings::hotkey_capture_active() {
+        return ListSwallow::No;
+    }
+    // SAFETY: CoreGraphics supplied a valid event.
+    let flags = unsafe { CGEventGetFlags(event) };
+    if crate::app_settings::runtime_hotkeys()
+        .all()
+        .iter()
+        .flatten()
+        .any(|hotkey| hotkey.matches_key_press(code, flags))
+    {
+        return ListSwallow::No;
+    }
+    let mut typed = [0u16; 8];
+    let mut length = 0usize;
+    // SAFETY: the buffer holds `typed.len()` UTF-16 units; CoreGraphics
+    // writes at most that many and reports how many in `length`.
+    unsafe { CGEventKeyboardGetUnicodeString(event, typed.len(), &mut length, typed.as_mut_ptr()) };
+    let typed = String::from_utf16_lossy(&typed[..length.min(typed.len())]);
+    match list_key(code, flags, &typed) {
+        ListTap::Pass => ListSwallow::No,
+        ListTap::Swallow => {
+            *taken |= bit;
+            ListSwallow::AfterListener
+        }
+        ListTap::Key(key) => {
+            *taken |= bit;
+            drop(taken);
+            let escape = key == CapsuleKey::Escape;
+            capsule_key(key);
+            if escape {
+                ListSwallow::Only
+            } else {
+                ListSwallow::AfterListener
+            }
+        }
+    }
 }
 
 /// What the session tap does with an event while a capture records.

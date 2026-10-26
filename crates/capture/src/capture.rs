@@ -239,7 +239,9 @@ pub enum Target {
     ActiveDisplay,
     /// Record a specific screen, window or region target.
     Screen(TargetInfo),
-    /// Record a cabled iPhone (either a new session for `device` or an existing preview).
+    /// Record a cabled iPhone (either a new session for `device` or an existing preview). With
+    /// [`AudioIn::External`] the mirror opens no microphone and `finish`'s audio is the
+    /// narration; otherwise the mirror records the Mac's microphone into the movie.
     Phone {
         device: Option<String>,
         name: Option<String>,
@@ -2337,7 +2339,19 @@ impl crate::log::Sink for HostLogSink {
 impl Engine {
     pub fn new(host: Arc<dyn Host>, config: Arc<dyn ConfigSource>) -> Self {
         crate::log::set_sink_if_unset(Arc::new(HostLogSink(Arc::clone(&host))));
-        let (tx, _rx) = flume::unbounded();
+        let (tx, rx) = flume::unbounded();
+        // Without an app's own telemetry, the one event a host must act on (the iPhone mirror
+        // ending on its own) reaches it through `Host::emit`; the rest are for Scrawl's UI.
+        let relay = Arc::clone(&host);
+        let _ = std::thread::Builder::new()
+            .name("scrawl-ui-events".into())
+            .spawn(move || {
+                for event in rx {
+                    if matches!(event, Event::PhoneEnded) {
+                        relay.emit(event);
+                    }
+                }
+            });
         Self {
             host,
             config,
@@ -2546,7 +2560,10 @@ impl Engine {
                 Self::restore_own_windows(&telemetry, &saved_excluded, &own);
                 // Hold interaction telemetry inactive until the helper's `recording` event arrives.
                 telemetry.active.store(false, Ordering::Release);
-                let session = if let Some(mut preview) = existing_preview {
+                // The movie's offset is measured from `t0`, the clock input and audio share.
+                let since_t0_ms = boot_time_ns().saturating_sub(req.t0_boot_ns) / 1_000_000;
+                let origin_epoch_ms = crate::pipeline::now_epoch_ms().saturating_sub(since_t0_ms);
+                let mut session = if let Some(mut preview) = existing_preview {
                     preview.begin_recording(&movie_path);
                     preview
                 } else {
@@ -2554,6 +2571,7 @@ impl Engine {
                         &movie_path,
                         device.as_deref(),
                         Some(Arc::clone(&telemetry)),
+                        req.audio == AudioIn::External,
                     ) {
                         Ok(session) => session,
                         Err(error) => {
@@ -2564,6 +2582,7 @@ impl Engine {
                         }
                     }
                 };
+                session.clock_from(origin_epoch_ms);
                 (target, InnerSource::Phone(session), session_id)
             }
             Target::ActiveDisplay | Target::Screen(_) => {
@@ -2632,6 +2651,7 @@ impl Engine {
             target,
             t0_boot_ns: req.t0_boot_ns,
             note: req.note,
+            host_narration: req.audio == AudioIn::External,
             source,
             stopped_input: None,
         })
@@ -2675,6 +2695,8 @@ pub struct Capture {
     target: TargetInfo,
     t0_boot_ns: u64,
     note: Option<String>,
+    /// A phone capture's narration is `finish`'s audio, not the movie's.
+    host_narration: bool,
     source: InnerSource,
     stopped_input: Option<(Vec<InteractionEvent>, Vec<Stroke>, Vec<u64>)>,
 }
@@ -2689,6 +2711,7 @@ pub struct SealedCapture {
     target: TargetInfo,
     t0_boot_ns: u64,
     note: Option<String>,
+    host_narration: bool,
     route_hint: RouteContext,
     events: Vec<InteractionEvent>,
     strokes: Vec<Stroke>,
@@ -2890,6 +2913,7 @@ impl Capture {
             target: self.target,
             t0_boot_ns: self.t0_boot_ns,
             note: self.note,
+            host_narration: self.host_narration,
             route_hint,
             events,
             strokes,
@@ -2952,6 +2976,20 @@ impl SealedCapture {
                             recording.flags.push(flag - recording.offset_ms);
                         }
                     }
+                    let narration = if self.host_narration {
+                        self.host.emit(Event::Progress {
+                            bundle: bundle_dir.clone(),
+                            stage: Stage::Transcribing,
+                        });
+                        Some(crate::phone::HostNarration {
+                            audio: external_audio
+                                .map(|audio| audio.since(recording.offset_ms))
+                                .transpose()?,
+                            transcriber: self.transcriber.as_deref(),
+                        })
+                    } else {
+                        None
+                    };
                     crate::phone::finalize_live_capture_for_config(
                         &bundle_dir,
                         recording,
@@ -2959,6 +2997,7 @@ impl SealedCapture {
                         strokes,
                         self.note,
                         Some(&self.engine_cfg),
+                        narration,
                     )
                 });
                 if let Err(error) = &finalized {
@@ -3648,6 +3687,7 @@ mod tests {
             target,
             t0_boot_ns: 123_456_789,
             note: Some("unit test".into()),
+            host_narration: false,
             source: InnerSource::Screen {
                 session: screen_session,
                 audio: None,
@@ -3733,6 +3773,7 @@ mod tests {
             target: target.clone(),
             t0_boot_ns: 100,
             note: None,
+            host_narration: false,
             source: InnerSource::Screen {
                 session: ScreenCaptureSession {
                     started_at: Instant::now(),
@@ -3771,6 +3812,7 @@ mod tests {
             target,
             t0_boot_ns: 100,
             note: None,
+            host_narration: false,
             source: InnerSource::Screen {
                 session: ScreenCaptureSession {
                     started_at: Instant::now(),
