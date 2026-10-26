@@ -20,6 +20,8 @@ pub(crate) const CHIPS_MIN_S: f64 = 0.9;
 /// The chips never fold under the pointer, and stay this much longer once
 /// it leaves (Scrawl's `REVEAL_LINGER_MS`).
 pub(crate) const CHIPS_LINGER_S: f64 = 1.2;
+/// How to send a kept capture later, which "Kept" says.
+pub(crate) const SEND_LATER: &str = "hex capture send latest";
 /// The most rows each list section shows.
 pub(crate) const MAX_SUGGESTED: usize = 3;
 pub(crate) const MAX_RECENT: usize = 5;
@@ -379,7 +381,12 @@ enum Phase {
         to: String,
         at: f64,
     },
+    /// Taken back with nowhere else to offer.
     TakenBack {
+        at: f64,
+    },
+    /// Dismissed after a take-back: the bundle stays, sent nowhere.
+    Kept {
         at: f64,
     },
     TooLate {
@@ -399,6 +406,9 @@ struct Routed {
     /// When the rule sent it, for the Undo countdown.
     at: f64,
     open: Option<Open>,
+    /// A send was taken back: it stays, sent nowhere, until a pick or a
+    /// dismissal, and never leaves by itself.
+    taken_back: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -412,6 +422,9 @@ struct Sent {
     to: String,
     rule_saved: bool,
     at: f64,
+    /// The route it was picked from, offered again when the send is taken
+    /// back.
+    back: Option<Route>,
 }
 
 /// The capsule's state machine.
@@ -468,6 +481,18 @@ impl Flow {
             (_, Phase::Failed { .. }) => Some(Cue::Failed),
             (Phase::TakenBack { .. }, Phase::TakenBack { .. }) => None,
             (_, Phase::TakenBack { .. }) => Some(Cue::TakenBack),
+            (
+                Phase::Routed(Routed {
+                    taken_back: true, ..
+                }),
+                _,
+            ) => None,
+            (
+                _,
+                Phase::Routed(Routed {
+                    taken_back: true, ..
+                }),
+            ) => Some(Cue::TakenBack),
             (Phase::Recording { .. } | Phase::Selecting(_), Phase::Hidden)
                 if actions.contains(&Action::Cancel) =>
             {
@@ -576,6 +601,7 @@ impl Flow {
                     to,
                     rule_saved: false,
                     at: now,
+                    back: None,
                 }),
                 Delivered::Queued { to } => Phase::Queued { to, at: now },
             },
@@ -583,6 +609,7 @@ impl Flow {
                 route,
                 at: now,
                 open: None,
+                taken_back: false,
             }),
             (Phase::Routed(mut routed), Input::OpenList) => {
                 if routed.open.is_none() && !matches!(routed.route, Route::Unreachable { .. }) {
@@ -627,6 +654,13 @@ impl Flow {
                 Phase::Routed(routed)
             }
             (phase, Input::ClickAway) => phase,
+            // Taken back, Escape is the dismissal: the bundle is kept.
+            (
+                Phase::Routed(Routed {
+                    taken_back: true, ..
+                }),
+                Input::Escape | Input::Dismiss,
+            ) => Phase::Kept { at: now },
             (Phase::Routed(mut routed), Input::Escape) => {
                 if routed.open.take().is_some() {
                     Phase::Routed(routed)
@@ -651,7 +685,28 @@ impl Flow {
             }
             // Pasted or dismissed: the take-back it asked for says nothing.
             (Phase::Hidden, Input::Undone(_)) => Phase::Hidden,
-            (_, Input::Undone(Undone::TakenBack)) => Phase::TakenBack { at: now },
+            // A take-back never ends the capture: the list comes back with
+            // the same sessions, the one it went to last, until a pick or a
+            // dismissal.
+            (phase, Input::Undone(Undone::TakenBack)) => {
+                let back = match phase {
+                    Phase::Routed(Routed { route, .. }) => match &route {
+                        Route::Rule { to, .. } => {
+                            let to = to.clone();
+                            Some((route, to))
+                        }
+                        _ => None,
+                    },
+                    Phase::Sent(Sent {
+                        to,
+                        back: Some(route),
+                        ..
+                    }) => Some((route, to)),
+                    _ => None,
+                };
+                back.and_then(|(route, to)| offered_again(route, &to, now))
+                    .map_or(Phase::TakenBack { at: now }, Phase::Routed)
+            }
             (phase, Input::Undone(Undone::TooLate)) => match phase {
                 Phase::Sent(Sent { to, .. })
                 | Phase::Routed(Routed {
@@ -721,10 +776,12 @@ impl Flow {
                 else {
                     return Vec::new();
                 };
+                let back = Some(routed.route.clone());
                 self.phase = Phase::Sent(Sent {
                     to: dest.name,
                     rule_saved: false,
                     at: now,
+                    back,
                 });
                 let to = dest.session;
                 vec![match from {
@@ -747,7 +804,16 @@ impl Flow {
             (_, Id::Undo) => self.input(Input::Escape, now),
             (_, Id::Ask) => self.input(Input::OpenList, now),
             (_, Id::Row(row)) => self.input(Input::SendRow(row), now),
-            (_, Id::Close) => self.input(Input::Dismiss, now),
+            // ✕ beside "Sending to X…" cancels the send, as Undo does.
+            (_, Id::Close) => match self.undoable(now) {
+                Some(undo) => {
+                    if let Phase::Routed(routed) = &mut self.phase {
+                        routed.open = None;
+                    }
+                    vec![undo]
+                }
+                None => self.input(Input::Dismiss, now),
+            },
             _ => Vec::new(),
         }
     }
@@ -766,7 +832,14 @@ impl Flow {
                 ..
             }) => None,
             Phase::Routed(_) | Phase::Sent(_) => {
-                let escape = self.undoable(now).is_some();
+                let escape = self.undoable(now).is_some()
+                    || matches!(
+                        self.phase,
+                        Phase::Routed(Routed {
+                            taken_back: true,
+                            ..
+                        })
+                    );
                 (escape || matches!(self.phase, Phase::Routed(_)))
                     .then_some(CapsuleKeys::Route { escape })
             }
@@ -884,7 +957,14 @@ impl Flow {
                     },
                 )
             }),
-            Phase::TakenBack { .. } => Pres::Done(Done::plain(Lead::Check, "Taken back")),
+            Phase::TakenBack { .. } => Pres::Done(Done {
+                why: Some(SEND_LATER.into()),
+                ..Done::plain(Lead::Check, "Taken back")
+            }),
+            Phase::Kept { .. } => Pres::Done(Done {
+                why: Some(SEND_LATER.into()),
+                ..Done::plain(Lead::Check, "Kept")
+            }),
             Phase::TooLate { to, .. } => Pres::Done(Done {
                 why: Some("too late to take back".into()),
                 hand_off: true,
@@ -916,8 +996,15 @@ fn hold_until(phase: &Phase) -> Option<f64> {
             Some(at + tuning::get().done_hold_s)
         }
         Phase::Sent(sent) => Some(sent.at + tuning::get().done_hold_s),
-        Phase::Routed(Routed { at, open: None, .. }) => Some(at + tuning::get().done_hold_s),
-        Phase::TakenBack { at } | Phase::Failed { at, .. } => Some(at + tuning::get().brief_hold_s),
+        Phase::Routed(Routed {
+            at,
+            open: None,
+            taken_back: false,
+            ..
+        }) => Some(at + tuning::get().done_hold_s),
+        Phase::TakenBack { at } | Phase::Kept { at } | Phase::Failed { at, .. } => {
+            Some(at + tuning::get().brief_hold_s)
+        }
         _ => None,
     }
 }
@@ -995,6 +1082,51 @@ fn send(
         to: dest.name.clone(),
         rule_saved: site.is_some(),
         at: now,
+        back: Some(routed.route.clone()),
+    })
+}
+
+/// The open list again after the send to `to` was taken back: the same
+/// sessions as a guess, `to` moved last, nothing sent. `None` when there's
+/// nothing to list.
+fn offered_again(route: Route, to: &str, now: f64) -> Option<Routed> {
+    let (mut suggested, mut recent, site) = match route {
+        Route::Rule {
+            suggested, recent, ..
+        } => (suggested, recent, None),
+        Route::Guess {
+            suggested,
+            recent,
+            site,
+        } => (suggested, recent, site),
+        Route::Nothing { recent } | Route::NoAnswer { recent } => (Vec::new(), recent, None),
+        Route::Unreachable { .. } => return None,
+    };
+    for rows in [&mut suggested, &mut recent] {
+        let (mut others, last): (Vec<Dest>, Vec<Dest>) = std::mem::take(rows)
+            .into_iter()
+            .partition(|dest| dest.name != to);
+        others.extend(last.into_iter().map(|dest| Dest {
+            why: "taken back".into(),
+            ..dest
+        }));
+        *rows = others;
+    }
+    if suggested.is_empty() && recent.is_empty() {
+        return None;
+    }
+    Some(Routed {
+        route: Route::Guess {
+            suggested,
+            recent,
+            site,
+        },
+        at: now,
+        open: Some(Open {
+            query: String::new(),
+            selected: 0,
+        }),
+        taken_back: true,
     })
 }
 
@@ -1061,6 +1193,11 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         .map(|(i, (dest, _))| route_label(i, &dest.name))
         .collect();
     let base = match &routed.route {
+        // Sent nowhere, it waits for a pick: ⌥⇧V or a click reopens the list.
+        _ if routed.taken_back => Done {
+            ask: Some("Elsewhere…".into()),
+            ..Done::plain(Lead::Check, "Taken back")
+        },
         // While the send can be taken back, the runner-up rides along
         // (⌥⇧V still opens the list); then the list's chip takes its place.
         Route::Rule { to, .. } => Done {
@@ -1379,12 +1516,126 @@ mod tests {
         let actions = flow.input(Input::Escape, 11.0);
         assert_eq!(actions, vec![Action::Undo { to: "SEER".into() }]);
         flow.input(Input::Undone(Undone::TakenBack), 11.4);
-        assert_eq!(done(&flow, 11.4).text, "Taken back");
+        assert!(
+            done(&flow, 11.4).open.is_some(),
+            "taken back, the list opens"
+        );
         // After the window, Escape just closes.
         let mut late = Flow::new();
         late.input(Input::Routed(rule()), 0.0);
         assert!(late.input(Input::Escape, 5.5).is_empty());
         assert_eq!(late.pres(5.5), Pres::Hidden);
+    }
+
+    fn rule_of_three() -> Route {
+        Route::Rule {
+            to: "SEER".into(),
+            suggested: vec![
+                Dest::new("SEER", "rule").session("ses_seer"),
+                Dest::new("HEX", "last sent").session("ses_hex"),
+                Dest::new("HOME", "recent").session("ses_home"),
+            ],
+            recent: vec![Dest::new("BOARD", "yesterday").session("ses_board")],
+        }
+    }
+
+    fn rows(flow: &Flow, now: f64) -> Vec<String> {
+        let (_, list) = done(flow, now).open.expect("the list is open");
+        list.rows().map(|dest| dest.name.clone()).collect()
+    }
+
+    #[test]
+    fn undoing_a_rule_send_reopens_the_list_until_a_pick() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        assert_eq!(
+            flow.input(Input::Escape, 1.0),
+            [Action::Undo { to: "SEER".into() }]
+        );
+        flow.input(Input::Undone(Undone::TakenBack), 1.2);
+        // The same sessions, the wrongly picked one last; nothing sent.
+        assert_eq!(rows(&flow, 1.2), ["HEX", "HOME", "SEER", "BOARD"]);
+        let (_, list) = done(&flow, 1.2).open.unwrap();
+        assert_eq!(list.suggested[2].why, "taken back");
+        assert_eq!(list.selected, 0);
+        assert_eq!(flow.keys(1.2), Some(crate::capture_host::CapsuleKeys::List));
+        // It never leaves by itself.
+        assert!(flow.next_due(1.2).is_none());
+        assert!(!flow.tick(1_000.0));
+        assert!(done(&flow, 1_000.0).open.is_some());
+        // Pick 2: sent to #2.
+        assert_eq!(
+            flow.input(Input::SendRow(1), 1_000.0),
+            [Action::Send {
+                to: "ses_home".into(),
+                always: None
+            }]
+        );
+        assert_eq!(done(&flow, 1_000.0).text, "Sending to HOME");
+
+        // Clicking away folds the list but keeps the capsule, and Paste Last
+        // opens it again; Escape (or ✕) is the dismissal, and the bundle is kept.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        flow.input(Input::Escape, 1.0);
+        flow.input(Input::Undone(Undone::TakenBack), 1.2);
+        flow.input(Input::ClickAway, 2.0);
+        let closed = done(&flow, 2.0);
+        assert_eq!(closed.text, "Taken back");
+        assert_eq!(closed.ask.as_deref(), Some("Elsewhere…"));
+        assert!(!flow.tick(1_000.0));
+        assert_eq!(
+            flow.keys(1_000.0),
+            Some(crate::capture_host::CapsuleKeys::Route { escape: true })
+        );
+        flow.click(Id::Ask, 1_000.0);
+        assert_eq!(rows(&flow, 1_000.0)[0], "HEX");
+        assert!(flow.input(Input::Escape, 1_001.0).is_empty());
+        let kept = done(&flow, 1_001.0);
+        assert_eq!(
+            (kept.text.as_str(), kept.why.as_deref()),
+            ("Kept", Some(SEND_LATER))
+        );
+        assert!(flow.tick(1_001.0 + tuning::get().brief_hold_s));
+
+        // ✕ beside "Sending to SEER…" cancels the send rather than letting
+        // it go unseen.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        assert_eq!(
+            flow.click(Id::Close, 1.0),
+            [Action::Undo { to: "SEER".into() }]
+        );
+        flow.input(Input::Undone(Undone::TakenBack), 1.2);
+        assert_eq!(rows(&flow, 1.2)[0], "HEX");
+        assert!(flow.click(Id::Close, 2.0).is_empty());
+        assert_eq!(done(&flow, 2.0).text, "Kept");
+        // After the window, ✕ dismisses as before.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        let late = undo_s() + 0.5;
+        assert!(flow.click(Id::Close, late).is_empty());
+        assert_eq!(flow.pres(late), Pres::Hidden);
+    }
+
+    #[test]
+    fn undoing_a_pick_reopens_the_list_it_came_from() {
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.input(Input::OpenList, 0.5);
+        flow.input(Input::SendRow(0), 1.0);
+        assert_eq!(
+            flow.input(Input::Escape, 2.0),
+            [Action::Undo { to: "SEER".into() }]
+        );
+        flow.input(Input::Undone(Undone::TakenBack), 2.2);
+        assert_eq!(rows(&flow, 2.2), ["HEX", "SEER", "HOME"]);
+        let (_, list) = done(&flow, 2.2).open.unwrap();
+        assert_eq!(
+            list.footer,
+            Footer::Always("problems.kitlangton.com".into())
+        );
     }
 
     #[test]

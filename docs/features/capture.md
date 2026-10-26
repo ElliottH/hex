@@ -144,10 +144,16 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   capsule runs a rule's undo window and a chip's send itself, and follows
 │   only Queued (then Sent), how an Undo ended, and a failed send
 │   ├── A rule's send -> "Auto-sending to X" (a pick: "Sending to X") with the
-│   │   seconds left in a ring, a filled Undo chip (esc) that drains over the
-│   │   5 s window (`routing::UNDO`; static under Reduce Motion), a quiet
+│   │   seconds left in a ring, a filled Undo chip (esc, or ✕) that drains over
+│   │   the 5 s window (`routing::UNDO`; static under Reduce Motion), a quiet
 │   │   Paste, and the runner-up as a "Send to Y" chip that redirects at once;
 │   │   then "Sent to X" with an "Elsewhere…" chip for the list
+│   ├── Taken back (a rule's send, or a pick from the list or a chip) -> never
+│   │   ends the capture: the list opens again with the same sessions, the one
+│   │   it went to last ("taken back"), with 1-9, typing, and ⇧⏎ as before.
+│   │   It stays, sent nowhere, until a pick or a dismissal; a click away folds
+│   │   it to "Taken back" with "Elsewhere…". Esc or ✕ dismisses: "Kept ·
+│   │   hex capture send latest", the bundle untouched
 │   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
 │   │   a chip sends at once
 │   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
@@ -157,7 +163,8 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   ├── Picker -> ⌥⇧S and Esc through the listener
 │   │   ├── Routed -> the Paste Last shortcut (⌥⇧V by default; the chip shows
 │   │   │   the saved one, and no keys while it's off) opens the list instead
-│   │   │   of pasting the last dictation; Esc too while a send can be undone.
+│   │   │   of pasting the last dictation; Esc too while a send can be undone
+│   │   │   or a taken-back capture waits for a pick.
 │   │   │   Unreachable has no list, so Paste Last pastes
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
@@ -420,6 +427,8 @@ Checks:
   `a_queued_send_says_so_and_says_sent_when_it_goes`,
   `a_cabled_phone_shows_its_chip`, …),
   `paste_takes_back_a_waiting_send_and_the_capsule_stays_gone`,
+  `undoing_a_rule_send_reopens_the_list_until_a_pick`,
+  `undoing_a_pick_reopens_the_list_it_came_from`,
   `the_capsule_takes_only_the_keys_its_state_needs`,
   `the_hints_keys_stay_inside_their_trays`, goldens
   `tests/golden/capture-capsule-*.png`, and
