@@ -1498,10 +1498,8 @@ impl CaptureHost {
         Ok(self.report(true, ended))
     }
 
-    /// Hands the capsule's route command to the `capture-route` thread,
-    /// which acts on the newest capture.
-    /// Pastes or opens the newest written capture on a thread of its own:
-    /// pasting waits on the pasteboard and the app in front.
+    /// Pastes or opens the newest written capture on a thread of its own,
+    /// one at a time: pasting waits on the pasteboard and the app in front.
     fn hand_off(&self, how: HandOff) -> Result<ControlReply> {
         let bundle = lock(&self.outcomes)
             .last
@@ -1510,12 +1508,21 @@ impl CaptureHost {
             .map(|last| last.bundle.clone())
             .ok_or_else(|| eyre!("no written capture"))?;
         if !cfg!(test) {
-            std::thread::Builder::new()
+            static HANDING_OFF: AtomicBool = AtomicBool::new(false);
+            if HANDING_OFF.swap(true, Ordering::AcqRel) {
+                return Ok(self.report(false, None));
+            }
+            let spawned = std::thread::Builder::new()
                 .name("capture-hand-off".into())
                 .spawn(move || {
                     let done = objc2::rc::autoreleasepool(|_| match how {
+                        // ⌘V from Hex's keyboard layout snapshot, marked as
+                        // Hex's: the crate's own reads TIS off the main thread.
                         HandOff::Paste => {
-                            scrawl_capture::handoff::paste_bundle_at_target(&bundle, None)
+                            scrawl_capture::handoff::paste_bundle_with(&bundle, &|| {
+                                crate::keyboard::post_command('v')
+                                    .map_err(|error| anyhow::anyhow!("{error:#}"))
+                            })
                         }
                         HandOff::Inspect => scrawl_capture::handoff::load_bundle(&bundle).and_then(
                             |(dir, loaded)| {
@@ -1530,12 +1537,18 @@ impl CaptureHost {
                             "capture hand-off failed"
                         );
                     }
-                })
-                .wrap_err("could not start the capture hand-off")?;
+                    HANDING_OFF.store(false, Ordering::Release);
+                });
+            if let Err(error) = spawned {
+                HANDING_OFF.store(false, Ordering::Release);
+                return Err(error).wrap_err("could not start the capture hand-off");
+            }
         }
         Ok(self.report(true, None))
     }
 
+    /// Hands the capsule's route command to the `capture-route` thread,
+    /// which acts on the newest capture.
     fn route(&self, job: routing::Job) -> ControlReply {
         if !self.routes.as_ref().is_some_and(|routes| routes.send(job)) {
             return ControlReply::error("busy", "the capture router is not taking requests");
