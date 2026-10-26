@@ -269,9 +269,19 @@ Where it goes                            // capture.route; capture.routing's aut
 ├── Written -> the one capture-route thread (queue 16) decides; the snapshot's
 │   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer |
 │   Unreachable
-│   ├── Rule (a dev server's port, a page, a saved rule) -> Pending, sent after
-│   │   5 s unless Undo; then Sending -> Sent, or Queued when OpenCode didn't take it
-│   ├── Guess -> suggestions and recent sessions; nothing sent until one is picked
+│   ├── Rule -> only a rule the person saved (`routing.sites`, `routing.apps`,
+│   │   an "Always send … here"): Pending, sent after 5 s unless Undo; then
+│   │   Sending -> Sent, or Queued when OpenCode didn't take it. Whatever
+│   │   autoSend says, nothing else sends on its own
+│   ├── Guess -> everything else the router would send (Jev's pick, HOME when
+│   │   Jev couldn't tell, a dev server's port, a page's data-session or
+│   │   publisher, a name that was said, the port ladder) is suggestion #1, its
+│   │   reason as the row's word ("Jev's pick", "dev server", "this page"), then
+│   │   the runners-up and recent sessions; nothing sent until one is picked.
+│   │   `site` names what "Always send <site> here" (⇧⏎ in the list, or
+│   │   `send --always`) would save, after which that site's captures are Rules
+│   ├── Each Rule or Guess -> routing.json's `shown`: `as` rule or guess, and
+│   │   `why`, the router's leading reason; `hex capture route` prints it
 │   ├── Nothing / NoAnswer -> recent sessions only
 │   └── Unreachable -> the look read no sessions (OpenCode slow past the look's
 │       10 s, down, or refusing); a warning in process.log with the error, and
@@ -294,10 +304,12 @@ hex capture list|show|send|route         // capture.cli; docs/cli.md
 ├── list [--limit N] -> the newest bundles in the captures folder: mode, words,
 │   where it went
 ├── show <capture> -> one capture's words, files, and send
-├── send <capture> [--to <session>] -> needs a listening Hex
+├── send <capture> [--to <session>] [--always] -> needs a listening Hex
 │   ├── The newest routed capture -> as the capsule's pick (no --to: the Rule's
-│   │   session or the recorded destination), so the capsule's Undo follows it
-│   └── Older -> --to must be a session ID; without it, its recorded destination
+│   │   session, a Guess's first suggestion, or the recorded destination), so
+│   │   the capsule's Undo follows it; --always also saves the site or app rule
+│   └── Older -> --to must be a session ID; without it, its recorded
+│       destination; --always is refused
 ├── route <capture> [--ask-jev] -> what the router sees and decides; sends nothing
 └── <capture> = bundle name, path, or `latest`; unknown -> `not-found`
 
@@ -379,9 +391,11 @@ Checks:
   [audio.rs](../../crates/capture/src/audio.rs). The mirror, its
   `--no-microphone`, and the camera prompt have not run in Hex.
 - Routing, in [routing.rs](../../src/capture_host/routing.rs):
+  `only_a_saved_rule_sends_on_its_own`,
   `a_rule_sends_after_undo_and_lists_the_rest`,
   `a_guess_sends_nothing_and_a_failure_still_lists_recent_sessions`, and
-  `the_ladder_is_a_rule`; the CLI's
+  `the_ladder_is_a_guess`; `an_always_rule_makes_its_sites_next_capture_a_saved_rule`
+  in [look.rs](../../crates/router/src/routing/look.rs); the CLI's
   `a_capture_on_disk_summarizes_its_mode_words_and_send` in
   [library.rs](../../src/capture_host/library.rs), the protocol round trips in
   control.rs, and `control_commands_parse` in main.rs.

@@ -413,6 +413,10 @@ enum CaptureCommand {
         /// lists by name. Without it, where its route or last send says.
         #[arg(long)]
         to: Option<String>,
+        /// Also save a rule that always sends this capture's site or app
+        /// there (the newest routed capture only).
+        #[arg(long)]
+        always: bool,
         #[command(flatten)]
         output: control::cli::Output,
     },
@@ -606,8 +610,16 @@ fn main() -> Result<()> {
                 CaptureCommand::Send {
                     capture,
                     to,
+                    always,
                     output,
-                } => (C::ScrawlCaptureSend { capture, to }, output),
+                } => (
+                    C::ScrawlCaptureSend {
+                        capture,
+                        to,
+                        always,
+                    },
+                    output,
+                ),
                 CaptureCommand::Route {
                     capture,
                     explain: _,
@@ -1163,6 +1175,16 @@ mod tests {
                 Ok(Some(Command::Capture {
                     command: super::CaptureCommand::Send { capture, to: Some(to), .. }
                 })) if capture == "latest" && to == "ses_1"
+            ));
+            assert!(matches!(
+                parse(&["hex", "capture", "send", "latest", "--always"]),
+                Ok(Some(Command::Capture {
+                    command: super::CaptureCommand::Send {
+                        to: None,
+                        always: true,
+                        ..
+                    }
+                }))
             ));
             assert!(parse(&["hex", "capture", "route", "latest", "--explain"]).is_ok());
         }

@@ -413,7 +413,7 @@ impl Scored {
     }
 
     /// The reason that gave the most points (the first on a tie), which names how it was found.
-    pub(crate) fn lead(&self) -> Option<&Reason> {
+    pub fn lead(&self) -> Option<&Reason> {
         self.reasons
             .iter()
             .filter(|r| r.basis != Basis::Recent)

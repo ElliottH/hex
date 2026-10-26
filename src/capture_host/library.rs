@@ -64,12 +64,12 @@ pub fn show(capture: &str) -> Result<ControlReply, ControlError> {
     )))
 }
 
-pub fn send(capture: &str, to: Option<String>) -> Result<ControlReply, ControlError> {
+pub fn send(capture: &str, to: Option<String>, always: bool) -> Result<ControlReply, ControlError> {
     let dir = resolve(capture)?;
     if load(&dir).is_none() {
         return Err(unreadable(&dir));
     }
-    let message = super::routing::send_bundle(dir, to)
+    let message = super::routing::send_bundle(dir, to, always)
         .map_err(|message| ControlError::new("failed", message))?;
     Ok(ControlReply::Done {
         message,

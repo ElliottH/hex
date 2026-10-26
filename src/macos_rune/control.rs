@@ -137,11 +137,15 @@ impl Pump {
                 None
             }
             #[cfg(hex_capture)]
-            ControlCommand::ScrawlCaptureSend { capture, to } => {
+            ControlCommand::ScrawlCaptureSend {
+                capture,
+                to,
+                always,
+            } => {
                 background(reply, move || {
                     listener_ready(&runtime)?;
                     captures_on()?;
-                    crate::capture_host::send_capture(&capture, to)
+                    crate::capture_host::send_capture(&capture, to, always)
                 });
                 None
             }

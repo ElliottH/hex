@@ -55,7 +55,7 @@ hex
 │   ├── start|stop|cancel|status   record a capture, end or discard it, or report
 │   ├── list [--limit N]           the newest captures in the captures folder
 │   ├── show <capture>             one capture's words, files, and where it went
-│   ├── send <capture> [--to <session>]  send it to an OpenCode session
+│   ├── send <capture> [--to <session>] [--always]  send it to an OpenCode session
 │   └── route <capture> [--ask-jev]  what routing sees and decides; sends nothing
 ├── experiments list|enable|disable  edit ~/.config/hex/experiments; no running Hex (features/experiments.md)
 ├── check-for-updates              check for an update now
@@ -123,7 +123,9 @@ folder and need only the experiment; `send` needs captures on and a listening
 Hex. `send` with `--to` takes a session ID; for the newest capture it also
 takes a name its route lists, and it acts as the capsule's pick, so the
 capsule's Undo follows it. Without `--to` it goes where the capture's route
-or its last send says. Its reply says what became of it (`Sent to …`,
+(its rule, or its first guess) or its last send says. `--always`, for the
+newest capture only, also saves a rule sending its site or app there, as the
+capsule's ⇧⏎ does. Its reply says what became of it (`Sent to …`,
 `Queued for …` when OpenCode didn't answer, which Hex retries). `route` is
 Scrawl's `route --explain` (`--explain` is accepted); `--ask-jev` asks Jev
 again, one network call. An unknown capture is refused with `not-found`.
@@ -185,7 +187,7 @@ history-clear | check-for-updates | launch-at-login {enabled?}
 vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
 scrawl-capture {action}                          action: start | stop | cancel | status; `capture` build option
 scrawl-capture-list {limit?} | scrawl-capture-show {capture}
-scrawl-capture-send {capture, to?} | scrawl-capture-route {capture, ask_jev}
+scrawl-capture-send {capture, to?, always?} | scrawl-capture-route {capture, ask_jev}
 ```
 
 Optional fields may be left out. `hex start` and `hex logs` are local and have

@@ -1639,6 +1639,64 @@ mod tests {
         assert_eq!(dest.directory.as_deref(), Some("/p/board"));
     }
 
+    thread_local! {
+        static SITES: std::cell::RefCell<Vec<(String, PathBuf)>> = std::cell::RefCell::default();
+    }
+
+    fn saved_sites() -> Vec<(String, PathBuf)> {
+        SITES.with(|s| s.borrow().clone())
+    }
+
+    #[test]
+    fn an_always_rule_makes_its_sites_next_capture_a_saved_rule() {
+        use super::super::policy::saved_rule;
+        use super::super::smart::{Decision, Policy, decide};
+        let senses = Senses {
+            hooks: Hooks {
+                sdk: no_sdk,
+                listener_dir: listener,
+                api,
+            },
+            own_port: |_| None,
+            terminal: no_terminal,
+            sites: saved_sites,
+            ..Senses::default()
+        };
+        let url = "https://board.example.com/cards";
+        let judge = || {
+            let clues = url_clues(url, &senses, false);
+            let (candidates, _) = read_for(&clues, None, &senses);
+            let evidence = Evidence {
+                address: None,
+                clues,
+                candidates,
+                now_ms: 30,
+                url: Some(url.into()),
+                sessions_error: None,
+            };
+            decide(&evidence, Policy::Weigh).decision
+        };
+        assert!(
+            !matches!(judge(), Decision::Send { ref to, .. } if saved_rule(to)),
+            "nothing the person saved covers the site yet"
+        );
+        // "Always send board.example.com here", as the capsule saves it (to the session
+        // when its folder isn't on this Mac).
+        let saved = crate::RouterConfig::default()
+            .with_rule(
+                crate::RuleKind::Site,
+                "https://board.example.com",
+                "ses_board",
+            )
+            .unwrap();
+        SITES.with(|s| *s.borrow_mut() = saved.site_rules());
+        let Decision::Send { to, .. } = judge() else {
+            panic!("the saved rule names the session");
+        };
+        assert_eq!(to.candidate.id, "ses_board");
+        assert!(saved_rule(&to));
+    }
+
     // MARK: Pages from a file server
 
     /// What a fixture's page needs: the folder `routing.servers` maps its URL prefix to, and the

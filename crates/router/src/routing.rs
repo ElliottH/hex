@@ -768,6 +768,9 @@ pub fn explain_bundle(bundle: &Path, url: Option<&str>, ask_jev: bool) -> Result
         let _ = writeln!(out, "Warning   {error}");
     }
     out.push_str(&smart::explain(&evidence, &judgement));
+    if let Some(shown) = read_shown(&dir) {
+        let _ = writeln!(out, "Shown     {}: {}", shown.kind, shown.why);
+    }
     if let Some(saved) = jev::read_record(&dir) {
         let _ = writeln!(out, "At capture (saved)");
         out.push_str(&jev::explain(&saved));
@@ -827,6 +830,53 @@ pub fn write_record(
     Ok(())
 }
 
+/// How the host showed a capture's route, saved in its `routing.json` as `shown`: sent on its
+/// own by a saved rule, or offered as a guess, and why (the leading reason).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shown {
+    /// `rule` or `guess`.
+    #[serde(rename = "as")]
+    pub kind: String,
+    pub why: String,
+}
+
+impl Shown {
+    pub fn rule(why: impl Into<String>) -> Self {
+        Self {
+            kind: "rule".into(),
+            why: why.into(),
+        }
+    }
+
+    pub fn guess(why: impl Into<String>) -> Self {
+        Self {
+            kind: "guess".into(),
+            why: why.into(),
+        }
+    }
+}
+
+/// Saves `shown` into the capture's `routing.json`, beside what was seen.
+pub fn record_shown(dir: &Path, shown: &Shown) -> Result<()> {
+    let path = dir.join(RECORD);
+    let mut body: serde_json::Value = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    body["shown"] = serde_json::to_value(shown)?;
+    std::fs::write(path, serde_json::to_vec_pretty(&body)?)?;
+    Ok(())
+}
+
+/// What [`record_shown`] saved for the capture in `dir`.
+pub fn read_shown(dir: &Path) -> Option<Shown> {
+    let value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join(RECORD)).ok()?).ok()?;
+    serde_json::from_value(value.get("shown")?.clone()).ok()
+}
+
 /// Counts Kit's pick of `session` for the capture in `dir` (a chip, or a send left to stand)
 /// toward a `routing.sites` or `routing.apps` rule, with Jev routing on. Once two agree, the
 /// rule to offer is saved in its `routing.json` as `offerRule` and returned.
@@ -840,12 +890,13 @@ pub fn learn_capture(dir: &Path, session: &str) -> Option<policy::OfferRule> {
         return None;
     }
     let evidence: smart::Evidence = serde_json::from_value(body.get("evidence")?.clone()).ok()?;
-    // A rule, port or dev build that sent it already says where it goes.
+    // A saved rule that sent it already says where it goes; anything else was a guess, so
+    // picking it counts toward offering one.
     if let Some(smart::Decision::Send { to, .. }) = body
         .get("decision")
         .and_then(|d| serde_json::from_value(d.clone()).ok())
         && to.candidate.id == session
-        && policy::obeyed(&to)
+        && policy::saved_rule(&to)
     {
         return None;
     }
@@ -1196,7 +1247,7 @@ mod tests {
 
         // Every request shares one budget, counted from the first: reading pages stops when
         // it's spent instead of waiting out each request in turn.
-        let budget = Duration::from_millis(500);
+        let budget = Duration::from_millis(550);
         let mut requests = 0;
         let mut api = within(slow, budget);
         let started = Instant::now();
@@ -1209,15 +1260,15 @@ mod tests {
             &[],
             look::SESSION_PAGES,
         );
-        // Two pages answer, the first folder's read gets the last 100 ms and fails, and the
-        // second is refused without asking: 500 ms, not the 800 ms four requests take. The
+        // Two pages answer, the first folder's read gets the last 150 ms and fails, and the
+        // second is refused without asking: 550 ms, not the 800 ms four requests take. The
         // pages already read are kept, with why the rest weren't.
         let read = result.expect("the newest pages were read");
         assert_eq!(read.candidates.len(), 200);
         assert!(read.error.is_some());
         let took = started.elapsed();
         assert_eq!(requests, 4);
-        assert!(took < Duration::from_millis(700), "{took:?}");
+        assert!(took < Duration::from_millis(800), "{took:?}");
 
         // A server that answers in time routes as usual.
         let hooks = Hooks { api: slow, ..hooks };
@@ -1262,6 +1313,26 @@ mod tests {
             (by_dir.session.as_str(), by_dir.via.as_str()),
             ("ses_app", "sdk")
         );
+    }
+
+    #[test]
+    fn how_a_route_was_shown_is_kept_beside_what_was_seen() {
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-shown-{}.scrawl",
+            crate::util::make_bundle_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(read_shown(&dir), None);
+        std::fs::write(dir.join(RECORD), br#"{"evidence": {"x": 1}}"#).unwrap();
+        record_shown(&dir, &Shown::guess("Jev's pick")).unwrap();
+        assert_eq!(read_shown(&dir), Some(Shown::guess("Jev's pick")));
+        let body: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(RECORD)).unwrap()).unwrap();
+        assert_eq!(body["evidence"]["x"], 1);
+        assert_eq!(body["shown"]["as"], "guess");
+        record_shown(&dir, &Shown::rule("routing.sites")).unwrap();
+        assert_eq!(read_shown(&dir), Some(Shown::rule("routing.sites")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

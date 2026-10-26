@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use scrawl_capture::capture::RouteContext;
 use scrawl_capture::delivery::{self, Delivery};
 use scrawl_capture::model::{Destination, ScrawlBundle};
-use scrawl_capture::routing::{self, jev, look, policy, smart, undo};
+use scrawl_capture::routing::{self, Shown, jev, look, policy, smart, undo};
 use scrawl_capture::{Router, RouterConfig, RouterDirs, RuleKind, Undone};
 
 use super::{SharedOutcomes, lock};
@@ -85,14 +85,18 @@ pub struct RouteDest {
 pub enum RouteAnswer {
     /// Written; the router is still working.
     Looking,
-    /// A rule (a dev server's port, a page, a saved rule) says where it
-    /// goes: sent to `to` after [`UNDO`] unless taken back.
+    /// A rule the person saved (`routing.sites` or `routing.apps`, an
+    /// "Always send … here" among them) says where it goes: sent to `to`
+    /// after [`UNDO`] unless taken back.
     Rule {
         to: RouteDest,
         suggested: Vec<RouteDest>,
         recent: Vec<RouteDest>,
     },
-    /// Guesses, best first; nothing is sent until one is picked. `site` is
+    /// Guesses, best first: everything else the router found (Jev's pick,
+    /// HOME when Jev couldn't tell, a dev server's port, a page or its
+    /// publisher, a name that was said). Nothing is sent until one is
+    /// picked; picking one with `always` saves a rule for `site`, which is
     /// what an always-rule would match (the site's host or the app's name),
     /// `None` when no rule can be made.
     Guess {
@@ -233,6 +237,7 @@ pub(super) enum Job {
     SendBundle {
         bundle: PathBuf,
         to: Option<String>,
+        always: bool,
         reply: SyncSender<Result<String, String>>,
     },
 }
@@ -249,7 +254,11 @@ const CLI_WAIT: Duration = Duration::from_secs(8);
 /// Sends `bundle` through the `capture-route` thread and says what became
 /// of it: as the capsule's pick when it is the newest capture, so its
 /// route and Undo follow.
-pub(super) fn send_bundle(bundle: PathBuf, to: Option<String>) -> Result<String, String> {
+pub(super) fn send_bundle(
+    bundle: PathBuf,
+    to: Option<String>,
+    always: bool,
+) -> Result<String, String> {
     let jobs = JOBS
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -257,7 +266,13 @@ pub(super) fn send_bundle(bundle: PathBuf, to: Option<String>) -> Result<String,
         .map(|(_, jobs)| jobs.clone())
         .ok_or("captures are off")?;
     let (reply, answer) = mpsc::sync_channel(1);
-    if !send(&jobs, Job::SendBundle { bundle, to, reply }) {
+    let job = Job::SendBundle {
+        bundle,
+        to,
+        always,
+        reply,
+    };
+    if !send(&jobs, job) {
         return Err("the capture router is busy; try again shortly".into());
     }
     answer
@@ -395,21 +410,35 @@ impl Worker {
             Job::Send { to, always } => self.chosen(&to, always),
             Job::Undo => self.undo(),
             Job::Redirect { to } => self.redirect(&to),
-            Job::SendBundle { bundle, to, reply } => {
-                let _ = reply.try_send(self.send_bundle(&bundle, to.as_deref()));
+            Job::SendBundle {
+                bundle,
+                to,
+                always,
+                reply,
+            } => {
+                let _ = reply.try_send(self.send_bundle(&bundle, to.as_deref(), always));
             }
         }
     }
 
     /// `hex capture send`: the newest capture as the capsule's pick, any
-    /// other straight to `to` or where it last went.
-    fn send_bundle(&mut self, bundle: &Path, to: Option<&str>) -> Result<String, String> {
+    /// other straight to `to` or where it last went. `always` (newest only)
+    /// also saves a rule for its site or app, as the capsule's ⇧⏎ does.
+    fn send_bundle(
+        &mut self,
+        bundle: &Path,
+        to: Option<&str>,
+        always: bool,
+    ) -> Result<String, String> {
         if self.is_current(bundle) && self.acting_on_last() {
             let current = self.current.as_ref().ok_or("no capture")?;
             let to = match to {
                 Some(to) => to.to_owned(),
                 None => match &current.route.answer {
                     RouteAnswer::Rule { to, .. } => to.session.clone(),
+                    RouteAnswer::Guess { suggested, .. } if !suggested.is_empty() => {
+                        suggested[0].session.clone()
+                    }
                     _ => recorded_destination(bundle)
                         .map(|dest| dest.session)
                         .ok_or("its route names no session; say where with --to")?,
@@ -418,13 +447,19 @@ impl Worker {
             if self.resolve(&to).is_none() {
                 return Err(format!("{to} isn't a session this capture lists"));
             }
-            self.chosen(&to, false);
+            if always && current.rule.is_none() && current.offered.is_none() {
+                return Err("no rule can be made for this capture's site or app".into());
+            }
+            self.chosen(&to, always);
             let current = self.current.as_ref().ok_or("no capture")?;
             return Ok(current
                 .route
                 .delivery
                 .as_ref()
                 .map_or_else(|| "Nothing sent".into(), describe));
+        }
+        if always {
+            return Err("only the newest routed capture can save a rule".into());
         }
         let dest = match to {
             Some(to) if to.starts_with("ses") => Destination {
@@ -516,12 +551,22 @@ impl Worker {
                 .to_owned(),
             RuleKind::App => app.clone().unwrap_or_else(|| key.clone()),
         });
-        let (answer, rule_send) = answer_for(decision, url.as_deref(), site, &candidates, now_ms());
+        let Answered {
+            answer,
+            send: rule_send,
+            shown,
+        } = answer_for(decision, url.as_deref(), site, &candidates, now_ms());
         tracing::info!(
             bundle = %bundle_name(&bundle),
             answer = answer_kind(&answer),
+            why = shown.as_ref().map(|shown| shown.why.as_str()),
             "capture routed"
         );
+        if let Some(shown) = &shown
+            && let Err(error) = routing::record_shown(&bundle, shown)
+        {
+            tracing::warn!(error = %format!("{error:#}"), "could not record how a capture's route was shown");
+        }
         let mut route = CaptureRoute::of(answer);
         if let Some(dest) = rule_send {
             route.delivery = Some(RouteDelivery::Pending {
@@ -946,7 +991,7 @@ fn answer_for(
     site: Option<String>,
     candidates: &[smart::Candidate],
     now_ms: u64,
-) -> (RouteAnswer, Option<Destination>) {
+) -> Answered {
     let scored = |scored: &smart::Scored| {
         let dest = smart::destination_of(scored, url);
         RouteDest {
@@ -956,66 +1001,95 @@ fn answer_for(
         }
     };
     let recent = |shown: &[&str]| recent(candidates, shown, now_ms);
+    let guess = |suggested: Vec<RouteDest>, why: String| {
+        let shown: Vec<&str> = suggested.iter().map(|d| d.session.as_str()).collect();
+        let recent = recent(&shown);
+        Answered {
+            answer: RouteAnswer::Guess {
+                suggested,
+                recent,
+                site: site.clone(),
+            },
+            send: None,
+            shown: Some(Shown::guess(why)),
+        }
+    };
     match decided {
-        Decided::Judged(smart::Decision::Send { to, instead }) => {
+        // Only a rule the person saved sends on its own; anything else the
+        // router would send is its first suggestion.
+        Decided::Judged(smart::Decision::Send { to, instead }) if policy::saved_rule(&to) => {
             let dest = smart::destination_of(&to, url);
+            let shown = Shown::rule(lead_why(&to));
             let to = scored(&to);
             let suggested: Vec<_> = instead.iter().map(scored).collect();
-            let mut shown: Vec<&str> = suggested.iter().map(|d| d.session.as_str()).collect();
-            shown.push(&to.session);
-            let recent = recent(&shown);
-            (
-                RouteAnswer::Rule {
+            let mut listed: Vec<&str> = suggested.iter().map(|d| d.session.as_str()).collect();
+            listed.push(&to.session);
+            let recent = recent(&listed);
+            Answered {
+                answer: RouteAnswer::Rule {
                     to,
                     suggested,
                     recent,
                 },
-                Some(dest),
-            )
+                send: Some(dest),
+                shown: Some(shown),
+            }
+        }
+        Decided::Judged(smart::Decision::Send { to, instead }) => {
+            let why = lead_why(&to);
+            let suggested = std::iter::once(&to).chain(&instead).map(scored).collect();
+            guess(suggested, why)
         }
         Decided::Judged(smart::Decision::Offer { choices }) => {
-            let suggested: Vec<_> = choices.iter().map(scored).collect();
-            let shown: Vec<&str> = suggested.iter().map(|d| d.session.as_str()).collect();
-            let recent = recent(&shown);
-            (
-                RouteAnswer::Guess {
-                    suggested,
-                    recent,
-                    site,
-                },
-                None,
-            )
+            let why = choices.first().map(lead_why).unwrap_or_default();
+            guess(choices.iter().map(scored).collect(), why)
         }
-        Decided::Judged(smart::Decision::Keep { .. }) => (
-            RouteAnswer::Nothing {
-                recent: recent(&[]),
-            },
-            None,
-        ),
+        Decided::Judged(smart::Decision::Keep { .. }) => Answered::of(RouteAnswer::Nothing {
+            recent: recent(&[]),
+        }),
+        // The port ladder (smart routing off) is never a saved rule.
         Decided::Ladder(dest) => {
             let to = RouteDest {
                 session: dest.session.clone(),
                 name: dest.title.clone(),
                 why: why(&dest.via).to_owned(),
             };
-            let recent = recent(&[&to.session]);
-            (
-                RouteAnswer::Rule {
-                    to,
-                    suggested: Vec::new(),
-                    recent,
-                },
-                Some(dest),
-            )
+            let reason = format!("the port ladder ({})", dest.via);
+            guess(vec![to], reason)
         }
-        Decided::Unreachable(why) => (RouteAnswer::Unreachable { why }, None),
-        Decided::Failed => (
-            RouteAnswer::NoAnswer {
-                recent: recent(&[]),
-            },
-            None,
-        ),
+        Decided::Unreachable(why) => Answered::of(RouteAnswer::Unreachable { why }),
+        Decided::Failed => Answered::of(RouteAnswer::NoAnswer {
+            recent: recent(&[]),
+        }),
     }
+}
+
+/// What [`answer_for`] made of a decision.
+struct Answered {
+    answer: RouteAnswer,
+    /// A saved rule's send, which goes after [`UNDO`] unless taken back.
+    send: Option<Destination>,
+    /// Rule or guess, and why, for the capture's `routing.json`.
+    shown: Option<Shown>,
+}
+
+impl Answered {
+    fn of(answer: RouteAnswer) -> Self {
+        Self {
+            answer,
+            send: None,
+            shown: None,
+        }
+    }
+}
+
+/// The reason that put `to` first, as the router wrote it ("Jev couldn't
+/// tell, so HOME").
+fn lead_why(to: &smart::Scored) -> String {
+    to.lead()
+        .or_else(|| to.reasons.first())
+        .map(|reason| reason.why.clone())
+        .unwrap_or_default()
 }
 
 /// The newest sessions not already shown, with how long ago each moved.
@@ -1043,12 +1117,14 @@ fn recent(candidates: &[smart::Candidate], shown: &[&str], now_ms: u64) -> Vec<R
 fn why(via: &str) -> &str {
     match via {
         "rule" | "app-rule" => "rule",
-        "sdk" | "page" => "page",
+        "named" => "you said it",
+        "sdk" | "page" => "this page",
         "localhost" | "port" => "dev server",
         "recorded" => "sent before",
         "publisher" => "published it",
         "dev-build" => "dev build",
-        "jev" | "jev-home" => "guess",
+        "jev" => "Jev's pick",
+        "jev-home" => "Jev's fallback",
         "weighed" => "recent",
         other => other,
     }
@@ -1240,6 +1316,103 @@ mod tests {
         }
     }
 
+    /// `id` scored on one reason, as the router writes it.
+    fn scored_by(id: &str, title: &str, basis: smart::Basis, why: &str) -> smart::Scored {
+        smart::Scored {
+            reasons: vec![smart::Reason {
+                basis,
+                points: 60,
+                why: why.into(),
+                directory: None,
+            }],
+            ..scored(id, title)
+        }
+    }
+
+    fn sent_by(basis: smart::Basis, why: &str) -> Answered {
+        answer_for(
+            Decided::Judged(smart::Decision::Send {
+                to: scored_by("ses_a", "Alpha", basis, why),
+                instead: vec![scored("ses_c", "Gamma")],
+            }),
+            Some("https://example.com/page"),
+            Some("example.com".into()),
+            &[
+                candidate("ses_a", "Alpha", 0),
+                candidate("ses_c", "Gamma", 0),
+            ],
+            0,
+        )
+    }
+
+    #[test]
+    fn only_a_saved_rule_sends_on_its_own() {
+        use smart::{Basis, Source};
+        for (basis, why, shown) in [
+            (
+                Basis::JevHome,
+                "Jev couldn't tell, so HOME",
+                "Jev's fallback",
+            ),
+            (Basis::Jev, "Jev's pick", "Jev's pick"),
+            (
+                Basis::Clue(Source::Port),
+                "port 5173 is Alpha's",
+                "dev server",
+            ),
+            (
+                Basis::Clue(Source::Page),
+                "the page registered with data-session",
+                "this page",
+            ),
+            (
+                Basis::Clue(Source::Publisher),
+                "Alpha published the file",
+                "published it",
+            ),
+            (Basis::Clue(Source::Named), "you said alpha", "you said it"),
+        ] {
+            let answered = sent_by(basis, why);
+            assert!(answered.send.is_none(), "{why}: nothing sends until picked");
+            let RouteAnswer::Guess {
+                suggested, site, ..
+            } = &answered.answer
+            else {
+                panic!("{why}: not a guess: {:?}", answered.answer);
+            };
+            assert_eq!(
+                suggested[0].session, "ses_a",
+                "{why}: the router's pick first"
+            );
+            assert_eq!(suggested[0].why, shown);
+            assert_eq!(suggested[1].session, "ses_c");
+            // So "Always send example.com here" can make it a rule.
+            assert_eq!(site.as_deref(), Some("example.com"));
+            assert_eq!(answered.shown, Some(Shown::guess(why)));
+        }
+        for (basis, why) in [
+            (
+                Basis::Clue(Source::Rule),
+                "routing.sites sends https://example.com to /p/a",
+            ),
+            (
+                Basis::Clue(Source::AppRule),
+                "routing.apps sends com.example.app to /p/a",
+            ),
+        ] {
+            let answered = sent_by(basis, why);
+            assert_eq!(
+                answered.send.map(|dest| dest.session),
+                Some("ses_a".into()),
+                "{why}: sent after the undo window"
+            );
+            assert!(
+                matches!(answered.answer, RouteAnswer::Rule { ref to, .. } if to.why == "rule")
+            );
+            assert_eq!(answered.shown, Some(Shown::rule(why)));
+        }
+    }
+
     #[test]
     fn a_rule_sends_after_undo_and_lists_the_rest() {
         let candidates = [
@@ -1247,9 +1420,14 @@ mod tests {
             candidate("ses_b", "Beta", 3_000),
             candidate("ses_c", "Gamma", 2_000),
         ];
-        let (answer, send) = answer_for(
+        let Answered { answer, send, .. } = answer_for(
             Decided::Judged(smart::Decision::Send {
-                to: scored("ses_a", "Alpha"),
+                to: scored_by(
+                    "ses_a",
+                    "Alpha",
+                    smart::Basis::Clue(smart::Source::Rule),
+                    "routing.sites sends https://example.com to /tmp/ses_a",
+                ),
                 instead: vec![scored("ses_c", "Gamma")],
             }),
             None,
@@ -1282,7 +1460,7 @@ mod tests {
     #[test]
     fn a_guess_sends_nothing_and_a_failure_still_lists_recent_sessions() {
         let candidates = [candidate("ses_a", "Alpha", 0)];
-        let (answer, send) = answer_for(
+        let Answered { answer, send, .. } = answer_for(
             Decided::Judged(smart::Decision::Offer {
                 choices: vec![scored("ses_a", "Alpha")],
             }),
@@ -1297,7 +1475,7 @@ mod tests {
             RouteAnswer::Guess { ref suggested, ref recent, site: Some(ref site) }
                 if suggested.len() == 1 && recent.is_empty() && site == "example.com"
         ));
-        let (answer, send) = answer_for(Decided::Failed, None, None, &candidates, 0);
+        let Answered { answer, send, .. } = answer_for(Decided::Failed, None, None, &candidates, 0);
         assert!(send.is_none());
         assert!(matches!(answer, RouteAnswer::NoAnswer { ref recent } if recent.len() == 1));
     }
@@ -1322,7 +1500,7 @@ mod tests {
             unreachable_why("couldn't list sessions: 401 Unauthorized"),
             "401 Unauthorized"
         );
-        let (answer, send) = answer_for(
+        let Answered { answer, send, .. } = answer_for(
             Decided::Unreachable(unreachable_why(&error)),
             None,
             None,
@@ -1370,8 +1548,8 @@ mod tests {
     }
 
     #[test]
-    fn the_ladder_is_a_rule() {
-        let (answer, send) = answer_for(
+    fn the_ladder_is_a_guess() {
+        let Answered { answer, send, .. } = answer_for(
             Decided::Ladder(Destination {
                 session: "ses_a".into(),
                 title: "Alpha".into(),
@@ -1384,7 +1562,11 @@ mod tests {
             &[],
             0,
         );
-        assert!(send.is_some());
-        assert!(matches!(answer, RouteAnswer::Rule { ref to, .. } if to.why == "dev server"));
+        assert!(send.is_none());
+        assert!(matches!(
+            answer,
+            RouteAnswer::Guess { ref suggested, .. }
+                if suggested.len() == 1 && suggested[0].why == "dev server"
+        ));
     }
 }

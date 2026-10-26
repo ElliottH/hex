@@ -151,6 +151,10 @@ pub enum ControlCommand {
         capture: String,
         #[serde(default)]
         to: Option<String>,
+        /// Also save a rule sending the capture's site or app there (the
+        /// newest routed capture only).
+        #[serde(default)]
+        always: bool,
     },
     /// What routing sees for a capture and what it decides. `ask_jev` asks
     /// Jev again (one call).
@@ -833,7 +837,8 @@ mod tests {
             send.command,
             ControlCommand::ScrawlCaptureSend {
                 capture: "latest".into(),
-                to: None
+                to: None,
+                always: false,
             }
         );
     }
