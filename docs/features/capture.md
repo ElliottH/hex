@@ -150,8 +150,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   collide; the capsule shows titles
 │   ├── Keys (capture_host::take_keys), never taking focus:
 │   │   ├── Picker -> ⌥⇧S and Esc through the listener
-│   │   ├── Routed -> the Paste Last shortcut (⌥⇧V) opens the list instead of
-│   │   │   pasting the last dictation; Esc too while a send can be undone
+│   │   ├── Routed -> the Paste Last shortcut (⌥⇧V by default; the chip shows
+│   │   │   the saved one, and no keys while it's off) opens the list instead
+│   │   │   of pasting the last dictation; Esc too while a send can be undone.
+│   │   │   Unreachable has no list, so Paste Last pastes
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a
@@ -260,11 +262,16 @@ Where it goes                            // capture.route; capture.routing's aut
 │   Scrawl's own router folders, so `scrawl router undo` and its evals see Hex's
 │   sends as Scrawl's)
 ├── Written -> the one capture-route thread (queue 16) decides; the snapshot's
-│   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer
+│   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer |
+│   Unreachable
 │   ├── Rule (a dev server's port, a page, a saved rule) -> Pending, sent after
 │   │   3 s unless Undo; then Sending -> Sent, or Queued when OpenCode didn't take it
 │   ├── Guess -> suggestions and recent sessions; nothing sent until one is picked
-│   └── Nothing / NoAnswer -> recent sessions only
+│   ├── Nothing / NoAnswer -> recent sessions only
+│   └── Unreachable -> the look read no sessions (OpenCode slow past the look's
+│       10 s, down, or refusing); a warning in process.log with the error, and
+│       the capsule reads "Couldn't reach OpenCode" with why ("didn't answer in
+│       time"), keeping Paste and Inspect
 ├── The capsule's commands act only on `last`, the newest routed capture:
 │   ├── Send{to} -> the Rule's own session while Pending sends now; any other
 │   │   pick sends there (taking back a send already elsewhere first) and logs

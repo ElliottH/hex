@@ -250,6 +250,7 @@ fn capsule_route(answer: &RouteAnswer) -> Option<Route> {
         RouteAnswer::NoAnswer { recent } => Route::NoAnswer {
             recent: dests(recent),
         },
+        RouteAnswer::Unreachable { why } => Route::Unreachable { why: why.clone() },
     })
 }
 

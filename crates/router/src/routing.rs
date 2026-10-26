@@ -503,6 +503,10 @@ impl Default for Hooks {
 
 /// How long one capture's routing may spend reading sessions, all requests together.
 pub const SESSIONS_BUDGET: Duration = Duration::from_secs(3);
+/// How long a capture's look ([`look::look_live`]) may spend reading sessions, all requests together.
+/// A look runs beside the capture's writing and holds nothing up, while a busy OpenCode takes
+/// one to two seconds per page of sessions, so [`SESSIONS_BUDGET`] would leave it with none.
+pub const LOOK_BUDGET: Duration = Duration::from_secs(10);
 
 /// `api` limited to `budget` in all, counted from its first request: each request gets what's
 /// left, and none starts after.

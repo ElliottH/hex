@@ -101,8 +101,11 @@ pub enum RouteAnswer {
     },
     /// Nothing fits: recent sessions only.
     Nothing { recent: Vec<RouteDest> },
-    /// The router failed or OpenCode couldn't be read.
+    /// The router failed.
     NoAnswer { recent: Vec<RouteDest> },
+    /// OpenCode's sessions couldn't be read, so there is nowhere to offer;
+    /// `why` says what went wrong in a few words ("didn't answer in time").
+    Unreachable { why: String },
 }
 
 /// What became of a capture's send; `to` is the session's name.
@@ -465,28 +468,33 @@ impl Worker {
             .map(|live| live.candidates.clone())
             .unwrap_or_default();
         let smart_routing = router.config().smart_routing;
-        let (decision, url) = router.run(|| match (seen.live, &loaded) {
-            (Some(live), Some(loaded)) if smart_routing => {
-                let sessions_read = live.error.is_none() || !live.candidates.is_empty();
-                let (judgement, url) = routing::judge_capture(&bundle, loaded, live);
-                let decision = if sessions_read {
-                    Decided::Judged(judgement.decision)
-                } else {
-                    Decided::Failed
-                };
-                (decision, url)
+        let unread = seen.live.as_ref().and_then(sessions_unread);
+        if let Some(error) = &unread {
+            tracing::warn!(
+                bundle = %bundle_name(&bundle),
+                error,
+                "a capture's look couldn't read OpenCode's sessions"
+            );
+        }
+        let (decision, url) = router.run(|| match (seen.live, &loaded, unread) {
+            (Some(live), _, Some(error)) => {
+                (Decided::Unreachable(unreachable_why(&error)), live.url)
             }
-            (Some(live), _) => {
-                let decision = match seen.ladder {
-                    Some(dest) => Decided::Ladder(dest),
-                    None if live.error.is_none() => Decided::Judged(smart::Decision::Keep {
+            (Some(live), Some(loaded), None) if smart_routing => {
+                let (judgement, url) = routing::judge_capture(&bundle, loaded, live);
+                (Decided::Judged(judgement.decision), url)
+            }
+            (Some(live), _, None) => {
+                let decision = match (seen.ladder, live.error) {
+                    (Some(dest), _) => Decided::Ladder(dest),
+                    (None, None) => Decided::Judged(smart::Decision::Keep {
                         reason: String::new(),
                     }),
-                    None => Decided::Failed,
+                    (None, Some(error)) => Decided::Unreachable(unreachable_why(&error)),
                 };
                 (decision, live.url)
             }
-            (None, _) => (Decided::Failed, None),
+            (None, ..) => (Decided::Failed, None),
         });
         let bundle_id = loaded
             .as_ref()
@@ -884,7 +892,33 @@ enum Decided {
     Judged(smart::Decision),
     /// The port ladder's send (smart routing off).
     Ladder(Destination),
+    /// OpenCode's sessions couldn't be read: why, in a few words.
+    Unreachable(String),
     Failed,
+}
+
+/// Why a look read no sessions at all, when its read failed.
+fn sessions_unread(live: &look::Live) -> Option<String> {
+    live.candidates
+        .is_empty()
+        .then(|| live.error.clone())
+        .flatten()
+}
+
+/// A failed session read (`couldn't list sessions: …`, outer context
+/// first) in the few words the capsule shows under "Couldn't reach
+/// OpenCode".
+fn unreachable_why(error: &str) -> String {
+    let error = error
+        .strip_prefix("couldn't list sessions: ")
+        .unwrap_or(error);
+    if error.contains("didn't answer in time") || error.contains("took over") {
+        "didn't answer in time".into()
+    } else if error.contains("Could not reach server") {
+        "it isn't running".into()
+    } else {
+        error.to_owned()
+    }
 }
 
 /// The answer to show, and the destination of a rule's send.
@@ -956,6 +990,7 @@ fn answer_for(
                 Some(dest),
             )
         }
+        Decided::Unreachable(why) => (RouteAnswer::Unreachable { why }, None),
         Decided::Failed => (
             RouteAnswer::NoAnswer {
                 recent: recent(&[]),
@@ -1004,7 +1039,7 @@ fn why(via: &str) -> &str {
 /// Every session the route lists, suggestions first.
 fn listed(answer: &RouteAnswer) -> Vec<&RouteDest> {
     match answer {
-        RouteAnswer::Looking => Vec::new(),
+        RouteAnswer::Looking | RouteAnswer::Unreachable { .. } => Vec::new(),
         RouteAnswer::Rule {
             to,
             suggested,
@@ -1142,6 +1177,7 @@ fn answer_kind(answer: &RouteAnswer) -> &'static str {
         RouteAnswer::Guess { .. } => "guess",
         RouteAnswer::Nothing { .. } => "nothing",
         RouteAnswer::NoAnswer { .. } => "no-answer",
+        RouteAnswer::Unreachable { .. } => "unreachable",
     }
 }
 
@@ -1246,6 +1282,48 @@ mod tests {
         let (answer, send) = answer_for(Decided::Failed, None, None, &candidates, 0);
         assert!(send.is_none());
         assert!(matches!(answer, RouteAnswer::NoAnswer { ref recent } if recent.len() == 1));
+    }
+
+    #[test]
+    fn a_look_that_read_no_sessions_answers_unreachable() {
+        let failed = |error: &str| look::Live {
+            error: Some(error.into()),
+            ..look::Live::default()
+        };
+        let slow = failed(
+            "couldn't list sessions: OpenCode at http://127.0.0.1:4096 didn't answer in time: \
+             Resource temporarily unavailable (os error 35)",
+        );
+        let error = sessions_unread(&slow).expect("nothing was read");
+        assert_eq!(unreachable_why(&error), "didn't answer in time");
+        let spent = "couldn't list sessions: OpenCode took over 10000 ms to list sessions";
+        assert_eq!(unreachable_why(spent), "didn't answer in time");
+        let down = "couldn't list sessions: Could not reach server at http://127.0.0.1:4096";
+        assert_eq!(unreachable_why(down), "it isn't running");
+        assert_eq!(
+            unreachable_why("couldn't list sessions: 401 Unauthorized"),
+            "401 Unauthorized"
+        );
+        let (answer, send) = answer_for(
+            Decided::Unreachable(unreachable_why(&error)),
+            None,
+            None,
+            &[],
+            0,
+        );
+        assert!(send.is_none());
+        assert_eq!(
+            answer,
+            RouteAnswer::Unreachable {
+                why: "didn't answer in time".into()
+            }
+        );
+
+        // Sessions read alongside a failure (a page's publisher) still route.
+        let mut partial = failed("couldn't list sessions: 500");
+        partial.candidates = vec![candidate("ses_a", "A", 1)];
+        assert_eq!(sessions_unread(&partial), None);
+        assert_eq!(sessions_unread(&look::Live::default()), None);
     }
 
     #[test]

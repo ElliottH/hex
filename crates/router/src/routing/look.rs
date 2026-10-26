@@ -253,20 +253,21 @@ fn root_session(get: &mut ApiGet, id: &str) -> String {
     current
 }
 
-/// Reads the sessions the clues and address could name.
+/// Reads the sessions the clues and address could name, within [`super::LOOK_BUDGET`].
 pub(crate) fn read_for(
     clues: &[Clue],
     address: Option<&Address>,
     senses: &Senses,
 ) -> (Vec<Candidate>, Option<String>) {
-    read_with(clues, address, &[], senses)
+    read_with(clues, address, &[], super::LOOK_BUDGET, senses)
 }
 
-/// [`read_for`], also reading the sessions `also` names.
+/// [`read_for`], also reading the sessions `also` names, within `budget`.
 pub(crate) fn read_with(
     clues: &[Clue],
     address: Option<&Address>,
     also: &[String],
+    budget: Duration,
     senses: &Senses,
 ) -> (Vec<Candidate>, Option<String>) {
     let mut roots = Vec::new();
@@ -280,7 +281,7 @@ pub(crate) fn read_with(
     }
     ids.extend(address.map(|a| a.session().to_owned()));
     ids.extend(also.iter().cloned());
-    let mut api = super::within(senses.hooks.api, super::SESSIONS_BUDGET);
+    let mut api = super::within(senses.hooks.api, budget);
     match read_candidates(&mut api, &roots, &ids, SESSION_PAGES) {
         Ok(candidates) => (candidates, None),
         Err(err) => (Vec::new(), Some(format!("couldn't list sessions: {err:#}"))),
@@ -1552,6 +1553,33 @@ mod tests {
         assert!(live.candidates.is_empty());
         assert!(live.error.unwrap().contains("couldn't list sessions"));
         assert!(started.elapsed() < Duration::from_millis(100));
+    }
+
+    #[test]
+    fn a_capture_look_waits_out_a_slow_server() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SLOWEST: AtomicU64 = AtomicU64::new(u64::MAX);
+        // A busy OpenCode answers a page in seconds; each request is let wait what's left.
+        fn busy(path: &str, left: Duration) -> Result<Vec<u8>> {
+            SLOWEST.fetch_min(left.as_millis() as u64, Ordering::Relaxed);
+            anyhow::ensure!(left > super::super::SESSIONS_BUDGET, "budget too short");
+            api(path, left)
+        }
+        let senses = Senses {
+            hooks: Hooks {
+                sdk: no_sdk,
+                listener_dir: listener,
+                api: busy,
+            },
+            own_port: tailnet,
+            terminal: no_terminal,
+            ..Senses::default()
+        };
+        let live = look_live(None, None, None, &senses);
+        assert_eq!(live.error, None);
+        assert_eq!(live.candidates.len(), 2);
+        let slowest = Duration::from_millis(SLOWEST.load(Ordering::Relaxed));
+        assert!(slowest > super::super::LOOK_BUDGET - Duration::from_secs(1));
     }
 
     #[test]

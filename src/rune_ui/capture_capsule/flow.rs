@@ -114,6 +114,9 @@ pub(crate) enum Route {
     Nothing { recent: Vec<Dest> },
     /// The router never answered.
     NoAnswer { recent: Vec<Dest> },
+    /// OpenCode's sessions couldn't be read, so there's no list: `why` in
+    /// a few words.
+    Unreachable { why: String },
 }
 
 /// What the capture engine says became of the bundle
@@ -490,7 +493,7 @@ impl Flow {
                 open: None,
             }),
             (Phase::Routed(mut routed), Input::OpenList) => {
-                if routed.open.is_none() {
+                if routed.open.is_none() && !matches!(routed.route, Route::Unreachable { .. }) {
                     // A guess opens on itself; a rule on the next best place.
                     let selected = usize::from(matches!(routed.route, Route::Rule { .. }));
                     routed.open = Some(Open {
@@ -647,13 +650,18 @@ impl Flow {
     }
 
     /// The keys the capsule takes from Hex's tap: the picker's, an open
-    /// list's, or a routed capture's ⌥⇧V and, while a send can be taken
-    /// back, Escape.
+    /// list's, or a routed capture's Paste Last (its list) and, while a
+    /// send can be taken back, Escape. With no sessions to list, Paste
+    /// Last stays Paste Last.
     pub(crate) fn keys(&self, now: f64) -> Option<crate::capture_host::CapsuleKeys> {
         use crate::capture_host::CapsuleKeys;
         match &self.phase {
             Phase::Selecting(_) => Some(CapsuleKeys::Picker),
             Phase::Routed(Routed { open: Some(_), .. }) => Some(CapsuleKeys::List),
+            Phase::Routed(Routed {
+                route: Route::Unreachable { .. },
+                ..
+            }) => None,
             Phase::Routed(_) | Phase::Sent(_) => {
                 let escape = self.undoable(now).is_some();
                 (escape || matches!(self.phase, Phase::Routed(_)))
@@ -799,6 +807,7 @@ fn sections(route: &Route) -> (&[Dest], &[Dest]) {
             suggested, recent, ..
         } => (suggested, recent),
         Route::Nothing { recent } | Route::NoAnswer { recent } => (&[], recent),
+        Route::Unreachable { .. } => (&[], &[]),
     }
 }
 
@@ -880,7 +889,9 @@ fn route_chips(route: &Route) -> Box<dyn Iterator<Item = (&Dest, Option<&str>)> 
         Route::Guess { suggested, .. } => {
             Box::new(suggested.iter().take(MAX_ROUTES).map(|dest| (dest, None)))
         }
-        Route::Nothing { .. } | Route::NoAnswer { .. } => Box::new(std::iter::empty()),
+        Route::Nothing { .. } | Route::NoAnswer { .. } | Route::Unreachable { .. } => {
+            Box::new(std::iter::empty())
+        }
     }
 }
 
@@ -945,6 +956,11 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
             why: Some("the router didn't answer".into()),
             ask: Some("Send to…".into()),
             ..Done::plain(Lead::Check, "Copied")
+        },
+        // Still copied, so Paste and Inspect stay; there's nothing to list.
+        Route::Unreachable { why } => Done {
+            why: Some(short_reason(why)),
+            ..Done::plain(Lead::Warning, "Couldn't reach OpenCode")
         },
     };
     match &routed.open {
@@ -1501,6 +1517,27 @@ mod tests {
         let shown = done(&flow, 0.0);
         assert_eq!(shown.why.as_deref(), Some("the router didn't answer"));
         assert_eq!(shown.ask.as_deref(), Some("Send to…"));
+    }
+
+    #[test]
+    fn opencode_out_of_reach_says_so_and_leaves_paste_last_alone() {
+        let mut flow = Flow::new();
+        flow.input(
+            Input::Routed(Route::Unreachable {
+                why: "didn't answer in time".into(),
+            }),
+            0.0,
+        );
+        let shown = done(&flow, 0.0);
+        assert_eq!(shown.lead, Lead::Warning);
+        assert_eq!(shown.text, "Couldn't reach OpenCode");
+        assert_eq!(shown.why.as_deref(), Some("didn't answer in time"));
+        assert_eq!(shown.ask, None);
+        assert!(shown.hand_off);
+        // Nothing to list, so Paste Last pastes, and a stray OpenList opens nothing.
+        assert_eq!(flow.keys(0.0), None);
+        flow.input(Input::OpenList, 0.5);
+        assert_eq!(done(&flow, 0.5).open, None);
     }
 
     #[test]

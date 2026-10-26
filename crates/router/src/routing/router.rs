@@ -379,7 +379,8 @@ fn decide_with(
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty())
         .collect();
-    let (mut candidates, error) = look::read_with(&clues, None, &pinned, senses);
+    let (mut candidates, error) =
+        look::read_with(&clues, None, &pinned, super::SESSIONS_BUDGET, senses);
     look::look_at_page(url, &mut clues, &mut candidates, senses);
     clues.extend(look::named_clue(
         &item.text,
