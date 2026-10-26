@@ -89,6 +89,35 @@ Checks in [suppression.rs](../../src/suppression.rs):
 Proof limit: synthetic events and sampled-state fixtures, not every physical
 keyboard or remapping.
 
+`recover.shortcut-press`: Command-Tab swallows Tab's release, and Kit often
+presses Option within 100 ms of letting go of Command. The press itself can
+resynchronize instead of waiting for the poll.
+
+```ts
+Command-Tab -> Tab still tracked (IDLE or DIRTY)
+  -> binding press: the binding's own down edge
+     ├── keyboard reported no modifiers after every tracked key went down
+     ├── only the binding's modifiers went down since
+     └── tracked keys + every other modifier read up now  // same source as recovery
+        -> clear tracked keys, fence older input -> fresh press -> Start
+  -> any check fails -> press ignored (logged with reason + key_codes)
+                     -> 100 ms poll as before
+LOCKED + stale keys -> press ignored, poll still repairs   // lock semantics unchanged
+```
+Checks in [suppression.rs](../../src/suppression.rs):
+`option_soon_after_command_tab_records`,
+`shortcut_press_after_command_tab_from_dirty_records`,
+`stale_press_waits_for_recovery_while_anything_else_is_held`,
+`stale_press_requires_a_neutral_keyboard_after_the_tracked_keys`,
+`stale_press_leaves_locks_and_escape_unchanged`.
+A binding press ignored while stale or DIRTY logs `shortcut press ignored` to
+`process.log` with its reason; a resynchronized one logs `resynchronized stale
+input tracking on a shortcut press`. Proof limit: synthetic events and injected
+keyboard state; the live state is read when the listener processes the press,
+not when it happened, so a tracked key released in between reads as up (the
+neutral-keyboard check covers the common Tab-then-Option chord). No
+physical-keyboard run yet.
+
 Fn metadata needs a narrower rule than "ignore Fn."
 
 ```ts

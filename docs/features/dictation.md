@@ -97,7 +97,9 @@ reports key presses as chord evidence only; session events still own key state,
 and Escape and Hex's own shortcuts are excluded. Evidence that overtakes its
 press still prevents the capture. Command-Tab likewise swallows Tab's release,
 which caused the routine `resynchronized stale input tracking` warnings, now
-logged with `key_codes`. Checks:
+logged with `key_codes`. Until October 26 an Option press within 100 ms of
+Command-Tab was silently ignored; the press now resynchronizes itself
+(`recover.shortcut-press` in [recovery](recovery.md)). Checks:
 `hid_evidence_discards_a_chord_hidden_by_a_global_shortcut`,
 `hidden_chords_in_quick_succession_never_double_tap_lock`,
 `hid_evidence_that_overtakes_its_press_prevents_the_capture`. Observed with
