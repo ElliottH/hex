@@ -141,14 +141,17 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
 │   │   a chip sends at once
 │   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
-│   │   session by title, which the router resolves among the sessions it listed
+│   │   session by id (`RouteDest.session`), so sessions sharing a title never
+│   │   collide; the capsule shows titles
 │   ├── Keys (capture_host::take_keys), never taking focus:
 │   │   ├── Picker -> ⌥⇧S and Esc through the listener
 │   │   ├── Routed -> the Paste Last shortcut (⌥⇧V) opens the list instead of
 │   │   │   pasting the last dictation; Esc too while a send can be undone
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
-│   │       ⇧⏎ (always), 1-9, Esc; their releases too
+│   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a
+│   │       press off the capsule (button state polled while the list is open)
+│   │       closes the list and gives the keys back; hiding drops the grab
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list
 │   ├── Every written capture -> Paste (the one accent action) and Inspect, as

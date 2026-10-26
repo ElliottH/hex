@@ -69,13 +69,26 @@ impl Mode {
 pub(crate) struct Dest {
     pub(crate) name: String,
     pub(crate) why: String,
+    /// The session id a send names, so two sessions with one title never
+    /// collide.
+    pub(crate) session: String,
 }
 
 impl Dest {
+    /// A session known by its title alone, which the host resolves.
     pub(crate) fn new(name: impl Into<String>, why: impl Into<String>) -> Self {
+        let name = name.into();
         Self {
-            name: name.into(),
+            session: name.clone(),
+            name,
             why: why.into(),
+        }
+    }
+
+    pub(crate) fn session(self, session: impl Into<String>) -> Self {
+        Self {
+            session: session.into(),
+            ..self
         }
     }
 }
@@ -170,6 +183,9 @@ pub(crate) enum Input {
     /// The recording it shows left the snapshot with no outcome: a chip's
     /// discard (the picker is already up) or a switch that couldn't start.
     Gone,
+    /// A click off the capsule: an open list closes, so typing goes back
+    /// to the app in front.
+    ClickAway,
 }
 
 /// What the host should do about an input or a click.
@@ -192,13 +208,14 @@ pub(crate) enum Action {
     Undo {
         to: String,
     },
-    /// Take back the send to `from` and send to `to` instead: the
-    /// runner-up chip beside a rule's send.
+    /// Take back the send to `from` and send to the session `to` instead:
+    /// the runner-up chip beside a rule's send.
     Redirect {
         from: String,
         to: String,
     },
-    /// Send the capture to `to`; `always` saves a rule for `site`.
+    /// Send the capture to the session `to`; `always` saves a rule for
+    /// `site`.
     Send {
         to: String,
         always: Option<String>,
@@ -396,6 +413,10 @@ impl Flow {
     }
 
     /// The pointer came onto the capsule or left it.
+    pub(crate) fn hovered(&self) -> bool {
+        self.hovered
+    }
+
     pub(crate) fn hover(&mut self, on: bool, now: f64) {
         self.hovered = on;
         if let (
@@ -501,6 +522,11 @@ impl Flow {
             (Phase::Routed(routed), Input::SendRow(row)) => {
                 send(routed, Some(row), false, now, &mut actions)
             }
+            (Phase::Routed(mut routed), Input::ClickAway) => {
+                routed.open = None;
+                Phase::Routed(routed)
+            }
+            (phase, Input::ClickAway) => phase,
             (Phase::Routed(mut routed), Input::Escape) => {
                 if routed.open.take().is_some() {
                     Phase::Routed(routed)
@@ -577,17 +603,18 @@ impl Flow {
                 vec![Action::Cancel]
             }
             (Phase::Routed(routed), Id::Route(chip)) => {
-                let Some((to, from)) = route_chips(&routed.route)
+                let Some((dest, from)) = route_chips(&routed.route)
                     .nth(chip)
-                    .map(|(dest, from)| (dest.name.clone(), from.map(str::to_owned)))
+                    .map(|(dest, from)| (dest.clone(), from.map(str::to_owned)))
                 else {
                     return Vec::new();
                 };
                 self.phase = Phase::Sent(Sent {
-                    to: to.clone(),
+                    to: dest.name,
                     rule_saved: false,
                     at: now,
                 });
+                let to = dest.session;
                 vec![match from {
                     Some(from) => Action::Redirect { from, to },
                     None => Action::Send { to, always: None },
@@ -822,7 +849,7 @@ fn send(
         _ => None,
     };
     actions.push(Action::Send {
-        to: dest.name.clone(),
+        to: dest.session.clone(),
         always: site.clone(),
     });
     Phase::Sent(Sent {
@@ -1205,6 +1232,56 @@ mod tests {
             }]
         );
         assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
+    }
+
+    #[test]
+    fn a_click_away_closes_the_list_and_nothing_else() {
+        use crate::capture_host::CapsuleKeys;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.input(Input::OpenList, 0.5);
+        assert_eq!(flow.keys(0.6), Some(CapsuleKeys::List));
+        assert!(flow.input(Input::ClickAway, 0.7).is_empty());
+        assert_eq!(flow.keys(0.8), Some(CapsuleKeys::Route { escape: false }));
+        assert!(matches!(flow.pres(0.8), Pres::Done(_)));
+        flow.input(Input::ClickAway, 0.9);
+        assert!(matches!(flow.pres(0.9), Pres::Done(_)), "the chips stay");
+    }
+
+    /// Two sessions may share a title: a send names the one picked by id.
+    #[test]
+    fn sends_name_the_session_by_id() {
+        use super::super::surface::Id;
+        let twins = || Route::Guess {
+            suggested: vec![
+                Dest::new("HEX", "guess").session("ses_a"),
+                Dest::new("HEX", "last sent").session("ses_b"),
+            ],
+            recent: Vec::new(),
+            site: None,
+        };
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(twins()), 0.0);
+        assert_eq!(
+            flow.click(Id::Route(1), 1.0),
+            [Action::Send {
+                to: "ses_b".into(),
+                always: None
+            }]
+        );
+        assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
+
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(twins()), 0.0);
+        flow.input(Input::OpenList, 0.5);
+        flow.input(Input::Move(1), 0.6);
+        assert_eq!(
+            flow.input(Input::Send { always: false }, 0.7),
+            [Action::Send {
+                to: "ses_b".into(),
+                always: None
+            }]
+        );
     }
 
     #[test]

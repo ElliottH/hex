@@ -210,13 +210,15 @@ impl Follow {
 }
 
 /// The router's answer as the capsule shows it. A rule's own session leads
-/// its suggestions, as in Scrawl's list; the capsule names sessions by
-/// title, which the host's Send and Redirect resolve.
+/// its suggestions, as in Scrawl's list; the capsule shows sessions by
+/// title and sends to them by id.
 fn capsule_route(answer: &RouteAnswer) -> Option<Route> {
     let dests = |dests: &[RouteDest]| -> Vec<Dest> {
         dests
             .iter()
-            .map(|dest| Dest::new(dest.name.clone(), dest.why.clone()))
+            .map(|dest| {
+                Dest::new(dest.name.clone(), dest.why.clone()).session(dest.session.clone())
+            })
             .collect()
     };
     Some(match answer {
@@ -629,8 +631,11 @@ mod tests {
             follow.next(&routed("a", rule(), pending.clone())),
             [Input::Routed(Route::Rule {
                 to: "SEER".into(),
-                suggested: vec![Dest::new("SEER", "rule"), Dest::new("HEX", "last sent")],
-                recent: vec![Dest::new("HOME", "yesterday")],
+                suggested: vec![
+                    Dest::new("SEER", "rule").session("ses_SEER"),
+                    Dest::new("HEX", "last sent").session("ses_HEX"),
+                ],
+                recent: vec![Dest::new("HOME", "yesterday").session("ses_HOME")],
             })]
         );
         // The capsule counts the undo window down and says Sent itself.
