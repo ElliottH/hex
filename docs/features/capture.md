@@ -1,13 +1,16 @@
 # Captures (experimental, a build option)
 
-Scrawl's capture engine hosted inside Hex, steps 3 and the first half of 4
-of [the plan](../plans/capture-in-hex.md). It runs the real `scrawl-capture`
-crate, imported into `crates/capture`: it records the active display with
-ScreenCaptureKit and narration from Hex's microphone, takes Shift ink and
-clicks from Hex's event tap, transcribes the narration with word timestamps on
-Hex's loaded model, and writes a Scrawl bundle into Scrawl's captures folder.
-Settings › Experiments › Scrawl turns it on and holds its settings. No
-capsule, ink or laser overlay, or routing yet.
+Scrawl's capture engine hosted inside Hex, steps 3 to 5 of
+[the plan](../plans/capture-in-hex.md) without the capsule. It runs the real
+`scrawl-capture` crate, imported into `crates/capture`: it records the active
+display with ScreenCaptureKit (or a cabled iPhone through `scrawl-helper`'s
+mirror) and narration from Hex's microphone, takes Shift ink and clicks from
+Hex's event tap, transcribes the narration with word timestamps on Hex's
+loaded model, writes a Scrawl bundle into Scrawl's captures folder, copies it
+to the clipboard, and sends it to an OpenCode session with Scrawl's router
+(`crates/router`), run in Hex's process. Settings › Experiments › Scrawl turns
+it on and holds its settings. The capsule (switch chips, picker, route chips)
+and the ink and laser overlay are on the `scrawl-capsule` branch, not here.
 
 ```ts
 Turn it on                               // capture.gate
@@ -38,11 +41,15 @@ Settings › Experiments › Scrawl          // capture.pane
 ├── Scrawl.app running -> "Scrawl is running" card + Use Hex for captures
 │   └── Click -> asks Scrawl to quit (nothing else quits it); Hex takes the
 │       shortcut within 2 s of Scrawl leaving
-└── No iPhone row: pairing needs the ingest server, which Hex doesn't run yet
+└── No iPhone pairing row: ScrawlKit pairing needs the ingest server, which Hex
+    doesn't run. A cabled iPhone needs no row (capture.phone)
 
 First launch with the experiment on      // capture.import
 ├── ~/.config/scrawl/config.json -> transcriber (apple; else Parakeet), capturesDir,
 │   retention, read once (migration `scrawl-capture-settings`); token not used
+├── Scrawl's router settings -> capture.routing, read once (migration
+│   `scrawl-routing-settings`): rules, autoSend, smartRouting and jevRouting;
+│   never the Jev key (Jev uses $OPENCODE_API_KEY or OpenCode's credential)
 ├── Scrawl's Application Support config.json -> its shortcut, unless it collides
 └── Scrawl's files are never written
 
@@ -73,8 +80,26 @@ Switching target                         // capture.switch; the capsule's chips
 │   records
 ├── The picked window closed, or Screen Recording refused -> last outcome
 │   `failed` with its reason (`error`)
-└── iPhone -> not yet: Scrawl's phone path opens the Mac microphone and its own
-    transcriber
+└── iPhone -> CaptureCommand::Switch(Phone) or Start(Phone), while the snapshot
+    names a cabled phone (capture.phone)
+
+A cabled iPhone                          // capture.phone
+├── Each capture start, and CaptureCommand::FindPhone (the picker opening) ->
+│   a capture-phone thread runs `scrawl-helper devices` (the USB registry, no
+│   permission) -> CaptureSnapshot.phone = its name, or None
+├── Start(Phone) -> scrawl-helper's mirror window shows the phone and records
+│   its native video into recording.mov; `--no-microphone`: the mirror never
+│   asks for or opens a microphone
+│   ├── Camera access -> macOS asks on Hex's behalf (HEX_CAPTURE builds carry
+│   │   NSCameraUsageDescription; validate-app.sh refuses it)
+│   └── Pointer and pen input -> normalized to the mirror's picture
+├── Narration -> Hex's timeline, as for the screen, moved onto the movie's clock
+│   (its first frame, measured from the capture's start) and transcribed by Hex's
+│   transcriber (capture.transcriber), not Scrawl's
+├── Stop -> as any capture; keyframes decoded from the phone's own video
+└── The mirror ends on its own (unplugged, no phone in 12 s, camera denied) ->
+    the listener finishes the capture: written if it recorded, else `failed`
+    with the helper's reason
 
 While a capture records                  // capture.input
 ├── The existing session tap adds mouse down/up/drag/scroll and Shift (no second tap)
@@ -104,7 +129,8 @@ While it records                         // capture.audio
 
 Never on Hex's path                      // capture.isolation
 ├── No microphone, event tap, global shortcut, or model of its own
-├── No ingest server (47777), delivery retries, or recovery workers
+├── No ingest server (47777) or recovery workers; delivery retries only while
+│   neither Scrawl.app runs nor anything serves the ingest port (capture.route)
 ├── No ingest token used; Scrawl's two config files read once by the import, never
 │   written; nothing else of Scrawl's touched (its log goes to Hex's tracing)
 └── Settings from Hex (capture.*), not Scrawl's config: auto-crop on (display
@@ -132,7 +158,44 @@ hex capture stop                         // capture.stop
     ├── Keyframes decoded from recording.mp4 by scrawl-helper (beside `hex`: in
     │   Hex.app's Contents/MacOS or target/<profile>; or $SCRAWL_HELPER); helper
     │   missing -> the 480 px sampled frames
-    └── Transcription fails -> logged; the bundle has no words, and the outcome says why
+    ├── Transcription fails -> logged; the bundle has no words, and the outcome says why
+    ├── Written -> image and text copied to the clipboard (Scrawl's handoff)
+    └── Sent -> the capture-route thread (capture.route)
+
+Where it goes                            // capture.route; capture.routing's autoSend on
+├── At the stop, beside the writing -> a capture-look thread reads the tab,
+│   terminal, and sessions in front (Scrawl's router, in Hex's process, with
+│   Scrawl's own router folders, so `scrawl router undo` and its evals see Hex's
+│   sends as Scrawl's)
+├── Written -> the one capture-route thread (queue 16) decides; the snapshot's
+│   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer
+│   ├── Rule (a dev server's port, a page, a saved rule) -> Pending, sent after
+│   │   3 s unless Undo; then Sending -> Sent, or Queued when OpenCode didn't take it
+│   ├── Guess -> suggestions and recent sessions; nothing sent until one is picked
+│   └── Nothing / NoAnswer -> recent sessions only
+├── The capsule's commands act only on `last`, the newest routed capture:
+│   ├── Send{to} -> the Rule's own session while Pending sends now; any other
+│   │   pick sends there (taking back a send already elsewhere first) and logs
+│   │   the correction; `always` also saves a rule for its site or app
+│   ├── Undo -> a Pending send never goes; a sent one is withdrawn unless the
+│   │   session acted on it (TooLate)
+│   └── Redirect{to} -> taken back, then sent to `to`
+├── Two sends to one place agree -> `offer` names the site or app a rule could
+│   send straight there
+├── Queued sends -> retried every 15 s, unless Scrawl.app runs or something
+│   serves the ingest port (that process retries); a retried send can't be undone
+└── autoSend off -> no look, no route; the capture is only copied
+
+hex capture list|show|send|route         // capture.cli; docs/cli.md
+├── list [--limit N] -> the newest bundles in the captures folder: mode, words,
+│   where it went
+├── show <capture> -> one capture's words, files, and send
+├── send <capture> [--to <session>] -> needs a listening Hex
+│   ├── The newest routed capture -> as the capsule's pick (no --to: the Rule's
+│   │   session or the recorded destination), so the capsule's Undo follows it
+│   └── Older -> --to must be a session ID; without it, its recorded destination
+├── route <capture> [--ask-jev] -> what the router sees and decides; sends nothing
+└── <capture> = bundle name, path, or `latest`; unknown -> `not-found`
 
 hex capture cancel -> engine cancelled, sink closed, bundle removed
 hex capture status -> recording (bundle, elapsed), bundles still writing, last outcome
@@ -159,8 +222,11 @@ Sources: [capture_host.rs](../../src/capture_host.rs), the tap in
 [rune_ui/scrawl.rs](../../src/rune_ui/scrawl.rs), the input rules in
 [hosted_input.rs](../../crates/capture/src/hosted_input.rs), the sink in
 [dictation_audio.rs](../../src/dictation_audio.rs),
-`transcribe_with_words` in [parakeet.rs](../../src/parakeet.rs), and the
-`scrawl-capture` control command in [control.rs](../../src/control.rs).
+`transcribe_with_words` in [parakeet.rs](../../src/parakeet.rs), routing in
+[capture_host/routing.rs](../../src/capture_host/routing.rs), the CLI's reads in
+[capture_host/library.rs](../../src/capture_host/library.rs), the phone finish
+in [phone.rs](../../crates/capture/src/phone.rs), and the `scrawl-capture`
+control commands in [control.rs](../../src/control.rs).
 
 Checks:
 
@@ -203,6 +269,18 @@ Checks:
   `a_capture_started_by_its_shortcut_waits_for_shift_to_come_up`,
   `a_capture_started_without_shift_held_inks_from_the_first_stroke`, and
   `a_click_with_the_chords_shift_still_held_is_no_pin`.
+- iPhone: `an_iphone_capture_narrates_with_hex_audio_and_finishes_when_its_mirror_ends`
+  and `a_mirror_ending_never_stops_a_screen_capture` in capture_host.rs;
+  `since_moves_audio_and_gaps_onto_a_later_clock` in
+  [audio.rs](../../crates/capture/src/audio.rs). The mirror, its
+  `--no-microphone`, and the camera prompt have not run in Hex.
+- Routing, in [routing.rs](../../src/capture_host/routing.rs):
+  `a_rule_sends_after_undo_and_lists_the_rest`,
+  `a_guess_sends_nothing_and_a_failure_still_lists_recent_sessions`, and
+  `the_ladder_is_a_rule`; the CLI's
+  `a_capture_on_disk_summarizes_its_mode_words_and_send` in
+  [library.rs](../../src/capture_host/library.rs), the protocol round trips in
+  control.rs, and `control_commands_parse` in main.rs.
 - Switching, in capture_host.rs:
   `a_discarded_capture_leaves_no_trace_and_a_pick_takes_its_place`,
   `a_switch_never_shows_nothing_recording`,
@@ -225,5 +303,6 @@ wrote 18 words with plausible times. The real engine has not run end to end:
 the unit tests use a fake engine over Scrawl's real bundle writer, and the
 mini (the test Mac) has no Screen Recording grant for a dev build, so neither
 `hex capture` against a live app nor `capture-replay` has recorded a screen.
-The shortcut, tap input, Escape, switching, Scrawl coexistence, and import are
-covered by unit tests only; none has run against a live Hex.
+The shortcut, tap input, Escape, switching, routing, the iPhone path, Scrawl
+coexistence, and import are covered by unit tests only; none has run against a
+live Hex.
