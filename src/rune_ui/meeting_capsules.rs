@@ -215,10 +215,11 @@ impl Capsule {
         entries: color_eyre::Result<Vec<TranscriptEntry>>,
         tx: &mut Tx,
     ) {
-        self.live.copying = false;
+        // A reply for an earlier recording leaves the shown one's copy alone.
         if !matches!(&self.kind, Some(Kind::Recording { id: shown, .. }) if shown == id) {
             return;
         }
+        self.live.copying = false;
         match entries {
             Ok(entries) => self.copy_new_from(id, &entries, tx),
             Err(error) => tracing::warn!(%error, "could not read new meeting transcript turns"),
@@ -1417,11 +1418,25 @@ mod tests {
         assert!(texts(&rt).contains(&"Copied".to_string()));
         assert_eq!(meeting::pending_delta_turns(id, &call()), 0);
 
-        // A reply for a recording that no longer shows copies nothing.
+        // A copy still running when the next recording shows: its late reply
+        // neither copies nor ends the new recording's copy.
+        let next = "capsule-copy-through-click-next";
         tap(&mut rt, "copy-new");
-        rt.update(|capsule, tx| capsule.finish_copy_new("another-meeting", Ok(call()), tx));
+        rt.update(move |capsule, _| {
+            capsule.kind = Some(live_recording(next));
+            capsule.live = Live::default();
+        });
+        rt.frame(1.0 / 60.0);
+        tap(&mut rt, "copy-new");
+        assert_eq!(*asked.lock().unwrap(), [id, id, next]);
+        rt.update(move |capsule, tx| capsule.finish_copy_new(id, Ok(call()), tx));
         rt.frame(1.0 / 60.0);
         assert!(rt.copy_request.is_none());
+        assert!(rt.state.live.copying);
+        assert!(texts(&rt).contains(&"Transcribing…".to_string()));
+        rt.update(move |capsule, tx| capsule.finish_copy_new(next, Ok(call()), tx));
+        rt.frame(1.0 / 60.0);
+        assert!(rt.copy_request.take().is_some());
         assert!(!rt.state.live.copying);
     }
 
