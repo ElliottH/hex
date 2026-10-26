@@ -210,6 +210,13 @@ pub enum CaptureCommand {
     Undo,
     /// Takes back the newest capture's send and sends it to `to`.
     Redirect { to: String },
+    /// Pastes the newest written capture into the app in front, as
+    /// Scrawl's Paste chip does: its contact sheet, then its summary.
+    Paste,
+    /// Opens the newest written capture's contact sheet: Hex has no review
+    /// window, and opening the bundle could launch Scrawl.app, which takes
+    /// captures over.
+    Inspect,
 }
 
 /// A started capture.
@@ -1309,6 +1316,8 @@ impl CaptureHost {
             }
             CaptureCommand::Undo => Ok(self.route(routing::Job::Undo)),
             CaptureCommand::Redirect { to } => Ok(self.route(routing::Job::Redirect { to })),
+            CaptureCommand::Paste => self.hand_off(HandOff::Paste),
+            CaptureCommand::Inspect => self.hand_off(HandOff::Inspect),
         };
         result.unwrap_or_else(|error| ControlReply::error("failed", format!("{error:#}")))
     }
@@ -1495,6 +1504,42 @@ impl CaptureHost {
 
     /// Hands the capsule's route command to the `capture-route` thread,
     /// which acts on the newest capture.
+    /// Pastes or opens the newest written capture on a thread of its own:
+    /// pasting waits on the pasteboard and the app in front.
+    fn hand_off(&self, how: HandOff) -> Result<ControlReply> {
+        let bundle = lock(&self.outcomes)
+            .last
+            .as_ref()
+            .filter(|last| last.stage == Stage::Done)
+            .map(|last| last.bundle.clone())
+            .ok_or_else(|| eyre!("no written capture"))?;
+        if !cfg!(test) {
+            std::thread::Builder::new()
+                .name("capture-hand-off".into())
+                .spawn(move || {
+                    let done = objc2::rc::autoreleasepool(|_| match how {
+                        HandOff::Paste => {
+                            scrawl_capture::handoff::paste_bundle_at_target(&bundle, None)
+                        }
+                        HandOff::Inspect => scrawl_capture::handoff::load_bundle(&bundle).and_then(
+                            |(dir, loaded)| {
+                                scrawl_capture::handoff::open_path(&dir.join(loaded.contact_sheet))
+                            },
+                        ),
+                    });
+                    if let Err(error) = done {
+                        tracing::warn!(
+                            error = format!("{error:#}"),
+                            ?how,
+                            "capture hand-off failed"
+                        );
+                    }
+                })
+                .wrap_err("could not start the capture hand-off")?;
+        }
+        Ok(self.report(true, None))
+    }
+
     fn route(&self, job: routing::Job) -> ControlReply {
         if !self.routes.as_ref().is_some_and(|routes| routes.send(job)) {
             return ControlReply::error("busy", "the capture router is not taking requests");
@@ -1851,7 +1896,7 @@ pub enum ShortcutAction {
     /// records.
     Cancel,
     Finish,
-    /// The picker is open: record what it is on ([`PickerKey::Shortcut`]).
+    /// The picker is open: record what it is on ([`CapsuleKey::Shortcut`]).
     Pick,
 }
 
@@ -1975,10 +2020,6 @@ pub enum CapsuleKeys {
     /// A routed capsule: the Paste Last shortcut opens its list
     /// ([`CapsuleKey::OpenList`]) instead of pasting, and Escape too while
     /// `escape` (a send that can still be undone).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the capsule takes routed keys next")
-    )]
     Route { escape: bool },
     /// The open list: every key press without ⌘ or ⌃ that isn't one of
     /// Hex's shortcuts.
@@ -2057,10 +2098,6 @@ pub fn take_keys(
 pub struct CapsuleKeyGrab(u64);
 
 impl CapsuleKeyGrab {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the capsule takes routed keys next")
-    )]
     pub fn set(&self, keys: CapsuleKeys) {
         let mut grab = grab();
         if let Some(current) = grab.as_mut().filter(|grab| grab.id == self.0) {
@@ -2243,6 +2280,13 @@ fn finish_captures(
             }
         }
     }
+}
+
+/// What the capsule's Paste and Inspect do with the newest written capture.
+#[derive(Clone, Copy, Debug)]
+enum HandOff {
+    Paste,
+    Inspect,
 }
 
 /// Copies a written capture to the clipboard, as Scrawl does: its summary,
@@ -2930,6 +2974,13 @@ mod tests {
 
         let idle = report(host.control(ScrawlCaptureAction::Stop, &audio));
         assert!(!idle.changed && idle.bundle.is_none());
+        // Paste and Inspect need a written capture.
+        for command in [CaptureCommand::Paste, CaptureCommand::Inspect] {
+            assert!(matches!(
+                host.command(command, &audio),
+                ControlReply::Error { .. }
+            ));
+        }
         assert!(!report(host.control(ScrawlCaptureAction::Cancel, &audio)).changed);
 
         let started = report(host.control(ScrawlCaptureAction::Start, &audio));
@@ -2961,6 +3012,9 @@ mod tests {
         let snapshot = lock(&host.outcomes).snapshot();
         assert!(snapshot.recording.is_none() && snapshot.finishing.is_empty());
         assert_eq!(snapshot.last.unwrap().stage, Stage::Done);
+        for command in [CaptureCommand::Paste, CaptureCommand::Inspect] {
+            assert!(report(host.command(command, &audio)).changed);
+        }
         // The fake audio ends before the stop, so the tail may count as a gap.
         assert!(last.gaps.is_some());
         assert_eq!(last.missing_transcript, None);
@@ -3590,6 +3644,10 @@ mod tests {
         assert!(!bundle.exists());
         let settled = lock(&host.outcomes).snapshot().last.unwrap();
         assert_eq!(settled.error.as_deref(), Some("the window closed"));
+        assert!(matches!(
+            host.command(CaptureCommand::Paste, &audio),
+            ControlReply::Error { .. }
+        ));
         host.shutdown(&audio);
         fs::remove_dir_all(dir).ok();
     }

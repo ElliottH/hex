@@ -286,6 +286,8 @@ pub(crate) fn act(action: Action) {
         })],
         Action::Undo { .. } => vec![command(CaptureCommand::Undo)],
         Action::Redirect { to, .. } => vec![command(CaptureCommand::Redirect { to })],
+        Action::Paste => vec![command(CaptureCommand::Paste)],
+        Action::Inspect => vec![command(CaptureCommand::Inspect)],
     };
     let Some(runtime) = crate::macos_rune::runtime() else {
         return;

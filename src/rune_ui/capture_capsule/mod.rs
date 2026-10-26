@@ -315,9 +315,12 @@ pub(crate) struct CapsuleState {
     overlay: Option<OverlayHandle<CapsuleState>>,
     shown: bool,
     follow: bool,
-    /// While the picker shows, Hex's tap hands it the capture shortcut and
-    /// Escape: the overlay never takes focus.
-    picking: Option<crate::capture_host::CapsuleKeyGrab>,
+    /// The keys Hex's tap hands the capsule ([`Flow::keys`]): the overlay
+    /// never takes focus.
+    keys: Option<(
+        crate::capture_host::CapsuleKeys,
+        crate::capture_host::CapsuleKeyGrab,
+    )>,
     /// The on-screen picker, and the mode it was last told to pick.
     picker: Option<picker::PickerOverlay>,
     picker_mode: Option<Mode>,
@@ -345,7 +348,7 @@ impl CapsuleState {
             overlay: None,
             shown: false,
             follow: false,
-            picking: None,
+            keys: None,
             picker: None,
             picker_mode: None,
             still: false,
@@ -490,19 +493,9 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
         s.follow = follow;
         if let Some(overlay) = &s.overlay {
             overlay.set_follow_pointer(follow);
-            s.picking = follow.then(|| {
-                let capsule = CaptureCapsule {
-                    overlay: overlay.clone(),
-                };
-                use crate::capture_host::{CapsuleKey, CapsuleKeys};
-                crate::capture_host::take_keys(CapsuleKeys::Picker, move |key| match key {
-                    CapsuleKey::Shortcut => capsule.input(Input::Record),
-                    CapsuleKey::Escape => capsule.input(Input::Escape),
-                    _ => {}
-                })
-            });
         }
     }
+    take_keys(s, now);
     // The on-screen picker shows what the capsule picks.
     let picking = match s.surface.pres {
         Pres::Selecting { mode, .. } => Some(mode),
@@ -524,6 +517,46 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
         tx.instant();
     }
     changed
+}
+
+/// Takes, changes, or lets go of the keys the capsule wants from Hex's tap.
+fn take_keys(s: &mut CapsuleState, now: f64) {
+    let wanted = s.flow.keys(now);
+    match (wanted, &mut s.keys) {
+        (None, held) => *held = None,
+        (Some(keys), Some((held, grab))) => {
+            if *held != keys {
+                grab.set(keys);
+                *held = keys;
+            }
+        }
+        (Some(keys), held @ None) => {
+            if let Some(overlay) = &s.overlay {
+                let capsule = CaptureCapsule {
+                    overlay: overlay.clone(),
+                };
+                let grab = crate::capture_host::take_keys(keys, move |key| {
+                    capsule.input(key_input(key));
+                });
+                *held = Some((keys, grab));
+            }
+        }
+    }
+}
+
+fn key_input(key: crate::capture_host::CapsuleKey) -> Input {
+    use crate::capture_host::CapsuleKey;
+    match key {
+        CapsuleKey::Shortcut => Input::Record,
+        CapsuleKey::Escape => Input::Escape,
+        CapsuleKey::OpenList => Input::OpenList,
+        CapsuleKey::Text(typed) => Input::Type(typed),
+        CapsuleKey::Backspace => Input::Backspace,
+        CapsuleKey::Up => Input::Move(-1),
+        CapsuleKey::Down => Input::Move(1),
+        CapsuleKey::Return { shift } => Input::Send { always: shift },
+        CapsuleKey::Digit(digit) => Input::SendRow(usize::from(digit.saturating_sub(1))),
+    }
 }
 
 // ─── The overlay ─────────────────────────────────────────────────────────────
@@ -868,6 +901,25 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 .on_press_tx(press(id))
         }
         Id::Ask => keyed(p, base, ASK_KEYS, &shown.ident, MEDIUM).on_press_tx(press(id)),
+        Id::Paste => base
+            .radius(CHIP_H * 0.5)
+            .fill(c.bg_contrast)
+            .hover(c.contrast_hover)
+            .press(c.contrast_pressed)
+            .child(label("Paste", STRONG, c.text_contrast))
+            .role("button")
+            .label("Paste")
+            .hit()
+            .on_press_tx(press(id)),
+        Id::Inspect => base
+            .radius(CHIP_H * 0.5)
+            .hover(c.hover)
+            .press(c.pressed)
+            .child(label("Inspect", MEDIUM, p.muted()))
+            .role("button")
+            .label("Inspect")
+            .hit()
+            .on_press_tx(press(id)),
         Id::Field => {
             let typed = match &surface.pres {
                 Pres::Done(Done {

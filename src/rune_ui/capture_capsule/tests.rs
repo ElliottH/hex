@@ -183,7 +183,7 @@ fn stills() -> Vec<(&'static str, Pres)> {
         ("list-no-answer", after(&open(no_answer()))),
         ("list-typed", {
             let mut beats = open(guess());
-            beats.push(In(Input::Query("he".into())));
+            beats.push(In(Input::Type("he".into())));
             after(&beats)
         }),
         ("sent", {
@@ -270,22 +270,35 @@ fn every_state_draws_its_pieces() {
             &["lead", "chip:Area", "chip:Screen", "chip:iPhone", "close"],
         ),
         ("processing", &["processing"]),
-        ("saved", &["done"]),
-        ("failed", &["done"]),
-        ("rule-sent", &["done", "why", "undo", "route0"]),
-        ("rule-final", &["done", "why", "ask"]),
-        ("guess", &["done", "route0", "route1"]),
+        ("saved", &["done", "paste", "inspect", "close"]),
+        ("failed", &["done", "close"]),
+        (
+            "rule-sent",
+            &["done", "why", "undo", "paste", "route0", "inspect"],
+        ),
+        ("rule-final", &["done", "why", "paste", "ask", "inspect"]),
+        ("guess", &["done", "paste", "route0", "route1", "inspect"]),
         (
             "guess-four",
-            &["done", "route0", "route1", "route2", "route3"],
+            &[
+                "done", "paste", "route0", "route1", "route2", "route3", "inspect",
+            ],
         ),
-        ("no-answer", &["done", "why", "ask"]),
+        ("no-answer", &["done", "why", "paste", "ask", "inspect"]),
         (
             "list-guess",
             &["done", "field", "list", "row-SEER", "footer"],
         ),
-        ("sent", &["done", "undo"]),
-        ("queued", &["done", "why"]),
+        ("sent", &["done", "undo", "paste", "inspect"]),
+        ("queued", &["done", "why", "paste", "inspect"]),
+    ];
+    // Paste and Inspect are for a written capture, and the open list's
+    // field takes their place.
+    let without: &[(&str, &[&str])] = &[
+        ("failed", &["paste", "inspect"]),
+        ("failed-start", &["paste", "inspect"]),
+        ("taken-back", &["paste", "inspect"]),
+        ("list-guess", &["paste", "inspect", "route0"]),
     ];
     let all = stills();
     for (name, pieces) in expect {
@@ -303,6 +316,17 @@ fn every_state_draws_its_pieces() {
             );
         }
         assert!(keys.iter().any(|k| k == "shell"), "{name} has no shell");
+    }
+    for (name, pieces) in without {
+        let pres = all
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, p)| p.clone())
+            .unwrap();
+        let keys = keys(&runtime(pres, false));
+        for piece in *pieces {
+            assert!(!keys.iter().any(|k| k == piece), "{name} has {piece}");
+        }
     }
     let rt = runtime(Pres::Hidden, false);
     let elements = rt.elements();
@@ -336,12 +360,82 @@ fn the_widest_states_fit_the_panel() {
         after(&[processing(), In(Input::Routed(ask))]),
         after(&chips),
     ] {
-        let (shell, _) = super::surface::layout(&pres, "10:00:00");
+        let (shell, items) = super::surface::layout(&pres, "10:00:00");
         assert!(
             shell[0] >= 0.0 && shell[0] + shell[2] <= PANEL_W,
             "{shell:?} for {pres:?}"
         );
+        // Long names give way before Paste and Inspect do.
+        if matches!(pres, Pres::Done(_)) {
+            for id in [Id::Paste, Id::Inspect] {
+                assert!(
+                    items.iter().any(|item| item.id == id),
+                    "{id:?} for {pres:?}"
+                );
+            }
+        }
     }
+}
+
+/// Every key of every hint sits wholly inside its tray, as far from its
+/// left edge as the last is from its right: the tray's width is worked out
+/// before Rune lays it out, and a short guess clips the keys.
+#[test]
+fn the_hints_keys_stay_inside_their_trays() {
+    let mut checked = 0;
+    for (name, pres) in stills() {
+        let rt = runtime(pres, false);
+        let elements = rt.elements();
+        for tray in elements
+            .iter()
+            .filter(|e| !e.exiting && e.key.as_deref() == Some("keys"))
+        {
+            let [tx, ty, tw, th] = tray.rect;
+            let prefix = format!("{}/", tray.path);
+            let caps: Vec<_> = elements
+                .iter()
+                .filter(|e| {
+                    e.path.starts_with(&prefix)
+                        && !e.path[prefix.len()..].contains('/')
+                        && e.key.as_deref().is_some_and(|k| k.starts_with("keycap"))
+                })
+                .collect();
+            assert!(!caps.is_empty(), "{name}: {} has no keys", tray.path);
+            for cap in &caps {
+                let [x, y, w, h] = cap.rect;
+                assert!(
+                    x >= tx - 0.01
+                        && y >= ty - 0.01
+                        && x + w <= tx + tw + 0.01
+                        && y + h <= ty + th + 0.01,
+                    "{name}: {} pokes out of its tray {:?}: {:?}",
+                    cap.path,
+                    tray.rect,
+                    cap.rect
+                );
+                assert!(
+                    cap.visible[2] >= w - 0.01,
+                    "{name}: {} is clipped: {:?} of {:?}",
+                    cap.path,
+                    cap.visible,
+                    cap.rect
+                );
+            }
+            let left = caps.iter().map(|c| c.rect[0]).fold(f32::INFINITY, f32::min) - tx;
+            let right = tx + tw
+                - caps
+                    .iter()
+                    .map(|c| c.rect[0] + c.rect[2])
+                    .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                (left - right).abs() < 0.5,
+                "{name}: {} is lopsided, {left} pt left and {right} pt right",
+                tray.path
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 6, "only {checked} trays drawn");
 }
 
 /// Pixels of the panel's top `height` points, at 2×.
@@ -584,7 +678,7 @@ fn scripts() -> Vec<Script> {
                 (2.2, In(Input::OpenList)),
                 (3.0, In(Input::Move(1))),
                 (3.5, In(Input::Move(1))),
-                (4.0, In(Input::Query("ho".into()))),
+                (4.0, In(Input::Type("ho".into()))),
                 (4.8, In(Input::Send { always: false })),
             ],
             end: 9.0,

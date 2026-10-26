@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use rune::{Spring, TextStyle};
 
 use super::flow::{Done, Mode, Pres};
-use crate::rune_ui::controls::{DESCRIPTION, KEY_GAP, KeySize};
+use crate::rune_ui::controls::KeySize;
 
 /// The overlay's panel: wide enough for the open list, and tall enough for
 /// it and the shadow under it.
@@ -115,16 +115,11 @@ pub(crate) fn ellipsize(text: &str, style: TextStyle, max: f32) -> String {
         .unwrap_or_else(|| "…".into())
 }
 
-/// One small keycap, as `controls::keycap` draws it.
-fn keycap_width(key: &str) -> f32 {
-    let size = KeySize::Small;
-    (measure(key, DESCRIPTION) + 12.0).max(size.min_width())
-}
-
-/// A chord's keycaps side by side, as `controls::keycaps` draws them.
+/// A chord's small keycaps in their tray, as `controls::keycaps` draws
+/// them.
 pub(crate) fn keycaps_width(keys: &[&str]) -> f32 {
-    keys.iter().map(|k| keycap_width(k)).sum::<f32>()
-        + KEY_GAP * keys.len().saturating_sub(1) as f32
+    let size = KeySize::Small;
+    size.tray_width(keys.iter().map(|key| measure(key, size.legend())))
 }
 
 pub(crate) fn undo_label(seconds: u32) -> String {
@@ -148,10 +143,13 @@ pub(crate) enum Id {
     Why,
     /// The Undo countdown chip.
     Undo,
+    /// Pastes the capture: the one accent action.
+    Paste,
     /// A route chip, best first.
     Route(usize),
     /// The ⌥⇧V chip.
     Ask,
+    Inspect,
     /// The open capsule's field.
     Field,
     Row(usize),
@@ -174,11 +172,13 @@ impl Id {
             Id::Done => "done",
             Id::Why => "why",
             Id::Undo => "undo",
+            Id::Paste => "paste",
             Id::Route(0) => "route0",
             Id::Route(1) => "route1",
             Id::Route(2) => "route2",
             Id::Route(_) => "route3",
             Id::Ask => "ask",
+            Id::Inspect => "inspect",
             Id::Field => "field",
             Id::Row(_) => "row",
         }
@@ -209,10 +209,12 @@ impl Id {
             Id::Finish => 10,
             Id::Field => 11,
             Id::Undo => 12,
-            Id::Route(i) => 13 + i.min(3) as u8,
-            Id::Ask => 17,
-            Id::Close => 18,
-            Id::Row(_) => 19,
+            Id::Paste => 13,
+            Id::Route(i) => 14 + i.min(3) as u8,
+            Id::Ask => 18,
+            Id::Inspect => 19,
+            Id::Close => 20,
+            Id::Row(_) => 21,
         }
     }
 }
@@ -270,21 +272,33 @@ fn row_width(raw: &[(Id, String, f32, bool)]) -> f32 {
 
 /// The finished capsule's items. When long session names would take the
 /// row past [`ROW_MAX`], the label and route chips give way together, cut
-/// to a shrinking width until it fits.
+/// to a shrinking width until it fits. Names cut shorter than
+/// `ROUTE_CUT_MIN` stop reading as names, so the last route chip goes
+/// instead and the cut starts over; the only one left may be cut to
+/// `CUT_MIN`.
 fn done_items(done: &Done, raw: &mut Vec<(Id, String, f32, bool)>) {
+    const ROUTE_CUT_MIN: f32 = 80.0;
+    const CUT_MIN: f32 = 48.0;
     let start = raw.len();
+    let mut routes = done.routes.len();
     let mut cap = f32::INFINITY;
     loop {
-        done_row(done, cap, raw);
-        if row_width(&raw[start..]) <= ROW_MAX || cap <= 48.0 {
+        done_row(done, &done.routes[..routes], cap, raw);
+        let fits = row_width(&raw[start..]) <= ROW_MAX;
+        if fits || (cap <= CUT_MIN && routes <= 1) {
             return;
         }
-        cap = if cap.is_finite() { cap - 8.0 } else { 200.0 };
+        if cap <= ROUTE_CUT_MIN && routes > 1 {
+            routes -= 1;
+            cap = f32::INFINITY;
+        } else {
+            cap = if cap.is_finite() { cap - 8.0 } else { 200.0 };
+        }
         raw.truncate(start);
     }
 }
 
-fn done_row(done: &Done, cap: f32, raw: &mut Vec<(Id, String, f32, bool)>) {
+fn done_row(done: &Done, routes: &[String], cap: f32, raw: &mut Vec<(Id, String, f32, bool)>) {
     let text = ellipsize(&done.text, STRONG, cap + 60.0);
     raw.push((
         Id::Done,
@@ -313,7 +327,15 @@ fn done_row(done: &Done, cap: f32, raw: &mut Vec<(Id, String, f32, bool)>) {
             false,
         ));
     }
-    for (i, route) in done.routes.iter().enumerate() {
+    if done.hand_off {
+        raw.push((
+            Id::Paste,
+            String::new(),
+            chip_width(measure("Paste", STRONG)),
+            false,
+        ));
+    }
+    for (i, route) in routes.iter().enumerate() {
         // The first chip's "Send to " doesn't count against its name.
         let verb = if i == 0 {
             measure("Send to ", MEDIUM)
@@ -329,6 +351,14 @@ fn done_row(done: &Done, cap: f32, raw: &mut Vec<(Id, String, f32, bool)>) {
             Id::Ask,
             ask.clone(),
             keyed_width(ASK_KEYS, ask, MEDIUM),
+            false,
+        ));
+    }
+    if done.hand_off {
+        raw.push((
+            Id::Inspect,
+            String::new(),
+            chip_width(measure("Inspect", MEDIUM)),
             false,
         ));
     }

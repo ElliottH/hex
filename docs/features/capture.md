@@ -74,7 +74,7 @@ Switching target                         // capture.switch; the capsule's chips
 ├── Window or Area -> CaptureCommand::Discard: bundle removed, no outcome, gone
 │   from the snapshot at once (and from MAX_FINISHING), so the capsule becomes
 │   the picker
-├── Picker open (begin_picking) -> Hex's tap hands it ⌥⇧S and Esc; it never
+├── Picker open (take_keys: Picker) -> Hex's tap hands it ⌥⇧S and Esc; it never
 │   takes focus
 ├── A pick -> CaptureCommand::Start(Window | Area | Display); nothing while one
 │   records
@@ -108,7 +108,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   recreated window replaces the old one), so recordings leave it out
 ├── Follows `capture_host::watch()`: Recording from the instant `recording` is
 │   Some (the bundle's t0; timer, meter, ✓ finish, ✕ cancel) -> Processing ->
-│   Saved, Failed, or Cancelled, then leaves on its own
+│   Copied, Failed, or Cancelled, then leaves on its own
 ├── Failed -> "Couldn't start the capture" until the engine reports it
 │   recording (`screen`), then "Couldn't save the capture"; a failed send ->
 │   "Couldn't send to X". Each keeps its `error`, or "Screen Recording is off"
@@ -122,7 +122,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── Screen -> it's what's recording: the chips fold, no command
 │   ├── iPhone -> CaptureCommand::Switch(Phone): the recording restarts on the
 │   │   phone
-│   └── Window or Area -> Discard; the capsule becomes the picker (begin_picking)
+│   └── Window or Area -> Discard; the capsule becomes the picker
 ├── Picker: ⌥⇧S records what the on-screen picker shows; Esc closes it
 ├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
 ├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
@@ -142,11 +142,17 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too
-│   │   The capsule takes only the picker's yet, so Undo and the list work by
-│   │   click only
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list
-│   └── Long names give way together so the widest row stays inside the panel
+│   ├── Every written capture -> Paste (the one accent action) and Inspect, as
+│   │   Scrawl's capsule has
+│   │   ├── Paste -> CaptureCommand::Paste: the contact sheet, then the summary,
+│   │   │   into the app in front; a send still in its Undo window is taken back
+│   │   └── Inspect -> CaptureCommand::Inspect: opens the contact sheet (Hex has
+│   │       no review window, and opening the bundle could launch Scrawl.app)
+│   └── Long names give way together so the widest row stays inside the panel;
+│       before a name is cut past reading, the last route chip goes (the list
+│       still has it)
 └── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
 
 The on-screen picker                     // capture.picker (capture_capsule/picker.rs)
@@ -355,7 +361,10 @@ Checks:
   `discarded_captures_never_count_against_the_writers`,
   `a_pick_that_cannot_start_says_why`,
   `the_first_click_or_scroll_means_work_started`, and
-  `the_newest_picker_takes_its_keys_until_it_closes`.
+  `the_newest_grab_takes_only_its_keys_until_it_drops`. Paste and Inspect
+  need a written capture
+  (`controls_are_idempotent_and_stop_writes_a_scrawl_bundle`); neither has
+  pasted into or opened anything in a test.
 - Capsule, in rune_ui/capture_capsule (feature builds only): the flow tests
   (`chips_fold_once_seen_when_work_starts_but_never_under_the_pointer`,
   `the_shortcut_records_the_pickers_screen_and_a_chip_discards_the_recording`,
@@ -363,7 +372,10 @@ Checks:
   (`the_shortcuts_recording_shows_its_chips_until_work_starts`,
   `a_rule_shows_once_and_only_news_the_capsule_cant_know_moves_it`,
   `a_queued_send_says_so_and_says_sent_when_it_goes`,
-  `a_cabled_phone_shows_its_chip`, …), goldens
+  `a_cabled_phone_shows_its_chip`, …),
+  `paste_takes_back_a_waiting_send_and_the_capsule_stays_gone`,
+  `the_capsule_takes_only_the_keys_its_state_needs`,
+  `the_hints_keys_stay_inside_their_trays`, goldens
   `tests/golden/capture-capsule-*.png`, and
   `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
   scripted state change per frame, Calm and Reduce Motion, for no pops,

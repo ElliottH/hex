@@ -151,32 +151,13 @@ pub(crate) enum Input {
     Record,
     /// ⌥⇧V: the list opens (or, when open, nothing).
     OpenList,
-    /// What's typed into the open list's field.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the open list's keys wait on a listener key path, as the picker's have"
-        )
-    )]
-    Query(String),
+    /// Typed into the open list's field.
+    Type(String),
+    /// Backspace in the open list's field.
+    Backspace,
     /// Up and Down in the open list.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the open list's keys wait on a listener key path, as the picker's have"
-        )
-    )]
     Move(i32),
     /// Return (or ⇧Return, `always`) in the open list.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the open list's keys wait on a listener key path, as the picker's have"
-        )
-    )]
     Send {
         always: bool,
     },
@@ -219,6 +200,10 @@ pub(crate) enum Action {
         to: String,
         always: Option<String>,
     },
+    /// Paste the capture into the app in front.
+    Paste,
+    /// Open the capture to look it over.
+    Inspect,
 }
 
 /// The glyph before the finished capsule's label.
@@ -276,6 +261,8 @@ pub(crate) struct Done {
     pub(crate) ask: Option<String>,
     /// Open: what's typed into the field, and the list under it.
     pub(crate) open: Option<(String, List)>,
+    /// A written capture: Paste and Inspect, as Scrawl's capsule offers.
+    pub(crate) hand_off: bool,
 }
 
 impl Done {
@@ -288,6 +275,7 @@ impl Done {
             routes: Vec::new(),
             ask: None,
             open: None,
+            hand_off: false,
         }
     }
 }
@@ -483,9 +471,14 @@ impl Flow {
                 }
                 Phase::Routed(routed)
             }
-            (Phase::Routed(mut routed), Input::Query(query)) => {
+            (Phase::Routed(mut routed), input @ (Input::Type(_) | Input::Backspace)) => {
                 if let Some(open) = &mut routed.open {
-                    open.query = query;
+                    match input {
+                        Input::Type(typed) => open.query.push_str(&typed),
+                        _ => {
+                            open.query.pop();
+                        }
+                    }
                     open.selected = 0;
                 }
                 Phase::Routed(routed)
@@ -526,6 +519,8 @@ impl Flow {
                 actions.push(Action::Cancel);
                 Phase::Hidden
             }
+            // Pasted or dismissed: the take-back it asked for says nothing.
+            (Phase::Hidden, Input::Undone(_)) => Phase::Hidden,
             (_, Input::Undone(Undone::TakenBack)) => Phase::TakenBack { at: now },
             (phase, Input::Undone(Undone::TooLate)) => match phase {
                 Phase::Sent(Sent { to, .. })
@@ -594,12 +589,55 @@ impl Flow {
                     None => Action::Send { to, always: None },
                 }]
             }
+            // Pasting here takes back a send still waiting out its Undo, as
+            // Scrawl's Paste does.
+            (_, Id::Paste) => {
+                let mut actions: Vec<Action> = self.undoable(now).into_iter().collect();
+                actions.push(Action::Paste);
+                self.phase = Phase::Hidden;
+                actions
+            }
+            (_, Id::Inspect) => {
+                self.phase = Phase::Hidden;
+                vec![Action::Inspect]
+            }
             (_, Id::Undo) => self.input(Input::Escape, now),
             (_, Id::Ask) => self.input(Input::OpenList, now),
             (_, Id::Row(row)) => self.input(Input::SendRow(row), now),
             (_, Id::Close) => self.input(Input::Dismiss, now),
             _ => Vec::new(),
         }
+    }
+
+    /// The keys the capsule takes from Hex's tap: the picker's, an open
+    /// list's, or a routed capture's ⌥⇧V and, while a send can be taken
+    /// back, Escape.
+    pub(crate) fn keys(&self, now: f64) -> Option<crate::capture_host::CapsuleKeys> {
+        use crate::capture_host::CapsuleKeys;
+        match &self.phase {
+            Phase::Selecting(_) => Some(CapsuleKeys::Picker),
+            Phase::Routed(Routed { open: Some(_), .. }) => Some(CapsuleKeys::List),
+            Phase::Routed(_) | Phase::Sent(_) => {
+                let escape = self.undoable(now).is_some();
+                (escape || matches!(self.phase, Phase::Routed(_)))
+                    .then_some(CapsuleKeys::Route { escape })
+            }
+            _ => None,
+        }
+    }
+
+    /// The take-back for a send still waiting out its Undo.
+    fn undoable(&self, now: f64) -> Option<Action> {
+        let (to, at) = match &self.phase {
+            Phase::Routed(Routed {
+                route: Route::Rule { to, .. },
+                at,
+                ..
+            })
+            | Phase::Sent(Sent { to, at, .. }) => (to, *at),
+            _ => return None,
+        };
+        (now - at < UNDO_S).then(|| Action::Undo { to: to.clone() })
     }
 
     /// Runs what time decides: the chips closing, the Undo window ending,
@@ -663,7 +701,10 @@ impl Flow {
                 phone: self.phone,
             },
             Phase::Processing => Pres::Processing,
-            Phase::Saved { .. } => Pres::Done(Done::plain(Lead::Check, "Saved")),
+            Phase::Saved { .. } => Pres::Done(Done {
+                hand_off: true,
+                ..Done::plain(Lead::Check, "Copied")
+            }),
             Phase::Failed { what, why, .. } => Pres::Done(Done {
                 why: why.clone(),
                 ..Done::plain(
@@ -678,10 +719,12 @@ impl Flow {
             Phase::TakenBack { .. } => Pres::Done(Done::plain(Lead::Check, "Taken back")),
             Phase::TooLate { to, .. } => Pres::Done(Done {
                 why: Some("too late to take back".into()),
+                hand_off: true,
                 ..Done::plain(Lead::Check, format!("Sent to {}", short(to)))
             }),
             Phase::Queued { to, .. } => Pres::Done(Done {
                 why: Some(format!("couldn't reach {}", short(to))),
+                hand_off: true,
                 ..Done::plain(Lead::Check, "Copied")
             }),
             Phase::Sent(sent) => {
@@ -689,6 +732,7 @@ impl Flow {
                 Pres::Done(Done {
                     why: sent.rule_saved.then(|| "rule saved".into()),
                     undo,
+                    hand_off: true,
                     ..Done::plain(Lead::Check, sending(&sent.to, undo))
                 })
             }
@@ -876,7 +920,10 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
             open: Some((open.query.clone(), list(&routed.route, open))),
             ..base
         },
-        None => base,
+        None => Done {
+            hand_off: true,
+            ..base
+        },
     }
 }
 
@@ -927,6 +974,65 @@ mod tests {
     }
 
     #[test]
+    fn paste_takes_back_a_waiting_send_and_the_capsule_stays_gone() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule()), 0.0);
+        assert!(done(&flow, 1.0).hand_off);
+        assert_eq!(
+            flow.click(Id::Paste, 1.0),
+            [Action::Undo { to: "SEER".into() }, Action::Paste]
+        );
+        assert_eq!(flow.pres(1.0), Pres::Hidden);
+        flow.input(Input::Undone(Undone::TakenBack), 1.2);
+        assert_eq!(flow.pres(1.2), Pres::Hidden, "the take-back says nothing");
+
+        // Once it's gone, Paste only pastes.
+        flow.input(Input::Routed(rule()), 2.0);
+        assert_eq!(flow.click(Id::Paste, 2.5 + UNDO_S), [Action::Paste]);
+
+        // Inspect never takes a send back.
+        flow.input(Input::Routed(rule()), 10.0);
+        assert_eq!(flow.click(Id::Inspect, 10.5), [Action::Inspect]);
+        assert_eq!(flow.pres(10.5), Pres::Hidden);
+
+        flow.input(Input::Stage(Stage::Done), 20.0);
+        assert!(done(&flow, 20.0).hand_off);
+        flow.input(Input::Failed(Failure::Save, None), 21.0);
+        assert!(!done(&flow, 21.0).hand_off, "nothing was written");
+    }
+
+    #[test]
+    fn the_capsule_takes_only_the_keys_its_state_needs() {
+        use crate::capture_host::CapsuleKeys;
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        assert_eq!(flow.keys(0.0), None);
+        flow.input(Input::Chips, 0.5);
+        flow.click(super::super::surface::Id::Mode(Mode::Window), 1.0);
+        assert_eq!(flow.keys(1.0), Some(CapsuleKeys::Picker));
+
+        flow.input(Input::Routed(rule()), 2.0);
+        assert_eq!(flow.keys(2.5), Some(CapsuleKeys::Route { escape: true }));
+        assert_eq!(
+            flow.keys(2.0 + UNDO_S),
+            Some(CapsuleKeys::Route { escape: false })
+        );
+        flow.input(Input::OpenList, 9.0);
+        assert_eq!(flow.keys(9.0), Some(CapsuleKeys::List));
+        flow.input(Input::Type("he".into()), 9.1);
+        flow.input(Input::Type("x".into()), 9.2);
+        flow.input(Input::Backspace, 9.3);
+        assert_eq!(done(&flow, 9.3).open.unwrap().0, "he");
+        flow.input(Input::SendRow(0), 9.4);
+        assert_eq!(flow.keys(9.5), Some(CapsuleKeys::Route { escape: true }));
+        assert_eq!(flow.keys(9.4 + UNDO_S), None, "sent, nothing to undo");
+
+        flow.input(Input::Stage(Stage::Done), 20.0);
+        assert_eq!(flow.keys(20.0), None);
+    }
+
+    #[test]
     fn stages_walk_the_capsule_through_a_capture() {
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Recording), 0.0);
@@ -958,7 +1064,7 @@ mod tests {
             assert_eq!(flow.pres(6.0), Pres::Processing);
         }
         flow.input(Input::Stage(Stage::Done), 7.0);
-        assert_eq!(done(&flow, 7.0).text, "Saved");
+        assert_eq!(done(&flow, 7.0).text, "Copied");
         assert!(flow.tick(7.0 + DONE_HOLD_S));
         assert_eq!(flow.pres(40.0), Pres::Hidden);
     }
@@ -1181,7 +1287,7 @@ mod tests {
             open.ask.is_none() && open.routes.is_empty(),
             "the field takes the chips' place"
         );
-        flow.input(Input::Query("ho".into()), 1.5);
+        flow.input(Input::Type("ho".into()), 1.5);
         let (_, list) = done(&flow, 1.5).open.unwrap();
         assert_eq!(list.rows().count(), 1);
         let actions = flow.input(Input::Send { always: false }, 2.0);
