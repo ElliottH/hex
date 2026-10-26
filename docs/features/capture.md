@@ -121,9 +121,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   when it isn't granted; a start that fails before any snapshot showed it
 │   recording still shows, but never over a newer recording, and a capture
 │   already under way that fails in the background never takes it over
-├── A shown recording that leaves with no outcome (a switch whose new start
-│   failed, `hex capture discard`) -> the capsule leaves; the picker a chip
-│   opened stays
+├── A shown recording that leaves with no outcome (a discard, from a chip or
+│   `hex capture discard`) -> the capsule leaves; the picker a chip opened
+│   stays. A switch that can't start settles the recording it discarded as
+│   failed, which the capsule shows as "Couldn't start the capture"
 ├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips, plus
 │   iPhone while the snapshot names a cabled phone, for 3.5 s
 │   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on

@@ -181,7 +181,7 @@ pub(crate) enum Input {
     /// The ✕, or anything that should just close it.
     Dismiss,
     /// The recording it shows left the snapshot with no outcome: a chip's
-    /// discard (the picker is already up) or a switch that couldn't start.
+    /// discard (the picker is already up) or `hex capture discard`.
     Gone,
     /// A click off the capsule: an open list closes, so typing goes back
     /// to the app in front.
@@ -395,6 +395,9 @@ pub(crate) struct Flow {
     hovered: bool,
     /// An iPhone is cabled.
     phone: bool,
+    /// The iPhone chip asked to switch, and its new recording hasn't shown:
+    /// a failure now is that start's, not the discarded capture's save.
+    switching: bool,
 }
 
 impl Default for Flow {
@@ -409,6 +412,7 @@ impl Flow {
             phase: Phase::Hidden,
             hovered: false,
             phone: false,
+            switching: false,
         }
     }
 
@@ -439,6 +443,8 @@ impl Flow {
             }
             return actions;
         }
+        let switching = matches!(input, Input::Stage(_) | Input::Failed(..) | Input::Gone)
+            && std::mem::take(&mut self.switching);
         let phase = std::mem::replace(&mut self.phase, Phase::Hidden);
         self.phase = match (phase, input) {
             (_, Input::Stage(stage)) => match stage {
@@ -456,7 +462,10 @@ impl Flow {
             },
             (_, Input::Failed(what, why)) => Phase::Failed {
                 at: now,
-                what,
+                what: match what {
+                    Failure::Save if switching => Failure::Start,
+                    what => what,
+                },
                 why: why.as_deref().map(short_reason),
             },
             (Phase::Recording { .. }, Input::Chips) => Phase::Recording {
@@ -590,6 +599,7 @@ impl Flow {
                 }
                 Mode::Iphone => {
                     self.phase = Phase::Recording { chips_until: None };
+                    self.switching = true;
                     vec![Action::Switch(mode)]
                 }
                 Mode::Area | Mode::Window => {
@@ -1232,6 +1242,42 @@ mod tests {
             }]
         );
         assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
+    }
+
+    /// A switch that can't start settles the recording it discarded as
+    /// failed: the capsule says the start failed, not the save.
+    #[test]
+    fn a_switch_that_cannot_start_says_so() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Phone(true), 0.0);
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::Chips, 0.1);
+        flow.click(Id::Mode(Mode::Iphone), 0.5);
+        flow.input(Input::Failed(Failure::Save, Some("no phone".into())), 0.6);
+        assert!(matches!(
+            flow.phase,
+            Phase::Failed {
+                what: Failure::Start,
+                ..
+            }
+        ));
+
+        // Once the phone's recording shows, a later failure is a save's.
+        let mut flow = Flow::new();
+        flow.input(Input::Phone(true), 0.0);
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::Chips, 0.1);
+        flow.click(Id::Mode(Mode::Iphone), 0.5);
+        flow.input(Input::Stage(Stage::Recording), 0.6);
+        flow.input(Input::Failed(Failure::Save, None), 3.0);
+        assert!(matches!(
+            flow.phase,
+            Phase::Failed {
+                what: Failure::Save,
+                ..
+            }
+        ));
     }
 
     #[test]

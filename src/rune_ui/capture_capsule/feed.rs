@@ -178,8 +178,8 @@ impl Follow {
         {
             (&last.bundle, last.stage)
         } else {
-            // A recording shown that left with no outcome: discarded, or
-            // a switch whose new start failed. It never comes back.
+            // A recording shown that left with no outcome: discarded. It
+            // never comes back.
             self.shown
                 .take_if(|(_, stage)| *stage == Stage::Recording)?;
             return Some(Input::Gone);
@@ -535,8 +535,8 @@ mod tests {
         assert_eq!(follow.next(&CaptureSnapshot::default()), []);
     }
 
-    /// A switch discards the recording and starts another; when the start
-    /// fails before any snapshot shows it, the timer must not count on.
+    /// A recording discarded with no outcome (and, from an older host, a
+    /// switch whose start failed): the timer must not count on.
     #[test]
     fn a_recording_that_leaves_with_no_outcome_ends_the_capsule() {
         let mut follow = Follow::default();
