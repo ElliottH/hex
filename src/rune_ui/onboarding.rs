@@ -18,8 +18,8 @@ use rune_kit::{Button, ButtonVariant, Progress, TextInput, glyphs};
 use super::Request;
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, KeySize, Paint, PushSize, TRAY_PADDING, button, card, icon_row,
-    key_tray, keycap, keycaps, setting_row,
+    ButtonKind, DESCRIPTION, InstantHover, KeySize, Paint, PushSize, TRAY_PADDING, button, card,
+    icon_row, key_tray, keycap, keycaps, setting_row,
 };
 use super::lists::{PermissionControl, allowed, permission_control};
 use super::platform::{Os, PlatformRequest, PlatformState};
@@ -578,6 +578,7 @@ fn try_it(ui: &Ui, p: Paint, tour: &Tour, view: &View) -> El {
                 .practice
         })
         .build(p.k)
+        .instant_hover()
         .key("practice-field");
     let body = if holds(ui) {
         tr_fill("Hold {}, say a sentence, then let go.", &shortcut)

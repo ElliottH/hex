@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 use rune::{Edge, El, Key, KeyEvent, Transition, Tx, col, row, spacer, text};
 
 use super::controls::{
-    ButtonKind, CardRow, Choice, DESCRIPTION, KEY_GAP, KeySize, Paint, button, described_row,
-    folding, icon_button, key_tray, keycap, keycaps, link_row, note, pulsing_dot, section,
-    segmented, select, setting_row, sheet_button, status_dot, text_field, toggle_row, tray_roll,
+    ButtonKind, CardRow, Choice, DESCRIPTION, InstantHover, KEY_GAP, KeySize, Paint, button,
+    described_row, folding, icon_button, key_tray, keycap, keycaps, link_row, note, pulsing_dot,
+    section, segmented, select, setting_row, sheet_button, status_dot, text_field, toggle_row,
+    tray_roll,
 };
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use super::{explainer, host};
@@ -989,7 +990,7 @@ pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
         frame = frame.box_shadow(*shadow);
     }
     if face == (Face::Shortcut { saved: false }) {
-        frame = frame.hover(c.hover).press(c.pressed);
+        frame = frame.hover(c.hover).instant_hover().press(c.pressed);
     }
     frame.child(
         col()
@@ -1253,6 +1254,7 @@ fn advanced_toggle(ui: &Ui, p: Paint, pinned: bool) -> El {
     toggle
         .role("button")
         .hover(c.hover)
+        .instant_hover()
         .press(c.pressed)
         .focusable(true)
         .focus_ring(2.0, 0.0, c.border_focus)
