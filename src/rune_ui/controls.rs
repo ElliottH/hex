@@ -288,12 +288,21 @@ pub(super) fn toggle_row<'a>(
     on: bool,
     flip: impl Fn(&mut Ui) + 'static,
 ) -> El {
-    setting_row(p, key, title, description.into(), row_switch(p, on))
-        .role("toggle")
-        .focusable(true)
-        .hover(p.k.c.hover)
-        .press(p.k.c.pressed)
-        .on_press(flip)
+    pressable_row(setting_row(
+        p,
+        key,
+        title,
+        description.into(),
+        row_switch(p, on),
+    ))
+    .on_press(flip)
+}
+
+/// A settings row that toggles when pressed anywhere. Only its switch
+/// reacts to the pointer; the row itself never paints a hover or press
+/// fill.
+pub(super) fn pressable_row(row: El) -> El {
+    row.role("toggle").focusable(true)
 }
 
 /// A few exclusive choices: equal segments sized for the longest label.

@@ -40,7 +40,9 @@ mod voice_action;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rune::{AppSpec, Cx, El, Icon, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, text};
+use rune::{
+    Anim, AppSpec, Cx, El, Icon, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, text,
+};
 
 use crate::app_settings::{AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, ModifierSide};
 use crate::desktop_host::{
@@ -1041,6 +1043,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .key("window")
         .role("window")
         .fill(p.k.c.bg_deep)
+        .hover_motion_within(Anim::INSTANT, Anim::INSTANT)
         .child(sidebar(ui, p))
         .child(panel);
     if let Some(modal) = picker::modal(ui, p) {
@@ -1079,15 +1082,41 @@ fn title_bar(element: El) -> El {
 }
 
 fn sidebar(ui: &Ui, p: Paint) -> El {
-    let mut nav = lists::source_list(col().key("nav").gap(NAV_ROW_GAP));
-    let mut experiments = false;
-    for pane in Pane::ALL.iter().copied().filter(|pane| pane.shown(ui)) {
-        if pane.experimental() && !experiments {
-            experiments = true;
-            nav = nav
-                .child(lists::group_label(p, "nav-experiments", tr("Experiments"), false).px(6.0));
+    let panes: Vec<Pane> = Pane::ALL
+        .iter()
+        .copied()
+        .filter(|pane| pane.shown(ui))
+        .collect();
+    // The Experiments heading opens a wider gap before the first
+    // experimental pane, shared by the items on either side of it.
+    let heading = lists::group_label_height(p, false);
+    let starts_group =
+        |index: usize| index > 0 && panes[index].experimental() && !panes[index - 1].experimental();
+    let half_gap = |wide: bool| {
+        if wide {
+            (heading + 2.0 * NAV_ROW_GAP) / 2.0
+        } else {
+            NAV_ROW_GAP / 2.0
         }
-        nav = nav.child(nav_item(p, pane, ui.pane == pane));
+    };
+    let mut nav = lists::source_list(col().key("nav"));
+    for (index, &pane) in panes.iter().enumerate() {
+        let group = starts_group(index);
+        let mut slot = nav_slot(
+            p,
+            pane,
+            ui.pane == pane,
+            half_gap(group),
+            half_gap(index + 1 < panes.len() && starts_group(index + 1)),
+        );
+        if group {
+            slot = slot.child(
+                lists::group_label(p, "nav-experiments", tr("Experiments"), false)
+                    .px(6.0)
+                    .absolute(0.0, -heading / 2.0),
+            );
+        }
+        nav = nav.child(slot);
     }
     let action = match ui.view.as_ref().map(|view| &view.update_status) {
         Some(DesktopUpdateStatus::ReadyToRestart) => {
@@ -1119,7 +1148,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         .role("navigation")
         .w(220.0)
         .h_full()
-        .pt(SIDEBAR_TOP)
+        .pt(SIDEBAR_TOP - NAV_ROW_GAP / 2.0)
         .pb(12.0)
         .pl(10.0)
         .pr(6.0)
@@ -1201,6 +1230,31 @@ fn version_label() -> String {
     }
 }
 
+/// A sidebar item inside its slot. Slots tile the item column, each
+/// reaching halfway into the gaps around its item, so wherever the pointer
+/// is in the column, the nearest item shows its hover, and a press there
+/// selects it.
+fn nav_slot(p: Paint, pane: Pane, on: bool, above: f32, below: f32) -> El {
+    col()
+        .key(format!("{}-slot", pane.key()))
+        .pt(above)
+        .pb(below)
+        .hover_group()
+        .on_drag(move |ui: &mut Ui, d: &mut rune::Drag, tx: &mut Tx| {
+            select_on_down(ui, d, tx, pane)
+        })
+        .on_press_tx(move |ui: &mut Ui, tx: &mut Tx| ui.select_pane(pane, tx))
+        .child(nav_item(p, pane, on))
+}
+
+/// Switch on pointer down, like a native sidebar; the press keeps keyboard
+/// activation.
+fn select_on_down(ui: &mut Ui, d: &mut rune::Drag, tx: &mut Tx, pane: Pane) {
+    if d.phase == rune::Phase::Down {
+        ui.select_pane(pane, tx);
+    }
+}
+
 fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
     let c = &p.k.c;
     let mut item = row()
@@ -1212,16 +1266,19 @@ fn nav_item(p: Paint, pane: Pane, on: bool) -> El {
         .gap(8.0)
         .center_y()
         .radius(p.k.radius.sm)
-        .hover(c.hover)
         .press(c.pressed)
-        // Switch on pointer down, like a native sidebar; the press keeps
-        // keyboard activation.
         .on_drag(move |ui: &mut Ui, d: &mut rune::Drag, tx: &mut Tx| {
-            if d.phase == rune::Phase::Down {
-                ui.select_pane(pane, tx);
-            }
+            select_on_down(ui, d, tx, pane)
         })
         .on_press_tx(move |ui: &mut Ui, tx: &mut Tx| ui.select_pane(pane, tx))
+        // The slot's hover, drawn on the item.
+        .child(
+            el().key("hover")
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .radius(p.k.radius.sm)
+                .fill(c.hover)
+                .group_opacity(0.0, 1.0),
+        )
         .child(icon(pane.icon(), 16.0).key("icon").color(if on {
             c.icon_base
         } else {

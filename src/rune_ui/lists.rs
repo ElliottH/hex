@@ -59,8 +59,19 @@ pub(super) fn group_label(p: Paint, key: &str, label: &str, first: bool) -> El {
         .font(p.k.ty.small_medium)
         .color(p.faint())
         .px(10.0)
-        .pt(if first { 4.0 } else { 16.0 })
-        .pb(6.0)
+        .pt(group_label_top(first))
+        .pb(GROUP_LABEL_BOTTOM)
+}
+
+const GROUP_LABEL_BOTTOM: f32 = 6.0;
+
+fn group_label_top(first: bool) -> f32 {
+    if first { 4.0 } else { 16.0 }
+}
+
+/// How tall a [`group_label`] is, for a list that lays it out by hand.
+pub(super) fn group_label_height(p: Paint, first: bool) -> f32 {
+    group_label_top(first) + p.k.ty.small_medium.line_px() + GROUP_LABEL_BOTTOM
 }
 
 /// A source list, as in a native sidebar: Tab enters at the selected row,
