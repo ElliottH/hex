@@ -385,9 +385,14 @@ Copy new or Option-Control-V while recording       // meetings.copy-through-now
      │   of its transcript: the snapshot and later chunks are unaffected
      ├── Waits for dictation like every meeting chunk; never a second model
      └── The same echo and You-waits-for-Them rules as the snapshot
-  -> Each track remembers where the copy ended; its sentence ends there, so
-     the copied part and the rest of it publish as separate entries and the
-     paste cursor neither repeats nor drops either
+     ├── Every sample up to the request, even 100 ms past a hard cut; the
+     │   system track counts as transcribed through all its audio
+  -> Each track remembers where the copy ended; its sentence ends there
+     (between the words whose middles lie either side, as boundaries move
+     when a later chunk hears more), so the copied part and the rest of it
+     publish as separate entries and the paste cursor neither repeats nor
+     drops either. A track rebuilt from its WAV after Stop keeps the cuts
+  -> A copy pressed as capture ends is still answered; quitting ends the wait
   -> Up to 3 s (COPY_TRANSCRIBE_WAIT): usually under 1 s; past that, or with
      dictation holding the model, copies the in-call transcript as it is and
      logs a warning
@@ -562,6 +567,12 @@ Other checks:
 `a_capture_gap_restarts_the_track_after_it_instead_of_dropping_it`,
 `a_copy_includes_speech_up_to_the_click`,
 `repeated_copies_neither_repeat_nor_drop_words_as_later_chunks_overlap_them`,
+`repeated_copies_cut_tracks_that_start_at_different_capture_times`,
+`a_copy_just_after_a_hard_cut_keeps_you_while_them_is_silent`,
+`a_copy_cut_holds_when_a_later_chunk_moves_the_words_slightly`,
+`a_track_rebuilt_from_its_wav_after_stop_keeps_the_copies_cuts`,
+`a_copy_waiting_when_capture_ends_is_still_answered`,
+`a_copy_stops_waiting_when_hex_quits`,
 `a_copy_that_runs_out_of_time_gets_no_reply`,
 `a_copy_waits_out_dictation_and_a_preempted_chunk`,
 `a_copy_reaches_only_the_recording_this_process_runs`,
@@ -999,7 +1010,9 @@ Granola import: see [granola-import.md](../plans/granola-import.md).
 - The recording capsule's Copy new / Copy all are unverified on a real Mac
   screen; its count can trail the transcript by up to a second.
 - Copying through the click is checked with a fake model only; its real-Mac
-  latency and how often the 3 s wait runs out are unmeasured. The copy waits
+  latency and how often the 3 s wait runs out are unmeasured. Handing a
+  copy's cuts from the rolling worker to the WAV rebuild in `transcribe` has
+  no test of its own; the rebuild with cuts does. The copy waits
   for the next audio packet to arrive, so with both sources stopped it runs
   out of time and copies the in-call transcript.
 - The Meetings pane is verified by Rune goldens rendered offscreen (on Linux
