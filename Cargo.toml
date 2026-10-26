@@ -98,9 +98,9 @@ x11rb = { version = "0.14.0", features = ["xtest"] }
 
 # The desktop UI.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-rune = { git = "https://github.com/anomalyco/rune.git", rev = "028d08d5570d6f0415532b41ec3518e943c67ad0" }
-rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "028d08d5570d6f0415532b41ec3518e943c67ad0" }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "028d08d5570d6f0415532b41ec3518e943c67ad0" }
+rune = { git = "https://github.com/anomalyco/rune.git", rev = "08885ad0d52c8775621bed1528cb828659ff77da" }
+rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "08885ad0d52c8775621bed1528cb828659ff77da" }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "08885ad0d52c8775621bed1528cb828659ff77da" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dev-dependencies]
 png = "0.18"
