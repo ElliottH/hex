@@ -36,6 +36,10 @@ pub struct Evidence {
     /// The browser tab's URL, when there was one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Why OpenCode's sessions couldn't all be read, when they couldn't: `candidates` holds
+    /// what was read before it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sessions_error: Option<String>,
 }
 
 /// A destination someone stated. Obeyed, never weighed.
@@ -1249,6 +1253,7 @@ mod tests {
             candidates: sessions(),
             now_ms: NOW,
             url: None,
+            sessions_error: None,
         }
     }
 

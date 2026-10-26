@@ -393,6 +393,7 @@ fn decide_with(
         candidates,
         now_ms,
         url: url.map(str::to_owned),
+        sessions_error: error.clone(),
     };
     let smart = smart::decide(&evidence, Policy::Weigh);
     let mut capture = serde_json::Map::new();

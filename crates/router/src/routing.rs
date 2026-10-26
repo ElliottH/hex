@@ -1209,11 +1209,14 @@ mod tests {
             &[],
             look::SESSION_PAGES,
         );
-        assert!(result.is_err());
         // Two pages answer, the first folder's read gets the last 100 ms and fails, and the
-        // second is never asked: 500 ms, not the 800 ms four requests take.
+        // second is refused without asking: 500 ms, not the 800 ms four requests take. The
+        // pages already read are kept, with why the rest weren't.
+        let read = result.expect("the newest pages were read");
+        assert_eq!(read.candidates.len(), 200);
+        assert!(read.error.is_some());
         let took = started.elapsed();
-        assert!((2..4).contains(&requests), "{requests}");
+        assert_eq!(requests, 4);
         assert!(took < Duration::from_millis(700), "{took:?}");
 
         // A server that answers in time routes as usual.
@@ -1259,6 +1262,49 @@ mod tests {
             (by_dir.session.as_str(), by_dir.via.as_str()),
             ("ses_app", "sdk")
         );
+    }
+
+    #[test]
+    fn a_page_session_routes_when_the_sessions_cannot_be_read() {
+        use smart::{Clue, Pointer, Source};
+        let dir = std::env::temp_dir().join(format!(
+            "scrawl-unread-{}.scrawl",
+            crate::util::make_bundle_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundle: ScrawlBundle = serde_json::from_value(serde_json::json!({
+            "version": 1, "id": "t", "createdAtMs": 0, "durationMs": 1_000,
+            "target": {"mode": "display", "displayId": 1,
+                "frame": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "scale": 1.0}},
+            "transcript": {"source": "none", "text": "", "segments": []},
+            "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "c.png"
+        }))
+        .unwrap();
+        let error = "couldn't list sessions: OpenCode took over 10000 ms to list sessions";
+        let live = look::Live {
+            url: Some("http://localhost:5173/".into()),
+            clues: vec![Clue::new(
+                Source::Page,
+                Pointer::Session {
+                    id: "ses_page".into(),
+                    directory: None,
+                },
+                "http://localhost:5173 registered with data-session",
+            )],
+            candidates: Vec::new(),
+            error: Some(error.into()),
+        };
+        let (judgement, url) = judge_capture(&dir, &bundle, live);
+        assert_eq!(url.as_deref(), Some("http://localhost:5173/"));
+        let smart::Decision::Send { to, .. } = judgement.decision else {
+            panic!("the page named its session: {:?}", judgement.decision);
+        };
+        assert_eq!(to.candidate.id, "ses_page");
+        // The record keeps what was seen, and why the sessions are missing, for a replay.
+        let saved = read_record(&dir).expect("routing.json");
+        assert_eq!(saved.sessions_error.as_deref(), Some(error));
+        assert_eq!(saved.url.as_deref(), Some("http://localhost:5173/"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

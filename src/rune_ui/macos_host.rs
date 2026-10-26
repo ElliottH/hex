@@ -416,13 +416,16 @@ pub(super) fn hotkey_key_named(name: &str) -> Result<HotkeyKey, &'static str> {
     }
 }
 
-/// macOS accepts every binding the capture can produce, except that the
+/// macOS accepts every binding the capture can produce, except that Paste
+/// Last fires only on a key press (`suppression::paste_action`), and the
 /// capture shortcut, pressed once to start and again to finish, needs a key.
-#[cfg_attr(not(hex_capture), allow(unused_variables))]
 pub(super) fn validate_hotkey(
     target: ShortcutTarget,
     binding: &HotkeyBinding,
 ) -> Result<(), &'static str> {
+    if target == ShortcutTarget::PasteLast && binding.key.is_none() {
+        return Err(tr("Add a key"));
+    }
     #[cfg(hex_capture)]
     if target == ShortcutTarget::Capture && binding.key.is_none() {
         return Err(tr("Add a key"));
@@ -1538,6 +1541,24 @@ fn personal_catalog(status: &crate::personal_commands::StatusSnapshot) -> Vec<Ca
 mod tests {
     use super::*;
     use crate::app_settings::ModifierSide;
+
+    #[test]
+    fn paste_last_needs_a_key() {
+        let modifiers_only = HotkeyBinding {
+            modifiers: crate::app_settings::HotkeyModifiers::option_command(),
+            key: None,
+        };
+        assert_eq!(
+            validate_hotkey(ShortcutTarget::PasteLast, &modifiers_only),
+            Err(tr("Add a key"))
+        );
+        assert_eq!(
+            validate_hotkey(ShortcutTarget::Dictation, &modifiers_only),
+            Ok(())
+        );
+        let chord = HotkeyBinding::paste_last_default();
+        assert_eq!(validate_hotkey(ShortcutTarget::PasteLast, &chord), Ok(()));
+    }
 
     const LEFT_OPTION: u64 = 0x0008_0020;
     const RIGHT_OPTION: u64 = 0x0008_0040;

@@ -179,6 +179,9 @@ struct Seen {
 }
 
 /// Starts looking, or `None` when captures aren't sent (`autoSend` off).
+/// Only the session reads share `LOOK_BUDGET`; the tab's osascript (6 s),
+/// the terminal's osascript and `tailscale` (2 s each), and the page
+/// publisher's read (1 s) sit outside it, each bounded on its own.
 pub(super) fn look(context: RouteContext) -> Option<Look> {
     let router = router();
     if !sends(router.config()) {
@@ -469,33 +472,37 @@ impl Worker {
             .map(|live| live.candidates.clone())
             .unwrap_or_default();
         let smart_routing = router.config().smart_routing;
-        let unread = seen.live.as_ref().and_then(sessions_unread);
-        if let Some(error) = &unread {
+        if let Some(live) = &seen.live
+            && let Some(error) = &live.error
+        {
             tracing::warn!(
                 bundle = %bundle_name(&bundle),
                 error,
-                "a capture's look couldn't read OpenCode's sessions"
+                read = live.candidates.len(),
+                "a capture's look couldn't read all of OpenCode's sessions"
             );
         }
-        let (decision, url) = router.run(|| match (seen.live, &loaded, unread) {
-            (Some(live), _, Some(error)) => {
-                (Decided::Unreachable(unreachable_why(&error)), live.url)
-            }
-            (Some(live), Some(loaded), None) if smart_routing => {
+        let unread = seen.live.as_ref().and_then(sessions_unread);
+        // Judged even without the sessions: a rule, page, or publisher names
+        // one outright, and the record keeps what was seen for a replay.
+        let (decision, url) = router.run(|| match (seen.live, &loaded) {
+            (Some(live), Some(loaded)) if smart_routing => {
                 let (judgement, url) = routing::judge_capture(&bundle, loaded, live);
-                (Decided::Judged(judgement.decision), url)
+                (judged(judgement.decision, unread.as_deref()), url)
             }
-            (Some(live), _, None) => {
-                let decision = match (seen.ladder, live.error) {
-                    (Some(dest), _) => Decided::Ladder(dest),
-                    (None, None) => Decided::Judged(smart::Decision::Keep {
-                        reason: String::new(),
-                    }),
-                    (None, Some(error)) => Decided::Unreachable(unreachable_why(&error)),
+            (Some(live), _) => {
+                let decision = match seen.ladder {
+                    Some(dest) => Decided::Ladder(dest),
+                    None => judged(
+                        smart::Decision::Keep {
+                            reason: String::new(),
+                        },
+                        unread.as_deref(),
+                    ),
                 };
                 (decision, live.url)
             }
-            (None, ..) => (Decided::Failed, None),
+            (None, _) => (Decided::Failed, None),
         });
         let bundle_id = loaded
             .as_ref()
@@ -906,12 +913,22 @@ fn sessions_unread(live: &look::Live) -> Option<String> {
         .flatten()
 }
 
+/// A decision as shown: nowhere to go for want of the sessions reads
+/// Unreachable; anything a clue named outright still routes.
+fn judged(decision: smart::Decision, unread: Option<&str>) -> Decided {
+    match (decision, unread) {
+        (smart::Decision::Keep { .. }, Some(error)) => Decided::Unreachable(unreachable_why(error)),
+        (decision, _) => Decided::Judged(decision),
+    }
+}
+
 /// A failed session read (`couldn't list sessions: …`, outer context
 /// first) in the few words the capsule shows under "Couldn't reach
 /// OpenCode".
 fn unreachable_why(error: &str) -> String {
-    let error = error
-        .strip_prefix("couldn't list sessions: ")
+    let error = ["couldn't list sessions: ", "couldn't list every session: "]
+        .into_iter()
+        .find_map(|prefix| error.strip_prefix(prefix))
         .unwrap_or(error);
     if error.contains("didn't answer in time") || error.contains("took over") {
         "didn't answer in time".into()
@@ -1320,7 +1337,32 @@ mod tests {
             }
         );
 
-        // Sessions read alongside a failure (a page's publisher) still route.
+        // A clue that names a session outright still routes without the list;
+        // only nowhere to go reads Unreachable.
+        let page = smart::Decision::Send {
+            to: smart::Scored {
+                candidate: candidate("ses_page", "", 0),
+                score: 40,
+                reasons: Vec::new(),
+            },
+            instead: Vec::new(),
+        };
+        assert!(matches!(
+            judged(page, Some(&error)),
+            Decided::Judged(smart::Decision::Send { ref to, .. }) if to.candidate.id == "ses_page"
+        ));
+        let keep = || smart::Decision::Keep {
+            reason: String::new(),
+        };
+        assert!(
+            matches!(judged(keep(), Some(&error)), Decided::Unreachable(ref why) if why == "didn't answer in time")
+        );
+        assert!(matches!(
+            judged(keep(), None),
+            Decided::Judged(smart::Decision::Keep { .. })
+        ));
+
+        // Sessions read alongside a failure (a folder's page) still route.
         let mut partial = failed("couldn't list sessions: 500");
         partial.candidates = vec![candidate("ses_a", "A", 1)];
         assert_eq!(sessions_unread(&partial), None);

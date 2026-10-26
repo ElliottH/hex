@@ -684,8 +684,9 @@ struct FinishJob {
     bundle: PathBuf,
     capture: Box<dyn Sealed>,
     audio: RecordedAudio,
-    /// What the router saw when it stopped.
-    look: Option<routing::Look>,
+    /// What the router saw when it stopped, handed over once the job was
+    /// queued; the sender is dropped without one when captures aren't sent.
+    look: Receiver<routing::Look>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2313,6 +2314,7 @@ fn finish_captures(
     } in jobs
     {
         let finished = capture.finish(audio);
+        let look = look.recv().ok();
         restrict_bundle(&bundle);
         match finished {
             Ok(written) => {
@@ -2416,9 +2418,11 @@ fn collect(
         Ok(Seal::Finish { through, closed }) => {
             // The screen stops now, not when the finisher gets to it.
             let capture = capture.stop();
-            // The tab and terminal in front now, read while it is written.
-            let look = capture.route_context().and_then(routing::look);
+            // The app in front now; its tab and terminal are read while the
+            // capture is written.
+            let context = capture.route_context();
             let audio = timeline.finish(through, closed);
+            let (give_look, look) = mpsc::sync_channel(1);
             // Starts are refused while the queue is full, so it has room
             // unless Hex is stopping.
             let job = FinishJob {
@@ -2428,7 +2432,14 @@ fn collect(
                 look,
             };
             match jobs.try_send(job) {
-                Ok(()) => return,
+                Ok(()) => {
+                    // Only a queued capture is looked at, so a refused one
+                    // leaves no look running.
+                    if let Some(look) = context.and_then(routing::look) {
+                        let _ = give_look.send(look);
+                    }
+                    return;
+                }
                 Err(TrySendError::Full(job) | TrySendError::Disconnected(job)) => {
                     tracing::warn!("no room to write the capture; discarding it");
                     job.capture.cancel();

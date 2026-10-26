@@ -39,8 +39,7 @@ use self::flow::{Action, Cue, Done, Flow, Footer, Input, Lead, List, Mode, Pres}
 use self::surface::{
     CHIP_H, CHIP_PX, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD, LIST_Y, MEDIUM,
     PANEL_H, PANEL_W, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON, SEG_ICON_GAP, SMALL, STRONG,
-    Shown, Surface, TIMER, UNDO_KEYS, UNDO_LABEL, ask_keys, clock_width, ellipsize, keycaps_width,
-    measure,
+    Shown, Surface, TIMER, UNDO_KEYS, UNDO_LABEL, clock_width, ellipsize, keycaps_width, measure,
 };
 use super::controls::{Paint, keycaps};
 
@@ -1008,7 +1007,10 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 .on_press_tx(press(id))
         }
         Id::Ask => {
-            let keys = ask_keys();
+            let keys = match &surface.pres {
+                Pres::Done(done) => done.ask_keys.as_slice(),
+                _ => &[],
+            };
             let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
             keyed(p, base, &keys, &shown.ident, MEDIUM).on_press_tx(press(id))
         }

@@ -341,7 +341,7 @@ fn done_row(done: &Done, routes: &[String], cap: f32, raw: &mut Vec<(Id, String,
             Id::Ask,
             ask.clone(),
             keyed_width(
-                &ask_keys().iter().map(String::as_str).collect::<Vec<_>>(),
+                &done.ask_keys.iter().map(String::as_str).collect::<Vec<_>>(),
                 ask,
                 MEDIUM,
             ),
@@ -979,6 +979,7 @@ mod tests {
             why: Some("rule".into()),
             undo,
             ask: Some("Elsewhere…".into()),
+            ask_keys: ask_keys(),
             ..Done::plain(Lead::Check, "Sent to SEER")
         })
     }

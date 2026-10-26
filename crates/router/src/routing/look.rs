@@ -235,7 +235,7 @@ pub fn look_at_page(
     if !missing.is_empty()
         && let Ok(more) = read_candidates(&mut api, &[], &missing, 0)
     {
-        candidates.extend(more);
+        candidates.extend(more.candidates);
     }
     clues.extend(found);
 }
@@ -283,7 +283,10 @@ pub(crate) fn read_with(
     ids.extend(also.iter().cloned());
     let mut api = super::within(senses.hooks.api, budget);
     match read_candidates(&mut api, &roots, &ids, SESSION_PAGES) {
-        Ok(candidates) => (candidates, None),
+        Ok(Read { candidates, error }) => (
+            candidates,
+            error.map(|err| format!("couldn't list every session: {err:#}")),
+        ),
         Err(err) => (Vec::new(), Some(format!("couldn't list sessions: {err:#}"))),
     }
 }
@@ -459,6 +462,7 @@ pub fn evidence_for(bundle: &ScrawlBundle, dir: &Path, live: Live) -> Evidence {
         candidates: live.candidates,
         now_ms: bundle.created_at_ms,
         url: live.url,
+        sessions_error: live.error,
     }
 }
 
@@ -954,14 +958,24 @@ fn candidate(session: OpenCodeSession, repos: &mut HashMap<PathBuf, Option<PathB
     }
 }
 
+/// The sessions [`read_candidates`] read, and why it read no more.
+#[derive(Debug)]
+pub struct Read {
+    pub candidates: Vec<Candidate>,
+    /// The first read after the newest pages that failed (a folder's page timing out); the
+    /// reads after it were still tried.
+    pub error: Option<anyhow::Error>,
+}
+
 /// Open root sessions: the newest `pages` pages, the newest page in each of `roots`, and each
-/// of `ids` (whatever its state, since something named it).
+/// of `ids` (whatever its state, since something named it). Fails only when the newest pages
+/// can't be read; a folder's page that can't keeps what was read.
 pub fn read_candidates(
     get: &mut ApiGet,
     roots: &[PathBuf],
     ids: &[String],
     pages: usize,
-) -> Result<Vec<Candidate>> {
+) -> Result<Read> {
     let mut raw: Vec<OpenCodeSession> = Vec::new();
     let add = |raw: &mut Vec<OpenCodeSession>, session: OpenCodeSession| {
         if !raw.iter().any(|s| s.id == session.id) {
@@ -972,15 +986,18 @@ pub fn read_candidates(
         add(&mut raw, session.clone());
         Scan::Skip
     })?;
+    let mut error = None;
     for root in roots {
         if super::smart::is_home_or_root(root) {
             continue;
         }
         let query = format!("&directory={}", query_escape(&root.to_string_lossy()));
-        find_root_session(get, &query, 1, |session| {
+        if let Err(err) = find_root_session(get, &query, 1, |session| {
             add(&mut raw, session.clone());
             Scan::Skip
-        })?;
+        }) {
+            error.get_or_insert(err);
+        }
     }
     for id in ids {
         if !raw.iter().any(|s| &s.id == id)
@@ -990,7 +1007,10 @@ pub fn read_candidates(
         }
     }
     let mut repos = HashMap::new();
-    Ok(raw.into_iter().map(|s| candidate(s, &mut repos)).collect())
+    Ok(Read {
+        candidates: raw.into_iter().map(|s| candidate(s, &mut repos)).collect(),
+        error,
+    })
 }
 
 // MARK: This Mac's own names
@@ -1350,6 +1370,7 @@ mod tests {
                 candidates,
                 now_ms: 0,
                 url: None,
+                sessions_error: None,
             };
             let ladder = destination(&decide(&evidence, Policy::Ladder), Some(url));
             assert_eq!(ladder, today, "{url}");
@@ -1607,6 +1628,7 @@ mod tests {
             candidates,
             now_ms: 15,
             url: None,
+            sessions_error: None,
         };
         let j = super::super::smart::decide(&evidence, super::super::smart::Policy::Weigh);
         let dest = super::super::smart::destination(&j, Some(url)).unwrap();

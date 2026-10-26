@@ -301,6 +301,9 @@ pub(crate) struct Done {
     pub(crate) routes: Vec<String>,
     /// The ⌥⇧V chip's label.
     pub(crate) ask: Option<String>,
+    /// Its keycaps, Paste Last's shortcut as saved when shown, so a change
+    /// lays the chip out again.
+    pub(crate) ask_keys: Vec<String>,
     /// Open: what's typed into the field, and the list under it.
     pub(crate) open: Option<(String, List)>,
     /// A written capture: Paste and Inspect, as Scrawl's capsule offers.
@@ -317,6 +320,7 @@ impl Done {
             undo_ends: None,
             routes: Vec::new(),
             ask: None,
+            ask_keys: Vec::new(),
             open: None,
             hand_off: false,
         }
@@ -1104,6 +1108,11 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         },
         None => Done {
             hand_off: true,
+            ask_keys: if base.ask.is_some() {
+                super::surface::ask_keys()
+            } else {
+                Vec::new()
+            },
             ..base
         },
     }
@@ -1182,6 +1191,24 @@ mod tests {
         assert!(done(&flow, 20.0).hand_off);
         flow.input(Input::Failed(Failure::Save, None), 21.0);
         assert!(!done(&flow, 21.0).hand_off, "nothing was written");
+    }
+
+    #[test]
+    fn a_paste_last_change_changes_the_ask_chip() {
+        use crate::app_settings::{HotkeyBinding, HotkeyModifiers, publish_paste_last_keycaps};
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(Route::Nothing { recent: Vec::new() }), 0.0);
+        let before = done(&flow, 0.5);
+        let rebound = HotkeyBinding {
+            modifiers: HotkeyModifiers::option_command(),
+            ..HotkeyBinding::paste_last_default()
+        };
+        publish_paste_last_keycaps(Some(&rebound));
+        let after = done(&flow, 0.5);
+        assert_eq!(after.ask_keys, rebound.keycaps());
+        assert_ne!(before, after, "so the surface lays the chip out again");
+        publish_paste_last_keycaps(None);
+        assert!(done(&flow, 0.5).ask_keys.is_empty());
     }
 
     #[test]

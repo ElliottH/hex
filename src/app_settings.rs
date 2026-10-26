@@ -2108,17 +2108,22 @@ pub fn runtime_hotkeys() -> RuntimeHotkeys {
 }
 
 #[cfg(hex_capture)]
-fn publish_paste_last_keycaps(binding: Option<&HotkeyBinding>) {
+pub(crate) fn publish_paste_last_keycaps(binding: Option<&HotkeyBinding>) {
     *PASTE_LAST_KEYCAPS
         .get_or_init(Default::default)
         .write()
-        .unwrap_or_else(|error| error.into_inner()) =
-        Some(binding.map(HotkeyBinding::keycaps).unwrap_or_default());
+        .unwrap_or_else(|error| error.into_inner()) = Some(
+        binding
+            .filter(|binding| binding.key.is_some())
+            .map(HotkeyBinding::keycaps)
+            .unwrap_or_default(),
+    );
 }
 
 /// Paste Last's keycaps (`["⌥", "⌘", "V"]`), which open a routed capture
-/// capsule's list; empty while Paste Last is off, and the default's before
-/// settings are applied (scenes and tests).
+/// capsule's list; empty while Paste Last is off or has no key (it fires
+/// only on a key press), and the default's before settings are applied
+/// (scenes and tests).
 #[cfg(hex_capture)]
 pub fn paste_last_keycaps() -> Vec<String> {
     PASTE_LAST_KEYCAPS
@@ -2296,6 +2301,13 @@ mod tests {
         publish_paste_last_keycaps(Some(&rebound));
         assert_eq!(paste_last_keycaps(), ["⌥", "⌘", "V"]);
         publish_paste_last_keycaps(None);
+        assert!(paste_last_keycaps().is_empty());
+        // A modifier-only Paste Last saved before Settings refused it never fires.
+        let modifiers_only = HotkeyBinding {
+            key: None,
+            ..rebound
+        };
+        publish_paste_last_keycaps(Some(&modifiers_only));
         assert!(paste_last_keycaps().is_empty());
         *PASTE_LAST_KEYCAPS.get().unwrap().write().unwrap() = None;
     }
