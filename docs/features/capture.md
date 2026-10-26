@@ -121,8 +121,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   is a phone target (logged); nothing sends `Input::Phone` yet, so the chip
 │   │   never shows
 │   └── Window or Area -> Discard; the capsule becomes the picker (begin_picking)
-├── Picker: ⌥⇧S records Screen; Esc closes it; Window and Area picking on screen
-│   is not built yet (logged)
+├── Picker: ⌥⇧S records what the on-screen picker shows; Esc closes it
 ├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
 ├── Routing (Scrawl's routing.md), built and scene-tested; nothing feeds it until
 │   routing exists
@@ -134,6 +133,21 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list
 │   └── Long names give way together so the widest row stays inside the panel
 └── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
+
+The on-screen picker                     // capture.picker (capture_capsule/picker.rs)
+├── A full-screen Rune overlay on the pointer's display, under the capsule,
+│   left out of recordings (`OwnWindow::Picker`); it takes the pointer only while
+│   picking and never takes focus; it follows the pointer to another display
+├── Everything but the target dims; the dim moves with the target as one piece
+├── Window -> the window under the pointer: tinted, ringed, its title in a badge;
+│   the cursor becomes Scrawl's camera; no window under it -> the display
+├── Area -> drag at least 36 pt; the badge shows its size; a click alone -> the
+│   display
+├── Screen -> the display, ringed
+├── Click or ⌥⇧S -> Action::Start(target) -> CaptureCommand::Start; the picker
+│   fades; a pick that starts no capture within 2 s brings it back
+└── Windows load off the UI thread (`list_selectable_windows`); nothing picks
+    until they arrive
 
 Ink and laser                            // capture.ink
 ├── A click-through overlay over the recorded display, excluded from the recording
@@ -336,9 +350,15 @@ Checks:
   `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
   scripted state change per frame, Calm and Reduce Motion, for no pops,
   jumps, or jiggle. `HEX_CAPSULE_MOTION` also writes rune-motion traces for
-  motion-lint. Observed (Oct 26, pro): all 16 runs pass lint. Not proven
-  natively end to end: the overlays have been driven only by the scripted
-  scenes, not a live capture.
+  motion-lint. Observed (Oct 26, pro): all 16 runs pass lint.
+- Picker, in capture_capsule/picker.rs and tests.rs: geometry, label, and
+  target tests, `the_picker_records_what_it_shows_and_comes_to_rest`, and
+  `picker_stills_and_motion`, which scripts window hover, an area drag, and
+  mode switches per frame (Calm and Reduce Motion). Observed (Oct 26, pro):
+  all 6 runs pass motion-lint with two excuses: the target growing from a
+  zero-size point, and the camera stopping where the scripted pointer stops.
+  Not proven natively end to end: the overlays have been driven only by the
+  scripted scenes, not a live capture.
 - Pane: `captures_default_off_and_refuse_a_shortcut_in_use` and
   `retention_names_presets_and_imported_days` in rune_ui/scrawl.rs; scenes
   `mac-scrawl-off`, `mac-scrawl`, `mac-scrawl-running`, `mac-scrawl-permission`
