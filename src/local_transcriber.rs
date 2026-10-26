@@ -312,7 +312,7 @@ impl ModelSwap {
     }
 
     /// Collects a finished load; a failure keeps the current model.
-    pub(crate) fn poll(&mut self) -> Option<String> {
+    pub(crate) fn poll(&mut self) -> Option<SwapFailed> {
         let (_, receiver) = self.loading.as_ref()?;
         let result = match receiver.try_recv() {
             Ok(result) => result,
@@ -327,7 +327,11 @@ impl ModelSwap {
                 self.ready = Some((selection, transcriber));
                 None
             }
-            Err(error) => Some(format!("could not switch the transcription model: {error}")),
+            Err(error) => Some(SwapFailed {
+                wanted: selection,
+                kept: self.loaded.clone(),
+                error: format!("could not switch the transcription model: {error}"),
+            }),
         }
     }
 
@@ -337,6 +341,14 @@ impl ModelSwap {
         self.loaded = selection;
         Some(transcriber)
     }
+}
+
+/// A model change that failed to load; the listener still runs `kept`.
+#[derive(Debug)]
+pub(crate) struct SwapFailed {
+    pub(crate) wanted: TranscriptionSelection,
+    pub(crate) kept: TranscriptionSelection,
+    pub(crate) error: String,
 }
 
 /// `selection` without recognition hints a model cannot use, which
