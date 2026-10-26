@@ -344,7 +344,10 @@ impl ModelSwap {
 }
 
 /// A model change that failed to load; the listener still runs `kept`.
+/// Windows hands it to the host, which puts settings back on `kept`; Linux
+/// only reports the error.
 #[derive(Debug)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub(crate) struct SwapFailed {
     pub(crate) wanted: TranscriptionSelection,
     pub(crate) kept: TranscriptionSelection,
