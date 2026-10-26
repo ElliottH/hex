@@ -212,6 +212,13 @@ pub enum CaptureCommand {
     /// [`Self::Discard`] does and starts `target` in the same step, so no
     /// snapshot shows nothing recording in between. With nothing recording,
     /// only starts.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the iPhone chip switches once there is a phone target"
+        )
+    )]
     Switch(CaptureTarget),
     /// Sends the newest written capture (`snapshot().last`) to `to` now: a
     /// session ID, or a name its route lists, suggestions first. A send

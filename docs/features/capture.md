@@ -102,7 +102,8 @@ A cabled iPhone                          // capture.phone
     with the helper's reason
 
 The capsule                              // capture.capsule (rune_ui/capture_capsule)
-├── A Rune overlay at the top of the pointer's display that never takes focus;
+├── A Rune overlay at the top of the pointer's display that never takes focus
+│   and lets clicks through except on its live chips, buttons, and list;
 │   its window id goes to the engine (`Host::own_windows`, one id per role, so a
 │   recreated window replaces the old one), so recordings leave it out
 ├── Follows `capture_host::watch()`: Recording from the instant `recording` is
@@ -116,8 +117,9 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   the capsule, and 1.2 s after it leaves
 │   ├── A chip restarts rather than retargets (Scrawl's `switch_recording`)
 │   ├── Screen -> it's what's recording: the chips fold, no command
-│   ├── iPhone -> Action::Switch(Iphone); capture_host's switch is not built yet
-│   │   (logged), and nothing sends `Input::Phone` yet, so the chip never shows
+│   ├── iPhone -> Action::Switch(Iphone), for CaptureCommand::Switch once there
+│   │   is a phone target (logged); nothing sends `Input::Phone` yet, so the chip
+│   │   never shows
 │   └── Window or Area -> Discard; the capsule becomes the picker (begin_picking)
 ├── Picker: ⌥⇧S records Screen; Esc closes it; Window and Area picking on screen
 │   is not built yet (logged)

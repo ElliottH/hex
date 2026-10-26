@@ -151,9 +151,9 @@ pub(crate) fn act(action: Action) {
         Action::Finish => vec![scrawl(ScrawlCaptureAction::Stop)],
         Action::Cancel => vec![scrawl(ScrawlCaptureAction::Cancel)],
         Action::Discard => vec![command(CaptureCommand::Discard)],
-        Action::Switch(Mode::Screen) => vec![command(CaptureCommand::Discard), command(screen())],
         Action::Record(Mode::Screen) => vec![command(screen())],
-        // Picking a window or an area on screen, and routing, are not built.
+        // Recording an iPhone, picking a window or an area on screen, and
+        // routing are not built.
         other => {
             tracing::info!(
                 ?other,

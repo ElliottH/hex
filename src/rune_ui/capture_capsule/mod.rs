@@ -598,8 +598,9 @@ fn presence(surface: &Surface, reduced: bool) -> Transition {
         .springs(SpringPair::new(surface.presence(), PRESENCE_EXIT))
 }
 
-/// The capsule in its `PANEL_W` × `PANEL_H` panel. Its shell, its
-/// controls, and the list are the only `.hit()` boxes.
+/// The capsule in its `PANEL_W` × `PANEL_H` panel. Its live chips and
+/// buttons and the list are the only `.hit()` boxes: a click anywhere else
+/// on it reaches the app beneath, and hover still comes from the pointer.
 fn capsule(p: Paint, surface: &Surface, live: &Animated, cx: &mut Cx<CapsuleState>) -> El {
     let reduced = cx.is_reduced_motion() || surface.reduced;
     if surface.reduced {
@@ -716,7 +717,6 @@ fn shell(p: Paint, surface: &Surface, meter: &Meter) -> El {
         .opacity_motion(surface.shell_fade)
         .role("group")
         .label("Capture")
-        .hit()
 }
 
 fn label(content: &str, style: rune::TextStyle, color: Color) -> El {
