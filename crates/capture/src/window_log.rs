@@ -97,9 +97,37 @@ pub struct AppMeta {
     pub regular: bool,
 }
 
-/// Keeps normal windows (plus regular apps' panels and menus), the menu bar and the Dock that
-/// overlap the capture, converts them to capture points and marks the frontmost app's first
-/// normal window.
+/// Highest window level that is still an app's own window: floating panels, status-level
+/// launchers (25) and pop-up menus (101). Above are screen savers, shields and overlays.
+const PANEL_LAYER_MAX: i32 = 101;
+
+/// The app whose floating panel has the keys while `front` stays the active app. Launchers
+/// (Invoke, Spotlight, Raycast) are non-activating panels, so `frontmostApplication` still names
+/// the app behind them. `focused` is the app Accessibility says has the keys; it counts when it
+/// shows a window at a normal or floating level.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn panel_front(
+    raw: &[RawWindow],
+    front: Option<i32>,
+    focused: Option<i32>,
+    own_pid: i32,
+) -> Option<i32> {
+    let focused = focused.filter(|pid| Some(*pid) != front && *pid != own_pid)?;
+    raw.iter()
+        .any(|w| {
+            w.pid == focused
+                && w.alpha > 0.01
+                && (0..=PANEL_LAYER_MAX).contains(&w.layer)
+                && w.bounds[2] >= 24.0
+                && w.bounds[3] >= 16.0
+        })
+        .then_some(focused)
+}
+
+/// Keeps normal windows (plus regular apps' panels and menus, and the frontmost app's even when
+/// it's a menu bar app), the menu bar and the Dock that overlap the capture, converts them to
+/// capture points and marks the frontmost app's window: its first normal one, else its largest
+/// panel (a launcher's).
 ///
 /// The Dock's own window covers the whole display, so it is replaced by `dock` (the strip the
 /// Dock reserves, in global points) or dropped when the Dock hides.
@@ -111,34 +139,52 @@ pub fn filter_windows(
     dock: Option<[f64; 4]>,
     app_meta: &mut dyn FnMut(i32) -> AppMeta,
 ) -> Vec<WindowEntry> {
-    let mut front_marked = false;
-    let mut out = Vec::new();
-    for w in raw {
-        let is_dock = w.layer == 20 && w.owner == "Dock";
-        let bounds = match (is_dock, dock) {
-            (true, Some(rect)) => rect,
-            (true, None) => continue,
-            (false, _) => w.bounds,
+    let bounds_of = |w: &RawWindow| match (w.layer == 20 && w.owner == "Dock", dock) {
+        (true, Some(rect)) => Some(rect),
+        (true, None) => None,
+        (false, _) => Some(w.bounds),
+    };
+    let visible = |w: &RawWindow| {
+        let Some([x, y, width, height]) = bounds_of(w) else {
+            return false;
         };
-        let [x, y, width, height] = bounds;
-        let menubar = w.layer == 24 && w.title == "Menubar";
         let overlaps = x < frame.x + frame.width
             && x + width > frame.x
             && y < frame.y + frame.height
             && y + height > frame.y;
-        if w.pid == own_pid || w.alpha <= 0.01 || width < 24.0 || height < 16.0 || !overlaps {
+        w.pid != own_pid && w.alpha > 0.01 && width >= 24.0 && height >= 16.0 && overlaps
+    };
+    let front_id = frontmost_pid.and_then(|pid| {
+        let own = || raw.iter().filter(|w| w.pid == pid && visible(w));
+        own()
+            .find(|w| w.layer == 0)
+            .or_else(|| {
+                own()
+                    .filter(|w| (1..=PANEL_LAYER_MAX).contains(&w.layer))
+                    .max_by(|a, b| {
+                        (a.bounds[2] * a.bounds[3]).total_cmp(&(b.bounds[2] * b.bounds[3]))
+                    })
+            })
+            .map(|w| w.id)
+    });
+    let mut out = Vec::new();
+    for w in raw {
+        if !visible(w) {
             continue;
         }
+        let Some([x, y, width, height]) = bounds_of(w) else {
+            continue;
+        };
+        let is_dock = w.layer == 20 && w.owner == "Dock";
+        let menubar = w.layer == 24 && w.title == "Menubar";
         let meta = app_meta(w.pid);
-        // Floating panels, sheets and pop-up menus (layers up to 101) count when a regular
-        // app owns them; other high layers are system chrome, notifications and overlays.
-        let keep =
-            w.layer == 0 || menubar || is_dock || (meta.regular && (1..=101).contains(&w.layer));
-        if !keep {
+        // Floating panels, sheets and pop-up menus count when a regular app or the frontmost
+        // one owns them; other high layers are system chrome, notifications and overlays.
+        let panel = (1..=PANEL_LAYER_MAX).contains(&w.layer)
+            && (meta.regular || Some(w.pid) == frontmost_pid);
+        if !(w.layer == 0 || menubar || is_dock || panel) {
             continue;
         }
-        let frontmost = !front_marked && w.layer == 0 && Some(w.pid) == frontmost_pid;
-        front_marked |= frontmost;
         out.push(WindowEntry {
             id: w.id,
             app: w.owner.clone(),
@@ -152,7 +198,7 @@ pub fn filter_windows(
                 height.round() as i32,
             ],
             layer: w.layer,
-            frontmost,
+            frontmost: Some(w.id) == front_id,
         });
     }
     out
@@ -777,6 +823,57 @@ mod tests {
             regular: true,
         });
         assert!(hidden.iter().all(|w| w.id != 3));
+    }
+
+    #[test]
+    fn a_launchers_key_panel_is_the_front_over_the_active_app() {
+        let raw = |id, pid, owner: &str, bounds, layer| RawWindow {
+            id,
+            pid,
+            owner: owner.into(),
+            title: String::new(),
+            bounds,
+            layer,
+            alpha: 1.0,
+        };
+        // Invoke (pid 20, a menu bar app) shows its search panel and an actions menu over
+        // OpenCode (pid 13), which stays the active app.
+        let windows = [
+            raw(1, 20, "Invoke", [520.0, 150.0, 200.0, 180.0], 25),
+            raw(2, 20, "Invoke", [350.0, 110.0, 400.0, 260.0], 25),
+            raw(3, 21, "Hex", [450.0, 460.0, 100.0, 30.0], 25),
+            raw(4, 13, "OpenCode Beta", [0.0, 0.0, 1000.0, 500.0], 0),
+        ];
+        assert_eq!(panel_front(&windows, Some(13), Some(20), 9), Some(20));
+        assert_eq!(panel_front(&windows, Some(13), Some(13), 9), None);
+        assert_eq!(
+            panel_front(&windows, Some(13), Some(9), 9),
+            None,
+            "Scrawl's own keys"
+        );
+        assert_eq!(
+            panel_front(&windows, Some(13), Some(22), 9),
+            None,
+            "an app with the keys but nothing on screen"
+        );
+
+        let out = filter_windows(&windows, frame(), 9, Some(20), None, &mut |pid| AppMeta {
+            bundle_id: None,
+            regular: pid == 13,
+        });
+        assert_eq!(
+            out.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![1, 2, 4],
+            "the frontmost menu bar app's panels count, another one's don't"
+        );
+        assert_eq!(
+            out.iter()
+                .filter(|w| w.frontmost)
+                .map(|w| w.id)
+                .collect::<Vec<_>>(),
+            vec![2],
+            "the launcher's largest panel, not the app behind it"
+        );
     }
 
     #[test]

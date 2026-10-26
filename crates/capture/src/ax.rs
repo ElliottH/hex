@@ -182,6 +182,17 @@ fn pid_of(element: AxElement) -> Option<i32> {
     (unsafe { AXUIElementGetPid(element, &raw mut pid) } == 0).then_some(pid)
 }
 
+/// The app the system says has the keys (`AXFocusedApplication`). Unlike
+/// `NSWorkspace.frontmostApplication` it names an app whose non-activating panel is key, like a
+/// launcher's search field over another app. `None` without Accessibility.
+#[cfg(target_os = "macos")]
+pub fn focused_app_pid() -> Option<i32> {
+    let system = Owned(unsafe { AXUIElementCreateSystemWide() });
+    unsafe { AXUIElementSetMessagingTimeout(system.0, MESSAGE_TIMEOUT_S) };
+    let app = element_attribute(system.0, "AXFocusedApplication")?;
+    pid_of(app.0).filter(|pid| *pid > 0)
+}
+
 #[cfg(target_os = "macos")]
 fn element_at(root: AxElement, x: f64, y: f64) -> Option<Owned> {
     let mut out: AxElement = std::ptr::null();

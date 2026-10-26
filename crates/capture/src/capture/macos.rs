@@ -904,14 +904,21 @@ pub fn discover_target_at(window_query: Option<&str>, point: Option<[f64; 2]>) -
         }
 
         let displays = content.displays();
+        // Its first normal window, else (a launcher's panel) its first floating one.
         let front_window = frontmost.as_ref().and_then(|(pid, _, _)| {
-            content.windows().into_iter().find(|w| {
-                w.is_on_screen()
-                    && w.window_layer() == 0
-                    && w.owning_application()
-                        .as_ref()
-                        .is_some_and(|a| a.process_id() == *pid)
-            })
+            let own: Vec<_> = content
+                .windows()
+                .into_iter()
+                .filter(|w| {
+                    w.is_on_screen()
+                        && (0..=101).contains(&w.window_layer())
+                        && w.owning_application()
+                            .as_ref()
+                            .is_some_and(|a| a.process_id() == *pid)
+                })
+                .collect();
+            let first = own.iter().position(|w| w.window_layer() == 0).unwrap_or(0);
+            own.into_iter().nth(first)
         });
         let rects: Vec<[f64; 4]> = displays
             .iter()
@@ -1063,7 +1070,16 @@ pub fn ensure_external_app_active() {
     }
 }
 
-/// The frontmost app's pid, or the last external one while Scrawl itself is in front.
+/// The app whose non-activating panel has the keys over the active app `front` (a launcher
+/// like Invoke), from Accessibility and the window list.
+fn key_panel_pid(front: i32) -> Option<i32> {
+    let focused = crate::ax::focused_app_pid().filter(|pid| *pid != front)?;
+    let raw = objc2::rc::autoreleasepool(|_| crate::windows::raw_windows());
+    crate::windows::panel_front(&raw, Some(front), Some(focused), std::process::id() as i32)
+}
+
+/// The frontmost app's pid (an app whose floating panel has the keys counts), or the last
+/// external one while Scrawl itself is in front.
 pub fn frontmost_external_pid() -> Option<i32> {
     use objc2_app_kit::NSWorkspace;
     let our_pid = std::process::id() as i32;
@@ -1071,7 +1087,7 @@ pub fn frontmost_external_pid() -> Option<i32> {
         .frontmostApplication()
         .map_or(0, |a| a.processIdentifier());
     if pid > 0 && pid != our_pid {
-        return Some(pid);
+        return Some(key_panel_pid(pid).unwrap_or(pid));
     }
     let fallback = LAST_EXTERNAL_APP_PID.load(Ordering::Acquire);
     (fallback > 0 && fallback != our_pid).then_some(fallback)
@@ -1085,6 +1101,10 @@ pub fn frontmost_app_info() -> Option<(i32, String, Option<String>)> {
         let pid = app.processIdentifier();
         if pid != our_pid {
             LAST_EXTERNAL_APP_PID.store(pid, Ordering::Release);
+            let app = key_panel_pid(pid)
+                .and_then(NSRunningApplication::runningApplicationWithProcessIdentifier)
+                .unwrap_or(app);
+            let pid = app.processIdentifier();
             let name = app.localizedName()?.to_string();
             let bundle_id = app.bundleIdentifier().map(|b| b.to_string());
             return Some((pid, name, bundle_id));
