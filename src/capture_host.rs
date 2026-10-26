@@ -186,10 +186,6 @@ pub enum CaptureCommand {
     Start(CaptureTarget),
     /// Looks for a cabled iPhone off the listener's thread;
     /// [`CaptureSnapshot::phone`] follows. Each start also looks.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "each start looks, which is all the capsule needs")
-    )]
     FindPhone,
     /// Drops the recording capture: its bundle is removed and it never
     /// settles, so the capsule can turn into the picker in its place.

@@ -269,7 +269,12 @@ pub(crate) fn act(action: Action) {
     let controls: Vec<RecognitionControl> = match action {
         Action::Finish => vec![scrawl(ScrawlCaptureAction::Stop)],
         Action::Cancel => vec![scrawl(ScrawlCaptureAction::Cancel)],
-        Action::Discard => vec![command(CaptureCommand::Discard)],
+        // The picker opens: look for a phone cabled since the recording
+        // began, as Scrawl's reveal does.
+        Action::Discard => vec![
+            command(CaptureCommand::Discard),
+            command(CaptureCommand::FindPhone),
+        ],
         Action::Start(target) => vec![command(CaptureCommand::Start(target))],
         // What the picker would record, when it has nothing to record yet
         // (its windows still load): the pointer's display.

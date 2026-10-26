@@ -122,7 +122,8 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── Screen -> it's what's recording: the chips fold, no command
 │   ├── iPhone -> CaptureCommand::Switch(Phone): the recording restarts on the
 │   │   phone
-│   └── Window or Area -> Discard; the capsule becomes the picker
+│   └── Window or Area -> Discard; the capsule becomes the picker, and
+│       FindPhone looks for a phone cabled since the recording began
 ├── Picker: ⌥⇧S records what the on-screen picker shows; Esc closes it
 ├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
 ├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
