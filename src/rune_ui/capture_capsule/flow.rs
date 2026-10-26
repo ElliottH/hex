@@ -25,6 +25,10 @@ pub(crate) const BRIEF_HOLD_S: f64 = 4.0;
 /// The most rows each list section shows.
 pub(crate) const MAX_SUGGESTED: usize = 3;
 pub(crate) const MAX_RECENT: usize = 5;
+/// An ask's route chips (Scrawl's `jev::CHIPS`).
+pub(crate) const MAX_ROUTES: usize = 4;
+/// Session names in the capsule are cut to this many characters.
+const ROUTE_NAME_MAX: usize = 18;
 
 /// What a capture records, picked from the capsule's chips.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,23 +36,31 @@ pub(crate) enum Mode {
     Area,
     Window,
     Screen,
+    /// A cabled iPhone, offered only while one is.
+    Iphone,
 }
 
 impl Mode {
-    pub(crate) const ALL: [Mode; 3] = [Mode::Area, Mode::Window, Mode::Screen];
+    /// The chips, left to right: iPhone last, and only with one cabled.
+    pub(crate) fn chips(phone: bool) -> impl Iterator<Item = Mode> {
+        [Mode::Area, Mode::Window, Mode::Screen]
+            .into_iter()
+            .chain(phone.then_some(Mode::Iphone))
+    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Mode::Area => "Area",
             Mode::Window => "Window",
             Mode::Screen => "Screen",
+            Mode::Iphone => "iPhone",
         }
     }
 
     /// Area and Window start once something is picked on screen; Screen
-    /// needs a Record press.
+    /// and iPhone need a Record press.
     pub(crate) fn shows_record(self) -> bool {
-        self == Mode::Screen
+        matches!(self, Mode::Screen | Mode::Iphone)
     }
 }
 
@@ -154,6 +166,8 @@ pub(crate) enum Input {
     Pick(Mode),
     /// The capture failed, and why, when the host knows.
     Failed(Option<String>),
+    /// An iPhone was cabled (true) or unplugged.
+    Phone(bool),
     /// ⌥⇧S tapped while recording: the chips spring open.
     Chips,
     /// The recording got its first click, scroll, or stroke: the chips
@@ -193,6 +207,12 @@ pub(crate) enum Action {
     Discard,
     /// Take back the send to `to`.
     Undo {
+        to: String,
+    },
+    /// Take back the send to `from` and send to `to` instead: the
+    /// runner-up chip beside a rule's send.
+    Redirect {
+        from: String,
         to: String,
     },
     /// Send the capture to `to`; `always` saves a rule for `site`.
@@ -241,7 +261,8 @@ impl List {
 }
 
 /// The finished capsule: its lead, a quiet word on why, the Undo
-/// countdown, the ⌥⇧V chip, and (open) the field with its list.
+/// countdown, the route chips, the ⌥⇧V chip, and (open) the field with its
+/// list.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Done {
     pub(crate) lead: Lead,
@@ -249,6 +270,9 @@ pub(crate) struct Done {
     pub(crate) why: Option<String>,
     /// Seconds left to take it back.
     pub(crate) undo: Option<u32>,
+    /// The route chips' labels: a rule's runner-up, or an ask's sessions,
+    /// best first ("Send to SEER", "HEX", …).
+    pub(crate) routes: Vec<String>,
     /// The ⌥⇧V chip's label.
     pub(crate) ask: Option<String>,
     /// Open: what's typed into the field, and the list under it.
@@ -262,6 +286,7 @@ impl Done {
             text: text.into(),
             why: None,
             undo: None,
+            routes: Vec::new(),
             ask: None,
             open: None,
         }
@@ -269,11 +294,22 @@ impl Done {
 }
 
 /// What the capsule draws.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a few live at a time, and the finished capsule is most of what's drawn"
+)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Pres {
     Hidden,
-    Selecting { mode: Mode },
-    Recording { chips: bool },
+    /// `phone`: an iPhone is cabled, so it has a chip.
+    Selecting {
+        mode: Mode,
+        phone: bool,
+    },
+    Recording {
+        chips: bool,
+        phone: bool,
+    },
     Processing,
     Done(Done),
 }
@@ -349,6 +385,8 @@ pub(crate) struct Flow {
     phase: Phase,
     /// The pointer is on the capsule.
     hovered: bool,
+    /// An iPhone is cabled.
+    phone: bool,
 }
 
 impl Default for Flow {
@@ -362,6 +400,7 @@ impl Flow {
         Self {
             phase: Phase::Hidden,
             hovered: false,
+            phone: false,
         }
     }
 
@@ -381,6 +420,13 @@ impl Flow {
 
     pub(crate) fn input(&mut self, input: Input, now: f64) -> Vec<Action> {
         let mut actions = Vec::new();
+        if let Input::Phone(phone) = input {
+            self.phone = phone;
+            if !phone && self.phase == Phase::Selecting(Mode::Iphone) {
+                self.phase = Phase::Selecting(Mode::Screen);
+            }
+            return actions;
+        }
         let phase = std::mem::replace(&mut self.phase, Phase::Hidden);
         self.phase = match (phase, input) {
             (_, Input::Stage(stage)) => match stage {
@@ -506,19 +552,45 @@ impl Flow {
                 Vec::new()
             }
             (Phase::Selecting(mode), Id::Record) => vec![Action::Record(*mode)],
-            (Phase::Recording { .. }, Id::Mode(mode)) => {
-                if mode.shows_record() {
+            // A chip restarts rather than retargets (Scrawl's
+            // `switch_recording`): Screen is what's recording, so it only
+            // folds the chips; iPhone starts the phone in its place; Window
+            // and Area drop it and become the picker.
+            (Phase::Recording { .. }, Id::Mode(mode)) => match mode {
+                Mode::Screen => {
+                    self.phase = Phase::Recording { chips_until: None };
+                    Vec::new()
+                }
+                Mode::Iphone => {
                     self.phase = Phase::Recording { chips_until: None };
                     vec![Action::Switch(mode)]
-                } else {
+                }
+                Mode::Area | Mode::Window => {
                     self.phase = Phase::Selecting(mode);
                     vec![Action::Discard]
                 }
-            }
+            },
             (Phase::Recording { .. }, Id::Finish) => vec![Action::Finish],
             (Phase::Recording { .. } | Phase::Selecting(_), Id::Cancel | Id::Close) => {
                 self.phase = Phase::Hidden;
                 vec![Action::Cancel]
+            }
+            (Phase::Routed(routed), Id::Route(chip)) => {
+                let Some((to, from)) = route_chips(&routed.route)
+                    .nth(chip)
+                    .map(|(dest, from)| (dest.name.clone(), from.map(str::to_owned)))
+                else {
+                    return Vec::new();
+                };
+                self.phase = Phase::Sent(Sent {
+                    to: to.clone(),
+                    rule_saved: false,
+                    at: now,
+                });
+                vec![match from {
+                    Some(from) => Action::Redirect { from, to },
+                    None => Action::Send { to, always: None },
+                }]
             }
             (_, Id::Undo) => self.input(Input::Escape, now),
             (_, Id::Ask) => self.input(Input::OpenList, now),
@@ -580,9 +652,13 @@ impl Flow {
         };
         match &self.phase {
             Phase::Hidden => Pres::Hidden,
-            Phase::Selecting(mode) => Pres::Selecting { mode: *mode },
+            Phase::Selecting(mode) => Pres::Selecting {
+                mode: *mode,
+                phone: self.phone,
+            },
             Phase::Recording { chips_until } => Pres::Recording {
                 chips: chips_until.is_some_and(|t| self.hovered || now < t),
+                phone: self.phone,
             },
             Phase::Processing => Pres::Processing,
             Phase::Saved { .. } => Pres::Done(Done::plain(Lead::Check, "Saved")),
@@ -593,16 +669,16 @@ impl Flow {
             Phase::TakenBack { .. } => Pres::Done(Done::plain(Lead::Check, "Taken back")),
             Phase::TooLate { to, .. } => Pres::Done(Done {
                 why: Some("too late to take back".into()),
-                ..Done::plain(Lead::Check, format!("Sent to {to}"))
+                ..Done::plain(Lead::Check, format!("Sent to {}", short(to)))
             }),
             Phase::Queued { to, .. } => Pres::Done(Done {
-                why: Some(format!("couldn't reach {to}")),
+                why: Some(format!("couldn't reach {}", short(to))),
                 ..Done::plain(Lead::Check, "Copied")
             }),
             Phase::Sent(sent) => Pres::Done(Done {
                 why: sent.rule_saved.then(|| "rule saved".into()),
                 undo: undo_left(sent.at),
-                ..Done::plain(Lead::Check, format!("Sent to {}", sent.to))
+                ..Done::plain(Lead::Check, format!("Sent to {}", short(&sent.to)))
             }),
             Phase::Routed(routed) => Pres::Done(routed_done(routed, undo_left(routed.at))),
         }
@@ -696,26 +772,68 @@ fn send(
     })
 }
 
+/// The route chips for `route`, best first, each with the send it takes
+/// back: a rule's runner-up (the best other suggestion, which redirects
+/// the send at once), or an ask's sessions, up to [`MAX_ROUTES`].
+fn route_chips(route: &Route) -> Box<dyn Iterator<Item = (&Dest, Option<&str>)> + '_> {
+    match route {
+        Route::Rule { to, suggested, .. } => Box::new(
+            suggested
+                .iter()
+                .find(|dest| dest.name != *to)
+                .map(|dest| (dest, Some(to.as_str())))
+                .into_iter(),
+        ),
+        Route::Guess { suggested, .. } => {
+            Box::new(suggested.iter().take(MAX_ROUTES).map(|dest| (dest, None)))
+        }
+        Route::Nothing { .. } | Route::NoAnswer { .. } => Box::new(std::iter::empty()),
+    }
+}
+
+/// A session's name cut to [`ROUTE_NAME_MAX`] characters, so the
+/// capsule's widest state stays inside its panel.
+fn short(name: &str) -> String {
+    if name.chars().count() <= ROUTE_NAME_MAX {
+        return name.to_owned();
+    }
+    let cut: String = name.chars().take(ROUTE_NAME_MAX - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// A route chip's label: the first says what it does ("Send to SEER"),
+/// the rest are just names.
+fn route_label(index: usize, name: &str) -> String {
+    let name = short(name);
+    if index == 0 {
+        format!("Send to {name}")
+    } else {
+        name
+    }
+}
+
 fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
-    let (suggested, _) = sections(&routed.route);
+    let routes: Vec<String> = route_chips(&routed.route)
+        .enumerate()
+        .map(|(i, (dest, _))| route_label(i, &dest.name))
+        .collect();
     let base = match &routed.route {
         Route::Rule { to, .. } => Done {
             why: Some("rule".into()),
             undo,
+            routes,
             ask: Some("Elsewhere…".into()),
-            ..Done::plain(Lead::Check, format!("Sent to {to}"))
+            ..Done::plain(Lead::Check, format!("Sent to {}", short(to)))
         },
-        Route::Guess { .. } => {
-            let ask = match suggested {
-                [] => "Send to…".to_owned(),
-                [top] => format!("→ {}?", top.name),
-                [top, rest @ ..] => format!("→ {}? +{}", top.name, rest.len()),
-            };
-            Done {
-                ask: Some(ask),
-                ..Done::plain(Lead::Check, "Copied")
-            }
-        }
+        // The chips are the ask; ⌥⇧V still opens the whole list.
+        Route::Guess { .. } if !routes.is_empty() => Done {
+            routes,
+            ..Done::plain(Lead::Check, "Copied")
+        },
+        Route::Guess { .. } => Done {
+            ask: Some("Send to…".into()),
+            ..Done::plain(Lead::Check, "Copied")
+        },
         Route::Nothing { .. } => Done {
             ask: Some("Send to…".into()),
             ..Done::plain(Lead::Check, "Copied")
@@ -731,6 +849,7 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         Some(open) => Done {
             why: None,
             undo: None,
+            routes: Vec::new(),
             ask: None,
             open: Some((open.query.clone(), list(&routed.route, open))),
             ..base
@@ -789,11 +908,29 @@ mod tests {
     fn stages_walk_the_capsule_through_a_capture() {
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Recording), 0.0);
-        assert_eq!(flow.pres(0.0), Pres::Recording { chips: false });
+        assert_eq!(
+            flow.pres(0.0),
+            Pres::Recording {
+                chips: false,
+                phone: false
+            }
+        );
         flow.input(Input::Chips, 1.0);
-        assert_eq!(flow.pres(1.0), Pres::Recording { chips: true });
+        assert_eq!(
+            flow.pres(1.0),
+            Pres::Recording {
+                chips: true,
+                phone: false
+            }
+        );
         assert!(flow.tick(1.0 + CHIPS_OPEN_S));
-        assert_eq!(flow.pres(5.0), Pres::Recording { chips: false });
+        assert_eq!(
+            flow.pres(5.0),
+            Pres::Recording {
+                chips: false,
+                phone: false
+            }
+        );
         for stage in [Stage::Stopping, Stage::Transcribing, Stage::Writing] {
             flow.input(Input::Stage(stage), 6.0);
             assert_eq!(flow.pres(6.0), Pres::Processing);
@@ -812,13 +949,25 @@ mod tests {
         flow.input(Input::Worked, 0.2);
         assert!(!flow.tick(0.5), "seen for CHIPS_MIN_S first");
         assert!(flow.tick(CHIPS_MIN_S));
-        assert_eq!(flow.pres(1.0), Pres::Recording { chips: false });
+        assert_eq!(
+            flow.pres(1.0),
+            Pres::Recording {
+                chips: false,
+                phone: false
+            }
+        );
 
         flow.input(Input::Chips, 2.0);
         flow.hover(true, 3.0);
         assert_eq!(flow.next_due(5.0), None);
         assert!(!flow.tick(2.0 + CHIPS_OPEN_S + 1.0));
-        assert_eq!(flow.pres(7.0), Pres::Recording { chips: true });
+        assert_eq!(
+            flow.pres(7.0),
+            Pres::Recording {
+                chips: true,
+                phone: false
+            }
+        );
         flow.hover(false, 7.0);
         assert!(!flow.tick(7.0 + CHIPS_LINGER_S - 0.1));
         assert!(flow.tick(7.0 + CHIPS_LINGER_S));
@@ -839,7 +988,13 @@ mod tests {
             flow.click(super::super::surface::Id::Mode(Mode::Window), 0.5),
             [Action::Discard]
         );
-        assert_eq!(flow.pres(0.5), Pres::Selecting { mode: Mode::Window });
+        assert_eq!(
+            flow.pres(0.5),
+            Pres::Selecting {
+                mode: Mode::Window,
+                phone: false
+            }
+        );
     }
 
     #[test]
@@ -866,10 +1021,115 @@ mod tests {
     }
 
     #[test]
+    fn route_chips_send_at_once_and_a_rules_runner_up_redirects() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        assert_eq!(
+            flow.click(Id::Route(1), 1.0),
+            [Action::Send {
+                to: "HEX".into(),
+                always: None
+            }]
+        );
+        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
+        assert_eq!(done(&flow, 1.0).undo, Some(3));
+
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule()), 0.0);
+        assert_eq!(done(&flow, 0.0).routes, ["Send to HEX"]);
+        assert_eq!(
+            flow.click(Id::Route(0), 1.0),
+            [Action::Redirect {
+                from: "SEER".into(),
+                to: "HEX".into()
+            }]
+        );
+        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
+    }
+
+    #[test]
+    fn an_ask_shows_at_most_four_chips_with_long_names_cut() {
+        let mut flow = Flow::new();
+        let suggested = ["SEER", "HEX", "HOME", "A VERY LONG SESSION TITLE", "FIFTH"]
+            .map(|name| Dest::new(name, ""))
+            .to_vec();
+        flow.input(
+            Input::Routed(Route::Guess {
+                suggested,
+                recent: Vec::new(),
+                site: None,
+            }),
+            0.0,
+        );
+        assert_eq!(
+            done(&flow, 0.0).routes,
+            ["Send to SEER", "HEX", "HOME", "A VERY LONG SESSI…"]
+        );
+    }
+
+    #[test]
+    fn the_screen_chip_folds_and_the_iphone_chip_restarts_on_the_phone() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::Chips, 0.0);
+        assert_eq!(
+            flow.pres(0.1),
+            Pres::Recording {
+                chips: true,
+                phone: false
+            }
+        );
+        assert_eq!(flow.click(Id::Mode(Mode::Screen), 0.5), []);
+        assert_eq!(
+            flow.pres(0.5),
+            Pres::Recording {
+                chips: false,
+                phone: false
+            }
+        );
+
+        flow.input(Input::Phone(true), 1.0);
+        flow.input(Input::Chips, 1.0);
+        assert_eq!(
+            flow.pres(1.1),
+            Pres::Recording {
+                chips: true,
+                phone: true
+            }
+        );
+        assert_eq!(
+            flow.click(Id::Mode(Mode::Iphone), 1.5),
+            [Action::Switch(Mode::Iphone)]
+        );
+        assert_eq!(
+            flow.pres(1.5),
+            Pres::Recording {
+                chips: false,
+                phone: true
+            }
+        );
+
+        // Unplugged while the picker is on it: back to Screen.
+        flow.input(Input::Pick(Mode::Iphone), 2.0);
+        flow.input(Input::Phone(false), 2.5);
+        assert_eq!(
+            flow.pres(2.5),
+            Pres::Selecting {
+                mode: Mode::Screen,
+                phone: false
+            }
+        );
+    }
+
+    #[test]
     fn a_guess_asks_and_the_list_sends_where_its_selected() {
         let mut flow = Flow::new();
         flow.input(Input::Routed(guess()), 0.0);
-        assert_eq!(done(&flow, 0.0).ask.as_deref(), Some("→ SEER? +1"));
+        let asked = done(&flow, 0.0);
+        assert_eq!(asked.routes, ["Send to SEER", "HEX"]);
+        assert!(asked.ask.is_none(), "the chips are the ask");
         flow.input(Input::OpenList, 1.0);
         let open = done(&flow, 1.0);
         let (query, list) = open.open.expect("open");
@@ -879,7 +1139,10 @@ mod tests {
             list.footer,
             Footer::Always("problems.kitlangton.com".into())
         );
-        assert!(open.ask.is_none(), "the field takes the chip's place");
+        assert!(
+            open.ask.is_none() && open.routes.is_empty(),
+            "the field takes the chips' place"
+        );
         flow.input(Input::Query("ho".into()), 1.5);
         let (_, list) = done(&flow, 1.5).open.unwrap();
         assert_eq!(list.rows().count(), 1);

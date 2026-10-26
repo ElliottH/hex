@@ -37,6 +37,17 @@ fn rule() -> Route {
     }
 }
 
+/// An ask with more sessions than it has chips for.
+fn guess_four() -> Route {
+    Route::Guess {
+        suggested: ["SEER", "HEX", "HOME", "OPENCODE IOS", "RUNE"]
+            .map(|name| Dest::new(name, "guess"))
+            .to_vec(),
+        recent: Vec::new(),
+        site: None,
+    }
+}
+
 fn no_answer() -> Route {
     Route::NoAnswer {
         recent: vec![
@@ -93,16 +104,44 @@ fn stills() -> Vec<(&'static str, Pres)> {
         ("picker-area", after(&[In(Input::Pick(Mode::Area))])),
         ("picker-window", after(&[In(Input::Pick(Mode::Window))])),
         ("picker-screen", after(&[In(Input::Pick(Mode::Screen))])),
+        (
+            "picker-iphone",
+            after(&[In(Input::Phone(true)), In(Input::Pick(Mode::Iphone))]),
+        ),
         ("recording", after(&[In(Input::Stage(Stage::Recording))])),
         (
             "recording-chips",
             after(&[In(Input::Stage(Stage::Recording)), In(Input::Chips)]),
+        ),
+        (
+            "recording-chips-iphone",
+            after(&[
+                In(Input::Phone(true)),
+                In(Input::Stage(Stage::Recording)),
+                In(Input::Chips),
+            ]),
         ),
         ("processing", after(&[processing()])),
         ("saved", after(&[In(Input::Stage(Stage::Done))])),
         ("failed", after(&[In(failed())])),
         ("rule-sent", after(&routed(rule()))),
         ("guess", after(&routed(guess()))),
+        ("guess-four", after(&routed(guess_four()))),
+        (
+            "guess-long",
+            after(&routed(Route::Guess {
+                suggested: [
+                    "OPENCODE IOS RELEASE",
+                    "SCRAWL IN HEX BUILDER",
+                    "CAPTURE CAPSULE",
+                    "HOME",
+                ]
+                .map(|name| Dest::new(name, "guess"))
+                .to_vec(),
+                recent: Vec::new(),
+                site: None,
+            })),
+        ),
         (
             "nothing",
             after(&routed(Route::Nothing {
@@ -191,16 +230,25 @@ fn every_state_draws_its_pieces() {
         ),
         ("picker-window", &["chip:Window", "close"]),
         ("picker-screen", &["record", "close"]),
+        ("picker-iphone", &["chip:iPhone", "record", "close"]),
         ("recording", &["lead", "cancel", "finish"]),
         (
             "recording-chips",
             &["lead", "chip:Area", "chip:Screen", "close"],
         ),
+        (
+            "recording-chips-iphone",
+            &["lead", "chip:Area", "chip:Screen", "chip:iPhone", "close"],
+        ),
         ("processing", &["processing"]),
         ("saved", &["done"]),
         ("failed", &["done"]),
-        ("rule-sent", &["done", "why", "undo", "ask"]),
-        ("guess", &["done", "ask"]),
+        ("rule-sent", &["done", "why", "undo", "route0", "ask"]),
+        ("guess", &["done", "route0", "route1"]),
+        (
+            "guess-four",
+            &["done", "route0", "route1", "route2", "route3"],
+        ),
         ("no-answer", &["done", "why", "ask"]),
         (
             "list-guess",
@@ -233,6 +281,37 @@ fn every_state_draws_its_pieces() {
         .find(|e| e.key.as_deref() == Some("shell"))
         .unwrap();
     assert!(shell.opacity < 0.01, "hidden shows its shell");
+}
+
+#[test]
+fn the_widest_states_fit_the_panel() {
+    let long = |n: usize| format!("A VERY LONG SESSION TITLE {n}");
+    let rule = Route::Rule {
+        to: long(0),
+        suggested: vec![Dest::new(long(0), ""), Dest::new(long(1), "")],
+        recent: Vec::new(),
+    };
+    let ask = Route::Guess {
+        suggested: (0..5).map(|n| Dest::new(long(n), "")).collect(),
+        recent: Vec::new(),
+        site: None,
+    };
+    let chips = [
+        In(Input::Phone(true)),
+        In(Input::Stage(Stage::Recording)),
+        In(Input::Chips),
+    ];
+    for pres in [
+        after(&[processing(), In(Input::Routed(rule))]),
+        after(&[processing(), In(Input::Routed(ask))]),
+        after(&chips),
+    ] {
+        let (shell, _) = super::surface::layout(&pres, "10:00:00");
+        assert!(
+            shell[0] >= 0.0 && shell[0] + shell[2] <= PANEL_W,
+            "{shell:?} for {pres:?}"
+        );
+    }
 }
 
 /// Pixels of the panel's top `height` points, at 2×.
@@ -281,10 +360,13 @@ const GOLDENS: &[&str] = &[
     "picker-window",
     "recording",
     "recording-chips",
+    "recording-chips-iphone",
+    "picker-iphone",
     "processing",
     "saved",
     "rule-sent",
     "guess",
+    "guess-four",
     "no-answer",
     "list-guess",
     "sent",
@@ -401,6 +483,20 @@ fn scripts() -> Vec<Script> {
             end: 8.0,
         },
         Script {
+            name: "iphone-switch",
+            beats: vec![
+                (0.1, In(Input::Phone(true))),
+                (0.2, stage(Stage::Recording)),
+                (0.2, In(Input::Chips)),
+                (1.6, Click(Id::Mode(Mode::Iphone))),
+                // The phone's capture takes the capsule over.
+                (1.9, stage(Stage::Recording)),
+                (3.2, Click(Id::Finish)),
+                (3.2, stage(Stage::Stopping)),
+            ],
+            end: 4.4,
+        },
+        Script {
             name: "chips-close",
             beats: vec![(0.2, stage(Stage::Recording)), (1.0, In(Input::Chips))],
             end: 5.6,
@@ -422,11 +518,29 @@ fn scripts() -> Vec<Script> {
             end: 8.8,
         },
         Script {
+            name: "ask-chips",
+            beats: vec![
+                (0.2, stage(Stage::Transcribing)),
+                (1.2, In(Input::Routed(guess_four()))),
+                (2.6, Click(Id::Route(2))),
+            ],
+            end: 4.4,
+        },
+        Script {
+            name: "rule-runner-up",
+            beats: vec![
+                (0.2, stage(Stage::Transcribing)),
+                (1.2, In(Input::Routed(rule()))),
+                (2.2, Click(Id::Route(0))),
+            ],
+            end: 6.0,
+        },
+        Script {
             name: "guess-list-send",
             beats: vec![
                 (0.2, stage(Stage::Transcribing)),
                 (1.2, In(Input::Routed(guess()))),
-                (2.2, Click(Id::Ask)),
+                (2.2, In(Input::OpenList)),
                 (3.0, In(Input::Move(1))),
                 (3.5, In(Input::Move(1))),
                 (4.0, In(Input::Query("ho".into()))),
@@ -619,14 +733,7 @@ fn presses_reach_the_host() {
         .find(|s| s.name == "record-window")
         .unwrap();
     let (_, actions) = play(&script, Variant::Calm, true, None, |_, _| {});
-    assert_eq!(
-        actions,
-        vec![
-            Action::Record(Mode::Window),
-            Action::Switch(Mode::Screen),
-            Action::Finish
-        ]
-    );
+    assert_eq!(actions, vec![Action::Record(Mode::Window), Action::Finish]);
     let script = scripts()
         .into_iter()
         .find(|s| s.name == "rule-undo")

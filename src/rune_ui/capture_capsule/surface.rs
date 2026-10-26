@@ -148,6 +148,8 @@ pub(crate) enum Id {
     Why,
     /// The Undo countdown chip.
     Undo,
+    /// A route chip, best first.
+    Route(usize),
     /// The ⌥⇧V chip.
     Ask,
     /// The open capsule's field.
@@ -162,6 +164,7 @@ impl Id {
             Id::Mode(Mode::Area) => "chip:Area",
             Id::Mode(Mode::Window) => "chip:Window",
             Id::Mode(Mode::Screen) => "chip:Screen",
+            Id::Mode(Mode::Iphone) => "chip:iPhone",
             Id::Record => "record",
             Id::Cancel => "cancel",
             Id::Finish => "finish",
@@ -171,6 +174,10 @@ impl Id {
             Id::Done => "done",
             Id::Why => "why",
             Id::Undo => "undo",
+            Id::Route(0) => "route0",
+            Id::Route(1) => "route1",
+            Id::Route(2) => "route2",
+            Id::Route(_) => "route3",
             Id::Ask => "ask",
             Id::Field => "field",
             Id::Row(_) => "row",
@@ -196,14 +203,16 @@ impl Id {
             Id::Mode(Mode::Area) => 4,
             Id::Mode(Mode::Window) => 5,
             Id::Mode(Mode::Screen) => 6,
-            Id::Record => 7,
-            Id::Cancel => 8,
-            Id::Finish => 9,
-            Id::Field => 10,
-            Id::Undo => 11,
-            Id::Ask => 12,
-            Id::Close => 13,
-            Id::Row(_) => 14,
+            Id::Mode(Mode::Iphone) => 7,
+            Id::Record => 8,
+            Id::Cancel => 9,
+            Id::Finish => 10,
+            Id::Field => 11,
+            Id::Undo => 12,
+            Id::Route(i) => 13 + i.min(3) as u8,
+            Id::Ask => 17,
+            Id::Close => 18,
+            Id::Row(_) => 19,
         }
     }
 }
@@ -237,11 +246,46 @@ pub(crate) fn clock_width(clock: &str) -> f32 {
     measure(clock, TIMER)
 }
 
+/// The widest a row gets: the panel, less room for the shadow.
+const ROW_MAX: f32 = PANEL_W - 32.0;
+
+/// A row's width from its items' widths, with its gaps and insets.
+fn row_width(raw: &[(Id, String, f32, bool)]) -> f32 {
+    let gaps: f32 = raw
+        .windows(2)
+        .map(|pair| {
+            if pair[0].0.group() == pair[1].0.group() {
+                CHIP_GAP
+            } else {
+                GROUP_GAP
+            }
+        })
+        .sum();
+    raw.iter().map(|r| r.2).sum::<f32>() + gaps + 2.0 * ISLAND_INSET
+}
+
+/// The finished capsule's items. When long session names would take the
+/// row past [`ROW_MAX`], the label and route chips give way together, cut
+/// to a shrinking width until it fits.
 fn done_items(done: &Done, raw: &mut Vec<(Id, String, f32, bool)>) {
+    let start = raw.len();
+    let mut cap = f32::INFINITY;
+    loop {
+        done_row(done, cap, raw);
+        if row_width(&raw[start..]) <= ROW_MAX || cap <= 48.0 {
+            return;
+        }
+        cap = if cap.is_finite() { cap - 8.0 } else { 200.0 };
+        raw.truncate(start);
+    }
+}
+
+fn done_row(done: &Done, cap: f32, raw: &mut Vec<(Id, String, f32, bool)>) {
+    let text = ellipsize(&done.text, STRONG, cap + 60.0);
     raw.push((
         Id::Done,
-        done.text.clone(),
-        DONE_TEXT_X + measure(&done.text, STRONG) + LEAD_TRAIL,
+        text.clone(),
+        DONE_TEXT_X + measure(&text, STRONG) + LEAD_TRAIL,
         false,
     ));
     if let Some(why) = &done.why {
@@ -262,6 +306,17 @@ fn done_items(done: &Done, raw: &mut Vec<(Id, String, f32, bool)>) {
             keyed_width(UNDO_KEYS, &undo_label(seconds), COUNT),
             false,
         ));
+    }
+    for (i, route) in done.routes.iter().enumerate() {
+        // The first chip's "Send to " doesn't count against its name.
+        let verb = if i == 0 {
+            measure("Send to ", MEDIUM)
+        } else {
+            0.0
+        };
+        let route = ellipsize(route, MEDIUM, cap + verb);
+        let w = chip_width(measure(&route, MEDIUM));
+        raw.push((Id::Route(i), route, w, false));
     }
     if let Some(ask) = &done.ask {
         raw.push((
@@ -284,8 +339,8 @@ fn done_items(done: &Done, raw: &mut Vec<(Id, String, f32, bool)>) {
 pub(crate) fn layout(pres: &Pres, clock: &str) -> ([f32; 4], Vec<Item>) {
     let mut raw: Vec<(Id, String, f32, bool)> = Vec::with_capacity(8);
     let mut held_row = false;
-    let modes = |raw: &mut Vec<(Id, String, f32, bool)>, active: Mode| {
-        for mode in Mode::ALL {
+    let modes = |raw: &mut Vec<(Id, String, f32, bool)>, active: Mode, phone: bool| {
+        for mode in Mode::chips(phone) {
             raw.push((
                 Id::Mode(mode),
                 String::new(),
@@ -296,8 +351,8 @@ pub(crate) fn layout(pres: &Pres, clock: &str) -> ([f32; 4], Vec<Item>) {
     };
     match pres {
         Pres::Hidden => return ([CX - 48.0, TOP, 96.0, ISLAND_H], Vec::new()),
-        Pres::Selecting { mode } => {
-            modes(&mut raw, *mode);
+        Pres::Selecting { mode, phone } => {
+            modes(&mut raw, *mode, *phone);
             if mode.shows_record() {
                 raw.push((
                     Id::Record,
@@ -308,12 +363,12 @@ pub(crate) fn layout(pres: &Pres, clock: &str) -> ([f32; 4], Vec<Item>) {
             }
             raw.push((Id::Close, String::new(), CHIP_H, false));
         }
-        Pres::Recording { chips } => {
+        Pres::Recording { chips, phone } => {
             let lead = LEAD_TEXT_X + clock_width(clock) + LEAD_TRAIL;
             raw.push((Id::Lead, String::new(), lead, false));
             if *chips {
                 held_row = true;
-                modes(&mut raw, Mode::Screen);
+                modes(&mut raw, Mode::Screen, *phone);
                 raw.push((Id::Close, String::new(), CHIP_H, false));
             } else {
                 raw.push((
@@ -655,10 +710,10 @@ impl Surface {
         }
 
         let change = match (&prev, &next) {
-            (Pres::Recording { chips: false }, Pres::Recording { chips: true }) => {
+            (Pres::Recording { chips: false, .. }, Pres::Recording { chips: true, .. }) => {
                 Change::ChipsOpen
             }
-            (Pres::Recording { chips: true }, Pres::Recording { chips: false }) => {
+            (Pres::Recording { chips: true, .. }, Pres::Recording { chips: false, .. }) => {
                 Change::ChipsClose
             }
             (Pres::Recording { .. }, Pres::Selecting { .. }) => Change::Switch,
@@ -849,7 +904,10 @@ mod tests {
     use super::*;
 
     fn recording(chips: bool) -> Pres {
-        Pres::Recording { chips }
+        Pres::Recording {
+            chips,
+            phone: false,
+        }
     }
 
     /// Steps the surface like frames at 120 Hz until `until`.
@@ -889,7 +947,13 @@ mod tests {
     #[test]
     fn switching_to_area_keeps_every_chip_still() {
         let (_, rec) = layout(&recording(true), "0:00");
-        let (_, pick) = layout(&Pres::Selecting { mode: Mode::Area }, "0:00");
+        let (_, pick) = layout(
+            &Pres::Selecting {
+                mode: Mode::Area,
+                phone: false,
+            },
+            "0:00",
+        );
         for item in &pick {
             let before = rec.iter().find(|r| r.id == item.id).expect("same chips");
             assert_eq!(before.rect, item.rect, "{:?} moved", item.id);
@@ -902,7 +966,10 @@ mod tests {
             recording(false),
             recording(true),
             Pres::Processing,
-            Pres::Selecting { mode: Mode::Screen },
+            Pres::Selecting {
+                mode: Mode::Screen,
+                phone: false,
+            },
             ruled(Some(3)),
             open(),
         ] {
@@ -1019,9 +1086,18 @@ mod tests {
 
     #[test]
     fn a_mode_change_in_place_slides_the_highlight() {
-        let mut s = Surface::new().settled(Pres::Selecting { mode: Mode::Screen });
+        let mut s = Surface::new().settled(Pres::Selecting {
+            mode: Mode::Screen,
+            phone: false,
+        });
         let before = s.highlight.clone().unwrap();
-        s.set(Pres::Selecting { mode: Mode::Area }, 1.0);
+        s.set(
+            Pres::Selecting {
+                mode: Mode::Area,
+                phone: false,
+            },
+            1.0,
+        );
         run(&mut s, 1.0, 1.1);
         let after = s.highlight.clone().unwrap();
         assert_eq!(after.key, before.key, "one highlight travels");

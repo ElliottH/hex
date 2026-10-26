@@ -110,16 +110,26 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   Saved, Failed, or Cancelled, then leaves on its own
 ├── Failed -> its `error`, or "Screen Recording is off" when it isn't granted;
 │   a start that fails before any snapshot showed it recording still shows
-├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips for 3.5 s
+├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips, plus
+│   iPhone while one is cabled (`Input::Phone`), for 3.5 s
 │   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on
 │   │   the capsule, and 1.2 s after it leaves
-│   ├── Screen -> CaptureCommand::Discard, then Start(Display) under the pointer
+│   ├── A chip restarts rather than retargets (Scrawl's `switch_recording`)
+│   ├── Screen -> it's what's recording: the chips fold, no command
+│   ├── iPhone -> Action::Switch(Iphone); capture_host's switch is not built yet
+│   │   (logged), and nothing sends `Input::Phone` yet, so the chip never shows
 │   └── Window or Area -> Discard; the capsule becomes the picker (begin_picking)
 ├── Picker: ⌥⇧S records Screen; Esc closes it; Window and Area picking on screen
 │   is not built yet (logged)
 ├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
-├── Route toast, Undo, the session list, and "the router didn't answer" are
-│   built and scene-tested, but nothing feeds them until routing exists
+├── Routing (Scrawl's routing.md), built and scene-tested; nothing feeds it until
+│   routing exists
+│   ├── A rule's send -> "Sent to X", Undo for 3 s (esc), the runner-up as a
+│   │   "Send to Y" chip that redirects at once, and ⌥⇧V for the list
+│   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
+│   │   a chip sends at once; ⌥⇧V still opens the list
+│   ├── Nothing fits, or no answer -> "Send to…" opens the list
+│   └── Long names give way together so the widest row stays inside the panel
 └── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
 
 Ink and laser                            // capture.ink

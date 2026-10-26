@@ -821,6 +821,25 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 .label("Undo")
                 .on_press_tx(press(id))
         }
+        // The first says what it does and carries a faint fill, as
+        // Scrawl's does; the rest are names beside it.
+        Id::Route(index) => {
+            let first = index == 0;
+            let chip = base
+                .radius(CHIP_H * 0.5)
+                .child(label(
+                    &shown.ident,
+                    MEDIUM,
+                    if first { p.text() } else { p.muted() },
+                ))
+                .hover(c.hover)
+                .press(c.pressed);
+            if first { chip.fill(c.layer_02) } else { chip }
+                .role("button")
+                .label(shown.ident.clone())
+                .hit()
+                .on_press_tx(press(id))
+        }
         Id::Ask => keyed(p, base, ASK_KEYS, &shown.ident, MEDIUM).on_press_tx(press(id)),
         Id::Field => {
             let typed = match &surface.pres {
@@ -1152,6 +1171,10 @@ fn icon(id: Id, width: f32, color: Color) -> Shape {
             paths.push(rounded(2.0, 3.0, 20.0, 14.0, 2.0));
             paths.push(line([8.0, 21.0], [16.0, 21.0]));
             paths.push(line([12.0, 17.0], [12.0, 21.0]));
+        }
+        Id::Mode(Mode::Iphone) => {
+            paths.push(rounded(6.5, 2.0, 11.0, 20.0, 3.0));
+            paths.push(line([10.5, 18.5], [13.5, 18.5]));
         }
         Id::Close => {
             paths.push(line([6.5, 6.5], [17.5, 17.5]));
