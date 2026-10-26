@@ -1745,11 +1745,14 @@ impl LiveInput {
     }
 
     /// The engine for `bundle` started; input flows unless it already ended.
+    /// `shift_held` is ⇧ now: left from the chord that started it (⌥⇧S) or
+    /// held before it, so it inks only once it came up.
     fn attach(
         &self,
         bundle: &Path,
         sink: InputSink,
         t0: CaptureInstant,
+        shift_held: bool,
         outcomes: &SharedOutcomes,
     ) {
         let mut state = self.state();
@@ -1760,11 +1763,7 @@ impl LiveInput {
             bundle: bundle.to_path_buf(),
             sink,
             t0,
-            // ⇧ held now is left from the chord that started it (⌥⇧S) or
-            // held before it; it inks only once it came up.
-            rules: HostedInput::with_shift_held(
-                modifiers(scrawl_capture::capture::modifier_flags()).shift,
-            ),
+            rules: HostedInput::with_shift_held(shift_held),
             outcomes: Some(outcomes.clone()),
         });
         TAP_RECORDING.store(true, Ordering::Release);
@@ -2147,7 +2146,8 @@ fn collect(
         let t0 = CaptureInstant::from_nanos(start.t0_boot_ns);
         let capture = engine.start(start)?;
         if let Some(sink) = capture.input() {
-            input.attach(&bundle, sink, t0, outcomes);
+            let shift = modifiers(scrawl_capture::capture::modifier_flags()).shift;
+            input.attach(&bundle, sink, t0, shift, outcomes);
         }
         Ok((capture, t0))
     });
@@ -3499,7 +3499,7 @@ mod tests {
         let bundle = PathBuf::from("/work.scrawl");
         lock(&outcomes).started(bundle.clone(), t(0), TargetKind::Pointer);
         live.recording(Some(&bundle));
-        live.attach(&bundle, InputSink::default(), t(0), &outcomes);
+        live.attach(&bundle, InputSink::default(), t(0), false, &outcomes);
         let (sender, received) = mpsc::sync_channel(4);
         let pointer = |x| {
             Tapped::Pointer(HostInput::Moved {
@@ -3535,11 +3535,11 @@ mod tests {
         live.recording(Some(&first));
         live.recording(None);
         let outcomes = SharedOutcomes::default();
-        live.attach(&first, sink.clone(), t(0), &outcomes);
+        live.attach(&first, sink.clone(), t(0), false, &outcomes);
         assert!(live.state().target.is_none());
         // An old collector detaching never takes the new capture's input.
         live.recording(Some(&second));
-        live.attach(&second, sink, t(0), &outcomes);
+        live.attach(&second, sink, t(0), false, &outcomes);
         live.detach(&first);
         assert!(live.state().target.is_some());
         live.recording(None);
