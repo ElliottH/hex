@@ -35,6 +35,9 @@ const TINT: f32 = 0.13;
 const WINDOW_RADIUS: f32 = 10.0;
 const WINDOW_RING: f32 = 2.0;
 const AREA_RING: f32 = 1.0;
+/// The dark hairline just outside the area's white ring, so the area reads
+/// over white content as well as dark (Scrawl's vanishes over white).
+const AREA_EDGE: f32 = 0.5;
 /// How far the dim reaches past the target: past any display's far corner.
 const REACH: f32 = 8192.0;
 /// The target moving to the next window, growing, or closing.
@@ -894,23 +897,26 @@ pub(crate) fn view(s: &PickerState, cx: &mut Cx<PickerState>) -> El {
         root = root.child(desktop(p, s));
     }
     let [x, y, tw, th] = scene.target;
-    let (radius, ring, ring_color, tint) = match scene.kind {
+    let (radius, ring, ring_color, edge_color, tint) = match scene.kind {
         Kind::Window => (
             WINDOW_RADIUS,
             WINDOW_RING,
             k.alpha(k.c.border_focus, 0.93),
+            k.alpha(k.c.black, 0.0),
             k.alpha(k.c.border_focus, TINT),
         ),
         Kind::Area | Kind::Screen => (
             0.0,
             AREA_RING,
             k.alpha(k.c.white, 0.92),
+            k.alpha(k.c.black, AREA_EDGE),
             k.alpha(k.c.white, 0.0),
         ),
         Kind::None => (
             0.0,
             AREA_RING,
             k.alpha(k.c.white, 0.0),
+            k.alpha(k.c.black, 0.0),
             k.alpha(k.c.white, 0.0),
         ),
     };
@@ -937,11 +943,18 @@ pub(crate) fn view(s: &PickerState, cx: &mut Cx<PickerState>) -> El {
                         .radius(radius)
                         .fill(tint)
                         .child(
-                            el().trace_name("ring")
-                                .absolute(0.0, 0.0)
-                                .size(tw, th)
-                                .radius(radius)
-                                .border(ring, ring_color),
+                            el().trace_name("edge")
+                                .absolute(-AREA_RING, -AREA_RING)
+                                .size(tw + 2.0 * AREA_RING, th + 2.0 * AREA_RING)
+                                .radius(radius + AREA_RING)
+                                .border(AREA_RING, edge_color)
+                                .child(
+                                    el().trace_name("ring")
+                                        .absolute(AREA_RING, AREA_RING)
+                                        .size(tw, th)
+                                        .radius(radius)
+                                        .border(ring, ring_color),
+                                ),
                         ),
                 ),
         );

@@ -166,6 +166,8 @@ The on-screen picker                     // capture.picker (capture_capsule/pick
 ├── Area -> drag at least 36 pt; the badge shows its size; a click alone -> the
 │   display
 ├── Screen -> the display, ringed
+│   └── An area's ring is white with a dark hairline outside it, so it reads
+│       over white content too (Scrawl's vanishes there)
 ├── Click or ⌥⇧S -> Action::Start(target) -> CaptureCommand::Start; the picker
 │   fades; a pick that starts no capture within 2 s brings it back
 └── Windows load off the UI thread (`list_selectable_windows`); nothing picks
