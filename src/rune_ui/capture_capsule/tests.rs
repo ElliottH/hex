@@ -8,7 +8,9 @@ use rune::Runtime;
 use rune::text::TextSystem;
 use scrawl_capture::capture::Stage;
 
-use super::flow::{Action, Delivered, Dest, Flow, Input, Mode, Pres, Route, UNDO_S, Undone};
+use super::flow::{
+    Action, Delivered, Dest, Failure, Flow, Input, Mode, Pres, Route, UNDO_S, Undone,
+};
 use super::surface::{Id, PANEL_H, PANEL_W, TOP};
 use super::{CapsuleState, poll, trace_channels, view};
 
@@ -85,7 +87,25 @@ fn after(beats: &[Beat]) -> Pres {
 }
 
 fn failed() -> Input {
-    Input::Failed(Some("starting the capture: the window closed".into()))
+    Input::Failed(
+        Failure::Save,
+        Some("writing the capture: the window closed".into()),
+    )
+}
+
+/// The way to the picker in `mode`, as Scrawl has it: the shortcut's
+/// recording, its Window chip, then the picker's own mode chip.
+fn picking(mode: Mode) -> Vec<Beat> {
+    let mut beats = vec![
+        In(Input::Phone(mode == Mode::Iphone)),
+        In(Input::Stage(Stage::Recording)),
+        In(Input::Chips),
+        Click(Id::Mode(Mode::Window)),
+    ];
+    if mode != Mode::Window {
+        beats.push(Click(Id::Mode(mode)));
+    }
+    beats
 }
 
 fn processing() -> Beat {
@@ -101,13 +121,10 @@ fn stills() -> Vec<(&'static str, Pres)> {
         beats
     };
     vec![
-        ("picker-area", after(&[In(Input::Pick(Mode::Area))])),
-        ("picker-window", after(&[In(Input::Pick(Mode::Window))])),
-        ("picker-screen", after(&[In(Input::Pick(Mode::Screen))])),
-        (
-            "picker-iphone",
-            after(&[In(Input::Phone(true)), In(Input::Pick(Mode::Iphone))]),
-        ),
+        ("picker-area", after(&picking(Mode::Area))),
+        ("picker-window", after(&picking(Mode::Window))),
+        ("picker-screen", after(&picking(Mode::Screen))),
+        ("picker-iphone", after(&picking(Mode::Iphone))),
         ("recording", after(&[In(Input::Stage(Stage::Recording))])),
         (
             "recording-chips",
@@ -124,6 +141,13 @@ fn stills() -> Vec<(&'static str, Pres)> {
         ("processing", after(&[processing()])),
         ("saved", after(&[In(Input::Stage(Stage::Done))])),
         ("failed", after(&[In(failed())])),
+        (
+            "failed-start",
+            after(&[In(Input::Failed(
+                Failure::Start,
+                Some("Screen Recording is off".into()),
+            ))]),
+        ),
         ("rule-sent", after(&routed(rule()))),
         ("rule-final", {
             let mut flow = Flow::new();
@@ -466,28 +490,30 @@ fn scripts() -> Vec<Script> {
         Script {
             name: "picker",
             beats: vec![
-                (0.2, In(Input::Pick(Mode::Area))),
-                (1.0, Click(Id::Mode(Mode::Window))),
-                (1.8, Click(Id::Mode(Mode::Screen))),
-                (2.6, Click(Id::Mode(Mode::Area))),
-                (3.4, Click(Id::Close)),
+                (0.2, stage(Stage::Recording)),
+                (0.2, In(Input::Chips)),
+                (1.2, Click(Id::Mode(Mode::Area))),
+                (2.0, Click(Id::Mode(Mode::Window))),
+                (2.8, Click(Id::Mode(Mode::Screen))),
+                (3.6, Click(Id::Mode(Mode::Area))),
+                (4.4, Click(Id::Close)),
             ],
-            end: 4.4,
+            end: 5.4,
         },
         Script {
             name: "record-window",
             beats: vec![
-                (0.2, In(Input::Pick(Mode::Window))),
-                (1.0, Click(Id::Record)),
-                (1.0, stage(Stage::Recording)),
-                (2.4, In(Input::Chips)),
-                (3.4, Click(Id::Mode(Mode::Screen))),
-                (4.4, Click(Id::Finish)),
-                (4.4, stage(Stage::Stopping)),
-                (5.6, stage(Stage::Done)),
-                (7.0, In(Input::Dismiss)),
+                (0.2, stage(Stage::Recording)),
+                (0.2, In(Input::Chips)),
+                (1.2, Click(Id::Mode(Mode::Window))),
+                // The pick's own recording: a window, so no chips.
+                (2.2, stage(Stage::Recording)),
+                (3.6, Click(Id::Finish)),
+                (3.6, stage(Stage::Stopping)),
+                (4.8, stage(Stage::Done)),
+                (6.2, In(Input::Dismiss)),
             ],
-            end: 8.0,
+            end: 7.2,
         },
         Script {
             name: "iphone-switch",
@@ -748,7 +774,7 @@ fn presses_reach_the_host() {
         .find(|s| s.name == "record-window")
         .unwrap();
     let (_, actions) = play(&script, Variant::Calm, true, None, |_, _| {});
-    assert_eq!(actions, vec![Action::Record(Mode::Window), Action::Finish]);
+    assert_eq!(actions, vec![Action::Discard, Action::Finish]);
     let script = scripts()
         .into_iter()
         .find(|s| s.name == "rule-undo")

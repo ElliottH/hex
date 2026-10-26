@@ -8,7 +8,7 @@ use std::time::Duration;
 use scrawl_capture::capture::Stage;
 
 use super::CaptureCapsule;
-use super::flow::{Action, Delivered, Dest, Input, Mode, Route, Undone};
+use super::flow::{Action, Delivered, Dest, Failure, Input, Mode, Route, Undone};
 use super::ink::InkOverlay;
 use crate::capture_host::{
     CaptureCommand, CaptureRoute, CaptureSnapshot, CaptureTarget, RouteAnswer, RouteDelivery,
@@ -21,6 +21,9 @@ use crate::capture_host::{
 pub(crate) struct Follow {
     shown: Option<(PathBuf, Stage)>,
     worked: bool,
+    /// The engine started recording the shown capture, so a failure is one
+    /// to save it, not to start it.
+    began: bool,
     /// The settled capture the previous snapshot held: `None` before the
     /// first snapshot, so an outcome from before Hex started moves nothing.
     last_seen: Option<Option<PathBuf>>,
@@ -56,6 +59,7 @@ impl Follow {
         {
             // Took the capsule over as it started: show it as followed.
             self.shown = Some((failed.bundle.clone(), Stage::Recording));
+            self.began = false;
         }
         if let Some(recording) = &snapshot.recording {
             let fresh = self
@@ -66,6 +70,7 @@ impl Follow {
                 self.shown = Some((recording.bundle.clone(), Stage::Recording));
                 self.route = None;
                 self.worked = recording.worked;
+                self.began = recording.screen;
                 inputs.push(Input::Stage(Stage::Recording));
                 if recording.target == TargetKind::Pointer && !recording.worked {
                     inputs.push(Input::Chips);
@@ -74,6 +79,7 @@ impl Follow {
                 self.worked = true;
                 inputs.push(Input::Worked);
             }
+            self.began |= recording.screen;
             return inputs;
         }
         inputs.extend(self.stage(snapshot));
@@ -123,8 +129,8 @@ impl Follow {
             }
             Some(RouteDelivery::TakenBack) => inputs.push(Input::Undone(Undone::TakenBack)),
             Some(RouteDelivery::TooLate { .. }) => inputs.push(Input::Undone(Undone::TooLate)),
-            Some(RouteDelivery::Failed { to, .. }) => {
-                inputs.push(Input::Failed(Some(format!("Couldn't send to {to}"))));
+            Some(RouteDelivery::Failed { to, why }) => {
+                inputs.push(Input::Failed(Failure::Send(to), Some(why)));
             }
             _ => {}
         }
@@ -165,7 +171,12 @@ impl Follow {
                 .as_ref()
                 .filter(|last| last.bundle == *bundle)
                 .and_then(|last| last.error.clone());
-            return Some(Input::Failed(error));
+            let what = if self.began {
+                Failure::Save
+            } else {
+                Failure::Start
+            };
+            return Some(Input::Failed(what, error));
         }
         Some(Input::Stage(stage))
     }
@@ -231,8 +242,10 @@ pub(crate) fn follow(capsule: CaptureCapsule, ink: InkOverlay) {
                     capsule.input(match input {
                         // The common first-capture failure: the engine's
                         // own reason for it is a ScreenCaptureKit error.
-                        Input::Failed(_) if !crate::meeting::screen_recording_permitted() => {
-                            Input::Failed(Some(SCREEN_RECORDING_OFF.into()))
+                        Input::Failed(what @ (Failure::Start | Failure::Save), _)
+                            if !crate::meeting::screen_recording_permitted() =>
+                        {
+                            Input::Failed(what, Some(SCREEN_RECORDING_OFF.into()))
                         }
                         input => input,
                     });
@@ -428,9 +441,29 @@ mod tests {
         failed.last.as_mut().unwrap().error = Some("no screen to record".into());
         assert_eq!(
             follow.next(&failed),
-            [Input::Failed(Some("no screen to record".into()))]
+            [Input::Failed(
+                Failure::Start,
+                Some("no screen to record".into())
+            )]
         );
         assert_eq!(follow.next(&failed), []);
+    }
+
+    #[test]
+    fn a_capture_that_never_began_failed_to_start() {
+        let mut follow = Follow::default();
+        let mut starting = recording("a");
+        starting.recording.as_mut().unwrap().screen = false;
+        follow.next(&starting);
+        let mut failed = settled("a", Stage::Failed);
+        failed.last.as_mut().unwrap().error = Some("Screen Recording refused".into());
+        assert_eq!(
+            follow.next(&failed),
+            [Input::Failed(
+                Failure::Start,
+                Some("Screen Recording refused".into())
+            )]
+        );
     }
 
     #[test]
@@ -441,7 +474,10 @@ mod tests {
         failed.last.as_mut().unwrap().error = Some("the window closed".into());
         assert_eq!(
             follow.next(&failed),
-            [Input::Failed(Some("the window closed".into()))]
+            [Input::Failed(
+                Failure::Save,
+                Some("the window closed".into())
+            )]
         );
     }
 
@@ -539,7 +575,10 @@ mod tests {
         });
         assert_eq!(
             follow.next(&routed("a", guess(), failed)),
-            [Input::Failed(Some("Couldn't send to HEX".into()))]
+            [Input::Failed(
+                Failure::Send("HEX".into()),
+                Some("gone".into())
+            )]
         );
     }
 

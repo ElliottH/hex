@@ -109,8 +109,11 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 ├── Follows `capture_host::watch()`: Recording from the instant `recording` is
 │   Some (the bundle's t0; timer, meter, ✓ finish, ✕ cancel) -> Processing ->
 │   Saved, Failed, or Cancelled, then leaves on its own
-├── Failed -> its `error`, or "Screen Recording is off" when it isn't granted;
-│   a start that fails before any snapshot showed it recording still shows
+├── Failed -> "Couldn't start the capture" until the engine reports it
+│   recording (`screen`), then "Couldn't save the capture"; a failed send ->
+│   "Couldn't send to X". Each keeps its `error`, or "Screen Recording is off"
+│   when it isn't granted; a start that fails before any snapshot showed it
+│   recording still shows
 ├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips, plus
 │   iPhone while the snapshot names a cabled phone, for 3.5 s
 │   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on

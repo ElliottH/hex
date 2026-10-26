@@ -120,6 +120,17 @@ pub(crate) enum Undone {
     TooLate,
 }
 
+/// What failed, for the finished capsule's headline.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Failure {
+    /// The capture never started recording.
+    Start,
+    /// It recorded, but wasn't written.
+    Save,
+    /// The router couldn't send it to this session.
+    Send(String),
+}
+
 /// Everything that moves the capsule.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Input {
@@ -127,17 +138,8 @@ pub(crate) enum Input {
     Stage(Stage),
     Delivered(Delivered),
     Routed(Route),
-    /// ⌥⇧S held: the picker, or S stepping it to the next mode.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Scrawl dropped hold-to-pick; tests open the picker with it"
-        )
-    )]
-    Pick(Mode),
-    /// The capture failed, and why, when the host knows.
-    Failed(Option<String>),
+    /// Something failed, and why, when the host knows.
+    Failed(Failure, Option<String>),
     /// An iPhone was cabled (true) or unplugged.
     Phone(bool),
     /// ⌥⇧S tapped while recording: the chips spring open.
@@ -351,6 +353,7 @@ enum Phase {
     },
     Failed {
         at: f64,
+        what: Failure,
         why: Option<String>,
     },
 }
@@ -433,10 +436,15 @@ impl Flow {
                 }
                 Stage::Done => Phase::Saved { at: now },
                 Stage::Cancelled => Phase::Hidden,
-                Stage::Failed => Phase::Failed { at: now, why: None },
+                Stage::Failed => Phase::Failed {
+                    at: now,
+                    what: Failure::Save,
+                    why: None,
+                },
             },
-            (_, Input::Failed(why)) => Phase::Failed {
+            (_, Input::Failed(what, why)) => Phase::Failed {
                 at: now,
+                what,
                 why: why.as_deref().map(short_reason),
             },
             (Phase::Recording { .. }, Input::Chips) => Phase::Recording {
@@ -450,7 +458,6 @@ impl Flow {
                 actions.push(Action::Record(mode));
                 Phase::Selecting(mode)
             }
-            (_, Input::Pick(mode)) => Phase::Selecting(mode),
             (_, Input::Delivered(delivered)) => match delivered {
                 Delivered::Sent { to } => Phase::Sent(Sent {
                     to,
@@ -657,9 +664,16 @@ impl Flow {
             },
             Phase::Processing => Pres::Processing,
             Phase::Saved { .. } => Pres::Done(Done::plain(Lead::Check, "Saved")),
-            Phase::Failed { why, .. } => Pres::Done(Done {
+            Phase::Failed { what, why, .. } => Pres::Done(Done {
                 why: why.clone(),
-                ..Done::plain(Lead::Warning, "Couldn't save the capture")
+                ..Done::plain(
+                    Lead::Warning,
+                    match what {
+                        Failure::Start => "Couldn't start the capture".to_owned(),
+                        Failure::Save => "Couldn't save the capture".to_owned(),
+                        Failure::Send(to) => format!("Couldn't send to {}", short(to)),
+                    },
+                )
             }),
             Phase::TakenBack { .. } => Pres::Done(Done::plain(Lead::Check, "Taken back")),
             Phase::TooLate { to, .. } => Pres::Done(Done {
@@ -983,13 +997,17 @@ mod tests {
 
     #[test]
     fn the_shortcut_records_the_pickers_screen_and_a_chip_discards_the_recording() {
+        use super::super::surface::Id;
         let mut flow = Flow::new();
-        flow.input(Input::Pick(Mode::Screen), 0.0);
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::Chips, 0.0);
+        flow.click(Id::Mode(Mode::Window), 0.2);
+        flow.click(Id::Mode(Mode::Screen), 0.3);
         assert_eq!(
             flow.input(Input::Record, 0.5),
             [Action::Record(Mode::Screen)]
         );
-        flow.input(Input::Pick(Mode::Window), 0.6);
+        flow.click(Id::Mode(Mode::Window), 0.6);
         assert_eq!(
             flow.input(Input::Record, 0.7),
             [Action::Record(Mode::Window)]
@@ -1129,7 +1147,10 @@ mod tests {
         );
 
         // Unplugged while the picker is on it: back to Screen.
-        flow.input(Input::Pick(Mode::Iphone), 2.0);
+        flow.input(Input::Stage(Stage::Recording), 1.8);
+        flow.input(Input::Chips, 1.8);
+        flow.click(Id::Mode(Mode::Window), 1.9);
+        flow.click(Id::Mode(Mode::Iphone), 2.0);
         flow.input(Input::Phone(false), 2.5);
         assert_eq!(
             flow.pres(2.5),
@@ -1245,10 +1266,22 @@ mod tests {
         flow.tick(2.0 + BRIEF_HOLD_S);
         assert_eq!(flow.pres(9.0), Pres::Hidden);
         flow.input(
-            Input::Failed(Some("starting the capture: the window closed".into())),
+            Input::Failed(
+                Failure::Start,
+                Some("starting the capture: the window closed".into()),
+            ),
             10.0,
         );
+        assert_eq!(done(&flow, 10.0).text, "Couldn't start the capture");
         assert_eq!(done(&flow, 10.0).why.as_deref(), Some("the window closed"));
+        flow.input(Input::Failed(Failure::Save, None), 11.0);
+        assert_eq!(done(&flow, 11.0).text, "Couldn't save the capture");
+        flow.input(
+            Input::Failed(Failure::Send("SEER".into()), Some("offline".into())),
+            12.0,
+        );
+        assert_eq!(done(&flow, 12.0).text, "Couldn't send to SEER");
+        assert_eq!(done(&flow, 12.0).why.as_deref(), Some("offline"));
         assert_eq!(
             short_reason("Screen Recording permission is off for Hex"),
             "Screen Recording permission is…"
