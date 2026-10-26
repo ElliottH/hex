@@ -3967,7 +3967,10 @@ mod tests {
         assert!(!capsule_key(CapsuleKey::Shortcut));
         assert!(!capsule_key(CapsuleKey::Escape));
         assert!(capsule_key(CapsuleKey::OpenList));
-        assert!(!capsule_key(CapsuleKey::Press), "a press matters only to the list");
+        assert!(
+            !capsule_key(CapsuleKey::Press),
+            "a press matters only to the list"
+        );
         second.set(CapsuleKeys::Route { escape: true });
         assert!(wants_escape());
         second.set(CapsuleKeys::List);
