@@ -71,6 +71,10 @@ Switching target                         // capture.switch; the capsule's chips
 ├── Screen -> the capsule folds the chips; the capture goes on
 ├── CaptureCommand::Switch(target) -> discard and start in one step: no snapshot
 │   shows nothing recording in between (Scrawl's switch_recording)
+│   ├── No room to start (two writing, Hex stopping) -> refused `busy` before
+│   │   the discard; the recording goes on
+│   └── The start fails after the discard -> the discarded capture settles
+│       `Failed` with the start's error
 ├── Window or Area -> CaptureCommand::Discard: bundle removed, no outcome, gone
 │   from the snapshot at once (and from MAX_FINISHING), so the capsule becomes
 │   the picker
@@ -370,6 +374,8 @@ Checks:
 - Switching, in capture_host.rs:
   `a_discarded_capture_leaves_no_trace_and_a_pick_takes_its_place`,
   `a_switch_never_shows_nothing_recording`,
+  `a_switch_with_no_room_to_start_keeps_the_recording`,
+  `a_switch_that_cannot_start_after_its_discard_settles_failed`,
   `discarded_captures_never_count_against_the_writers`,
   `a_pick_that_cannot_start_says_why`,
   `the_first_click_or_scroll_means_work_started`, and

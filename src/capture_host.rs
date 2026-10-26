@@ -977,6 +977,21 @@ impl Outcomes {
         self.settle_with(bundle, Stage::Failed, None, Some(error), None);
     }
 
+    /// A switch discarded `bundle` and then could not start: its outcome,
+    /// since the discard settles none.
+    fn fail_switch(&mut self, bundle: PathBuf, error: String) {
+        self.last = Some(SettledCapture {
+            bundle,
+            stage: Stage::Failed,
+            words: None,
+            gaps: None,
+            missing_transcript: None,
+            error: Some(error),
+            route: None,
+        });
+        self.publish();
+    }
+
     fn phone(&mut self, phone: Option<String>) {
         if self.phone != phone {
             self.phone = phone;
@@ -1299,14 +1314,7 @@ impl CaptureHost {
                 Ok(self.report(false, None))
             }
             CaptureCommand::Discard => self.end(now, audio, End::Discard),
-            CaptureCommand::Switch(target) => {
-                lock(&self.outcomes).held = true;
-                let switched = self
-                    .end(now, audio, End::Discard)
-                    .and_then(|_| self.begin(now, audio, target));
-                lock(&self.outcomes).release();
-                switched
-            }
+            CaptureCommand::Switch(target) => self.switch(now, audio, target),
             CaptureCommand::Send { to, always } => {
                 Ok(self.route(routing::Job::Send { to, always }))
             }
@@ -1397,6 +1405,54 @@ impl CaptureHost {
         }
     }
 
+    /// Discards the recording capture and starts `target` in one published
+    /// step. Refused before the discard when no capture could start, so the
+    /// recording goes on; a start that fails after it settles `Failed`.
+    fn switch(
+        &mut self,
+        now: CaptureInstant,
+        audio: &impl AudioTimeline,
+        target: CaptureTarget,
+    ) -> Result<ControlReply> {
+        if let Some(refused) = self.refuse_start() {
+            return Ok(refused);
+        }
+        lock(&self.outcomes).held = true;
+        let discarded = self.active.as_ref().map(|active| active.bundle.clone());
+        let switched = self
+            .end(now, audio, End::Discard)
+            .and_then(|_| self.begin(now, audio, target));
+        let mut outcomes = lock(&self.outcomes);
+        if let (Some(bundle), true) = (discarded, self.active.is_none()) {
+            let error = match &switched {
+                Err(error) => format!("{error:#}"),
+                Ok(ControlReply::Error { message, .. }) => message.clone(),
+                Ok(_) => "the capture could not start".into(),
+            };
+            outcomes.fail_switch(bundle, error);
+        }
+        outcomes.release();
+        switched
+    }
+
+    /// Why no capture can start now, besides one already recording.
+    fn refuse_start(&self) -> Option<ControlReply> {
+        if self.finisher.is_none() {
+            return Some(ControlReply::error("busy", "Hex is stopping"));
+        }
+        // Every unfinished capture but the recording one is stopped and
+        // writing or about to be.
+        let writing = lock(&self.outcomes)
+            .writing()
+            .saturating_sub(usize::from(self.active.is_some()));
+        (writing >= MAX_FINISHING).then(|| {
+            ControlReply::error(
+                "busy",
+                format!("{writing} captures are still being written; try again shortly"),
+            )
+        })
+    }
+
     fn begin(
         &mut self,
         now: CaptureInstant,
@@ -1406,18 +1462,12 @@ impl CaptureHost {
         if self.active.is_some() {
             return Ok(self.report(false, None));
         }
+        if let Some(refused) = self.refuse_start() {
+            return Ok(refused);
+        }
         let Some((jobs, _)) = &self.finisher else {
             return Ok(ControlReply::error("busy", "Hex is stopping"));
         };
-        // Nothing records here, so every unfinished capture is stopped and
-        // writing or about to be.
-        let writing = lock(&self.outcomes).writing();
-        if writing >= MAX_FINISHING {
-            return Ok(ControlReply::error(
-                "busy",
-                format!("{writing} captures are still being written; try again shortly"),
-            ));
-        }
         self.ended.retain(|collector| !collector.is_finished());
         let captures_dir = self
             .captures_dir
@@ -3631,6 +3681,67 @@ mod tests {
         );
         host.shutdown(&audio);
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_switch_with_no_room_to_start_keeps_the_recording() {
+        let dir = temp_dir("switch-busy");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let recording = report(host.control(ScrawlCaptureAction::Start, &audio))
+            .bundle
+            .unwrap();
+        {
+            let mut outcomes = lock(&host.outcomes);
+            for index in 0..MAX_FINISHING {
+                let bundle = dir.join(format!("writing-{index}"));
+                outcomes.started(bundle.clone(), t(0), TargetKind::Pointer);
+                outcomes.stopped(&bundle, End::Finish);
+            }
+        }
+        let switch = CaptureCommand::Switch(CaptureTarget::Pointer);
+        assert!(matches!(
+            host.command(switch, &audio),
+            ControlReply::Error { code, .. } if code == "busy"
+        ));
+        let snapshot = lock(&host.outcomes).snapshot();
+        assert_eq!(snapshot.recording.unwrap().bundle, recording);
+        assert_eq!(snapshot.last, None);
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_switch_that_cannot_start_after_its_discard_settles_failed() {
+        let dir = temp_dir("switch-failed");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let first = report(host.control(ScrawlCaptureAction::Start, &audio))
+            .bundle
+            .unwrap();
+        // No captures folder can be made: the new bundle fails.
+        fs::remove_dir_all(&dir).unwrap();
+        fs::write(&dir, "").unwrap();
+        let switch = CaptureCommand::Switch(CaptureTarget::Pointer);
+        assert!(matches!(
+            host.command(switch, &audio),
+            ControlReply::Error { code, .. } if code == "failed"
+        ));
+        let snapshot = lock(&host.outcomes).snapshot();
+        assert_eq!(snapshot.recording, None);
+        let last = snapshot.last.unwrap();
+        assert_eq!((last.bundle, last.stage), (first, Stage::Failed));
+        assert!(last.error.is_some());
+        host.shutdown(&audio);
+        fs::remove_file(dir).ok();
     }
 
     #[test]
