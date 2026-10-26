@@ -114,7 +114,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   recreated window replaces the old one), so recordings leave it out
 ├── Follows `capture_host::watch()`: Recording from the instant `recording` is
 │   Some (the bundle's t0; timer, meter, ✓ finish, ✕ cancel) -> Processing ->
-│   Copied, Failed, or Cancelled, then leaves on its own
+│   Copied, Failed, or Cancelled, then leaves on its own; a written capture
+│   whose transcript has no words reads "Copied", "no speech heard"
+├── Tones (`feedback::Tone::Capture*`, at the dictation volume; zero is
+│   silent): start, stop, a rule's send going, an Undo, a failure
 ├── Failed -> "Couldn't start the capture" until the engine reports it
 │   recording (`screen`), then "Couldn't save the capture"; a failed send ->
 │   "Couldn't send to X". Each keeps its `error`, or "Screen Recording is off"
@@ -140,9 +143,11 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 ├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
 │   capsule runs a rule's undo window and a chip's send itself, and follows
 │   only Queued (then Sent), how an Undo ended, and a failed send
-│   ├── A rule's send -> "Sending to X…", Undo for 3 s (esc), and the runner-up
-│   │   as a "Send to Y" chip that redirects at once; then "Sent to X" with an
-│   │   "Elsewhere…" chip for the list
+│   ├── A rule's send -> "Auto-sending to X" (a pick: "Sending to X") with the
+│   │   seconds left in a ring, a filled Undo chip (esc) that drains over the
+│   │   5 s window (`routing::UNDO`; static under Reduce Motion), a quiet
+│   │   Paste, and the runner-up as a "Send to Y" chip that redirects at once;
+│   │   then "Sent to X" with an "Elsewhere…" chip for the list
 │   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
 │   │   a chip sends at once
 │   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
@@ -265,7 +270,7 @@ Where it goes                            // capture.route; capture.routing's aut
 │   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer |
 │   Unreachable
 │   ├── Rule (a dev server's port, a page, a saved rule) -> Pending, sent after
-│   │   3 s unless Undo; then Sending -> Sent, or Queued when OpenCode didn't take it
+│   │   5 s unless Undo; then Sending -> Sent, or Queued when OpenCode didn't take it
 │   ├── Guess -> suggestions and recent sessions; nothing sent until one is picked
 │   ├── Nothing / NoAnswer -> recent sessions only
 │   └── Unreachable -> the look read no sessions (OpenCode slow past the look's
@@ -407,7 +412,19 @@ Checks:
   `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
   scripted state change per frame, Calm and Reduce Motion, for no pops,
   jumps, or jiggle. `HEX_CAPSULE_MOTION` also writes rune-motion traces for
-  motion-lint. Observed (Oct 26, pro): all 16 runs pass lint.
+  motion-lint. `cues_mark_start_stop_sent_and_taking_back`,
+  `nothing_heard_says_so`, and `a_capture_with_no_words_says_nothing_was_heard`
+  cover the tones and the empty transcript. Observed (Oct 26, pro): all 22
+  capsule runs pass lint, including the countdown.
+- Playground: `hex capsule-playground` (feature builds; hidden), or
+  `scripts/build-capsule-playground.sh` for an ad-hoc signed
+  `Hex Playground.app`, runs the real capsule in a window of its own against a
+  fake host, with state buttons, the whole flow, slow motion, Reduce Motion,
+  the tones, and live tuning ([tuning.rs](../../src/rune_ui/capture_capsule/tuning.rs);
+  "Copy values" copies its `DEFAULT`). It reads and writes no Hex data and
+  records or sends nothing. `--snap --scene countdown|guess|recording`
+  renders it. The tones were checked by waveform and level only, never on
+  speakers.
 - Picker, in capture_capsule/picker.rs and tests.rs: geometry, label, and
   target tests, `the_picker_records_what_it_shows_and_comes_to_rest`, and
   `picker_stills_and_motion`, which scripts window hover, an area drag, and

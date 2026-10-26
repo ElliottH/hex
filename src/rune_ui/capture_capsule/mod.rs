@@ -18,7 +18,9 @@ pub(crate) mod feed;
 pub(crate) mod flow;
 pub(crate) mod ink;
 pub(crate) mod picker;
+pub(crate) mod playground;
 pub(crate) mod surface;
+pub(crate) mod tuning;
 
 #[cfg(test)]
 mod tests;
@@ -33,12 +35,12 @@ use rune::{
     SpringPair, Transition, Tx, canvas, col, el, row, text,
 };
 
-use self::flow::{Action, Done, Flow, Footer, Input, Lead, List, Mode, Pres};
+use self::flow::{Action, Cue, Done, Flow, Footer, Input, Lead, List, Mode, Pres};
 use self::surface::{
-    CHIP_H, CHIP_PX, COUNT, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD, LIST_Y,
-    MEDIUM, PANEL_H, PANEL_W, PRESENCE_EXIT, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON,
-    SEG_ICON_GAP, SMALL, STRONG, Shown, Surface, TIMER, UNDO_KEYS, ask_keys, clock_width,
-    ellipsize, keycaps_width, measure, undo_label,
+    CHIP_H, CHIP_PX, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD, LIST_Y, MEDIUM,
+    PANEL_H, PANEL_W, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON, SEG_ICON_GAP, SMALL, STRONG,
+    Shown, Surface, TIMER, UNDO_KEYS, UNDO_LABEL, ask_keys, clock_width, ellipsize, keycaps_width,
+    measure,
 };
 use super::controls::{Paint, keycaps};
 
@@ -245,6 +247,9 @@ pub(crate) struct Animated {
     clock: LiveText,
     /// `surface.morphs` as last passed to the meter's edge glow.
     morphs: u32,
+    /// The Undo chip's fill draining to the end of its window: the
+    /// window's end, the chip's width, and the track.
+    drain: Option<(f64, f32, rune::Tween<[f32; 4]>)>,
 }
 
 impl Animated {
@@ -257,6 +262,7 @@ impl Animated {
             meter,
             clock: LiveText::new(surface.clock.clone()),
             morphs: surface.morphs,
+            drain: None,
         }
     }
 
@@ -269,7 +275,8 @@ impl Animated {
 
     /// Tells the meter what the surface shows: which loops run, at what
     /// speed, and when a morph lights the edge.
-    fn sync(&mut self, surface: &Surface) {
+    fn sync(&mut self, surface: &Surface, now: f64) {
+        self.drain(surface, now);
         let activity = match surface.pres {
             Pres::Recording { .. } => 1,
             Pres::Processing => 2,
@@ -288,6 +295,42 @@ impl Animated {
         if wake {
             self.meter.wake();
         }
+    }
+
+    /// Starts the Undo chip's drain for a new window, from what's left of
+    /// it; a remount keeps the same track, so it never restarts.
+    fn drain(&mut self, surface: &Surface, now: f64) {
+        let ends = match &surface.pres {
+            Pres::Done(Done {
+                undo_ends: Some(ends),
+                ..
+            }) => *ends,
+            _ => {
+                self.drain = None;
+                return;
+            }
+        };
+        let Some(w) = surface
+            .items
+            .iter()
+            .find(|shown| shown.id == Id::Undo)
+            .map(|shown| shown.rect[2])
+        else {
+            return;
+        };
+        if self
+            .drain
+            .as_ref()
+            .is_some_and(|(e, width, _)| *e == ends && (*width - w).abs() < 0.5)
+        {
+            return;
+        }
+        let total = flow::undo_s().max(0.1);
+        let left = (ends - now).clamp(0.0, total);
+        let from = [0.0, 0.0, w * (left / total) as f32, CHIP_H];
+        let tween =
+            rune::Tween::linear(from, [0.0, 0.0, 0.0, CHIP_H], Duration::from_secs_f64(left));
+        self.drain = Some((ends, w, tween));
     }
 }
 
@@ -332,6 +375,10 @@ pub(crate) struct CapsuleState {
     /// Draws a plain backdrop behind the capsule (stills and clips), so its
     /// shadow and edge read.
     backdrop: bool,
+    /// Plays the flow's cues; none in stills and tests, which stay silent.
+    sound: Option<Arc<dyn Fn(Cue) + Send + Sync>>,
+    /// The playground's controls and fake host (`hex capsule-playground`).
+    playground: Option<Box<playground::Playground>>,
 }
 
 impl CapsuleState {
@@ -357,6 +404,8 @@ impl CapsuleState {
             picker_mode: None,
             still: false,
             backdrop: false,
+            sound: None,
+            playground: None,
         }
     }
 
@@ -380,10 +429,20 @@ impl CapsuleState {
         state
     }
 
-    fn dispatch(&self, actions: Vec<Action>) {
+    fn dispatch(&mut self, actions: Vec<Action>) {
         if let Some(act) = &self.act {
             for action in actions {
                 act(action);
+            }
+        }
+        self.sound();
+    }
+
+    /// Plays the cues the flow has due.
+    fn sound(&mut self) {
+        for cue in self.flow.take_cues() {
+            if let Some(sound) = &self.sound {
+                sound(cue);
             }
         }
     }
@@ -406,7 +465,7 @@ impl CapsuleState {
         let actions = self.flow.click(id, now);
         self.dispatch(actions);
         self.present(now);
-        self.live.sync(&self.surface);
+        self.live.sync(&self.surface, now);
         tx.wake_after(Duration::ZERO);
     }
 
@@ -415,7 +474,7 @@ impl CapsuleState {
         let now = self.now;
         self.flow.hover(on, now);
         self.present(now);
-        self.live.sync(&self.surface);
+        self.live.sync(&self.surface, now);
         tx.wake_after(Duration::ZERO);
     }
 
@@ -447,6 +506,7 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
         changed = true;
     }
     changed |= s.flow.tick(now);
+    s.sound();
     changed |= s.present(now);
     changed |= s.surface.tick(now);
 
@@ -463,7 +523,7 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
         changed |= s.live.set_clock(&mut s.surface, &clock, now);
         wake = earliest(wake, Some(whole as f64 + 1.0 - secs));
     }
-    s.live.sync(&s.surface);
+    s.live.sync(&s.surface, now);
 
     // The overlay stays up while the capsule leaves, then hides.
     let hidden = matches!(s.surface.pres, Pres::Hidden);
@@ -622,6 +682,7 @@ impl CaptureCapsule {
             });
         let mut state = CapsuleState::new(true);
         state.act = Some(Arc::new(act));
+        state.sound = Some(Arc::new(|cue| crate::feedback::play(tone(cue))));
         let overlay = app.overlay(spec, state);
         let handle = overlay.clone();
         overlay.update(move |s, _| s.overlay = Some(handle));
@@ -649,8 +710,23 @@ impl CaptureCapsule {
 
 // ─── View ────────────────────────────────────────────────────────────────────
 
+/// The sound for a cue, in the dictation tones' family.
+fn tone(cue: Cue) -> crate::feedback::Tone {
+    use crate::feedback::Tone;
+    match cue {
+        Cue::Start => Tone::CaptureStart,
+        Cue::Stop => Tone::CaptureStop,
+        Cue::Sent => Tone::CaptureSent,
+        Cue::TakenBack => Tone::CaptureUndo,
+        Cue::Failed => Tone::CaptureFailed,
+    }
+}
+
 fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
-    s.reduced.set(cx.is_reduced_motion() || s.surface.reduced);
+    if s.playground.is_some() {
+        return playground::view(s, cx);
+    }
+    s.reduced.set(cx.is_reduced_motion());
     let p = Paint::new(cx.system_dark(), cx.env().scale);
     let capsule = capsule(p, &s.surface, &s.live, cx);
     if s.backdrop {
@@ -667,7 +743,10 @@ fn presence(surface: &Surface, reduced: bool) -> Transition {
     let blur = if reduced { 0.0 } else { PRESENCE_BLUR };
     Transition::blur(blur)
         .combined(Transition::scale(0.96))
-        .springs(SpringPair::new(surface.presence(), PRESENCE_EXIT))
+        .springs(SpringPair::new(
+            surface.presence(),
+            tuning::get().presence_exit,
+        ))
 }
 
 /// The capsule in its `PANEL_W` × `PANEL_H` panel. Its live chips and
@@ -881,16 +960,32 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         Id::Why => placed(row().center_y(), shown)
             .trace_name("why")
             .child(label(shown.text(), SMALL, p.faint())),
+        // The way out of a send that's about to go, so it carries the fill,
+        // and the fill drains over the time left to take it.
         Id::Undo => {
-            let seconds = match &surface.pres {
-                Pres::Done(Done {
-                    undo: Some(seconds),
-                    ..
-                }) => *seconds,
-                _ => 0,
-            };
-            keyed(p, base, UNDO_KEYS, &undo_label(seconds), COUNT)
+            let tuning = tuning::get();
+            let mut chip = base
+                .radius(CHIP_H * 0.5)
+                .fill(c.layer_02)
+                .clip_rounded(CHIP_H * 0.5)
+                .gap(KEYCAP_GAP)
+                .hover(c.hover)
+                .press(c.pressed);
+            if let Some((_, w, drain)) = live.drain.as_ref().filter(|_| !surface.reduced) {
+                chip = chip.child(
+                    el().key("drain")
+                        .absolute(0.0, 0.0)
+                        .size(*w, CHIP_H)
+                        .fill(p.k.alpha(countdown_color(p, tuning.countdown), tuning.drain_alpha))
+                        .live_rect(drain),
+                );
+            }
+            let keys: Vec<String> = UNDO_KEYS.iter().map(|k| (*k).to_owned()).collect();
+            chip.child(keycaps(p, "keys", &keys).w(keycaps_width(UNDO_KEYS)))
+                .child(label(UNDO_LABEL, STRONG, p.text()))
+                .role("button")
                 .label("Undo")
+                .hit()
                 .on_press_tx(press(id))
         }
         // The first says what it does and carries a faint fill, as
@@ -917,6 +1012,16 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
             keyed(p, base, &keys, &shown.ident, MEDIUM).on_press_tx(press(id))
         }
+        // Quiet while a send counts down, so Undo is what stands out.
+        Id::Paste if counting(surface) => base
+            .radius(CHIP_H * 0.5)
+            .hover(c.hover)
+            .press(c.pressed)
+            .child(label("Paste", STRONG, p.muted()))
+            .role("button")
+            .label("Paste")
+            .hit()
+            .on_press_tx(press(id)),
         Id::Paste => base
             .radius(CHIP_H * 0.5)
             .fill(c.bg_contrast)
@@ -1006,6 +1111,7 @@ fn glyph(p: Paint, lead: Lead) -> El {
     let (color, id) = match lead {
         Lead::Check => (p.success(), Id::Done),
         Lead::Warning => (p.k.c.warning.fg, Id::Why),
+        Lead::Countdown(seconds) => return countdown(p, seconds),
     };
     canvas(icon(id, CHECK * 2.7 / 24.0, color))
         .absolute(8.0, (CHIP_H - CHECK) * 0.5)
@@ -1013,6 +1119,34 @@ fn glyph(p: Paint, lead: Lead) -> El {
 }
 
 const CHECK: f32 = 16.0;
+
+/// The seconds left to take a send back, in a ring where the check will
+/// be.
+fn countdown(p: Paint, seconds: u32) -> El {
+    let color = countdown_color(p, tuning::get().countdown);
+    row()
+        .center()
+        .absolute(8.0, (CHIP_H - CHECK) * 0.5)
+        .size(CHECK, CHECK)
+        .radius(CHECK * 0.5)
+        .border(1.5, color)
+        .child(label(&seconds.to_string(), RING_DIGIT, color))
+}
+
+const RING_DIGIT: rune::TextStyle = rune::TextStyle::new(10.0, 650.0).features("'tnum' 1");
+
+fn countdown_color(p: Paint, tone: tuning::CountdownColor) -> Color {
+    match tone {
+        tuning::CountdownColor::Text => p.text(),
+        tuning::CountdownColor::Accent => p.accent(),
+        tuning::CountdownColor::Success => p.success(),
+    }
+}
+
+/// A send is counting down to going.
+fn counting(surface: &Surface) -> bool {
+    matches!(&surface.pres, Pres::Done(Done { undo: Some(_), .. }))
+}
 
 /// The timer in tabular digits, bound to its `LiveText` in a box as wide
 /// as the clock.
@@ -1104,7 +1238,7 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
     let scale = if reduced { 1.0 } else { 0.96 };
     let in_place = Transition::blur(blur)
         .combined(Transition::scale(scale))
-        .springs(SpringPair::new(LIST_MOVE, PRESENCE_EXIT));
+        .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit));
     let mut body = col().absolute(0.0, 0.0).w(w).padding(LIST_PAD);
     let mut n = 0;
     let sections = [("Suggested", &list.suggested), ("Recent", &list.recent)];
@@ -1140,7 +1274,7 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                         .w(NUMBER_W)
                         .transition(
                             Transition::opacity()
-                                .springs(SpringPair::new(LIST_MOVE, PRESENCE_EXIT)),
+                                .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit)),
                         ),
                 )
                 .child(label(&ellipsize(&dest.name, MEDIUM, max), MEDIUM, p.text()))
@@ -1217,7 +1351,7 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
             Transition::offset(0.0, -LIST_DROP)
                 .combined(Transition::opacity())
                 .combined(Transition::blur(blur))
-                .springs(SpringPair::new(LIST_MOVE, PRESENCE_EXIT)),
+                .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit)),
         )
 }
 

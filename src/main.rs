@@ -287,6 +287,15 @@ enum Command {
         #[command(subcommand)]
         command: CaptureCommand,
     },
+    /// The Scrawl capture capsule in a window of its own, driven by a fake
+    /// host, with live tuning. Records and sends nothing.
+    #[cfg(hex_capture)]
+    #[command(name = "capsule-playground", hide = true)]
+    CapsulePlayground {
+        /// Rune's flags, such as `--snap out.png --scene countdown`.
+        #[arg(last = true)]
+        rune_args: Vec<String>,
+    },
     #[cfg(debug_assertions)]
     /// Record, transcribe, and browse local meetings.
     Meeting {
@@ -562,6 +571,14 @@ fn main() -> Result<()> {
     if let Some(Command::Mcp { meetings_dir }) = &cli.command {
         return run_mcp(meetings_dir.clone());
     }
+    // A window of its own: no data folder, log, lock, or settings, so it
+    // runs beside the installed Hex.
+    #[cfg(hex_capture)]
+    if let Some(Command::CapsulePlayground { rune_args }) = &cli.command {
+        keyboard::initialize_layout()?;
+        rune_ui::capture_capsule::playground::run(rune_args.clone());
+        return Ok(());
+    }
     // Control commands talk to the running Hex; like the read commands, they
     // touch no data folder, log, or lock of their own.
     let cli = match cli.command {
@@ -814,6 +831,8 @@ fn main() -> Result<()> {
         }
         #[cfg(any(debug_assertions, hex_capture))]
         Command::Capture { .. } => unreachable!("handled before startup"),
+        #[cfg(hex_capture)]
+        Command::CapsulePlayground { .. } => unreachable!("handled before startup"),
         Command::Commands {
             command: CommandsCommand::Init,
         } => {

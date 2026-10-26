@@ -60,7 +60,7 @@ pub use library::{
     explain as explain_capture, list as list_captures, send as send_capture, show as show_capture,
 };
 pub use routing::CaptureRoute;
-pub use routing::{RouteAnswer, RouteDelivery, RouteDest};
+pub use routing::{RouteAnswer, RouteDelivery, RouteDest, UNDO};
 
 /// The sink's capacity in microphone chunks (about 10 ms each): seconds of
 /// slack before a stalled collector starts dropping audio as a gap.

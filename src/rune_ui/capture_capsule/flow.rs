@@ -6,22 +6,20 @@
 
 use scrawl_capture::capture::Stage;
 
-/// A recording's chips close by themselves this long after a tap.
-pub(crate) const CHIPS_OPEN_S: f64 = 3.5;
+use super::tuning;
+
+/// A rule's send can be taken back with Escape for this long (Scrawl's
+/// `SMART_SEND_UNDO`, and the router's `UNDO`).
+pub(crate) fn undo_s() -> f64 {
+    tuning::get().undo_s
+}
+
 /// The chips stay at least this long even when work starts at once, so
 /// they are seen (Scrawl's `REVEAL_MIN_MS`).
 pub(crate) const CHIPS_MIN_S: f64 = 0.9;
 /// The chips never fold under the pointer, and stay this much longer once
 /// it leaves (Scrawl's `REVEAL_LINGER_MS`).
 pub(crate) const CHIPS_LINGER_S: f64 = 1.2;
-/// A rule's send can be taken back with Escape for this long
-/// (Scrawl's `SMART_SEND_UNDO`).
-pub(crate) const UNDO_S: f64 = 3.0;
-/// The finished capsule leaves by itself after this long, unless its list
-/// is open.
-pub(crate) const DONE_HOLD_S: f64 = 25.0;
-/// "Taken back" and errors that need nothing more leave sooner.
-pub(crate) const BRIEF_HOLD_S: f64 = 4.0;
 /// The most rows each list section shows.
 pub(crate) const MAX_SUGGESTED: usize = 3;
 pub(crate) const MAX_RECENT: usize = 5;
@@ -189,6 +187,8 @@ pub(crate) enum Input {
     /// A mouse button went down while the list was open: off the capsule,
     /// the list closes, so typing goes back to the app in front.
     ClickAway,
+    /// The written capture has no words: the microphone heard no speech.
+    NothingHeard,
 }
 
 /// What the host should do about an input or a click.
@@ -234,6 +234,22 @@ pub(crate) enum Action {
 pub(crate) enum Lead {
     Check,
     Warning,
+    /// A send waiting out its Undo: the seconds left, in a ring.
+    Countdown(u32),
+}
+
+/// A moment the capsule marks with a sound ([`Flow::take_cues`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cue {
+    /// A capture started recording.
+    Start,
+    /// It stopped and is being written.
+    Stop,
+    /// A send's Undo ran out: it went.
+    Sent,
+    /// A send was taken back, or a recording cancelled.
+    TakenBack,
+    Failed,
 }
 
 /// The second footer hint in the open list.
@@ -277,6 +293,9 @@ pub(crate) struct Done {
     pub(crate) why: Option<String>,
     /// Seconds left to take it back.
     pub(crate) undo: Option<u32>,
+    /// When the Undo window ends, in the flow's seconds: the countdown's
+    /// drain runs to it.
+    pub(crate) undo_ends: Option<f64>,
     /// The route chips' labels: a rule's runner-up, or an ask's sessions,
     /// best first ("Send to SEER", "HEX", …).
     pub(crate) routes: Vec<String>,
@@ -295,6 +314,7 @@ impl Done {
             text: text.into(),
             why: None,
             undo: None,
+            undo_ends: None,
             routes: Vec::new(),
             ask: None,
             open: None,
@@ -401,6 +421,13 @@ pub(crate) struct Flow {
     /// The iPhone chip asked to switch, and its new recording hasn't shown:
     /// a failure now is that start's, not the discarded capture's save.
     switching: bool,
+    /// Sounds due, in order, for the host to play.
+    cues: Vec<Cue>,
+    /// The send (by when it started) whose Undo was asked for or whose
+    /// [`Cue::Sent`] already sounded.
+    settled_send: Option<f64>,
+    /// The capture shown has no words.
+    silent: bool,
 }
 
 impl Default for Flow {
@@ -416,6 +443,50 @@ impl Flow {
             hovered: false,
             phone: false,
             switching: false,
+            cues: Vec::new(),
+            settled_send: None,
+            silent: false,
+        }
+    }
+
+    /// The sounds due since the last call.
+    pub(crate) fn take_cues(&mut self) -> Vec<Cue> {
+        std::mem::take(&mut self.cues)
+    }
+
+    /// The cue for moving from `before` to the current phase, if any.
+    fn cue(&mut self, before: &Phase, actions: &[Action]) {
+        let cue = match (before, &self.phase) {
+            (Phase::Recording { .. }, Phase::Recording { .. }) => None,
+            (_, Phase::Recording { .. }) => Some(Cue::Start),
+            (Phase::Recording { .. }, Phase::Processing) => Some(Cue::Stop),
+            (Phase::Failed { .. }, Phase::Failed { .. }) => None,
+            (_, Phase::Failed { .. }) => Some(Cue::Failed),
+            (Phase::TakenBack { .. }, Phase::TakenBack { .. }) => None,
+            (_, Phase::TakenBack { .. }) => Some(Cue::TakenBack),
+            (Phase::Recording { .. } | Phase::Selecting(_), Phase::Hidden)
+                if actions.contains(&Action::Cancel) =>
+            {
+                Some(Cue::TakenBack)
+            }
+            _ => None,
+        };
+        self.cues.extend(cue);
+        if actions.iter().any(|a| matches!(a, Action::Undo { .. })) {
+            self.settled_send = self.counting_since();
+        }
+    }
+
+    /// When the send now waiting out its Undo started.
+    fn counting_since(&self) -> Option<f64> {
+        match &self.phase {
+            Phase::Routed(Routed {
+                route: Route::Rule { .. },
+                at,
+                ..
+            })
+            | Phase::Sent(Sent { at, .. }) => Some(*at),
+            _ => None,
         }
     }
 
@@ -434,7 +505,21 @@ impl Flow {
     }
 
     pub(crate) fn input(&mut self, input: Input, now: f64) -> Vec<Action> {
+        let before = self.phase.clone();
+        let actions = self.step(input, now);
+        self.cue(&before, &actions);
+        actions
+    }
+
+    fn step(&mut self, input: Input, now: f64) -> Vec<Action> {
         let mut actions = Vec::new();
+        if input == Input::NothingHeard {
+            self.silent = true;
+            return actions;
+        }
+        if input == Input::Stage(Stage::Recording) {
+            self.silent = false;
+        }
         if let Input::Phone(phone) = input {
             self.phone = phone;
             if !phone && self.phase == Phase::Selecting(Mode::Iphone) {
@@ -468,11 +553,14 @@ impl Flow {
                 why: why.as_deref().map(short_reason),
             },
             (Phase::Recording { .. }, Input::Chips) => Phase::Recording {
-                chips_until: Some(now + CHIPS_OPEN_S),
+                chips_until: Some(now + tuning::get().chips_open_s),
             },
             (Phase::Recording { chips_until }, Input::Worked) => Phase::Recording {
-                chips_until: chips_until
-                    .map(|until| until.min(until - CHIPS_OPEN_S + CHIPS_MIN_S).max(now)),
+                chips_until: chips_until.map(|until| {
+                    until
+                        .min(until - tuning::get().chips_open_s + CHIPS_MIN_S)
+                        .max(now)
+                }),
             },
             (Phase::Recording { .. }, Input::Gone) => Phase::Hidden,
             (Phase::Selecting(mode), Input::Record) => {
@@ -539,7 +627,7 @@ impl Flow {
                 if routed.open.take().is_some() {
                     Phase::Routed(routed)
                 } else if let (Route::Rule { to, .. }, true) =
-                    (&routed.route, now - routed.at < UNDO_S)
+                    (&routed.route, now - routed.at < undo_s())
                 {
                     actions.push(Action::Undo { to: to.clone() });
                     Phase::Routed(routed)
@@ -547,7 +635,7 @@ impl Flow {
                     Phase::Hidden
                 }
             }
-            (Phase::Sent(sent), Input::Escape) if now - sent.at < UNDO_S => {
+            (Phase::Sent(sent), Input::Escape) if now - sent.at < undo_s() => {
                 actions.push(Action::Undo {
                     to: sent.to.clone(),
                 });
@@ -577,6 +665,17 @@ impl Flow {
     /// What a click on `id` does: the action for the host, after moving
     /// the capsule as the click shows.
     pub(crate) fn click(&mut self, id: super::surface::Id, now: f64) -> Vec<Action> {
+        let before = self.phase.clone();
+        let cued = self.cues.len();
+        let actions = self.press(id, now);
+        // A click that became an input cued already.
+        if self.cues.len() == cued {
+            self.cue(&before, &actions);
+        }
+        actions
+    }
+
+    fn press(&mut self, id: super::surface::Id, now: f64) -> Vec<Action> {
         use super::surface::Id;
         match (&self.phase, id) {
             (Phase::Selecting(current), Id::Mode(mode)) => {
@@ -682,12 +781,19 @@ impl Flow {
             | Phase::Sent(Sent { to, at, .. }) => (to, *at),
             _ => return None,
         };
-        (now - at < UNDO_S).then(|| Action::Undo { to: to.clone() })
+        (now - at < undo_s()).then(|| Action::Undo { to: to.clone() })
     }
 
     /// Runs what time decides: the chips closing, the Undo window ending,
     /// the finished capsule leaving. True when one was due.
     pub(crate) fn tick(&mut self, now: f64) -> bool {
+        if let Some(at) = self.counting_since()
+            && now - at >= undo_s()
+            && self.settled_send != Some(at)
+        {
+            self.settled_send = Some(at);
+            self.cues.push(Cue::Sent);
+        }
         match &mut self.phase {
             Phase::Recording { chips_until }
                 if !self.hovered && chips_until.is_some_and(|t| now >= t) =>
@@ -708,7 +814,7 @@ impl Flow {
     /// When `tick` next has something to do.
     pub(crate) fn next_due(&self, now: f64) -> Option<f64> {
         let undo_at = |at: f64| {
-            let left = UNDO_S - (now - at);
+            let left = undo_s() - (now - at);
             // The countdown's next whole second.
             let step = left.rem_euclid(1.0);
             (left > 0.0).then_some(now + if step < 1e-6 { 1.0 } else { step })
@@ -718,7 +824,7 @@ impl Flow {
             Phase::Routed(Routed {
                 route: Route::Rule { .. },
                 at,
-                open: None,
+                ..
             }) => undo_at(*at),
             Phase::Sent(sent) => undo_at(sent.at),
             _ => None,
@@ -731,8 +837,21 @@ impl Flow {
 
     /// What the capsule draws at `now`.
     pub(crate) fn pres(&self, now: f64) -> Pres {
+        let mut pres = self.pres_of(now);
+        // Scrawl's "No speech": a capture with no words still copies.
+        if let Pres::Done(done) = &mut pres
+            && self.silent
+            && done.text == "Copied"
+            && done.why.is_none()
+        {
+            done.why = Some("no speech heard".into());
+        }
+        pres
+    }
+
+    fn pres_of(&self, now: f64) -> Pres {
         let undo_left = |at: f64| {
-            let left = UNDO_S - (now - at);
+            let left = undo_s() - (now - at);
             (left > 0.0).then(|| left.ceil() as u32)
         };
         match &self.phase {
@@ -777,8 +896,9 @@ impl Flow {
                 Pres::Done(Done {
                     why: sent.rule_saved.then(|| "rule saved".into()),
                     undo,
+                    undo_ends: undo.map(|_| sent.at + undo_s()),
                     hand_off: true,
-                    ..Done::plain(Lead::Check, sending(&sent.to, undo))
+                    ..Done::plain(lead(undo), sending(&sent.to, undo, false))
                 })
             }
             Phase::Routed(routed) => Pres::Done(routed_done(routed, undo_left(routed.at))),
@@ -789,11 +909,11 @@ impl Flow {
 fn hold_until(phase: &Phase) -> Option<f64> {
     match phase {
         Phase::Saved { at } | Phase::Queued { at, .. } | Phase::TooLate { at, .. } => {
-            Some(at + DONE_HOLD_S)
+            Some(at + tuning::get().done_hold_s)
         }
-        Phase::Sent(sent) => Some(sent.at + DONE_HOLD_S),
-        Phase::Routed(Routed { at, open: None, .. }) => Some(at + DONE_HOLD_S),
-        Phase::TakenBack { at } | Phase::Failed { at, .. } => Some(at + BRIEF_HOLD_S),
+        Phase::Sent(sent) => Some(sent.at + tuning::get().done_hold_s),
+        Phase::Routed(Routed { at, open: None, .. }) => Some(at + tuning::get().done_hold_s),
+        Phase::TakenBack { at } | Phase::Failed { at, .. } => Some(at + tuning::get().brief_hold_s),
         _ => None,
     }
 }
@@ -895,12 +1015,19 @@ fn route_chips(route: &Route) -> Box<dyn Iterator<Item = (&Dest, Option<&str>)> 
     }
 }
 
-/// "Sending to X…" while a send can be taken back, then "Sent to X".
-fn sending(to: &str, undo: Option<u32>) -> String {
-    match undo {
-        Some(_) => format!("Sending to {}…", short(to)),
-        None => format!("Sent to {}", short(to)),
+/// "Sending to X" while a send can be taken back ("Auto-sending" when a
+/// rule sends it, not a pick), then "Sent to X".
+fn sending(to: &str, undo: Option<u32>, auto: bool) -> String {
+    match (undo, auto) {
+        (Some(_), true) => format!("Auto-sending to {}", short(to)),
+        (Some(_), false) => format!("Sending to {}", short(to)),
+        (None, _) => format!("Sent to {}", short(to)),
     }
+}
+
+/// The countdown ring while a send can be taken back, then the check.
+fn lead(undo: Option<u32>) -> Lead {
+    undo.map_or(Lead::Check, Lead::Countdown)
 }
 
 /// A session's name cut to [`ROUTE_NAME_MAX`] characters, so the
@@ -935,9 +1062,10 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         Route::Rule { to, .. } => Done {
             why: Some("rule".into()),
             undo,
+            undo_ends: undo.map(|_| routed.at + undo_s()),
             routes: if undo.is_some() { routes } else { Vec::new() },
             ask: undo.is_none().then(|| "Elsewhere…".into()),
-            ..Done::plain(Lead::Check, sending(to, undo))
+            ..Done::plain(lead(undo), sending(to, undo, true))
         },
         // The chips are the ask; ⌥⇧V still opens the whole list.
         Route::Guess { .. } if !routes.is_empty() => Done {
@@ -968,6 +1096,7 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         Some(open) => Done {
             why: None,
             undo: None,
+            undo_ends: None,
             routes: Vec::new(),
             ask: None,
             open: Some((open.query.clone(), list(&routed.route, open))),
@@ -1042,7 +1171,7 @@ mod tests {
 
         // Once it's gone, Paste only pastes.
         flow.input(Input::Routed(rule()), 2.0);
-        assert_eq!(flow.click(Id::Paste, 2.5 + UNDO_S), [Action::Paste]);
+        assert_eq!(flow.click(Id::Paste, 2.5 + undo_s()), [Action::Paste]);
 
         // Inspect never takes a send back.
         flow.input(Input::Routed(rule()), 10.0);
@@ -1068,7 +1197,7 @@ mod tests {
         flow.input(Input::Routed(rule()), 2.0);
         assert_eq!(flow.keys(2.5), Some(CapsuleKeys::Route { escape: true }));
         assert_eq!(
-            flow.keys(2.0 + UNDO_S),
+            flow.keys(2.0 + undo_s()),
             Some(CapsuleKeys::Route { escape: false })
         );
         flow.input(Input::OpenList, 9.0);
@@ -1079,7 +1208,7 @@ mod tests {
         assert_eq!(done(&flow, 9.3).open.unwrap().0, "he");
         flow.input(Input::SendRow(0), 9.4);
         assert_eq!(flow.keys(9.5), Some(CapsuleKeys::Route { escape: true }));
-        assert_eq!(flow.keys(9.4 + UNDO_S), None, "sent, nothing to undo");
+        assert_eq!(flow.keys(9.4 + undo_s()), None, "sent, nothing to undo");
 
         flow.input(Input::Stage(Stage::Done), 20.0);
         assert_eq!(flow.keys(20.0), None);
@@ -1118,7 +1247,7 @@ mod tests {
                 phone: false
             }
         );
-        assert!(flow.tick(1.0 + CHIPS_OPEN_S));
+        assert!(flow.tick(1.0 + tuning::get().chips_open_s));
         assert_eq!(
             flow.pres(5.0),
             Pres::Recording {
@@ -1132,7 +1261,7 @@ mod tests {
         }
         flow.input(Input::Stage(Stage::Done), 7.0);
         assert_eq!(done(&flow, 7.0).text, "Copied");
-        assert!(flow.tick(7.0 + DONE_HOLD_S));
+        assert!(flow.tick(7.0 + tuning::get().done_hold_s));
         assert_eq!(flow.pres(40.0), Pres::Hidden);
     }
 
@@ -1155,7 +1284,7 @@ mod tests {
         flow.input(Input::Chips, 2.0);
         flow.hover(true, 3.0);
         assert_eq!(flow.next_due(5.0), None);
-        assert!(!flow.tick(2.0 + CHIPS_OPEN_S + 1.0));
+        assert!(!flow.tick(2.0 + tuning::get().chips_open_s + 1.0));
         assert_eq!(
             flow.pres(7.0),
             Pres::Recording {
@@ -1206,15 +1335,18 @@ mod tests {
         let mut flow = Flow::new();
         flow.input(Input::Routed(rule()), 10.0);
         let at = |t| done(&flow, t).undo;
-        assert_eq!(at(10.0), Some(3));
-        assert_eq!(at(11.2), Some(2));
-        assert_eq!(at(12.5), Some(1));
-        assert_eq!(at(13.0), None);
-        assert_eq!(done(&flow, 10.0).text, "Sending to SEER…");
+        assert_eq!(at(10.0), Some(5));
+        assert_eq!(at(11.2), Some(4));
+        assert_eq!(at(14.5), Some(1));
+        assert_eq!(at(15.0), None);
+        assert_eq!(done(&flow, 10.0).text, "Auto-sending to SEER");
+        assert_eq!(done(&flow, 10.0).lead, Lead::Countdown(5));
+        assert_eq!(done(&flow, 10.0).undo_ends, Some(15.0));
         assert_eq!(done(&flow, 10.0).routes.len(), 1);
         // Once it can't be taken back, it's sent and the runner-up goes.
-        assert_eq!(done(&flow, 13.0).text, "Sent to SEER");
-        assert!(done(&flow, 13.0).routes.is_empty());
+        assert_eq!(done(&flow, 15.0).text, "Sent to SEER");
+        assert_eq!(done(&flow, 15.0).lead, Lead::Check);
+        assert!(done(&flow, 15.0).routes.is_empty());
         assert_eq!(done(&flow, 10.0).why.as_deref(), Some("rule"));
         assert!((flow.next_due(10.0).unwrap() - 11.0).abs() < 1e-6);
         let actions = flow.input(Input::Escape, 11.0);
@@ -1224,8 +1356,8 @@ mod tests {
         // After the window, Escape just closes.
         let mut late = Flow::new();
         late.input(Input::Routed(rule()), 0.0);
-        assert!(late.input(Input::Escape, 3.5).is_empty());
-        assert_eq!(late.pres(3.5), Pres::Hidden);
+        assert!(late.input(Input::Escape, 5.5).is_empty());
+        assert_eq!(late.pres(5.5), Pres::Hidden);
     }
 
     #[test]
@@ -1240,8 +1372,8 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
-        assert_eq!(done(&flow, 1.0).undo, Some(3));
+        assert_eq!(done(&flow, 1.0).text, "Sending to HEX");
+        assert_eq!(done(&flow, 1.0).undo, Some(5));
 
         let mut flow = Flow::new();
         flow.input(Input::Routed(rule()), 0.0);
@@ -1253,7 +1385,7 @@ mod tests {
                 to: "HEX".into()
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
+        assert_eq!(done(&flow, 1.0).text, "Sending to HEX");
     }
 
     /// A switch that can't start settles the recording it discarded as
@@ -1332,7 +1464,7 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
+        assert_eq!(done(&flow, 1.0).text, "Sending to HEX");
 
         let mut flow = Flow::new();
         flow.input(Input::Routed(twins()), 0.0);
@@ -1456,8 +1588,8 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 2.0).text, "Sending to HOME…");
-        assert_eq!(done(&flow, 2.0).undo, Some(3));
+        assert_eq!(done(&flow, 2.0).text, "Sending to HOME");
+        assert_eq!(done(&flow, 2.0).undo, Some(5));
     }
 
     #[test]
@@ -1478,20 +1610,72 @@ mod tests {
     }
 
     #[test]
+    fn cues_mark_start_stop_sent_and_taking_back() {
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        assert_eq!(flow.take_cues(), [Cue::Start]);
+        flow.input(Input::Stage(Stage::Recording), 0.1);
+        assert!(flow.take_cues().is_empty(), "a repeat stage is silent");
+        flow.click(super::super::surface::Id::Finish, 1.0);
+        flow.input(Input::Stage(Stage::Stopping), 1.0);
+        assert_eq!(flow.take_cues(), [Cue::Stop]);
+        flow.input(Input::Stage(Stage::Done), 2.0);
+        flow.input(Input::Routed(rule()), 2.0);
+        flow.tick(6.9);
+        assert!(flow.take_cues().is_empty(), "nothing went yet");
+        flow.tick(7.0);
+        flow.tick(7.5);
+        assert_eq!(flow.take_cues(), [Cue::Sent], "once, when Undo runs out");
+
+        // Taken back: the undo sounds, and the send never does.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule()), 0.0);
+        flow.input(Input::Escape, 1.0);
+        flow.input(Input::Undone(Undone::TakenBack), 1.2);
+        flow.tick(9.0);
+        assert_eq!(flow.take_cues(), [Cue::TakenBack]);
+
+        // A cancelled recording, and a failure.
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::Escape, 1.0);
+        assert_eq!(flow.take_cues(), [Cue::Start, Cue::TakenBack]);
+        flow.input(Input::Failed(Failure::Start, None), 2.0);
+        assert_eq!(flow.take_cues(), [Cue::Failed]);
+    }
+
+    #[test]
+    fn nothing_heard_says_so() {
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::NothingHeard, 1.0);
+        flow.input(Input::Stage(Stage::Done), 1.0);
+        flow.input(Input::Routed(Route::Nothing { recent: Vec::new() }), 1.0);
+        let shown = done(&flow, 1.0);
+        assert_eq!(shown.text, "Copied");
+        assert_eq!(shown.why.as_deref(), Some("no speech heard"));
+        // The next recording starts fresh.
+        flow.input(Input::Stage(Stage::Recording), 2.0);
+        flow.input(Input::Stage(Stage::Done), 3.0);
+        flow.input(Input::Routed(Route::Nothing { recent: Vec::new() }), 3.0);
+        assert_eq!(done(&flow, 3.0).why, None);
+    }
+
+    #[test]
     fn escape_in_the_list_keeps_it_where_it_was() {
         let mut flow = Flow::new();
         flow.input(Input::Routed(rule()), 0.0);
-        flow.input(Input::OpenList, 4.0);
-        let (_, list) = done(&flow, 4.0).open.unwrap();
+        flow.input(Input::OpenList, 6.0);
+        let (_, list) = done(&flow, 6.0).open.unwrap();
         assert_eq!(
             list.selected_dest().unwrap().name,
             "HEX",
             "a rule opens on the next"
         );
         assert_eq!(list.footer, Footer::Keep("SEER".into()));
-        assert!(flow.next_due(4.0).is_none(), "an open list stays");
-        assert!(flow.input(Input::Escape, 5.0).is_empty());
-        assert!(done(&flow, 5.0).open.is_none());
+        assert!(flow.next_due(6.0).is_none(), "an open list stays");
+        assert!(flow.input(Input::Escape, 7.0).is_empty());
+        assert!(done(&flow, 7.0).open.is_none());
     }
 
     #[test]
@@ -1548,7 +1732,7 @@ mod tests {
         assert_eq!(flow.pres(1.0), Pres::Hidden);
         flow.input(Input::Stage(Stage::Failed), 2.0);
         assert_eq!(done(&flow, 2.0).lead, Lead::Warning);
-        flow.tick(2.0 + BRIEF_HOLD_S);
+        flow.tick(2.0 + tuning::get().brief_hold_s);
         assert_eq!(flow.pres(9.0), Pres::Hidden);
         flow.input(
             Input::Failed(

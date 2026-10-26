@@ -999,7 +999,10 @@ pub(crate) fn view(s: &PickerState, cx: &mut Cx<PickerState>) -> El {
         let reduced = cx.is_reduced_motion();
         let swap = Transition::blur(if reduced { 0.0 } else { super::PRESENCE_BLUR })
             .combined(Transition::scale(if reduced { 1.0 } else { 0.96 }))
-            .springs(rune::SpringPair::new(FADE, super::surface::PRESENCE_EXIT));
+            .springs(rune::SpringPair::new(
+                FADE,
+                super::tuning::get().presence_exit,
+            ));
         let mut pill = row()
             .key("badge")
             .trace_name("badge")

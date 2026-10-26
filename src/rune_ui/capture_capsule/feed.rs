@@ -103,7 +103,12 @@ impl Follow {
             self.began |= recording.screen;
             return inputs;
         }
-        inputs.extend(self.stage(snapshot));
+        let stage = self.stage(snapshot);
+        if stage == Some(Input::Stage(Stage::Done)) && heard_nothing(snapshot, self.shown.as_ref())
+        {
+            inputs.push(Input::NothingHeard);
+        }
+        inputs.extend(stage);
         inputs.extend(self.routed(snapshot));
         inputs
     }
@@ -207,6 +212,17 @@ impl Follow {
         }
         Some(Input::Stage(stage))
     }
+}
+
+/// Whether the shown capture was written with a transcript that has no
+/// words. One that has no transcript at all (the transcriber was missing
+/// or failed) wasn't silence.
+fn heard_nothing(snapshot: &CaptureSnapshot, shown: Option<&(PathBuf, Stage)>) -> bool {
+    snapshot.last.as_ref().is_some_and(|last| {
+        shown.is_some_and(|(bundle, _)| *bundle == last.bundle)
+            && last.words == Some(0)
+            && last.missing_transcript.is_none()
+    })
 }
 
 /// The router's answer as the capsule shows it. A rule's own session leads
@@ -449,6 +465,30 @@ mod tests {
             [Input::Stage(Stage::Done)]
         );
         assert_eq!(follow.next(&settled("a", Stage::Done)), []);
+    }
+
+    #[test]
+    fn a_capture_with_no_words_says_nothing_was_heard() {
+        let silent = |missing: Option<&str>| {
+            let mut snapshot = settled("a", Stage::Done);
+            let last = snapshot.last.as_mut().unwrap();
+            last.words = Some(0);
+            last.missing_transcript = missing.map(Into::into);
+            snapshot
+        };
+        let mut follow = Follow::default();
+        follow.next(&recording("a"));
+        assert_eq!(
+            follow.next(&silent(None)),
+            [Input::NothingHeard, Input::Stage(Stage::Done)]
+        );
+        let mut follow = Follow::default();
+        follow.next(&recording("a"));
+        assert_eq!(
+            follow.next(&silent(Some("Transcriber unavailable."))),
+            [Input::Stage(Stage::Done)],
+            "no transcript at all isn't silence"
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use rune::text::TextSystem;
 use scrawl_capture::capture::Stage;
 
 use super::flow::{
-    Action, Delivered, Dest, Failure, Flow, Input, Mode, Pres, Route, UNDO_S, Undone,
+    Action, Delivered, Dest, Failure, Flow, Input, Mode, Pres, Route, Undone, undo_s,
 };
 use super::surface::{Id, PANEL_H, PANEL_W, TOP};
 use super::{CapsuleState, poll, trace_channels, view};
@@ -152,7 +152,7 @@ fn stills() -> Vec<(&'static str, Pres)> {
         ("rule-final", {
             let mut flow = Flow::new();
             flow.input(Input::Routed(rule()), 0.0);
-            flow.pres(UNDO_S + 1.0)
+            flow.pres(undo_s() + 1.0)
         }),
         ("guess", after(&routed(guess()))),
         ("guess-four", after(&routed(guess_four()))),
@@ -178,6 +178,13 @@ fn stills() -> Vec<(&'static str, Pres)> {
             })),
         ),
         ("no-answer", after(&routed(no_answer()))),
+        ("nothing-heard", {
+            let mut beats = vec![In(Input::NothingHeard)];
+            beats.extend(routed(Route::Nothing {
+                recent: vec![Dest::new("HOME", "yesterday")],
+            }));
+            after(&beats)
+        }),
         ("list-guess", after(&open(guess()))),
         ("list-rule", after(&open(rule()))),
         ("list-no-answer", after(&open(no_answer()))),
@@ -659,7 +666,8 @@ fn scripts() -> Vec<Script> {
                 (0.2, stage(Stage::Transcribing)),
                 (1.2, In(Input::Routed(rule()))),
             ],
-            end: 6.0,
+            // The whole countdown, then "Sent".
+            end: 1.2 + undo_s() + 1.6,
         },
         Script {
             name: "rule-runner-up",

@@ -550,6 +550,19 @@ pub(super) fn slider(
     width: f32,
     set: impl Fn(&mut Ui, f32, bool) + 'static,
 ) -> El {
+    slider_in(p, key, label, value, display, width, set)
+}
+
+/// A [`slider`] for a window whose state isn't [`Ui`].
+pub(super) fn slider_in<S: 'static>(
+    p: Paint,
+    key: &str,
+    label: &str,
+    value: f32,
+    display: String,
+    width: f32,
+    set: impl Fn(&mut S, f32, bool) + 'static,
+) -> El {
     let c = &p.k.c;
     let value = value.clamp(0.0, 1.0);
     let knob = 14.0;
@@ -560,19 +573,17 @@ pub(super) fn slider(
         .w(width)
         .h(22.0)
         .center_y()
-        .on_drag(
-            move |ui: &mut Ui, drag: &mut rune::Drag, _: &mut rune::Tx| {
-                if drag.phase == rune::Phase::Down {
-                    drag.data = value;
-                }
-                if drag.cancelled() {
-                    set(ui, drag.data, false);
-                    return;
-                }
-                let position = ((drag.x - knob / 2.0) / (drag.w - knob).max(1.0)).clamp(0.0, 1.0);
-                set(ui, position, drag.phase == rune::Phase::Up);
-            },
-        )
+        .on_drag(move |ui: &mut S, drag: &mut rune::Drag, _: &mut rune::Tx| {
+            if drag.phase == rune::Phase::Down {
+                drag.data = value;
+            }
+            if drag.cancelled() {
+                set(ui, drag.data, false);
+                return;
+            }
+            let position = ((drag.x - knob / 2.0) / (drag.w - knob).max(1.0)).clamp(0.0, 1.0);
+            set(ui, position, drag.phase == rune::Phase::Up);
+        })
         .child(
             row()
                 .key("rail")

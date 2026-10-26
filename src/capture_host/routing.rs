@@ -25,8 +25,9 @@ use scrawl_capture::{Router, RouterConfig, RouterDirs, RuleKind, Undone};
 
 use super::{SharedOutcomes, lock};
 
-/// How long a rule's send waits, taken back by Undo, before it goes.
-pub const UNDO: Duration = Duration::from_secs(3);
+/// How long a rule's send waits, taken back by Undo, before it goes. The
+/// capsule's countdown ring drains over it.
+pub const UNDO: Duration = Duration::from_secs(5);
 /// How often sends OpenCode didn't take are retried.
 const RETRY_EVERY: Duration = Duration::from_secs(15);
 /// How long taking back a send may wait on OpenCode.

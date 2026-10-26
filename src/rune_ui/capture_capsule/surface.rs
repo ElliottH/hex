@@ -5,7 +5,7 @@
 //!
 //! Ported from Scrawl's Rune capsule (`scrawl-pill-lab`, `rune_pill`).
 //! Timing a spring can't express lives here as pending steps the overlay's
-//! poll runs: narrowing, the walls start [`SHELL_WAIT_S`] after the content
+//! poll runs: narrowing, the walls start [`tuning::Tuning::shell_wait_s`] after the content
 //! so leaving chips are already fading when a wall reaches them, and an
 //! entering chip mounts once the walls have room for it, predicted from the
 //! same closed-form spring Rune animates the walls on.
@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use rune::{Spring, TextStyle};
 
 use super::flow::{Done, Mode, Pres};
+use super::tuning;
 use crate::rune_ui::controls::KeySize;
 
 /// The overlay's panel: wide enough for the open list, and tall enough for
@@ -61,8 +62,6 @@ pub(crate) const MEDIUM: TextStyle = TextStyle::new(13.0, 530.0);
 pub(crate) const STRONG: TextStyle = TextStyle::new(13.0, 600.0);
 /// Tabular digits, so a new second never changes the timer's width.
 pub(crate) const TIMER: TextStyle = STRONG.features("'tnum' 1");
-/// The Undo countdown, for the same reason.
-pub(crate) const COUNT: TextStyle = MEDIUM.features("'tnum' 1");
 pub(crate) const SMALL: TextStyle = TextStyle::new(11.5, 530.0);
 pub(crate) const PROCESSING: &str = "Processing…";
 pub(crate) const UNDO_KEYS: &[&str] = &["esc"];
@@ -76,25 +75,9 @@ pub(crate) fn ask_keys() -> Vec<String> {
 /// The capsule unfolds from this fraction of its height, anchored on its
 /// top edge.
 const TOP_FROM: f32 = 0.7;
-const SHELL_WAIT_S: f32 = 0.06;
-/// Content leaves on the SwiftUI capsule's exit, 0.20 s × 0.85: exits run
-/// shorter than entrances.
-pub(crate) const PRESENCE_EXIT: Spring = Spring::new(0.20 * 0.85, 0.0);
 const ENTRY_CONTENT_DELAY_S: f32 = 0.016;
-const STAGGER_S: f32 = 0.008;
 /// Opening, sliding content takes this many times the walls' duration.
 const FOLLOW: f32 = 1.15;
-/// The selection highlight trails a mode change in place.
-const HIGHLIGHT: Spring = Spring::new(0.25, 0.0);
-/// The walls between phases, and the shell's fade and scale on entry.
-const ISLAND: Spring = Spring::new(0.32, 0.0);
-const ISLAND_SCALE: Spring = Spring::new(0.22, 0.0);
-const REVEAL_OPEN: Spring = Spring::new(0.36, 0.16);
-const REVEAL_CLOSE: Spring = Spring::new(0.32, 0.08);
-const SWITCH_WIDTH: Spring = Spring::new(0.30, 0.0);
-const SWITCH_SLIDE: Spring = Spring::new(0.36, 0.0);
-/// How long content takes to fade in (× 1.6 for its spring).
-const REVEAL_ENTER_S: f32 = 0.16;
 
 thread_local! {
     static TEXT: RefCell<rune::text::TextSystem> = RefCell::new(
@@ -127,9 +110,8 @@ pub(crate) fn keycaps_width(keys: &[&str]) -> f32 {
     size.tray_width(keys.iter().map(|key| measure(key, size.legend())))
 }
 
-pub(crate) fn undo_label(seconds: u32) -> String {
-    format!("Undo {seconds}")
-}
+/// The Undo chip's label; the seconds left show in the ring.
+pub(crate) const UNDO_LABEL: &str = "Undo";
 
 /// Something the capsule shows, or a click on a row of its list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,11 +309,11 @@ fn done_row(done: &Done, routes: &[String], cap: f32, raw: &mut Vec<(Id, String,
     if done.open.is_some() {
         raw.push((Id::Field, String::new(), FIELD_MIN, false));
     }
-    if let Some(seconds) = done.undo {
+    if done.undo.is_some() {
         raw.push((
             Id::Undo,
             String::new(),
-            keyed_width(UNDO_KEYS, &undo_label(seconds), COUNT),
+            keyed_width(UNDO_KEYS, UNDO_LABEL, STRONG),
             false,
         ));
     }
@@ -508,7 +490,7 @@ impl Wall {
             v0: 0.0,
             target: x,
             t0: 0.0,
-            spring: HIGHLIGHT,
+            spring: tuning::get().highlight,
         }
     }
 
@@ -570,7 +552,7 @@ impl Shown {
 #[derive(Clone, Debug)]
 enum Step {
     /// The capsule's walls narrowing, after the content has started
-    /// ([`SHELL_WAIT_S`]).
+    /// ([`tuning::Tuning::shell_wait_s`]).
     Shell([f32; 4], Spring),
     /// The second frame of an entry: from the origin pose to rest.
     Entry,
@@ -627,8 +609,8 @@ impl Surface {
             reduced: false,
             shell: pose(shell),
             shell_on: false,
-            shell_motion: ISLAND,
-            shell_fade: ISLAND_SCALE,
+            shell_motion: tuning::get().island,
+            shell_fade: tuning::get().island_scale,
             items: Vec::new(),
             highlight: None,
             instant: false,
@@ -656,8 +638,11 @@ impl Surface {
         let (rest, items) = layout(&pres, &self.clock);
         self.shell_on = !matches!(pres, Pres::Hidden);
         self.shell = if self.shell_on { rest } else { pose(rest) };
-        self.items = items.iter().map(|item| self.shown(item, ISLAND)).collect();
-        self.highlight = self.highlight_for(&items, ISLAND);
+        self.items = items
+            .iter()
+            .map(|item| self.shown(item, tuning::get().island))
+            .collect();
+        self.highlight = self.highlight_for(&items, tuning::get().island);
         self.pres = pres;
         self
     }
@@ -674,9 +659,9 @@ impl Surface {
         }
     }
 
-    /// The fade an element enters with (it leaves on [`PRESENCE_EXIT`]).
+    /// The fade an element enters with (it leaves on [`tuning::Tuning::presence_exit`]).
     pub(crate) fn presence(&self) -> Spring {
-        Spring::new(REVEAL_ENTER_S * 1.6, 0.0)
+        Spring::new(tuning::get().reveal_enter_s * 1.6, 0.0)
     }
 
     fn highlight_for(&mut self, items: &[Item], motion: Spring) -> Option<Shown> {
@@ -732,7 +717,7 @@ impl Surface {
         if matches!(next, Pres::Hidden) {
             // Exit in place: the capsule settles back to its origin pose as
             // it fades, and every item leaves with it.
-            let exit = Spring::new(ISLAND_SCALE.duration * 0.9, 0.0);
+            let exit = Spring::new(tuning::get().island_scale.duration * 0.9, 0.0);
             self.shell = pose(self.shell);
             self.shell_on = false;
             self.shell_motion = exit;
@@ -780,7 +765,7 @@ impl Surface {
         let narrowing = rest[2] < self.shell[2] - 1.0;
         self.target = Some((rest, items, change));
         let wait = if narrowing && leaving && !self.reduced {
-            SHELL_WAIT_S
+            tuning::get().shell_wait_s
         } else {
             0.0
         };
@@ -797,20 +782,32 @@ impl Surface {
         let t = now;
         let opening = rest[2] >= self.shell[2] - 1.0;
         let (shell_spring, item_spring) = match change {
-            Change::ChipsOpen => (REVEAL_OPEN, Spring::new(REVEAL_OPEN.duration * FOLLOW, 0.0)),
-            Change::ChipsClose => (REVEAL_CLOSE, Spring::new(REVEAL_CLOSE.duration, 0.0)),
-            Change::Switch => (SWITCH_WIDTH, Spring::new(SWITCH_SLIDE.duration, 0.0)),
+            Change::ChipsOpen => (
+                tuning::get().reveal_open,
+                Spring::new(tuning::get().reveal_open.duration * FOLLOW, 0.0),
+            ),
+            Change::ChipsClose => (
+                tuning::get().reveal_close,
+                Spring::new(tuning::get().reveal_close.duration, 0.0),
+            ),
+            Change::Switch => (
+                tuning::get().switch_width,
+                Spring::new(tuning::get().switch_slide.duration, 0.0),
+            ),
             Change::Phase => (
-                ISLAND,
-                Spring::new(ISLAND.duration * if opening { FOLLOW } else { 1.0 }, 0.0),
+                tuning::get().island,
+                Spring::new(
+                    tuning::get().island.duration * if opening { FOLLOW } else { 1.0 },
+                    0.0,
+                ),
             ),
         };
         let entry = !self.shell_on;
         if entry {
             self.shell = rest;
-            self.shell_motion = ISLAND_SCALE;
-            self.shell_fade = Spring::new(ISLAND_SCALE.duration * 0.9, 0.0);
-            self.walls[2].to(t, rest[1] + rest[3], ISLAND_SCALE);
+            self.shell_motion = tuning::get().island_scale;
+            self.shell_fade = Spring::new(tuning::get().island_scale.duration * 0.9, 0.0);
+            self.walls[2].to(t, rest[1] + rest[3], tuning::get().island_scale);
         } else {
             if (rest[2] - self.shell[2]).abs() > 1.0 && !self.reduced {
                 self.morphs = self.morphs.wrapping_add(1);
@@ -842,7 +839,11 @@ impl Surface {
         let active = items.iter().find(|i| i.active).cloned();
         match (&mut self.highlight, &active) {
             (Some(h), Some(a)) => {
-                h.motion = if h.id == a.id { item_spring } else { HIGHLIGHT };
+                h.motion = if h.id == a.id {
+                    item_spring
+                } else {
+                    tuning::get().highlight
+                };
                 h.id = a.id;
                 h.rect = a.rect;
             }
@@ -861,7 +862,7 @@ impl Surface {
             } else {
                 self.room_delay(item.rect, t, false)
             };
-            let delay = room + STAGGER_S * rank as f32;
+            let delay = room + tuning::get().stagger_s * rank as f32;
             rank += 1;
             let shown = self.shown(item, presence);
             if item.active && self.highlight.is_none() {
@@ -1155,7 +1156,7 @@ mod tests {
         let after = s.highlight.clone().unwrap();
         assert_eq!(after.key, before.key, "one highlight travels");
         assert_eq!(after.id, Id::Mode(Mode::Area));
-        assert_eq!(after.motion, HIGHLIGHT);
+        assert_eq!(after.motion, tuning::get().highlight);
     }
 
     #[test]
