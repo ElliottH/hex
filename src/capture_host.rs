@@ -1457,13 +1457,32 @@ mod tests {
         }
     }
 
+    /// Waits until the one writer has taken `bundle`. Each capture's thread
+    /// hands it over on its own schedule, so tests that need the first
+    /// capture written first wait for it before starting the next.
+    fn wait_until_writing(engine: &FakeEngine, bundle: &Path) {
+        for _ in 0..1_000 {
+            if engine
+                .steps
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(step, dir)| *step == "finish" && dir == bundle)
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("{} was never written", bundle.display());
+    }
+
     #[test]
     fn captures_finish_one_at_a_time_and_starts_wait_for_room() {
         let dir = temp_dir("bounded");
         let audio = FakeTimeline::default();
         let (gate, gated) = mpsc::channel();
         let engine = FakeEngine::new(Arc::new(GatedTranscriber(Mutex::new(gated))));
-        let mut host = CaptureHost::with(engine, dir.clone()).unwrap();
+        let mut host = CaptureHost::with(engine.clone(), dir.clone()).unwrap();
         let mut bundles = Vec::new();
         for _ in 0..MAX_FINISHING {
             let started = report(host.control(ScrawlCaptureAction::Start, &audio));
@@ -1474,8 +1493,11 @@ mod tests {
                 host.active.as_ref().unwrap().t0 + Duration::from_millis(10),
             );
             thread::sleep(Duration::from_millis(20));
-            bundles.push(bundle);
             host.control(ScrawlCaptureAction::Stop, &audio);
+            if bundles.is_empty() {
+                wait_until_writing(&engine, &bundle);
+            }
+            bundles.push(bundle);
         }
         assert_eq!(
             report(host.control(ScrawlCaptureAction::Status, &audio)).finishing,
@@ -1522,6 +1544,9 @@ mod tests {
                 host.active.as_ref().unwrap().t0 + Duration::from_millis(10),
             );
             host.control(ScrawlCaptureAction::Stop, &audio);
+            if bundles.is_empty() {
+                wait_until_writing(&engine, &bundle);
+            }
             bundles.push(bundle);
         }
         // The first is stuck transcribing; the second waits behind it, its
