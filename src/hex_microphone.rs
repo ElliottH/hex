@@ -22,6 +22,9 @@ const RING_MASK: usize = RING_CAPACITY - 1;
 const MAX_RING_LATENCY_FRAMES: usize = 768;
 /// Upper bound on the producer burst the latency cap makes room for (~85 ms).
 const MAX_PRODUCER_BURST_FRAMES: usize = RING_CAPACITY / 4;
+/// A smaller callback closes 1/N of the gap to a feed's recorded burst, so one
+/// coalesced callback widens the latency cap for about a second, not for good.
+const BURST_DECAY_CALLBACKS: usize = 32;
 
 pub fn is_hex_virtual_device_name(name: &str) -> bool {
     let trimmed = name.trim();
@@ -37,7 +40,7 @@ struct HexMicRingBuffer {
     read_pos: AtomicUsize,
     underflows: AtomicU64,
     overflows: AtomicU64,
-    /// Largest number of frames the producer delivers in one capture callback.
+    /// The active feed's recent largest capture callback, in frames.
     producer_burst: AtomicUsize,
 }
 
@@ -61,12 +64,12 @@ impl HexMicRingBuffer {
         self.producer_burst.store(0, Ordering::Relaxed);
     }
 
-    /// Records the frames one capture callback delivers, so the latency cap
-    /// leaves room for a whole callback. A device delivering 20 ms at a time
-    /// (a 24 kHz Bluetooth headset) would otherwise lose audio on every callback.
-    fn note_producer_burst(&self, frames: usize) {
+    /// Sets the frames the latency cap leaves room for: one whole capture
+    /// callback. A device delivering 20 ms at a time (a 24 kHz Bluetooth
+    /// headset) would otherwise lose audio on every callback.
+    fn set_producer_burst(&self, frames: usize) {
         self.producer_burst
-            .fetch_max(frames.min(MAX_PRODUCER_BURST_FRAMES), Ordering::Relaxed);
+            .store(frames.min(MAX_PRODUCER_BURST_FRAMES), Ordering::Relaxed);
     }
 
     fn counters(&self) -> (u64, u64) {
@@ -148,6 +151,11 @@ impl HexMicRingBuffer {
         self.read_pos
             .store(read.wrapping_add(to_copy), Ordering::Release);
         to_copy
+    }
+
+    #[cfg(test)]
+    fn producer_burst(&self) -> usize {
+        self.producer_burst.load(Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -328,6 +336,9 @@ pub fn sync_from_settings(mode: VoiceFilterMode, comfort_noise: bool, strength: 
 pub struct CaptureFeed {
     enabled: Arc<AtomicBool>,
     resampler: Option<LinearResampler>,
+    /// This feed's recent largest callback, decaying; zero while inactive,
+    /// so a newly active feed never inherits another microphone's burst.
+    burst: usize,
 }
 
 /// Turns one stream's `CaptureFeed` on or off from outside the audio callback.
@@ -352,6 +363,7 @@ pub fn capture_feed(sample_rate: u32) -> (CaptureFeed, CaptureFeedSwitch) {
         enabled: enabled.clone(),
         resampler: (sample_rate != HEX_MICROPHONE_SAMPLE_RATE && sample_rate > 0)
             .then(|| LinearResampler::new(sample_rate)),
+        burst: 0,
     };
     (feed, CaptureFeedSwitch(enabled))
 }
@@ -374,6 +386,7 @@ impl CaptureFeed {
             if let Some(resampler) = &mut self.resampler {
                 resampler.reset();
             }
+            self.burst = 0;
             return;
         }
         let deliver = |chunk: &[f32]| {
@@ -391,8 +404,13 @@ impl CaptureFeed {
             }
             Some(resampler) => resampler.process(samples, deliver),
         };
+        self.burst = if frames >= self.burst {
+            frames
+        } else {
+            self.burst - (self.burst - frames).div_ceil(BURST_DECAY_CALLBACKS)
+        };
         if let Some(ring) = ring {
-            ring.note_producer_burst(frames);
+            ring.set_producer_burst(self.burst);
         }
     }
 }
@@ -1738,6 +1756,51 @@ mod tests {
         assert_eq!(result.underflows, 0);
         assert_eq!(result.overflows, 0);
         assert_eq!(result.discontinuities, 0);
+    }
+
+    #[test]
+    fn switching_to_a_smaller_callback_microphone_lowers_the_latency_cap() {
+        let ring = HexMicRingBuffer::new();
+        let (mut headset, headset_switch) = capture_feed(48_000);
+        let (mut built_in, built_in_switch) = capture_feed(48_000);
+        headset_switch.set(true);
+        for _ in 0..5 {
+            headset.push_to(Some(&ring), false, &[0.1; 960]);
+        }
+        assert_eq!(ring.producer_burst(), 960);
+
+        headset_switch.set(false);
+        built_in_switch.set(true);
+        headset.push_to(Some(&ring), false, &[0.1; 960]);
+        built_in.push_to(Some(&ring), false, &[0.1; 480]);
+        assert_eq!(ring.producer_burst(), 480);
+
+        // 1,200 queued frames now exceed the cap (1,120 for a 256-frame pull);
+        // with the headset's burst it was 1,600.
+        let mut out = [0.0_f32; 256];
+        ring.pop_slice(&mut [0.0_f32; RING_CAPACITY / 2]);
+        ring.push_slice(&[0.1; 1_200]);
+        let (_, overflows) = ring.counters();
+        ring.pop_slice(&mut out);
+        assert_eq!(ring.counters().1, overflows + 1);
+    }
+
+    #[test]
+    fn one_coalesced_callback_does_not_widen_the_cap_for_good() {
+        let ring = HexMicRingBuffer::new();
+        let mut feed = switched_on_feed(48_000);
+        feed.push_to(Some(&ring), false, &[0.1; 480]);
+        feed.push_to(Some(&ring), false, &[0.1; MAX_PRODUCER_BURST_FRAMES]);
+        assert_eq!(ring.producer_burst(), MAX_PRODUCER_BURST_FRAMES);
+
+        for _ in 0..BURST_DECAY_CALLBACKS {
+            feed.push_to(Some(&ring), false, &[0.1; 480]);
+        }
+        assert!(ring.producer_burst() < MAX_PRODUCER_BURST_FRAMES / 2);
+        for _ in 0..10 * BURST_DECAY_CALLBACKS {
+            feed.push_to(Some(&ring), false, &[0.1; 480]);
+        }
+        assert_eq!(ring.producer_burst(), 480);
     }
 
     #[test]

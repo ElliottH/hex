@@ -563,7 +563,9 @@ impl RecoveringAudioInput {
     }
 
     pub fn close(&mut self) {
-        self.input = None;
+        if let Some(previous) = self.input.take() {
+            previous.feed_hex_microphone(false);
+        }
         self.replacement = None;
         self.recovery.recovered();
     }
@@ -1181,6 +1183,9 @@ mod tests {
         ));
         assert!(!first_feed.is_on());
         assert!(replacement_feed.is_on());
+
+        input.close();
+        assert!(!replacement_feed.is_on());
     }
 
     #[test]
