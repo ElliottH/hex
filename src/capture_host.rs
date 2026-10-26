@@ -34,7 +34,8 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use scrawl_capture::audio::{GapSpan, RecordedAudio};
 use scrawl_capture::capture::{
-    AudioIn, ConfigSource, Event, Host, InputSink, SharedResources, Stage, Start, Target,
+    AudioIn, ConfigSource, Event, Host, InputSink, OwnWindows, SharedCaptureTelemetry,
+    SharedResources, Stage, Start, Target,
 };
 use scrawl_capture::handoff::EngineConfig;
 use scrawl_capture::hosted_input::{HostInput, HostedInput, Modifiers};
@@ -142,7 +143,10 @@ trait CaptureEngine: Send + Sync + 'static {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "the capture capsule (scrawl-capsule) picks these")
+    expect(
+        dead_code,
+        reason = "the capsule has no on-screen window or area picker yet"
+    )
 )]
 pub enum CaptureTarget {
     /// The display under the pointer, cropped to what changes: the
@@ -352,6 +356,36 @@ impl Host for HexHost {
     fn metric(&self, name: &str, ms: f64) {
         tracing::debug!(target: "hex::capture", name, ms, "capture metric");
     }
+
+    fn own_windows(&self) -> OwnWindows {
+        let own = OWN_WINDOWS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        OwnWindows {
+            excluded: own.iter().flatten().copied().collect(),
+            passthrough: own[OwnWindow::Ink as usize].into_iter().collect(),
+        }
+    }
+}
+
+/// Hex's windows a capture leaves out of its recording, one per role. A
+/// capture reads them when it starts.
+static OWN_WINDOWS: Mutex<[Option<u32>; 2]> = Mutex::new([None, None]);
+
+/// Which of Hex's windows a capture leaves out.
+#[derive(Clone, Copy, Debug)]
+pub enum OwnWindow {
+    Capsule,
+    /// Click-through, so a click on it never counts as a click on Hex.
+    Ink,
+}
+
+/// Leaves `window` out of every later capture's recording, replacing the
+/// window that last held `role` (Rune may recreate an overlay's window).
+pub fn exclude_window(role: OwnWindow, window: u32) {
+    OWN_WINDOWS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())[role as usize] = Some(window);
 }
 
 /// The engine's settings, from Hex rather than `~/.config/scrawl`. The
@@ -805,36 +839,19 @@ pub fn snapshot() -> CaptureSnapshot {
 /// Watches the capture snapshot from any thread. Changes coalesce: a watcher
 /// always gets the latest snapshot, never a stale one, but may skip the ones
 /// between.
-#[expect(
-    dead_code,
-    reason = "the capture capsule subscribes next (scrawl-capsule)"
-)]
 pub fn watch() -> CaptureWatch {
     FEED.watch()
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture capsule subscribes next (scrawl-capsule)"
-    )
-)]
 pub struct CaptureWatch {
     feed: &'static Feed,
     woken: Receiver<()>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture capsule subscribes next (scrawl-capsule)"
-    )
-)]
 impl CaptureWatch {
     /// The snapshot if it changed since the last call (the first call always
     /// returns it), without blocking.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the capsule waits instead"))]
     pub fn changed(&self) -> Option<CaptureSnapshot> {
         let mut woke = false;
         while self.woken.try_recv().is_ok() {
@@ -1655,6 +1672,38 @@ pub fn modifiers(flags: u64) -> Modifiers {
 #[derive(Clone)]
 struct LiveInput(Arc<Mutex<InputState>>);
 
+static SHARED_INPUT: Mutex<Option<LiveInput>> = Mutex::new(None);
+
+/// The recording capture's ink, laser, and pointer, for the ink overlay to
+/// draw: `None` until its engine started, and once it ended.
+pub fn ink_source() -> Option<InkSource> {
+    let shared = SHARED_INPUT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let state = shared.as_ref()?.state();
+    state.target.as_ref().map(|target| InkSource {
+        telemetry: target.sink.telemetry().clone(),
+        t0: target.t0,
+    })
+}
+
+/// Where a recording capture keeps its strokes, and its clock.
+#[derive(Clone)]
+pub struct InkSource {
+    pub telemetry: Arc<SharedCaptureTelemetry>,
+    t0: CaptureInstant,
+}
+
+impl InkSource {
+    /// Now on the strokes' clock: milliseconds since the capture started.
+    pub fn now_ms(&self) -> u64 {
+        CaptureInstant::now()
+            .checked_duration_since(self.t0)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+}
+
 #[derive(Default)]
 struct InputState {
     recording: Option<PathBuf>,
@@ -1674,8 +1723,9 @@ struct InputTarget {
 impl LiveInput {
     /// The process's one target and its `capture-input` thread.
     fn shared() -> Result<Self> {
-        static SHARED: Mutex<Option<LiveInput>> = Mutex::new(None);
-        let mut shared = SHARED.lock().unwrap_or_else(|error| error.into_inner());
+        let mut shared = SHARED_INPUT
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if let Some(live) = &*shared {
             return Ok(live.clone());
         }
@@ -1941,26 +1991,12 @@ pub enum PickerKey {
 type OnPickerKey = Arc<dyn Fn(PickerKey) + Send + Sync>;
 
 static PICKER: Mutex<Option<(u64, OnPickerKey)>> = Mutex::new(None);
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture capsule (scrawl-capsule) opens the picker"
-    )
-)]
 static PICKERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The capsule's picker is open until the guard drops. While it lives, the
 /// listener consumes fresh presses of the capture shortcut and Escape and
 /// hands them to `on_key`, on the listener's thread: it must not block. A
 /// newer picker replaces an older one.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture capsule (scrawl-capsule) opens the picker"
-    )
-)]
 pub fn begin_picking(on_key: impl Fn(PickerKey) + Send + Sync + 'static) -> Picking {
     let id = PICKERS.fetch_add(1, Ordering::Relaxed) + 1;
     *PICKER.lock().unwrap_or_else(|error| error.into_inner()) = Some((id, Arc::new(on_key)));
@@ -1969,13 +2005,6 @@ pub fn begin_picking(on_key: impl Fn(PickerKey) + Send + Sync + 'static) -> Pick
 
 /// The open picker; see [`begin_picking`].
 #[must_use = "the picker closes when this drops"]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture capsule (scrawl-capsule) opens the picker"
-    )
-)]
 pub struct Picking(u64);
 
 impl Drop for Picking {

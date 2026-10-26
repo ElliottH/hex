@@ -101,6 +101,32 @@ A cabled iPhone                          // capture.phone
     the listener finishes the capture: written if it recorded, else `failed`
     with the helper's reason
 
+The capsule                              // capture.capsule (rune_ui/capture_capsule)
+├── A Rune overlay at the top of the pointer's display that never takes focus;
+│   its window id goes to the engine (`Host::own_windows`, one id per role, so a
+│   recreated window replaces the old one), so recordings leave it out
+├── Follows `capture_host::watch()`: Recording from the instant `recording` is
+│   Some (the bundle's t0; timer, meter, ✓ finish, ✕ cancel) -> Processing ->
+│   Saved, Failed, or Cancelled, then leaves on its own
+├── Failed -> its `error`, or "Screen Recording is off" when it isn't granted;
+│   a start that fails before any snapshot showed it recording still shows
+├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips for 3.5 s
+│   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on
+│   │   the capsule, and 1.2 s after it leaves
+│   ├── Screen -> CaptureCommand::Discard, then Start(Display) under the pointer
+│   └── Window or Area -> Discard; the capsule becomes the picker (begin_picking)
+├── Picker: ⌥⇧S records Screen; Esc closes it; Window and Area picking on screen
+│   is not built yet (logged)
+├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
+├── Route toast, Undo, the session list, and "the router didn't answer" are
+│   built and scene-tested, but nothing feeds them until routing exists
+└── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
+
+Ink and laser                            // capture.ink
+├── A click-through overlay over the recorded display, excluded from the recording
+├── Shift strokes draw as ink, hold 650 ms, then fade over 650 ms
+└── The laser's tail lasts 420 ms; nothing lags the pointer
+
 While a capture records                  // capture.input
 ├── The existing session tap adds mouse down/up/drag/scroll and Shift (no second tap)
 ├── -> Capture::input() through a bounded queue; full -> events dropped and counted
@@ -287,8 +313,19 @@ Checks:
   `discarded_captures_never_count_against_the_writers`,
   `a_pick_that_cannot_start_says_why`,
   `the_first_click_or_scroll_means_work_started`, and
-  `the_newest_picker_takes_its_keys_until_it_closes`. The chips and picker
-  themselves are the capsule's (not on this branch).
+  `the_newest_picker_takes_its_keys_until_it_closes`.
+- Capsule, in rune_ui/capture_capsule (feature builds only): the flow tests
+  (`chips_fold_once_seen_when_work_starts_but_never_under_the_pointer`,
+  `the_shortcut_records_the_pickers_screen_and_a_chip_discards_the_recording`,
+  …), feed tests
+  (`the_shortcuts_recording_shows_its_chips_until_work_starts`, …), goldens
+  `tests/golden/capture-capsule-*.png`, and
+  `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
+  scripted state change per frame, Calm and Reduce Motion, for no pops,
+  jumps, or jiggle. `HEX_CAPSULE_MOTION` also writes rune-motion traces for
+  motion-lint. Observed (Oct 26, pro): all 16 runs pass lint. Not proven
+  natively end to end: the overlays have been driven only by the scripted
+  scenes, not a live capture.
 - Pane: `captures_default_off_and_refuse_a_shortcut_in_use` and
   `retention_names_presets_and_imported_days` in rune_ui/scrawl.rs; scenes
   `mac-scrawl-off`, `mac-scrawl`, `mac-scrawl-running`, `mac-scrawl-permission`

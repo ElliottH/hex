@@ -1,0 +1,1051 @@
+//! Where the capture capsule's pieces rest and how each change moves,
+//! decided in Rust: [`layout`] places what [`Pres`] shows, and [`Surface`]
+//! keeps what is mounted, its keys, and the spring each piece moves on
+//! next. The view only draws it; Rune animates between the targets.
+//!
+//! Ported from Scrawl's Rune capsule (`scrawl-pill-lab`, `rune_pill`).
+//! Timing a spring can't express lives here as pending steps the overlay's
+//! poll runs: narrowing, the walls start [`SHELL_WAIT_S`] after the content
+//! so leaving chips are already fading when a wall reaches them, and an
+//! entering chip mounts once the walls have room for it, predicted from the
+//! same closed-form spring Rune animates the walls on.
+
+use std::cell::RefCell;
+
+use rune::{Spring, TextStyle};
+
+use super::flow::{Done, Mode, Pres};
+use crate::rune_ui::controls::{DESCRIPTION, KEY_GAP, KeySize};
+
+/// The overlay's panel: wide enough for the open list, and tall enough for
+/// it and the shadow under it.
+pub(crate) const PANEL_W: f32 = 640.0;
+pub(crate) const PANEL_H: f32 = 424.0;
+/// Panel points the capsule is centred on, and its top.
+pub(crate) const CX: f32 = PANEL_W * 0.5;
+pub(crate) const TOP: f32 = 22.0;
+pub(crate) const ISLAND_H: f32 = 40.0;
+pub(crate) const ISLAND_INSET: f32 = 4.0;
+pub(crate) const CHIP_H: f32 = ISLAND_H - 2.0 * ISLAND_INSET;
+/// The red dot's ink spans 12…20 of the lead's 32 pt square; the timer
+/// starts 8 pt after it.
+pub(crate) const LEAD_TEXT_X: f32 = 28.0;
+pub(crate) const PROCESSING_TEXT_X: f32 = 31.5;
+const PROCESSING_TRAIL: f32 = 8.5;
+/// The check's ink spans 12…20, as the dot's does; its label starts where
+/// the timer does.
+pub(crate) const DONE_TEXT_X: f32 = LEAD_TEXT_X;
+const CHIP_GAP: f32 = 2.0;
+const GROUP_GAP: f32 = 6.0;
+pub(crate) const CHIP_PX: f32 = 12.0;
+/// After the lead's text, equal to the dot's 12 pt inset.
+const LEAD_TRAIL: f32 = 12.0;
+/// A mode chip: its icon, the gap after it, and the padding either side.
+pub(crate) const SEG_ICON: f32 = 14.0;
+pub(crate) const SEG_ICON_GAP: f32 = 5.0;
+const SEG_PX: f32 = 10.0;
+/// Between a chip's keycaps and its label.
+pub(crate) const KEYCAP_GAP: f32 = 6.0;
+
+/// The open capsule is as wide as the list under it; its field takes what
+/// the rest leaves.
+pub(crate) const LIST_W: f32 = 420.0;
+const FIELD_MIN: f32 = 120.0;
+pub(crate) const LIST_Y: f32 = TOP + ISLAND_H + 6.0;
+pub(crate) const LIST_PAD: f32 = 6.0;
+pub(crate) const HEADER_H: f32 = 24.0;
+pub(crate) const ROW_H: f32 = 30.0;
+pub(crate) const FOOTER_H: f32 = 28.0;
+
+pub(crate) const MEDIUM: TextStyle = TextStyle::new(13.0, 530.0);
+pub(crate) const STRONG: TextStyle = TextStyle::new(13.0, 600.0);
+/// Tabular digits, so a new second never changes the timer's width.
+pub(crate) const TIMER: TextStyle = STRONG.features("'tnum' 1");
+/// The Undo countdown, for the same reason.
+pub(crate) const COUNT: TextStyle = MEDIUM.features("'tnum' 1");
+pub(crate) const SMALL: TextStyle = TextStyle::new(11.5, 530.0);
+pub(crate) const PROCESSING: &str = "Processing…";
+pub(crate) const UNDO_KEYS: &[&str] = &["esc"];
+pub(crate) const ASK_KEYS: &[&str] = &["⌥", "⇧", "V"];
+
+/// The capsule unfolds from this fraction of its height, anchored on its
+/// top edge.
+const TOP_FROM: f32 = 0.7;
+const SHELL_WAIT_S: f32 = 0.06;
+/// Content leaves on the SwiftUI capsule's exit, 0.20 s × 0.85: exits run
+/// shorter than entrances.
+pub(crate) const PRESENCE_EXIT: Spring = Spring::new(0.20 * 0.85, 0.0);
+const ENTRY_CONTENT_DELAY_S: f32 = 0.016;
+const STAGGER_S: f32 = 0.008;
+/// Opening, sliding content takes this many times the walls' duration.
+const FOLLOW: f32 = 1.15;
+/// The selection highlight trails a mode change in place.
+const HIGHLIGHT: Spring = Spring::new(0.25, 0.0);
+/// The walls between phases, and the shell's fade and scale on entry.
+const ISLAND: Spring = Spring::new(0.32, 0.0);
+const ISLAND_SCALE: Spring = Spring::new(0.22, 0.0);
+const REVEAL_OPEN: Spring = Spring::new(0.36, 0.16);
+const REVEAL_CLOSE: Spring = Spring::new(0.32, 0.08);
+const SWITCH_WIDTH: Spring = Spring::new(0.30, 0.0);
+const SWITCH_SLIDE: Spring = Spring::new(0.36, 0.0);
+/// How long content takes to fade in (× 1.6 for its spring).
+const REVEAL_ENTER_S: f32 = 0.16;
+
+thread_local! {
+    static TEXT: RefCell<rune::text::TextSystem> = RefCell::new(
+        rune::text::TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES),
+    );
+}
+
+/// `text`'s width in points as Rune draws it in `style`.
+pub(crate) fn measure(text: &str, style: TextStyle) -> f32 {
+    TEXT.with_borrow_mut(|t| t.measure(text, style, 2.0).0)
+}
+
+/// `text` cut to fit `max` points, ending in "…" when cut.
+pub(crate) fn ellipsize(text: &str, style: TextStyle, max: f32) -> String {
+    if measure(text, style) <= max {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    (1..chars.len())
+        .rev()
+        .map(|n| format!("{}…", chars[..n].iter().collect::<String>().trim_end()))
+        .find(|cut| measure(cut, style) <= max)
+        .unwrap_or_else(|| "…".into())
+}
+
+/// One small keycap, as `controls::keycap` draws it.
+fn keycap_width(key: &str) -> f32 {
+    let size = KeySize::Small;
+    (measure(key, DESCRIPTION) + 12.0).max(size.min_width())
+}
+
+/// A chord's keycaps side by side, as `controls::keycaps` draws them.
+pub(crate) fn keycaps_width(keys: &[&str]) -> f32 {
+    keys.iter().map(|k| keycap_width(k)).sum::<f32>()
+        + KEY_GAP * keys.len().saturating_sub(1) as f32
+}
+
+pub(crate) fn undo_label(seconds: u32) -> String {
+    format!("Undo {seconds}")
+}
+
+/// Something the capsule shows, or a click on a row of its list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Id {
+    Mode(Mode),
+    Record,
+    Cancel,
+    Finish,
+    Close,
+    /// The recording dot and timer.
+    Lead,
+    Processing,
+    /// The finished capsule's check (or warning) and its label.
+    Done,
+    /// A quiet word on why, after the label.
+    Why,
+    /// The Undo countdown chip.
+    Undo,
+    /// The ⌥⇧V chip.
+    Ask,
+    /// The open capsule's field.
+    Field,
+    Row(usize),
+}
+
+impl Id {
+    /// Its name in keys and the motion trace (Scrawl's trace names).
+    pub(crate) fn trace_key(self) -> &'static str {
+        match self {
+            Id::Mode(Mode::Area) => "chip:Area",
+            Id::Mode(Mode::Window) => "chip:Window",
+            Id::Mode(Mode::Screen) => "chip:Screen",
+            Id::Record => "record",
+            Id::Cancel => "cancel",
+            Id::Finish => "finish",
+            Id::Close => "close",
+            Id::Lead => "lead",
+            Id::Processing => "processing",
+            Id::Done => "done",
+            Id::Why => "why",
+            Id::Undo => "undo",
+            Id::Ask => "ask",
+            Id::Field => "field",
+            Id::Row(_) => "row",
+        }
+    }
+
+    const fn group(self) -> u8 {
+        match self {
+            Id::Lead | Id::Processing | Id::Done | Id::Why => 0,
+            Id::Mode(_) => 1,
+            Id::Close => 3,
+            _ => 2,
+        }
+    }
+
+    /// Its place left to right, for drawing order.
+    fn order(self) -> u8 {
+        match self {
+            Id::Lead => 0,
+            Id::Processing => 1,
+            Id::Done => 2,
+            Id::Why => 3,
+            Id::Mode(Mode::Area) => 4,
+            Id::Mode(Mode::Window) => 5,
+            Id::Mode(Mode::Screen) => 6,
+            Id::Record => 7,
+            Id::Cancel => 8,
+            Id::Finish => 9,
+            Id::Field => 10,
+            Id::Undo => 11,
+            Id::Ask => 12,
+            Id::Close => 13,
+            Id::Row(_) => 14,
+        }
+    }
+}
+
+/// A piece of the capsule at rest. `ident` is what makes it the same
+/// piece across changes: a new label on the finished capsule's lead is a
+/// new piece that crossfades with the old, while the Undo chip stays
+/// itself as it counts down and the field as it's typed into.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Item {
+    pub(crate) id: Id,
+    pub(crate) ident: String,
+    pub(crate) rect: [f32; 4],
+    pub(crate) active: bool,
+}
+
+fn mode_width(mode: Mode) -> f32 {
+    measure(mode.label(), MEDIUM) + 2.0 * SEG_PX + SEG_ICON + SEG_ICON_GAP
+}
+
+fn chip_width(label: f32) -> f32 {
+    label + 2.0 * CHIP_PX
+}
+
+/// A chip with keycaps before its label.
+pub(crate) fn keyed_width(keys: &[&str], label: &str, style: TextStyle) -> f32 {
+    keycaps_width(keys) + KEYCAP_GAP + measure(label, style) + 2.0 * CHIP_PX - 4.0
+}
+
+pub(crate) fn clock_width(clock: &str) -> f32 {
+    measure(clock, TIMER)
+}
+
+fn done_items(done: &Done, raw: &mut Vec<(Id, String, f32, bool)>) {
+    raw.push((
+        Id::Done,
+        done.text.clone(),
+        DONE_TEXT_X + measure(&done.text, STRONG) + LEAD_TRAIL,
+        false,
+    ));
+    if let Some(why) = &done.why {
+        raw.push((
+            Id::Why,
+            why.clone(),
+            measure(why, SMALL) + LEAD_TRAIL * 0.5,
+            false,
+        ));
+    }
+    if done.open.is_some() {
+        raw.push((Id::Field, String::new(), FIELD_MIN, false));
+    }
+    if let Some(seconds) = done.undo {
+        raw.push((
+            Id::Undo,
+            String::new(),
+            keyed_width(UNDO_KEYS, &undo_label(seconds), COUNT),
+            false,
+        ));
+    }
+    if let Some(ask) = &done.ask {
+        raw.push((
+            Id::Ask,
+            ask.clone(),
+            keyed_width(ASK_KEYS, ask, MEDIUM),
+            false,
+        ));
+    }
+    raw.push((Id::Close, String::new(), CHIP_H, false));
+}
+
+/// The resting capsule `[x, y, w, h]` and its items for `pres`, in panel
+/// points.
+///
+/// Every state is centred on [`CX`], except the recording capsule with its
+/// chips: it centres the chip row (`Area … ✕`) where the picker puts the
+/// same row and hangs the lead off its left, so switching to Area or Window
+/// moves no chip.
+pub(crate) fn layout(pres: &Pres, clock: &str) -> ([f32; 4], Vec<Item>) {
+    let mut raw: Vec<(Id, String, f32, bool)> = Vec::with_capacity(8);
+    let mut held_row = false;
+    let modes = |raw: &mut Vec<(Id, String, f32, bool)>, active: Mode| {
+        for mode in Mode::ALL {
+            raw.push((
+                Id::Mode(mode),
+                String::new(),
+                mode_width(mode),
+                mode == active,
+            ));
+        }
+    };
+    match pres {
+        Pres::Hidden => return ([CX - 48.0, TOP, 96.0, ISLAND_H], Vec::new()),
+        Pres::Selecting { mode } => {
+            modes(&mut raw, *mode);
+            if mode.shows_record() {
+                raw.push((
+                    Id::Record,
+                    String::new(),
+                    chip_width(measure("Record", STRONG)),
+                    false,
+                ));
+            }
+            raw.push((Id::Close, String::new(), CHIP_H, false));
+        }
+        Pres::Recording { chips } => {
+            let lead = LEAD_TEXT_X + clock_width(clock) + LEAD_TRAIL;
+            raw.push((Id::Lead, String::new(), lead, false));
+            if *chips {
+                held_row = true;
+                modes(&mut raw, Mode::Screen);
+                raw.push((Id::Close, String::new(), CHIP_H, false));
+            } else {
+                raw.push((
+                    Id::Cancel,
+                    String::new(),
+                    chip_width(measure("Cancel", MEDIUM)),
+                    false,
+                ));
+                raw.push((
+                    Id::Finish,
+                    String::new(),
+                    chip_width(measure("Finish", STRONG)),
+                    false,
+                ));
+            }
+        }
+        Pres::Processing => {
+            let w = PROCESSING_TEXT_X + measure(PROCESSING, STRONG) + PROCESSING_TRAIL;
+            raw.push((Id::Processing, String::new(), w, false));
+        }
+        Pres::Done(done) => done_items(done, &mut raw),
+    }
+    let gap_after = |i: usize| {
+        if raw[i].0.group() == raw[i + 1].0.group() {
+            CHIP_GAP
+        } else {
+            GROUP_GAP
+        }
+    };
+    let mut widths: Vec<f32> = raw.iter().map(|r| r.2).collect();
+    let span = |widths: &[f32], from: usize| -> f32 {
+        widths[from..].iter().sum::<f32>()
+            + (from..raw.len().saturating_sub(1))
+                .map(gap_after)
+                .sum::<f32>()
+    };
+    if let Some(field) = raw.iter().position(|r| r.0 == Id::Field) {
+        let grow = (LIST_W - 2.0 * ISLAND_INSET - span(&widths, 0)).max(0.0);
+        widths[field] += grow;
+    }
+    let (l, r) = if held_row {
+        let row = span(&widths, 1);
+        (
+            CX - row * 0.5 - gap_after(0) - widths[0] - ISLAND_INSET,
+            CX + row * 0.5 + ISLAND_INSET,
+        )
+    } else {
+        let w = span(&widths, 0) + 2.0 * ISLAND_INSET;
+        (CX - w * 0.5, CX + w * 0.5)
+    };
+    let mut x = l + ISLAND_INSET;
+    let mut items = Vec::with_capacity(raw.len());
+    for (i, (id, ident, _, active)) in raw.iter().enumerate() {
+        let w = widths[i];
+        items.push(Item {
+            id: *id,
+            ident: ident.clone(),
+            rect: [x, TOP + ISLAND_INSET, w, CHIP_H],
+            active: *active,
+        });
+        if i + 1 < raw.len() {
+            x += w + gap_after(i);
+        }
+    }
+    ([l, TOP, r - l, ISLAND_H], items)
+}
+
+/// Where the capsule enters from and leaves to: its own width,
+/// [`TOP_FROM`] of its height.
+fn pose(rest: [f32; 4]) -> [f32; 4] {
+    [rest[0], rest[1], rest[2], rest[3] * TOP_FROM]
+}
+
+/// One edge of the capsule, followed on the same closed-form spring Rune
+/// animates it on, so an entering chip can wait for the wall to pass it.
+#[derive(Clone, Copy, Debug)]
+struct Wall {
+    x0: f32,
+    v0: f32,
+    target: f32,
+    t0: f64,
+    spring: Spring,
+}
+
+impl Wall {
+    fn at_rest(x: f32) -> Self {
+        Self {
+            x0: x,
+            v0: 0.0,
+            target: x,
+            t0: 0.0,
+            spring: HIGHLIGHT,
+        }
+    }
+
+    fn at(&self, t: f64) -> (f32, f32) {
+        let dt = (t - self.t0).max(0.0) as f32;
+        if (self.x0 - self.target).abs() < 1e-4 && self.v0.abs() < 1e-4 {
+            return (self.target, 0.0);
+        }
+        self.spring.sample(self.x0, self.v0, self.target, dt)
+    }
+
+    fn to(&mut self, t: f64, target: f32, spring: Spring) {
+        let (x, v) = self.at(t);
+        *self = Self {
+            x0: x,
+            v0: v,
+            target,
+            t0: t,
+            spring,
+        };
+    }
+
+    fn snap(&mut self, t: f64, x: f32) {
+        *self = Self {
+            x0: x,
+            v0: 0.0,
+            target: x,
+            t0: t,
+            spring: self.spring,
+        };
+    }
+}
+
+/// Something mounted in the capsule. Its key carries a generation, so a
+/// chip that leaves and comes back is a new element entering in place
+/// rather than the old one flying back from where it faded.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Shown {
+    pub(crate) id: Id,
+    pub(crate) ident: String,
+    pub(crate) key: String,
+    pub(crate) rect: [f32; 4],
+    pub(crate) active: bool,
+    /// The spring for this element's next layout change.
+    pub(crate) motion: Spring,
+}
+
+impl Shown {
+    fn is(&self, item: &Item) -> bool {
+        self.id == item.id && self.ident == item.ident
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Step {
+    /// The capsule's walls narrowing, after the content has started
+    /// ([`SHELL_WAIT_S`]).
+    Shell([f32; 4], Spring),
+    /// The second frame of an entry: from the origin pose to rest.
+    Entry,
+    Mount(Shown),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    ChipsOpen,
+    ChipsClose,
+    Switch,
+    Phase,
+}
+
+pub(crate) struct Surface {
+    pub(crate) pres: Pres,
+    pub(crate) clock: String,
+    pub(crate) reduced: bool,
+    /// The capsule's resting rect, whether it shows, and the springs for
+    /// its next change.
+    pub(crate) shell: [f32; 4],
+    pub(crate) shell_on: bool,
+    pub(crate) shell_motion: Spring,
+    pub(crate) shell_fade: Spring,
+    pub(crate) items: Vec<Shown>,
+    pub(crate) highlight: Option<Shown>,
+    /// The next commit lands with no animation (an entry's origin pose).
+    pub(crate) instant: bool,
+    /// Counts the width morphs (each one lights the edge glow) and the last
+    /// one's settle time.
+    pub(crate) morphs: u32,
+    pub(crate) morph_settle: f32,
+    /// Phase changes for the motion trace.
+    pub(crate) events: Vec<String>,
+    pending: Vec<(f64, u64, Step)>,
+    target: Option<([f32; 4], Vec<Item>, Change)>,
+    walls: [Wall; 3],
+    generation: u64,
+    seq: u64,
+}
+
+impl Default for Surface {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Surface {
+    pub(crate) fn new() -> Self {
+        let shell = [CX - 60.0, TOP, 120.0, ISLAND_H];
+        Self {
+            pres: Pres::Hidden,
+            clock: "0:00".into(),
+            reduced: false,
+            shell: pose(shell),
+            shell_on: false,
+            shell_motion: ISLAND,
+            shell_fade: ISLAND_SCALE,
+            items: Vec::new(),
+            highlight: None,
+            instant: false,
+            morphs: 0,
+            morph_settle: 0.0,
+            events: Vec::new(),
+            pending: Vec::new(),
+            target: None,
+            walls: [
+                Wall::at_rest(shell[0]),
+                Wall::at_rest(shell[0] + shell[2]),
+                Wall::at_rest(TOP + shell[3] * TOP_FROM),
+            ],
+            generation: 0,
+            seq: 0,
+        }
+    }
+
+    /// `pres` at rest, as a first frame shows it (headless goldens).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "headless stills and motion runs")
+    )]
+    pub(crate) fn settled(mut self, pres: Pres) -> Self {
+        let (rest, items) = layout(&pres, &self.clock);
+        self.shell_on = !matches!(pres, Pres::Hidden);
+        self.shell = if self.shell_on { rest } else { pose(rest) };
+        self.items = items.iter().map(|item| self.shown(item, ISLAND)).collect();
+        self.highlight = self.highlight_for(&items, ISLAND);
+        self.pres = pres;
+        self
+    }
+
+    fn shown(&mut self, item: &Item, motion: Spring) -> Shown {
+        self.generation += 1;
+        Shown {
+            id: item.id,
+            ident: item.ident.clone(),
+            key: format!("{}#{}", item.id.trace_key(), self.generation),
+            rect: item.rect,
+            active: item.active,
+            motion,
+        }
+    }
+
+    /// The fade an element enters with (it leaves on [`PRESENCE_EXIT`]).
+    pub(crate) fn presence(&self) -> Spring {
+        Spring::new(REVEAL_ENTER_S * 1.6, 0.0)
+    }
+
+    fn highlight_for(&mut self, items: &[Item], motion: Spring) -> Option<Shown> {
+        let active = items.iter().find(|i| i.active)?;
+        self.generation += 1;
+        Some(Shown {
+            id: active.id,
+            ident: String::new(),
+            key: format!("highlight#{}", self.generation),
+            rect: active.rect,
+            active: true,
+            motion,
+        })
+    }
+
+    /// The timer reads `clock`. True when the capsule re-lays out for it (a
+    /// longer timer); the view draws the digits from a `LiveText`.
+    pub(crate) fn set_clock(&mut self, clock: &str, now: f64) -> bool {
+        if self.clock == clock {
+            return false;
+        }
+        let resize = (clock_width(&self.clock) - clock_width(clock)).abs() > 0.01;
+        self.clock = clock.to_owned();
+        if resize && matches!(self.pres, Pres::Recording { .. }) {
+            let same = self.pres.clone();
+            self.transition(same, now);
+        }
+        resize
+    }
+
+    /// Shows `next`. Retargets keep every element's position and velocity
+    /// (Rune's springs).
+    pub(crate) fn set(&mut self, next: Pres, now: f64) {
+        if next == self.pres {
+            return;
+        }
+        if std::mem::discriminant(&next) != std::mem::discriminant(&self.pres) {
+            self.events.push(format!("phase:{}", next.phase()));
+        }
+        let prev = std::mem::replace(&mut self.pres, next);
+        self.transition(prev, now);
+    }
+
+    /// Retargets from `prev` to `self.pres`.
+    fn transition(&mut self, prev: Pres, now: f64) {
+        let next = self.pres.clone();
+        self.seq += 1;
+        let t = now;
+        self.pending.clear();
+        self.target = None;
+        self.instant = false;
+
+        if matches!(next, Pres::Hidden) {
+            // Exit in place: the capsule settles back to its origin pose as
+            // it fades, and every item leaves with it.
+            let exit = Spring::new(ISLAND_SCALE.duration * 0.9, 0.0);
+            self.shell = pose(self.shell);
+            self.shell_on = false;
+            self.shell_motion = exit;
+            self.shell_fade = exit;
+            self.walls[2].to(t, self.shell[1] + self.shell[3], exit);
+            self.items.clear();
+            self.highlight = None;
+            return;
+        }
+
+        let (rest, items) = layout(&next, &self.clock);
+        if !self.shell_on || matches!(prev, Pres::Hidden) {
+            // Entry: this commit puts the capsule at its origin pose,
+            // invisibly and instantly; the next frame springs it to rest.
+            self.shell = pose(rest);
+            self.shell_on = false;
+            self.instant = true;
+            self.items.clear();
+            self.highlight = None;
+            let walls = [rest[0], rest[0] + rest[2], self.shell[1] + self.shell[3]];
+            for (wall, x) in self.walls.iter_mut().zip(walls) {
+                wall.snap(t, x);
+            }
+            self.target = Some((rest, items, Change::Phase));
+            // Due after this commit, never in the same poll.
+            self.pending.push((now + 1e-4, self.seq, Step::Entry));
+            return;
+        }
+
+        let change = match (&prev, &next) {
+            (Pres::Recording { chips: false }, Pres::Recording { chips: true }) => {
+                Change::ChipsOpen
+            }
+            (Pres::Recording { chips: true }, Pres::Recording { chips: false }) => {
+                Change::ChipsClose
+            }
+            (Pres::Recording { .. }, Pres::Selecting { .. }) => Change::Switch,
+            _ => Change::Phase,
+        };
+        let leaving = self.items.iter().any(|s| !items.iter().any(|i| s.is(i)));
+        self.items.retain(|s| items.iter().any(|i| s.is(i)));
+        if !items.iter().any(|i| i.active) {
+            self.highlight = None;
+        }
+        let narrowing = rest[2] < self.shell[2] - 1.0;
+        self.target = Some((rest, items, change));
+        let wait = if narrowing && leaving && !self.reduced {
+            SHELL_WAIT_S
+        } else {
+            0.0
+        };
+        self.apply_geometry(now, wait);
+    }
+
+    /// The walls (after `wait` animation seconds) and staying items move to
+    /// the target; entering items are scheduled for when the walls have
+    /// room for them.
+    fn apply_geometry(&mut self, now: f64, wait: f32) {
+        let Some((rest, items, change)) = self.target.take() else {
+            return;
+        };
+        let t = now;
+        let opening = rest[2] >= self.shell[2] - 1.0;
+        let (shell_spring, item_spring) = match change {
+            Change::ChipsOpen => (REVEAL_OPEN, Spring::new(REVEAL_OPEN.duration * FOLLOW, 0.0)),
+            Change::ChipsClose => (REVEAL_CLOSE, Spring::new(REVEAL_CLOSE.duration, 0.0)),
+            Change::Switch => (SWITCH_WIDTH, Spring::new(SWITCH_SLIDE.duration, 0.0)),
+            Change::Phase => (
+                ISLAND,
+                Spring::new(ISLAND.duration * if opening { FOLLOW } else { 1.0 }, 0.0),
+            ),
+        };
+        let entry = !self.shell_on;
+        if entry {
+            self.shell = rest;
+            self.shell_motion = ISLAND_SCALE;
+            self.shell_fade = Spring::new(ISLAND_SCALE.duration * 0.9, 0.0);
+            self.walls[2].to(t, rest[1] + rest[3], ISLAND_SCALE);
+        } else {
+            if (rest[2] - self.shell[2]).abs() > 1.0 && !self.reduced {
+                self.morphs = self.morphs.wrapping_add(1);
+                self.morph_settle = shell_spring.duration;
+            }
+            let at = t + f64::from(wait);
+            self.walls[0].to(at, rest[0], shell_spring);
+            self.walls[1].to(at, rest[0] + rest[2], shell_spring);
+            self.walls[2].to(at, rest[1] + rest[3], shell_spring);
+            if wait <= 0.0 {
+                self.move_shell(rest, shell_spring);
+            } else {
+                let due = now + f64::from(wait);
+                self.pending
+                    .push((due, self.seq, Step::Shell(rest, shell_spring)));
+            }
+        }
+        self.shell_on = true;
+
+        for item in &items {
+            if let Some(shown) = self.items.iter_mut().find(|s| s.is(item)) {
+                shown.motion = item_spring;
+                shown.rect = item.rect;
+                shown.active = item.active;
+            }
+        }
+        // The highlight rides its chip when the chip travels and trails a
+        // change of mode.
+        let active = items.iter().find(|i| i.active).cloned();
+        match (&mut self.highlight, &active) {
+            (Some(h), Some(a)) => {
+                h.motion = if h.id == a.id { item_spring } else { HIGHLIGHT };
+                h.id = a.id;
+                h.rect = a.rect;
+            }
+            (h, None) => *h = None,
+            (None, Some(_)) => {}
+        }
+
+        let presence = self.presence();
+        let mut rank = 0;
+        for item in &items {
+            if self.items.iter().any(|s| s.is(item)) {
+                continue;
+            }
+            let room = if entry {
+                ENTRY_CONTENT_DELAY_S + self.room_delay(item.rect, t, true)
+            } else {
+                self.room_delay(item.rect, t, false)
+            };
+            let delay = room + STAGGER_S * rank as f32;
+            rank += 1;
+            let shown = self.shown(item, presence);
+            if item.active && self.highlight.is_none() {
+                let h = self
+                    .highlight_for(std::slice::from_ref(item), presence)
+                    .expect("active");
+                self.pending
+                    .push((now + f64::from(delay), self.seq, Step::Mount(h)));
+            }
+            if delay <= 1e-4 {
+                self.items.push(shown);
+            } else {
+                self.pending
+                    .push((now + f64::from(delay), self.seq, Step::Mount(shown)));
+            }
+        }
+        self.sort_items();
+    }
+
+    fn move_shell(&mut self, rest: [f32; 4], spring: Spring) {
+        self.shell = rest;
+        self.shell_motion = spring;
+        self.shell_fade = spring;
+    }
+
+    /// Animation seconds until the walls clear `rect` by most of its
+    /// resting inset (and, on entry, until the bottom nearly reaches it).
+    fn room_delay(&self, rect: [f32; 4], t: f64, entry: bool) -> f32 {
+        let [l, r, _] = self.walls.map(|w| w.target);
+        let need_l = rect[0] - (rect[0] - l).max(0.0) * 0.6;
+        let need_r = rect[0] + rect[2] + (r - rect[0] - rect[2]).max(0.0) * 0.6;
+        let need_b = if entry {
+            rect[1] + rect[3] - 2.0
+        } else {
+            f32::NEG_INFINITY
+        };
+        let mut tau = 0.0_f32;
+        while tau < 1.5 {
+            let at = t + f64::from(tau);
+            let ok = self.walls[0].at(at).0 <= need_l + 0.01
+                && self.walls[1].at(at).0 >= need_r - 0.01
+                && self.walls[2].at(at).0 >= need_b - 0.01;
+            if ok {
+                return tau;
+            }
+            tau += 1.0 / 240.0;
+        }
+        tau
+    }
+
+    fn sort_items(&mut self) {
+        self.items.sort_by_key(|s| s.id.order());
+    }
+
+    /// Runs the steps that are due. True when something changed.
+    pub(crate) fn tick(&mut self, now: f64) -> bool {
+        let mut changed = false;
+        while let Some(i) = self
+            .pending
+            .iter()
+            .position(|(due, seq, _)| *due <= now + 1e-9 && *seq == self.seq)
+        {
+            let (_, _, step) = self.pending.remove(i);
+            changed = true;
+            match step {
+                Step::Entry => self.apply_geometry(now, 0.0),
+                Step::Shell(rest, spring) => self.move_shell(rest, spring),
+                Step::Mount(shown) if shown.key.starts_with("highlight") => {
+                    self.highlight = Some(shown);
+                }
+                Step::Mount(shown) => {
+                    self.items.push(shown);
+                    self.sort_items();
+                }
+            }
+        }
+        self.pending.retain(|(_, seq, _)| *seq == self.seq);
+        changed
+    }
+
+    /// The next due step, in clock seconds.
+    pub(crate) fn next_due(&self) -> Option<f64> {
+        self.pending
+            .iter()
+            .map(|(due, ..)| *due)
+            .min_by(f64::total_cmp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::flow::{Dest, Footer, Lead, List};
+    use super::*;
+
+    fn recording(chips: bool) -> Pres {
+        Pres::Recording { chips }
+    }
+
+    /// Steps the surface like frames at 120 Hz until `until`.
+    fn run(s: &mut Surface, from: f64, until: f64) -> f64 {
+        let mut now = from;
+        while now < until {
+            now += 1.0 / 120.0;
+            s.tick(now);
+        }
+        now
+    }
+
+    fn ruled(undo: Option<u32>) -> Pres {
+        Pres::Done(Done {
+            why: Some("rule".into()),
+            undo,
+            ask: Some("Elsewhere…".into()),
+            ..Done::plain(Lead::Check, "Sent to SEER")
+        })
+    }
+
+    fn open() -> Pres {
+        Pres::Done(Done {
+            open: Some((
+                String::new(),
+                List {
+                    suggested: vec![Dest::new("SEER", "guess")],
+                    recent: vec![Dest::new("HOME", "yesterday")],
+                    selected: 0,
+                    footer: Footer::KeepCopied,
+                },
+            )),
+            ..Done::plain(Lead::Check, "Copied")
+        })
+    }
+
+    #[test]
+    fn switching_to_area_keeps_every_chip_still() {
+        let (_, rec) = layout(&recording(true), "0:00");
+        let (_, pick) = layout(&Pres::Selecting { mode: Mode::Area }, "0:00");
+        for item in &pick {
+            let before = rec.iter().find(|r| r.id == item.id).expect("same chips");
+            assert_eq!(before.rect, item.rect, "{:?} moved", item.id);
+        }
+    }
+
+    #[test]
+    fn layouts_are_inset_gapped_and_fit_the_panel() {
+        for pres in [
+            recording(false),
+            recording(true),
+            Pres::Processing,
+            Pres::Selecting { mode: Mode::Screen },
+            ruled(Some(3)),
+            open(),
+        ] {
+            let (shell, items) = layout(&pres, "0:00");
+            let first = items.first().unwrap().rect;
+            let last = items.last().unwrap().rect;
+            assert!((first[0] - shell[0] - ISLAND_INSET).abs() < 1e-3);
+            assert!((shell[0] + shell[2] - last[0] - last[2] - ISLAND_INSET).abs() < 1e-3);
+            assert!(
+                shell[0] >= 0.0 && shell[0] + shell[2] <= PANEL_W,
+                "{pres:?}"
+            );
+            for pair in items.windows(2) {
+                let gap = pair[1].rect[0] - pair[0].rect[0] - pair[0].rect[2];
+                assert!(gap == CHIP_GAP || gap == GROUP_GAP, "{gap}");
+            }
+        }
+        let (shell, _) = layout(&open(), "0:00");
+        assert!(
+            (shell[2] - LIST_W).abs() < 0.5,
+            "the open capsule is the list's width"
+        );
+    }
+
+    #[test]
+    fn the_countdown_keeps_its_chip_and_width() {
+        let (a, three) = layout(&ruled(Some(3)), "0:00");
+        let (b, two) = layout(&ruled(Some(2)), "0:00");
+        assert_eq!(a, b, "tabular digits");
+        assert_eq!(three, two);
+        let mut s = Surface::new().settled(ruled(Some(3)));
+        let key = s
+            .items
+            .iter()
+            .find(|i| i.id == Id::Undo)
+            .unwrap()
+            .key
+            .clone();
+        s.set(ruled(Some(2)), 1.0);
+        run(&mut s, 1.0, 1.5);
+        assert_eq!(s.items.iter().find(|i| i.id == Id::Undo).unwrap().key, key);
+    }
+
+    #[test]
+    fn a_new_label_is_a_new_piece() {
+        let mut s = Surface::new().settled(ruled(None));
+        let old = s
+            .items
+            .iter()
+            .find(|i| i.id == Id::Done)
+            .unwrap()
+            .key
+            .clone();
+        s.set(Pres::Done(Done::plain(Lead::Check, "Taken back")), 1.0);
+        run(&mut s, 1.0, 2.0);
+        let new = s
+            .items
+            .iter()
+            .find(|i| i.id == Id::Done)
+            .unwrap()
+            .key
+            .clone();
+        assert_ne!(old, new, "crossfades rather than swapping text in place");
+    }
+
+    #[test]
+    fn entry_lands_the_pose_instantly_then_springs_to_rest_with_content_after() {
+        let mut s = Surface::new();
+        s.set(recording(true), 0.0);
+        assert!(s.instant && !s.shell_on && s.items.is_empty());
+        assert!(s.shell[3] < ISLAND_H, "origin pose is shorter");
+        s.instant = false;
+        assert!(s.tick(0.001));
+        assert!(s.shell_on && s.shell[3] == ISLAND_H);
+        assert!(s.items.is_empty(), "content waits for the shell");
+        run(&mut s, 0.001, 0.6);
+        assert_eq!(s.items.len(), 5, "lead, three chips and close");
+        assert!(
+            s.highlight
+                .as_ref()
+                .is_some_and(|h| h.id == Id::Mode(Mode::Screen))
+        );
+    }
+
+    #[test]
+    fn narrowing_walls_follow_the_content_and_opening_waits_for_room() {
+        let mut s = Surface::new();
+        s.set(recording(true), 0.0);
+        let now = run(&mut s, 0.0, 1.0);
+        let wide = s.shell;
+        s.set(recording(false), now);
+        assert_eq!(s.shell, wide, "walls start after the chips begin to fade");
+        assert!(!s.items.iter().any(|i| i.id == Id::Mode(Mode::Area)));
+        let now = run(&mut s, now, now + 0.03);
+        assert_eq!(s.shell, wide);
+        assert!(
+            s.items.iter().any(|i| i.id == Id::Finish),
+            "Finish crossfades over the chips leaving under it"
+        );
+        let now = run(&mut s, now, now + 0.05);
+        assert!(s.shell[2] < wide[2]);
+
+        let now = run(&mut s, now, now + 1.0);
+        s.set(Pres::Processing, now);
+        let now = run(&mut s, now, now + 1.0);
+        s.set(ruled(Some(3)), now);
+        assert!(
+            !s.items.iter().any(|i| i.id == Id::Close),
+            "close waits for the wall"
+        );
+        run(&mut s, now, now + 1.0);
+        assert!(s.items.iter().any(|i| i.id == Id::Close));
+    }
+
+    #[test]
+    fn a_mode_change_in_place_slides_the_highlight() {
+        let mut s = Surface::new().settled(Pres::Selecting { mode: Mode::Screen });
+        let before = s.highlight.clone().unwrap();
+        s.set(Pres::Selecting { mode: Mode::Area }, 1.0);
+        run(&mut s, 1.0, 1.1);
+        let after = s.highlight.clone().unwrap();
+        assert_eq!(after.key, before.key, "one highlight travels");
+        assert_eq!(after.id, Id::Mode(Mode::Area));
+        assert_eq!(after.motion, HIGHLIGHT);
+    }
+
+    #[test]
+    fn an_interrupted_transition_drops_its_pending_steps() {
+        let mut s = Surface::new();
+        s.set(recording(true), 0.0);
+        s.tick(0.001);
+        s.set(Pres::Hidden, 0.002);
+        run(&mut s, 0.002, 1.0);
+        assert!(s.items.is_empty() && !s.shell_on);
+    }
+
+    #[test]
+    fn long_names_end_in_an_ellipsis() {
+        let cut = ellipsize("OpenCode Desktop · Problems board rewrite", MEDIUM, 120.0);
+        assert!(
+            cut.ends_with('…') && measure(&cut, MEDIUM) <= 120.0,
+            "{cut}"
+        );
+        assert_eq!(ellipsize("HEX", MEDIUM, 120.0), "HEX");
+    }
+}

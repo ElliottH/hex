@@ -31,7 +31,7 @@ onnx-benchmark = ["dep:transcribe-rs"]
 # The `capture` experiment's engine (Scrawl's `scrawl-capture`, macOS only): a
 # build option (`HEX_CAPTURE=1 scripts/build-app.sh`), off by default and in
 # every public build, which never compile it or its Swift helper.
-capture = ["dep:scrawl-capture", "dep:anyhow"]
+capture = ["dep:scrawl-capture", "dep:anyhow", "dep:rune-motion"]
 
 [profile.moonshine-lab]
 inherits = "release"
@@ -100,6 +100,8 @@ x11rb = { version = "0.14.0", features = ["xtest"] }
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
 rune = { git = "https://github.com/anomalyco/rune.git", rev = "a4d39795d402a0e8db7abd5b652b4de662a69b99" }
 rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "a4d39795d402a0e8db7abd5b652b4de662a69b99" }
+# The capture capsule's motion-lint trace (`capture` only).
+rune-motion = { git = "https://github.com/anomalyco/rune.git", rev = "a4d39795d402a0e8db7abd5b652b4de662a69b99", optional = true }
 rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "a4d39795d402a0e8db7abd5b652b4de662a69b99" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dev-dependencies]

@@ -125,7 +125,6 @@ pub enum RecognitionControl {
     },
     /// The capture capsule's switch chips and picker (`capture_host`).
     #[cfg(hex_capture)]
-    #[expect(dead_code, reason = "the capture capsule (scrawl-capsule) sends these")]
     CaptureCommand {
         command: crate::capture_host::CaptureCommand,
         reply: SyncSender<ControlReply>,
