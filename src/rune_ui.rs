@@ -14,6 +14,7 @@ mod commands;
 mod controls;
 mod explainer;
 mod fun;
+mod hero;
 mod history;
 #[cfg_attr(target_os = "linux", path = "rune_ui/linux_host.rs")]
 #[cfg_attr(target_os = "windows", path = "rune_ui/windows_host.rs")]
@@ -162,7 +163,8 @@ pub(crate) fn run_app(
 pub(crate) fn app(connect: host::Connect) -> rune::App<Ui> {
     let app = rune::App::new(spec())
         .init(move || Ui::load_with(connect))
-        .on_close(on_close);
+        .on_close(on_close)
+        .compositor(hero::HeroCompositor::default());
     let window = app.handle();
     window.update({
         let window = window.clone();
@@ -296,7 +298,7 @@ pub(crate) fn meeting_failed(ui: &mut Ui, error: String) {
 /// scene, or `live` for the running Hex's `hex status`.
 #[cfg(target_os = "linux")]
 pub(crate) fn render() {
-    rune::run(spec());
+    rune::run_with(spec(), hero::HeroCompositor::default());
 }
 
 /// The window's logical size, which every pane and the picker fit.
@@ -1710,7 +1712,18 @@ const SCENES: &[Scene] = &[
     ("mac-onboarding-done", |ui| {
         mac_tour(ui, onboarding::MacStep::Done)
     }),
+    // The welcome hero animating (`--video`, or a live window), and settled as
+    // Reduce Motion shows it.
+    ("onboarding-hero", |ui| hero_tour(ui, false)),
+    ("onboarding-hero-still", |ui| hero_tour(ui, true)),
 ];
+
+fn hero_tour(ui: &mut Ui, still: bool) {
+    mac_tour(ui, onboarding::MacStep::Welcome);
+    if let Some(tour) = &mut ui.tour {
+        tour.hero_still = still;
+    }
+}
 
 /// The macOS window with every permission granted, meetings on, the Hex
 /// Microphone experiment on, and sample meetings and commands.
