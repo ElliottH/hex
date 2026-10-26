@@ -392,7 +392,7 @@ mod tests {
         );
     }
 
-    /// Kit's review: a drag that starts on a left display and overshoots onto the laptop. The
+    /// A review case: a drag that starts on a left display and overshoots onto the laptop. The
     /// picker keeps the drag on the display it started on (`ui::area_rect`), so the area is the
     /// left display's part and is recorded there.
     #[test]

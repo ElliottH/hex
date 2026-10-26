@@ -327,7 +327,7 @@ pub struct EngineConfig {
     /// Apple Speech locale (BCP-47, e.g. "zh-TW"); missing means the Mac's own language.
     #[serde(default)]
     pub apple_locale: Option<String>,
-    /// Behaviour Kit tries locally before it ships (`{"agentContext": true}`); see `experiment`.
+    /// Behaviour tried locally before it ships (`{"agentContext": true}`); see `experiment`.
     /// Read leniently (`lenient_experiments`), so a stray value never fails the file.
     #[serde(default, deserialize_with = "lenient_experiments")]
     pub experiments: std::collections::BTreeMap<String, bool>,
@@ -1526,7 +1526,7 @@ mod tests {
         let cfg = load_config_from(&path);
         assert_eq!(cfg.auto_send, Some(false));
         assert!(cfg.experiments.is_empty());
-        // Tests never read Kit's config, only what this process turned on.
+        // Tests never read the user's config, only what this process turned on.
         assert!(!experiment("neverEnabled"));
         enable_experiment("enabledForThisTest");
         assert!(experiment("enabledForThisTest"));

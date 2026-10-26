@@ -2079,7 +2079,7 @@ mod tests {
         assert!(r[0] <= 0.30 && r[0] > 0.26, "left edge {r:?}");
     }
 
-    /// Kit's capture: a tall Focus crop whose right edge ran through a ragged paragraph,
+    /// A real capture: a tall Focus crop whose right edge ran through a ragged paragraph,
     /// cutting "…instead of 5 GB, a" mid-line, because each column there is only a few
     /// percent text.
     #[test]

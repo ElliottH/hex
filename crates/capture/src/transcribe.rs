@@ -424,30 +424,47 @@ pub fn transcribe_with(
         if let Some(live) = audio.take_live().and_then(|live| finish_live(live, audio)) {
             return normalize_transcript(live, audio.start_offset_ms);
         }
-        match transcriber.transcribe(audio) {
+        let missing = match transcriber.transcribe(audio) {
             Ok(Some(transcript)) => return normalize_transcript(transcript, audio.start_offset_ms),
-            Ok(None) => {}
-            Err(error) => {
-                crate::log::scrawl_log(format!("Transcription failed: {error:#}"));
-            }
-        }
+            Ok(None) => transcriber_unavailable(),
+            Err(error) => transcriber_failed(&error),
+        };
         return TranscriptData {
             source: "offline".into(),
+            missing: Some(missing),
             ..Default::default()
         };
     }
     if let Some(wav) = wav {
-        match transcriber.transcribe_wav(wav, 0) {
+        let missing = match transcriber.transcribe_wav(wav, 0) {
             Ok(Some(transcript)) => return normalize_transcript(transcript, 0),
-            Ok(None) => {}
-            Err(error) => {
-                crate::log::scrawl_log(format!("Transcription failed: {error:#}"));
-            }
-        }
+            Ok(None) => transcriber_unavailable(),
+            Err(error) => transcriber_failed(&error),
+        };
+        return TranscriptData {
+            source: "offline".into(),
+            missing: Some(missing),
+            ..Default::default()
+        };
     }
     TranscriptData {
         source: "none".into(),
         ..Default::default()
+    }
+}
+
+fn transcriber_unavailable() -> crate::model::MissingTranscript {
+    crate::model::MissingTranscript {
+        reason: "Transcriber unavailable.".into(),
+        retry: false,
+    }
+}
+
+fn transcriber_failed(error: &anyhow::Error) -> crate::model::MissingTranscript {
+    crate::log::scrawl_log(format!("Transcription failed: {error:#}"));
+    crate::model::MissingTranscript {
+        reason: format!("Transcription failed ({error:#})."),
+        retry: false,
     }
 }
 
@@ -727,5 +744,39 @@ mod tests {
         assert_eq!(tr.segments[0].t0, 260);
         assert_eq!(tr.segments[0].t1, 350);
         assert_eq!(tr.segments[0].text, "hello world.");
+    }
+
+    #[test]
+    fn a_transcriber_that_declines_or_fails_leaves_the_reason() {
+        struct Declines;
+        impl Transcriber for Declines {
+            fn transcribe(&self, _: &RecordedAudio) -> Result<Option<TranscriptData>> {
+                Ok(None)
+            }
+            fn transcribe_wav(&self, _: &Path, _: u64) -> Result<Option<TranscriptData>> {
+                Ok(None)
+            }
+        }
+        struct Fails;
+        impl Transcriber for Fails {
+            fn transcribe(&self, _: &RecordedAudio) -> Result<Option<TranscriptData>> {
+                anyhow::bail!("model missing")
+            }
+        }
+        let audio = RecordedAudio::new(vec![0.1; 160], 16_000, 0, Vec::new());
+        let declined = transcribe_with(None, Some(&audio), &Declines);
+        assert_eq!(declined.source, "offline");
+        let missing = declined.missing.unwrap();
+        assert_eq!(missing.reason, "Transcriber unavailable.");
+        assert!(!missing.retry);
+        let failed = transcribe_with(None, Some(&audio), &Fails);
+        assert_eq!(
+            failed.missing.unwrap().reason,
+            "Transcription failed (model missing)."
+        );
+
+        let from_wav = transcribe_with(Some(Path::new("unused.wav")), None, &Declines);
+        assert_eq!(from_wav.source, "offline");
+        assert_eq!(from_wav.missing.unwrap().reason, "Transcriber unavailable.");
     }
 }

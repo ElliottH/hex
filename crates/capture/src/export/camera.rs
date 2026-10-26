@@ -4,7 +4,7 @@
 //! points, and the cursor's path) into a rectangle per frame; the helper only renders them.
 //!
 //! The approach follows ScreenDemon's click zoom (`sd-composition/src/lib.rs`, see the constants
-//! below) with Kit's motion rules on top:
+//! below) with the motion rules on top:
 //!
 //! - Nearby activity shares one zoom, focused on its bounding box; a zoom is held until
 //!   `HOLD_MS` after the last activity, then eases back out (ScreenDemon: 1.5 s hold, 2.2 s
@@ -29,7 +29,7 @@ pub const FIT_FRACTION: f32 = 0.7;
 pub const LEAD_MS: u64 = 350;
 /// How long a zoom is held after the last activity before easing out.
 pub const HOLD_MS: u64 = 2_500;
-/// Spring visual duration in seconds (Kit's `camera` row, 1.0–1.8 / 0, a little quicker for a
+/// Spring visual duration in seconds (the `camera` row, 1.0–1.8 / 0, a little quicker for a
 /// screen recording). ω = 2π / (1.2 · duration), ScreenDemon's Motion conversion.
 pub const VISUAL_DURATION_S: f64 = 0.9;
 /// Follow dead zone, as a fraction of the crop at scale 1 (ScreenDemon `margin = 0.22 / scale`).

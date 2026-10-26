@@ -3120,7 +3120,7 @@ mod tests {
         assert!(at(1400.0, 400.0), "a helper that isn't the source");
     }
 
-    /// Kit's Screen capture on the Pro: the old listen-only event tap was off (no Input
+    /// A screen capture on a laptop: the old listen-only event tap was off (no Input
     /// Monitoring), so his clicks on OpenCode's composer never reached the bundle. Clicks now
     /// come from the mouse monitor; polled button state stands in if it couldn't be installed.
     #[test]
