@@ -1,7 +1,7 @@
 # Captures (experimental, a build option)
 
 Scrawl's capture engine hosted inside Hex, steps 3 to 5 of
-[the plan](../plans/capture-in-hex.md) without the capsule. It runs the real
+[the plan](../plans/capture-in-hex.md). It runs the real
 `scrawl-capture` crate, imported into `crates/capture`: it records the active
 display with ScreenCaptureKit (or a cabled iPhone through `scrawl-helper`'s
 mirror) and narration from Hex's microphone, takes Shift ink and clicks from
@@ -9,8 +9,8 @@ Hex's event tap, transcribes the narration with word timestamps on Hex's
 loaded model, writes a Scrawl bundle into Scrawl's captures folder, copies it
 to the clipboard, and sends it to an OpenCode session with Scrawl's router
 (`crates/router`), run in Hex's process. Settings › Experiments › Scrawl turns
-it on and holds its settings. The capsule (switch chips, picker, route chips)
-and the ink and laser overlay are on the `scrawl-capsule` branch, not here.
+it on and holds its settings. Scrawl's capsule (switch chips, the on-screen
+picker, route chips) and its ink and laser overlay are Rune overlays.
 
 ```ts
 Turn it on                               // capture.gate
@@ -112,24 +112,30 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 ├── Failed -> its `error`, or "Screen Recording is off" when it isn't granted;
 │   a start that fails before any snapshot showed it recording still shows
 ├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips, plus
-│   iPhone while one is cabled (`Input::Phone`), for 3.5 s
+│   iPhone while the snapshot names a cabled phone, for 3.5 s
 │   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on
 │   │   the capsule, and 1.2 s after it leaves
 │   ├── A chip restarts rather than retargets (Scrawl's `switch_recording`)
 │   ├── Screen -> it's what's recording: the chips fold, no command
-│   ├── iPhone -> Action::Switch(Iphone), for CaptureCommand::Switch once there
-│   │   is a phone target (logged); nothing sends `Input::Phone` yet, so the chip
-│   │   never shows
+│   ├── iPhone -> CaptureCommand::Switch(Phone): the recording restarts on the
+│   │   phone
 │   └── Window or Area -> Discard; the capsule becomes the picker (begin_picking)
 ├── Picker: ⌥⇧S records what the on-screen picker shows; Esc closes it
 ├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
-├── Routing (Scrawl's routing.md), built and scene-tested; nothing feeds it until
-│   routing exists
+├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
+│   capsule runs a rule's undo window and a chip's send itself, and follows
+│   only Queued (then Sent), how an Undo ended, and a failed send
 │   ├── A rule's send -> "Sending to X…", Undo for 3 s (esc), and the runner-up
 │   │   as a "Send to Y" chip that redirects at once; then "Sent to X" with an
-│   │   "Elsewhere…" chip for the list (⌥⇧V opens it throughout)
+│   │   "Elsewhere…" chip for the list
 │   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
-│   │   a chip sends at once; ⌥⇧V still opens the list
+│   │   a chip sends at once
+│   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
+│   │   session by title, which the router resolves among the sessions it listed
+│   ├── ⌥⇧V, esc for Undo, and the list's keys (type to filter, ↑↓, ⏎, ⇧⏎
+│   │   always) need a key path from the listener, as the picker's ⌥⇧S and Esc
+│   │   have; not wired, so Undo and the list work by click only
+│   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list
 │   └── Long names give way together so the widest row stays inside the panel
 └── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
@@ -345,7 +351,10 @@ Checks:
   (`chips_fold_once_seen_when_work_starts_but_never_under_the_pointer`,
   `the_shortcut_records_the_pickers_screen_and_a_chip_discards_the_recording`,
   …), feed tests
-  (`the_shortcuts_recording_shows_its_chips_until_work_starts`, …), goldens
+  (`the_shortcuts_recording_shows_its_chips_until_work_starts`,
+  `a_rule_shows_once_and_only_news_the_capsule_cant_know_moves_it`,
+  `a_queued_send_says_so_and_says_sent_when_it_goes`,
+  `a_cabled_phone_shows_its_chip`, …), goldens
   `tests/golden/capture-capsule-*.png`, and
   `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
   scripted state change per frame, Calm and Reduce Motion, for no pops,

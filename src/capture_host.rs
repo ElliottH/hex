@@ -60,10 +60,6 @@ pub use library::{
     explain as explain_capture, list as list_captures, send as send_capture, show as show_capture,
 };
 pub use routing::CaptureRoute;
-#[expect(
-    unused_imports,
-    reason = "the capture capsule (scrawl-capsule) reads routes"
-)]
 pub use routing::{RouteAnswer, RouteDelivery, RouteDest};
 
 /// The sink's capacity in microphone chunks (about 10 ms each): seconds of
@@ -185,18 +181,15 @@ pub enum TargetKind {
 /// What the capture capsule asks of the host, through
 /// `RecognitionControl::CaptureCommand`.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capture capsule (scrawl-capsule) drives these"
-    )
-)]
 pub enum CaptureCommand {
     /// Starts a capture on the picker's pick; nothing while one records.
     Start(CaptureTarget),
     /// Looks for a cabled iPhone off the listener's thread;
     /// [`CaptureSnapshot::phone`] follows. Each start also looks.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "each start looks, which is all the capsule needs")
+    )]
     FindPhone,
     /// Drops the recording capture: its bundle is removed and it never
     /// settles, so the capsule can turn into the picker in its place.
@@ -205,13 +198,6 @@ pub enum CaptureCommand {
     /// [`Self::Discard`] does and starts `target` in the same step, so no
     /// snapshot shows nothing recording in between. With nothing recording,
     /// only starts.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the iPhone chip switches once there is a phone target"
-        )
-    )]
     Switch(CaptureTarget),
     /// Sends the newest written capture (`snapshot().last`) to `to` now: a
     /// session ID, or a name its route lists, suggestions first. A send

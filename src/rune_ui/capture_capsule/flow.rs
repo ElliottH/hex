@@ -71,13 +71,6 @@ pub(crate) struct Dest {
     pub(crate) why: String,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Hex hosts no router or capture shortcut yet; tests drive these"
-    )
-)]
 impl Dest {
     pub(crate) fn new(name: impl Into<String>, why: impl Into<String>) -> Self {
         Self {
@@ -89,13 +82,6 @@ impl Dest {
 
 /// The router's answer for a finished capture (Scrawl's design f: only a
 /// rule ever sends; a guess suggests).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Hex hosts no router or capture shortcut yet; tests drive these"
-    )
-)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
     /// A rule matched, so it was sent to `to`.
@@ -119,13 +105,6 @@ pub(crate) enum Route {
 
 /// What the capture engine says became of the bundle
 /// (`scrawl_capture::delivery::Delivery`).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Hex hosts no router or capture shortcut yet; tests drive these"
-    )
-)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Delivered {
     Sent { to: String },
@@ -133,13 +112,6 @@ pub(crate) enum Delivered {
 }
 
 /// How a send the capsule asked to take back ended (Hex's router undo).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Hex hosts no router or capture shortcut yet; tests drive these"
-    )
-)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Undone {
     /// Taken back before the session saw it, or reverted.
@@ -149,13 +121,6 @@ pub(crate) enum Undone {
 }
 
 /// Everything that moves the capsule.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Hex hosts no router or capture shortcut yet; tests drive these"
-    )
-)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Input {
     /// A capture's stage, from `capture_host`'s engine events.
@@ -163,6 +128,13 @@ pub(crate) enum Input {
     Delivered(Delivered),
     Routed(Route),
     /// ⌥⇧S held: the picker, or S stepping it to the next mode.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Scrawl dropped hold-to-pick; tests open the picker with it"
+        )
+    )]
     Pick(Mode),
     /// The capture failed, and why, when the host knows.
     Failed(Option<String>),
@@ -178,10 +150,31 @@ pub(crate) enum Input {
     /// ⌥⇧V: the list opens (or, when open, nothing).
     OpenList,
     /// What's typed into the open list's field.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the open list's keys wait on a listener key path, as the picker's have"
+        )
+    )]
     Query(String),
     /// Up and Down in the open list.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the open list's keys wait on a listener key path, as the picker's have"
+        )
+    )]
     Move(i32),
     /// Return (or ⇧Return, `always`) in the open list.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the open list's keys wait on a listener key path, as the picker's have"
+        )
+    )]
     Send {
         always: bool,
     },

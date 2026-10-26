@@ -83,10 +83,11 @@ hex capture start|stop|cancel|status     // `--features capture`; POST /control 
   publishes it on every change; engine progress moves a capture on but never
   settles it. The capsule, the router, and `hex capture list` subscribe here
   rather than to the host.
-- Routing and delivery (step 5) and a cabled iPhone are built; see those
-  sections. Not built yet on this branch: the capsule and the ink and laser
-  overlays (on `scrawl-capsule`), iPhone ingest (ScrawlKit pairing), and
-  moving the ingest token.
+- Routing and delivery (step 5), a cabled iPhone, the capsule, the on-screen
+  picker, and the ink and laser overlays are built; see those sections and
+  `docs/features/capture.md`. Not built yet: iPhone ingest (ScrawlKit
+  pairing), moving the ingest token, and a listener key path for the open
+  list (⌥⇧V, typing, arrows, Return).
 
 Step 4, first half (the shortcut, input, Escape) with the pane, import, and
 coexistence from step 5:
@@ -311,8 +312,9 @@ where the work starts (the `capture_host` worker), not only in the window.
   (`RecordedAudio::since`) and transcribed by Hex's transcriber. A mirror
   that ends on its own (`Event::PhoneEnded`) finishes the capture at the
   listener's next reap.
-- The done capsule's route chips read `SettledCapture.route` (answer,
-  delivery, offer) and send `CaptureCommand::{Send, Undo, Redirect}`.
+- The done capsule's route chips read `SettledCapture.route` (its answer,
+  then only the deliveries the capsule can't know itself) and send
+  `CaptureCommand::{Send, Undo, Redirect}`. Built; `offer` isn't drawn.
 - A Scrawl pane under Experiments, feature-owned (D-5): opt-in, shortcut,
   Screen Recording, transcriber, captures folder, retention, and "Use Hex for
   captures" while Scrawl runs (built; iPhone joins with ingest).
@@ -377,8 +379,8 @@ engine tools (autocrop eval, capture simulation, reprocess) under
    Built: copied without history from `e351ddb`.
 3. `capture_host` with the experiment gate, the capture sink, Parakeet words,
    and a headless `hex capture start|stop` producing a bundle. Built.
-4. Input and Escape (built), then the Rune capsule and ink overlay with
-   scenes.
+4. Input and Escape, then the Rune capsule, picker, and ink overlay with
+   scenes and motion traces. Built.
 5. Router in-process, the Scrawl pane, import, and coexistence. Built.
 6. Compare Parakeet and SpeechAnalyzer word times on recorded captures. Done
    (Oct 25): Parakeet's lag is corrected in `capture_host`.
