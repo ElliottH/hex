@@ -1218,7 +1218,7 @@ impl CaptureHost {
             ShortcutAction::Record => ScrawlCaptureAction::Start,
             ShortcutAction::Finish => ScrawlCaptureAction::Stop,
             ShortcutAction::Pick => {
-                picker_key(PickerKey::Shortcut);
+                capsule_key(CapsuleKey::Shortcut);
                 return self.report(false, None);
             }
             ShortcutAction::None | ShortcutAction::Cancel => return self.report(false, None),
@@ -1833,7 +1833,7 @@ impl LiveInput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShortcutActivity {
     Free,
-    /// The capsule's picker is open ([`begin_picking`]).
+    /// The capsule's picker is open ([`CapsuleKeys::Picker`]).
     Picking,
     Recording {
         elapsed: Duration,
@@ -1966,59 +1966,191 @@ impl CaptureShortcut {
     }
 }
 
-/// A key the capsule's picker gets from Hex's tap: the picker never takes
-/// focus.
+/// The keys the capsule takes from Hex's tap while it is on screen: it never
+/// takes focus, so these never reach the app in front.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PickerKey {
-    /// The capture shortcut: record what the picker is on.
+pub enum CapsuleKeys {
+    /// The picker: the capture shortcut ([`CapsuleKey::Shortcut`]) and Escape.
+    Picker,
+    /// A routed capsule: the Paste Last shortcut opens its list
+    /// ([`CapsuleKey::OpenList`]) instead of pasting, and Escape too while
+    /// `escape` (a send that can still be undone).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the capsule takes routed keys next")
+    )]
+    Route { escape: bool },
+    /// The open list: every key press without ⌘ or ⌃ that isn't one of
+    /// Hex's shortcuts.
+    List,
+}
+
+/// A key the capsule gets from Hex's tap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapsuleKey {
+    /// The capture shortcut, while picking: record what the picker is on.
     Shortcut,
     Escape,
+    /// The Paste Last shortcut, while routed.
+    OpenList,
+    /// What a key types in the list, in the active layout.
+    Text(String),
+    Backspace,
+    Up,
+    Down,
+    /// Return or Enter, ⇧ for always.
+    Return {
+        shift: bool,
+    },
+    /// 1 to 9 typed in the list (otherwise text).
+    Digit(u8),
 }
 
-type OnPickerKey = Arc<dyn Fn(PickerKey) + Send + Sync>;
+type OnCapsuleKey = Arc<dyn Fn(CapsuleKey) + Send + Sync>;
 
-static PICKER: Mutex<Option<(u64, OnPickerKey)>> = Mutex::new(None);
-static PICKERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The capsule's picker is open until the guard drops. While it lives, the
-/// listener consumes fresh presses of the capture shortcut and Escape and
-/// hands them to `on_key`, on the listener's thread: it must not block. A
-/// newer picker replaces an older one.
-pub fn begin_picking(on_key: impl Fn(PickerKey) + Send + Sync + 'static) -> Picking {
-    let id = PICKERS.fetch_add(1, Ordering::Relaxed) + 1;
-    *PICKER.lock().unwrap_or_else(|error| error.into_inner()) = Some((id, Arc::new(on_key)));
-    Picking(id)
+struct KeyGrab {
+    id: u64,
+    keys: CapsuleKeys,
+    on_key: OnCapsuleKey,
 }
 
-/// The open picker; see [`begin_picking`].
-#[must_use = "the picker closes when this drops"]
-pub struct Picking(u64);
+static GRAB: Mutex<Option<KeyGrab>> = Mutex::new(None);
+static GRABS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// [`GRAB`]'s keys for the tap, without its lock: 0 none, then
+/// [`keys_code`].
+static GRAB_KEYS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-impl Drop for Picking {
+fn keys_code(keys: Option<CapsuleKeys>) -> u8 {
+    match keys {
+        None => 0,
+        Some(CapsuleKeys::Picker) => 1,
+        Some(CapsuleKeys::Route { escape: false }) => 2,
+        Some(CapsuleKeys::Route { escape: true }) => 3,
+        Some(CapsuleKeys::List) => 4,
+    }
+}
+
+fn grab() -> std::sync::MutexGuard<'static, Option<KeyGrab>> {
+    GRAB.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// The capsule takes `keys` until the guard drops; [`CapsuleKeyGrab::set`]
+/// changes them. Each key goes to `on_key` on the listener's thread or, for
+/// the open list, the tap's: it must not block. A newer grab replaces an
+/// older one.
+pub fn take_keys(
+    keys: CapsuleKeys,
+    on_key: impl Fn(CapsuleKey) + Send + Sync + 'static,
+) -> CapsuleKeyGrab {
+    let id = GRABS.fetch_add(1, Ordering::Relaxed) + 1;
+    *grab() = Some(KeyGrab {
+        id,
+        keys,
+        on_key: Arc::new(on_key),
+    });
+    GRAB_KEYS.store(keys_code(Some(keys)), Ordering::Release);
+    CapsuleKeyGrab(id)
+}
+
+/// The capsule's keys; see [`take_keys`].
+#[must_use = "the capsule lets the keys go when this drops"]
+pub struct CapsuleKeyGrab(u64);
+
+impl CapsuleKeyGrab {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the capsule takes routed keys next")
+    )]
+    pub fn set(&self, keys: CapsuleKeys) {
+        let mut grab = grab();
+        if let Some(current) = grab.as_mut().filter(|grab| grab.id == self.0) {
+            current.keys = keys;
+            GRAB_KEYS.store(keys_code(Some(keys)), Ordering::Release);
+        }
+    }
+}
+
+impl Drop for CapsuleKeyGrab {
     fn drop(&mut self) {
-        let mut picker = PICKER.lock().unwrap_or_else(|error| error.into_inner());
-        if picker.as_ref().is_some_and(|(id, _)| *id == self.0) {
-            *picker = None;
+        let mut grab = grab();
+        if grab.as_ref().is_some_and(|grab| grab.id == self.0) {
+            *grab = None;
+            GRAB_KEYS.store(0, Ordering::Release);
         }
     }
 }
 
 /// Whether the capsule's picker is open.
 pub fn picking() -> bool {
-    PICKER
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_some()
+    GRAB_KEYS.load(Ordering::Acquire) == keys_code(Some(CapsuleKeys::Picker))
 }
 
-/// Hands `key` to the open picker; false when none is open.
-pub fn picker_key(key: PickerKey) -> bool {
-    let on_key = PICKER
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
+/// Whether the capsule takes Escape from the listener.
+pub fn wants_escape() -> bool {
+    matches!(GRAB_KEYS.load(Ordering::Acquire), 1 | 3)
+}
+
+/// Whether the open list takes every key press at the tap.
+pub fn list_open() -> bool {
+    GRAB_KEYS.load(Ordering::Acquire) == keys_code(Some(CapsuleKeys::List))
+}
+
+/// Hands `key` to the capsule if its keys include it; false otherwise.
+pub fn capsule_key(key: CapsuleKey) -> bool {
+    let on_key = grab()
         .as_ref()
-        .map(|(_, on_key)| on_key.clone());
+        .filter(|grab| takes(grab.keys, &key))
+        .map(|grab| grab.on_key.clone());
     on_key.map(|on_key| on_key(key)).is_some()
+}
+
+fn takes(keys: CapsuleKeys, key: &CapsuleKey) -> bool {
+    match (keys, key) {
+        (CapsuleKeys::Picker, CapsuleKey::Shortcut | CapsuleKey::Escape) => true,
+        (CapsuleKeys::Route { escape }, CapsuleKey::Escape) => escape,
+        (CapsuleKeys::Route { .. } | CapsuleKeys::List, CapsuleKey::OpenList) => true,
+        (CapsuleKeys::List, key) => !matches!(key, CapsuleKey::Shortcut),
+        _ => false,
+    }
+}
+
+/// What the tap does with a key press while the list is open.
+#[derive(Debug, Eq, PartialEq)]
+pub enum ListTap {
+    /// Not the list's: ⌘ or ⌃ held, or one of Hex's shortcuts.
+    Pass,
+    /// Kept from the app; the list does nothing with it.
+    Swallow,
+    Key(CapsuleKey),
+}
+
+/// The list's reading of a key press, `typed` being what it types in the
+/// active layout.
+pub fn list_key(code: u16, flags: u64, typed: &str) -> ListTap {
+    const COMMAND: u64 = 1 << 20;
+    const CONTROL: u64 = 1 << 18;
+    const SHIFT: u64 = 1 << 17;
+    const OPTION: u64 = 1 << 19;
+    if flags & (COMMAND | CONTROL) != 0 {
+        return ListTap::Pass;
+    }
+    let key = match code {
+        53 => CapsuleKey::Escape,
+        36 | 76 => CapsuleKey::Return {
+            shift: flags & SHIFT != 0,
+        },
+        126 => CapsuleKey::Up,
+        125 => CapsuleKey::Down,
+        51 => CapsuleKey::Backspace,
+        _ => match typed.chars().next() {
+            Some(digit @ '1'..='9') if typed.len() == 1 && flags & OPTION == 0 => {
+                CapsuleKey::Digit(digit as u8 - b'0')
+            }
+            Some(_) if !typed.chars().any(char::is_control) => CapsuleKey::Text(typed.into()),
+            _ => return ListTap::Swallow,
+        },
+    };
+    ListTap::Key(key)
 }
 
 /// The ANSI Z key, when the layout has none.
@@ -3632,25 +3764,71 @@ mod tests {
         assert!(shortcut.armed());
     }
 
+    /// One test, since the grab is the process's.
     #[test]
-    fn the_newest_picker_takes_its_keys_until_it_closes() {
+    fn the_newest_grab_takes_only_its_keys_until_it_drops() {
         let (sent, keys) = mpsc::channel();
         let first = {
             let sent = sent.clone();
-            begin_picking(move |key| sent.send((1, key)).unwrap())
+            take_keys(CapsuleKeys::Picker, move |key| sent.send((1, key)).unwrap())
         };
-        let second = begin_picking(move |key| sent.send((2, key)).unwrap());
-        assert!(picking());
-        assert!(picker_key(PickerKey::Shortcut));
+        let second = take_keys(CapsuleKeys::Picker, move |key| sent.send((2, key)).unwrap());
+        assert!(picking() && wants_escape());
+        assert!(capsule_key(CapsuleKey::Shortcut));
+        assert!(!capsule_key(CapsuleKey::OpenList));
         drop(first);
-        assert!(picker_key(PickerKey::Escape));
+        assert!(capsule_key(CapsuleKey::Escape));
+
+        // A routed capsule: Paste Last opens the list; Escape only while a
+        // send can be undone.
+        second.set(CapsuleKeys::Route { escape: false });
+        assert!(!picking() && !wants_escape());
+        assert!(!capsule_key(CapsuleKey::Shortcut));
+        assert!(!capsule_key(CapsuleKey::Escape));
+        assert!(capsule_key(CapsuleKey::OpenList));
+        second.set(CapsuleKeys::Route { escape: true });
+        assert!(wants_escape());
+        second.set(CapsuleKeys::List);
+        assert!(list_open() && !wants_escape());
+        assert!(capsule_key(CapsuleKey::Text("ho".into())));
         drop(second);
-        assert!(!picking());
-        assert!(!picker_key(PickerKey::Escape));
+        assert!(!picking() && !list_open());
+        assert!(!capsule_key(CapsuleKey::Escape));
         assert_eq!(
             keys.try_iter().collect::<Vec<_>>(),
-            [(2, PickerKey::Shortcut), (2, PickerKey::Escape)]
+            [
+                (2, CapsuleKey::Shortcut),
+                (2, CapsuleKey::Escape),
+                (2, CapsuleKey::OpenList),
+                (2, CapsuleKey::Text("ho".into())),
+            ]
         );
+    }
+
+    #[test]
+    fn the_open_list_reads_keys_and_leaves_command_chords_to_the_app() {
+        let (shift, option, command, control) = (1 << 17, 1 << 19, 1 << 20, 1 << 18);
+        let key = |key| ListTap::Key(key);
+        assert_eq!(list_key(53, 0, "\u{1b}"), key(CapsuleKey::Escape));
+        assert_eq!(
+            list_key(36, 0, "\r"),
+            key(CapsuleKey::Return { shift: false })
+        );
+        assert_eq!(
+            list_key(76, shift, "\u{3}"),
+            key(CapsuleKey::Return { shift: true })
+        );
+        assert_eq!(list_key(126, 0, ""), key(CapsuleKey::Up));
+        assert_eq!(list_key(125, 0, ""), key(CapsuleKey::Down));
+        assert_eq!(list_key(51, 0, "\u{7f}"), key(CapsuleKey::Backspace));
+        assert_eq!(list_key(18, 0, "1"), key(CapsuleKey::Digit(1)));
+        assert_eq!(list_key(29, 0, "0"), key(CapsuleKey::Text("0".into())));
+        assert_eq!(list_key(18, option, "¡"), key(CapsuleKey::Text("¡".into())));
+        assert_eq!(list_key(4, shift, "H"), key(CapsuleKey::Text("H".into())));
+        assert_eq!(list_key(123, 0, ""), ListTap::Swallow);
+        assert_eq!(list_key(48, 0, "\t"), ListTap::Swallow);
+        assert_eq!(list_key(9, command, "v"), ListTap::Pass);
+        assert_eq!(list_key(53, control, "\u{1b}"), ListTap::Pass);
     }
 
     #[test]

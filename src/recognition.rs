@@ -1046,7 +1046,7 @@ pub fn listen(
             #[cfg(hex_capture)]
             if !hotkeys.any_recording()
                 && input_event.is_escape_down()
-                && crate::capture_host::picker_key(crate::capture_host::PickerKey::Escape)
+                && crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::Escape)
             {
                 continue;
             }
@@ -1278,7 +1278,7 @@ pub fn listen(
         let capture_recording = capture_host.as_mut().is_some_and(|host| {
             host.recording_since(&input).is_some()
                 || capture_shortcut.armed()
-                || crate::capture_host::picking()
+                || crate::capture_host::wants_escape()
         });
         #[cfg(not(hex_capture))]
         let capture_recording = false;
@@ -1883,6 +1883,13 @@ fn handle_hotkey_action(
             feedback::retract_start();
             dictation.cancel()?;
             reset_command_recognizer(dictation, recognizer)?;
+            // A routed capture capsule on screen takes Paste Last for its list.
+            #[cfg(hex_capture)]
+            if action == HotkeyAction::PasteLast
+                && crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::OpenList)
+            {
+                return emit_engine_state(events, false, worker, mode, device).map(|()| true);
+            }
             let paste_result = match action {
                 HotkeyAction::PasteLast => worker.paste_last(),
                 HotkeyAction::PasteMeeting => worker.paste_meeting(),

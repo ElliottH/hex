@@ -317,7 +317,7 @@ pub(crate) struct CapsuleState {
     follow: bool,
     /// While the picker shows, Hex's tap hands it the capture shortcut and
     /// Escape: the overlay never takes focus.
-    picking: Option<crate::capture_host::Picking>,
+    picking: Option<crate::capture_host::CapsuleKeyGrab>,
     /// The on-screen picker, and the mode it was last told to pick.
     picker: Option<picker::PickerOverlay>,
     picker_mode: Option<Mode>,
@@ -494,11 +494,11 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
                 let capsule = CaptureCapsule {
                     overlay: overlay.clone(),
                 };
-                crate::capture_host::begin_picking(move |key| {
-                    capsule.input(match key {
-                        crate::capture_host::PickerKey::Shortcut => Input::Record,
-                        crate::capture_host::PickerKey::Escape => Input::Escape,
-                    });
+                use crate::capture_host::{CapsuleKey, CapsuleKeys};
+                crate::capture_host::take_keys(CapsuleKeys::Picker, move |key| match key {
+                    CapsuleKey::Shortcut => capsule.input(Input::Record),
+                    CapsuleKey::Escape => capsule.input(Input::Escape),
+                    _ => {}
                 })
             });
         }

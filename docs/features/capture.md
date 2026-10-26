@@ -132,9 +132,15 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   a chip sends at once
 │   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
 │   │   session by title, which the router resolves among the sessions it listed
-│   ├── ⌥⇧V, esc for Undo, and the list's keys (type to filter, ↑↓, ⏎, ⇧⏎
-│   │   always) need a key path from the listener, as the picker's ⌥⇧S and Esc
-│   │   have; not wired, so Undo and the list work by click only
+│   ├── Keys (capture_host::take_keys), never taking focus:
+│   │   ├── Picker -> ⌥⇧S and Esc through the listener
+│   │   ├── Routed -> the Paste Last shortcut (⌥⇧V) opens the list instead of
+│   │   │   pasting the last dictation; Esc too while a send can be undone
+│   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
+│   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
+│   │       ⇧⏎ (always), 1-9, Esc; their releases too
+│   │   The capsule takes only the picker's yet, so Undo and the list work by
+│   │   click only
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list
 │   └── Long names give way together so the widest row stays inside the panel
