@@ -30,6 +30,8 @@ mod onboarding;
 mod picker;
 mod platform;
 mod platform_settings;
+#[cfg(hex_capture)]
+mod scrawl;
 mod settings;
 mod vocabulary;
 mod voice_action;
@@ -100,6 +102,12 @@ static MEETINGS_ICON: Icon = Icon {
     name: "hex-meetings",
     view: 16.0,
     body: include_str!("../assets/icons/meetings.svg"),
+};
+#[cfg(hex_capture)]
+static SCRAWL_ICON: Icon = Icon {
+    name: "hex-scrawl",
+    view: 16.0,
+    body: include_str!("../assets/icons/scrawl.svg"),
 };
 
 /// Runs the Linux window's app on the main thread until Hex quits: the
@@ -244,6 +252,8 @@ pub(crate) fn shortcut_rule(
         HotkeySlot::Dictation => ShortcutTarget::Dictation,
         HotkeySlot::VoiceAction => ShortcutTarget::VoiceAction,
         HotkeySlot::PasteLast => ShortcutTarget::PasteLast,
+        #[cfg(hex_capture)]
+        HotkeySlot::Capture => ShortcutTarget::Capture,
     };
     host::validate_hotkey(target, binding)
 }
@@ -364,6 +374,11 @@ enum Pane {
     /// Recorded calls and their settings, or the opt-in (macOS beta).
     Meetings,
     History,
+    /// Scrawl captures inside Hex: the opt-in, shortcut, permission,
+    /// transcriber, folder, retention, and Scrawl's own app (the `capture`
+    /// experiment, under Experiments, in builds with the build option).
+    #[cfg(hex_capture)]
+    Scrawl,
     /// The Hex Microphone's driver, tuning, and try-it demo (macOS, under
     /// Experiments).
     VoiceFilter,
@@ -374,13 +389,15 @@ enum Pane {
 }
 
 impl Pane {
-    const ALL: [Pane; 9] = [
+    const ALL: &[Pane] = &[
         Pane::General,
         Pane::Modes,
         Pane::VoiceAction,
         Pane::Commands,
         Pane::Meetings,
         Pane::History,
+        #[cfg(hex_capture)]
+        Pane::Scrawl,
         Pane::VoiceFilter,
         Pane::HudLab,
         Pane::Activity,
@@ -403,12 +420,18 @@ impl Pane {
             }
             Pane::HudLab => caps.hud_lab && ui.platform.developer,
             Pane::Activity => ui.platform.developer,
+            #[cfg(hex_capture)]
+            Pane::Scrawl => ui.platform.scrawl.is_some(),
             _ => true,
         }
     }
 
     /// Listed under the sidebar's Experiments heading.
     fn experimental(self) -> bool {
+        #[cfg(hex_capture)]
+        if self == Pane::Scrawl {
+            return true;
+        }
         matches!(self, Pane::VoiceFilter | Pane::HudLab | Pane::Activity)
     }
 
@@ -420,6 +443,8 @@ impl Pane {
             Pane::VoiceAction => tr("Voice Action"),
             Pane::History => tr("History"),
             Pane::Meetings => tr("Meetings"),
+            #[cfg(hex_capture)]
+            Pane::Scrawl => "Scrawl",
             Pane::VoiceFilter => tr("Voice Filter"),
             Pane::HudLab => "HUD Lab",
             Pane::Activity => tr("Activity"),
@@ -434,6 +459,8 @@ impl Pane {
             Pane::VoiceAction => "nav-voice-action",
             Pane::History => "nav-history",
             Pane::Meetings => "nav-meetings",
+            #[cfg(hex_capture)]
+            Pane::Scrawl => "nav-scrawl",
             Pane::VoiceFilter => "nav-voice-filter",
             Pane::HudLab => "nav-hud-lab",
             Pane::Activity => "nav-activity",
@@ -448,6 +475,8 @@ impl Pane {
             Pane::VoiceAction => &VOICE_ACTION_ICON,
             Pane::History => &HISTORY_ICON,
             Pane::Meetings => &MEETINGS_ICON,
+            #[cfg(hex_capture)]
+            Pane::Scrawl => &SCRAWL_ICON,
             Pane::VoiceFilter => &VOICE_FILTER_ICON,
             Pane::HudLab => &HUD_LAB_ICON,
             Pane::Activity => &ACTIVITY_ICON,
@@ -469,6 +498,9 @@ enum Menu {
     MeetingActions,
     /// The calendars meeting reminders read.
     Calendars,
+    /// How long captures are kept (the Scrawl pane).
+    #[cfg(hex_capture)]
+    CaptureRetention,
 }
 
 pub(crate) struct Ui {
@@ -695,6 +727,29 @@ impl Ui {
                 }
                 self.platform.note_asked(kind);
             }
+            #[cfg(hex_capture)]
+            platform::PlatformRequest::Scrawl(request) => {
+                let fixture = self.host.is_fixture();
+                if let Some(view) = self.platform.scrawl.as_mut() {
+                    match request {
+                        platform::ScrawlRequest::ScreenRecording => {
+                            // Previews grant on the second ask, as for
+                            // system audio.
+                            if fixture && view.screen_recording_asked {
+                                view.screen_recording = true;
+                            }
+                            view.screen_recording_asked = true;
+                        }
+                        platform::ScrawlRequest::QuitScrawl => {
+                            view.quitting_scrawl = true;
+                            if fixture {
+                                view.scrawl_running = false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             platform::PlatformRequest::SetLaunchAtLogin(enabled) => match &self.host {
                 // Windows writes its Run key from the window's own process.
                 platform::PlatformHost::None => {
@@ -818,7 +873,8 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     {
         let index = digit as usize - '1' as usize;
         let pane = Pane::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|pane| pane.shown(ui))
             .nth(index);
         if let Some(pane) = pane {
@@ -951,6 +1007,8 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         Pane::VoiceAction => (Vec::new(), voice_action::pane(ui, p, &mut layer)),
         Pane::History => history::pane(ui, p, &mut layer),
         Pane::Meetings => meetings::pane(ui, p, &mut layer),
+        #[cfg(hex_capture)]
+        Pane::Scrawl => (Vec::new(), scrawl::pane(ui, p, &mut layer)),
         Pane::VoiceFilter => (Vec::new(), fun::pane(ui, p)),
         Pane::HudLab => hud_lab::pane(ui, p),
         Pane::Activity => activity::pane(ui, p),
@@ -1021,7 +1079,7 @@ fn title_bar(element: El) -> El {
 fn sidebar(ui: &Ui, p: Paint) -> El {
     let mut nav = lists::source_list(col().key("nav").gap(NAV_ROW_GAP));
     let mut experiments = false;
-    for pane in Pane::ALL.into_iter().filter(|pane| pane.shown(ui)) {
+    for pane in Pane::ALL.iter().copied().filter(|pane| pane.shown(ui)) {
         if pane.experimental() && !experiments {
             experiments = true;
             nav = nav
@@ -1561,6 +1619,18 @@ const SCENES: &[Scene] = &[
         ui.meetings = meetings::MeetingsPane::default();
         ui.pane = Pane::Meetings;
     }),
+    #[cfg(hex_capture)]
+    ("mac-scrawl-off", |ui| scrawl_fixture(ui, false, |_| {})),
+    #[cfg(hex_capture)]
+    ("mac-scrawl", |ui| scrawl_fixture(ui, true, |_| {})),
+    #[cfg(hex_capture)]
+    ("mac-scrawl-running", |ui| {
+        scrawl_fixture(ui, true, |view| view.scrawl_running = true)
+    }),
+    #[cfg(hex_capture)]
+    ("mac-scrawl-permission", |ui| {
+        scrawl_fixture(ui, true, |view| view.screen_recording = false)
+    }),
     ("mac-voice-filter", |ui| {
         *ui = mac_fixture();
         ui.pane = Pane::VoiceFilter;
@@ -1644,6 +1714,19 @@ const SCENES: &[Scene] = &[
 
 /// The macOS window with every permission granted, meetings on, the Hex
 /// Microphone experiment on, and sample meetings and commands.
+/// The Scrawl pane with captures `enabled`, Scrawl's settings imported
+/// (its 3-day video retention), and `adjust` applied to what the host shows.
+#[cfg(hex_capture)]
+fn scrawl_fixture(ui: &mut Ui, enabled: bool, adjust: fn(&mut platform::ScrawlView)) {
+    *ui = mac_fixture();
+    ui.settings.capture.enabled = enabled;
+    ui.settings.capture.media_days = Some(3);
+    let mut view = platform::ScrawlView::preview();
+    adjust(&mut view);
+    ui.platform.scrawl = Some(view);
+    ui.pane = Pane::Scrawl;
+}
+
 fn mac_fixture() -> Ui {
     let mut ui = fixture(DesktopShortcuts::Registered);
     ui.platform = platform::PlatformState::preview(platform::Capabilities::MACOS);

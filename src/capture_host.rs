@@ -9,25 +9,33 @@
 //! the dictation engine's loaded model as foreground work. The engine runs
 //! with [`SharedResources::none`]: no ingest server, delivery retries, or
 //! global shortcuts. [`CaptureHost::start`] does nothing unless the
-//! experiment is on.
+//! experiment is on and the person turned captures on (`capture.enabled`).
+//!
+//! Step 4 adds the capture shortcut (`recognition`), and the pointer, Shift,
+//! and key input the session tap reports while a capture records
+//! ([`report_input`]), which the `capture-input` thread hands to the
+//! capture's `InputSink` through the engine's pure input rules
+//! (`scrawl_capture::hosted_input`).
 
 use std::fs;
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
 use scrawl_capture::audio::{GapSpan, RecordedAudio};
 use scrawl_capture::capture::{
-    AudioIn, ConfigSource, Event, Host, SharedResources, Stage, Start, Target,
+    AudioIn, ConfigSource, Event, Host, InputSink, SharedResources, Stage, Start, Target,
 };
 use scrawl_capture::handoff::EngineConfig;
+use scrawl_capture::hosted_input::{HostInput, HostedInput, Modifiers};
 use scrawl_capture::model::{TranscriptData, WordTiming};
-use scrawl_capture::transcribe::Transcriber;
+use scrawl_capture::transcribe::{AppleTranscriber, Transcriber};
 
 use crate::audio::CaptureInstant;
 use crate::control::{
@@ -51,6 +59,16 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 /// Captures being written at once: the one finishing plus those queued
 /// behind it. A start beyond this is refused.
 const MAX_FINISHING: usize = 2;
+/// Tap events waiting for the `capture-input` thread; past this they drop.
+const INPUT_CAPACITY: usize = 1_024;
+/// A second press of the capture shortcut sooner than this after the start
+/// is a bounce, not a stop.
+pub const SHORTCUT_DEBOUNCE: Duration = Duration::from_millis(400);
+/// Retention passes over the captures folder.
+const RETENTION_FIRST: Duration = Duration::from_secs(90);
+const RETENTION_EVERY: Duration = Duration::from_secs(60 * 60);
+/// How long captures wait to try again after the host failed to start.
+const START_RETRY: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
 // The engine, as Hex runs it.
@@ -70,6 +88,10 @@ trait Recording: Send {
     /// Stops recording the screen, its windows, and input now, keeping what
     /// was recorded for [`Sealed::finish`].
     fn stop(self: Box<Self>) -> Box<dyn Sealed>;
+    /// Where the host's pointer and key input goes while it records.
+    fn input(&self) -> Option<InputSink> {
+        None
+    }
 }
 
 /// A stopped capture, waiting to be written.
@@ -105,6 +127,10 @@ impl Recording for scrawl_capture::capture::Capture {
 
     fn stop(self: Box<Self>) -> Box<dyn Sealed> {
         Box::new(scrawl_capture::capture::Capture::stop(*self))
+    }
+
+    fn input(&self) -> Option<InputSink> {
+        Some(scrawl_capture::capture::Capture::input(self).clone())
     }
 }
 
@@ -178,10 +204,11 @@ impl Host for HexHost {
     }
 }
 
-/// The engine's settings, from Hex rather than `~/.config/scrawl`. Hex has
-/// no capture settings yet, so these are Scrawl's defaults, chosen here:
-/// auto-crop on (it applies to display captures), and the `agentContext`
-/// summary format off.
+/// The engine's settings, from Hex rather than `~/.config/scrawl`. The
+/// captures folder, retention, and transcriber are Hex's `capture.*`
+/// settings, applied by [`CaptureHost`]; the rest are Scrawl's defaults,
+/// chosen here: auto-crop on (it applies to display captures), and the
+/// `agentContext` summary format off.
 struct HexConfig;
 
 impl ConfigSource for HexConfig {
@@ -197,6 +224,52 @@ fn hex_engine_config() -> EngineConfig {
         .experiments
         .insert(scrawl_capture::handoff::AGENT_CONTEXT.into(), false);
     config
+}
+
+/// The listener's dictation engine, for the one capture engine's
+/// transcriber; replaced when a listener starts captures.
+static DICTATION_ENGINE: Mutex<Option<Weak<TranscriptionEngine>>> = Mutex::new(None);
+
+/// The process's one capture engine (it keeps process-global state), made
+/// the first time captures turn on.
+fn shared_engine(
+    dictation: Option<&Arc<TranscriptionEngine>>,
+) -> Result<Arc<scrawl_capture::capture::Engine>> {
+    static ENGINE: Mutex<Option<Arc<scrawl_capture::capture::Engine>>> = Mutex::new(None);
+    *DICTATION_ENGINE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = dictation.map(Arc::downgrade);
+    let mut engine = ENGINE.lock().unwrap_or_else(|error| error.into_inner());
+    if let Some(engine) = &*engine {
+        return Ok(engine.clone());
+    }
+    let (events, received) = mpsc::sync_channel(EVENT_CAPACITY);
+    thread::Builder::new()
+        .name("capture-events".into())
+        .spawn(move || log_events(received))?;
+    let made = Arc::new(scrawl_engine(events, Arc::new(ChosenTranscriber)));
+    *engine = Some(made.clone());
+    Ok(made)
+}
+
+/// The transcriber `capture.transcriber` names when a capture is written.
+struct ChosenTranscriber;
+
+impl Transcriber for ChosenTranscriber {
+    fn transcribe(&self, audio: &RecordedAudio) -> anyhow::Result<Option<TranscriptData>> {
+        match crate::app_settings::capture_settings().transcriber {
+            crate::app_settings::CaptureTranscriber::Parakeet => HexTranscriber {
+                engine: DICTATION_ENGINE
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .clone(),
+            }
+            .transcribe(audio),
+            crate::app_settings::CaptureTranscriber::Apple => {
+                AppleTranscriber::default().transcribe(audio)
+            }
+        }
+    }
 }
 
 /// Word-timed transcription on the dictation engine's loaded model. It holds
@@ -397,8 +470,13 @@ fn lock(outcomes: &Mutex<Outcomes>) -> std::sync::MutexGuard<'_, Outcomes> {
 /// One capture records at a time.
 pub struct CaptureHost {
     engine: Arc<dyn CaptureEngine>,
-    captures_dir: PathBuf,
+    /// The folder for new captures; `None` reads `capture.folder` at each
+    /// start.
+    captures_dir: Option<PathBuf>,
     active: Option<Active>,
+    /// The recording capture's input, once its engine started.
+    input: LiveInput,
+    retention: Option<(SyncSender<()>, JoinHandle<()>)>,
     outcomes: SharedOutcomes,
     finisher: Option<(SyncSender<FinishJob>, JoinHandle<()>)>,
     /// Collectors of ended captures, until they exit.
@@ -406,29 +484,56 @@ pub struct CaptureHost {
 }
 
 impl CaptureHost {
-    /// The host when the `capture` experiment is on; otherwise `None`, and
-    /// no engine, thread, sink, or folder is created.
+    /// The host when captures are on (the `capture` experiment and
+    /// `capture.enabled`); otherwise `None`, and no engine, thread, sink, or
+    /// folder is created.
     pub fn start(engine: Option<Arc<TranscriptionEngine>>) -> Option<Self> {
-        if !crate::experiments::enabled(crate::experiments::Experiment::Capture) {
+        if !crate::app_settings::capture_on() {
             return None;
         }
         // scripts/validate-app.sh refuses a binary containing this line.
         tracing::info!("capture experiment on: `hex capture` is available");
-        let transcriber = Arc::new(HexTranscriber {
-            engine: engine.as_ref().map(Arc::downgrade),
-        });
-        let host = crate::app_paths::captures_dir().and_then(|captures_dir| {
-            let (events, received) = mpsc::sync_channel(EVENT_CAPACITY);
-            thread::Builder::new()
-                .name("capture-events".into())
-                .spawn(move || log_events(received))?;
-            Self::with(Arc::new(scrawl_engine(events, transcriber)), captures_dir)
+        let host = shared_engine(engine.as_ref()).and_then(|engine| {
+            let mut host = Self::with(engine, None)?;
+            host.start_retention()?;
+            Ok(host)
         });
         host.inspect_err(|error| tracing::warn!(%error, "could not start the capture host"))
             .ok()
     }
 
-    fn with(engine: Arc<dyn CaptureEngine>, captures_dir: PathBuf) -> Result<Self> {
+    /// Starts or stops the host as captures are turned on and off. Turning
+    /// them off cancels a recording capture and stops every capture thread.
+    pub fn reconcile(
+        host: &mut Option<Self>,
+        engine: Option<&Arc<TranscriptionEngine>>,
+        audio: &impl AudioTimeline,
+    ) {
+        static RETRY_AT: Mutex<Option<Instant>> = Mutex::new(None);
+        watch_scrawl();
+        match (host.is_some(), crate::app_settings::capture_on()) {
+            (false, true) => {
+                let mut retry_at = RETRY_AT.lock().unwrap_or_else(|error| error.into_inner());
+                if retry_at.is_some_and(|at| Instant::now() < at) {
+                    return;
+                }
+                *host = Self::start(engine.cloned());
+                *retry_at = host.is_none().then(|| Instant::now() + START_RETRY);
+            }
+            (false, false) => {
+                *RETRY_AT.lock().unwrap_or_else(|error| error.into_inner()) = None;
+            }
+            (true, false) => {
+                if let Some(mut stopped) = host.take() {
+                    tracing::info!("captures turned off");
+                    stopped.shutdown(audio);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn with(engine: Arc<dyn CaptureEngine>, captures_dir: Option<PathBuf>) -> Result<Self> {
         let outcomes = SharedOutcomes::default();
         let (jobs, queued) = mpsc::sync_channel(MAX_FINISHING);
         let finisher = {
@@ -441,10 +546,75 @@ impl CaptureHost {
             engine,
             captures_dir,
             active: None,
+            input: LiveInput::shared()?,
+            retention: None,
             outcomes,
             finisher: Some((jobs, finisher)),
             ended: Vec::new(),
         })
+    }
+
+    /// Whether a capture is recording, and since when.
+    pub fn recording_since(&self) -> Option<CaptureInstant> {
+        self.active.as_ref().map(|active| active.t0)
+    }
+
+    /// The capture shortcut: starts a capture, or stops the recording one
+    /// unless it started within [`SHORTCUT_DEBOUNCE`].
+    pub fn toggle(&mut self, at: CaptureInstant, audio: &impl AudioTimeline) -> ControlReply {
+        let action = match self.recording_since() {
+            None => ScrawlCaptureAction::Start,
+            Some(t0) if at.checked_duration_since(t0).unwrap_or_default() < SHORTCUT_DEBOUNCE => {
+                return self.report(false, None);
+            }
+            Some(_) => ScrawlCaptureAction::Stop,
+        };
+        let reply = self.control(action, audio);
+        if let ControlReply::Error { code, message, .. } = &reply {
+            tracing::warn!(code, message, "the capture shortcut did nothing");
+            crate::feedback::play(crate::feedback::Tone::Error);
+        }
+        reply
+    }
+
+    /// The `capture-retention` thread: Scrawl's cleanup of the captures
+    /// folder with `capture.*`'s policy, a while after the host starts and
+    /// hourly, never while a capture records or is written, and never while
+    /// Scrawl's own app runs (it cleans the folder itself).
+    fn start_retention(&mut self) -> Result<()> {
+        let (nudge, nudged) = mpsc::sync_channel(1);
+        let outcomes = self.outcomes.clone();
+        let thread = thread::Builder::new()
+            .name("capture-retention".into())
+            .spawn(move || {
+                let mut wait = RETENTION_FIRST;
+                loop {
+                    match nudged.recv_timeout(wait) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                    if !lock(&outcomes).unfinished.is_empty()
+                        || crate::app_settings::scrawl_app_running()
+                    {
+                        wait = Duration::from_secs(60);
+                        continue;
+                    }
+                    let settings = crate::app_settings::capture_settings();
+                    let captures = settings.captures_dir();
+                    if captures.is_dir() {
+                        scrawl_capture::retention::run_pass(
+                            &captures,
+                            &settings.retention(),
+                            false,
+                            Duration::ZERO,
+                            false,
+                        );
+                    }
+                    wait = RETENTION_EVERY;
+                }
+            })?;
+        self.retention = Some((nudge, thread));
+        Ok(())
     }
 
     pub fn control(
@@ -479,6 +649,10 @@ impl CaptureHost {
             drop(jobs);
             join_by(finisher, deadline, "capture-finish");
         }
+        if let Some((nudge, retention)) = self.retention.take() {
+            drop(nudge);
+            join_by(retention, deadline, "capture-retention");
+        }
     }
 
     /// Ends a capture whose engine failed to start: its collector exited on
@@ -490,6 +664,7 @@ impl CaptureHost {
             .is_some_and(|active| active.collector.is_finished())
             && let Some(active) = self.active.take()
         {
+            self.input.recording(None);
             let _ = audio.close_sink(now);
             self.ended.push(active.collector);
         }
@@ -512,7 +687,11 @@ impl CaptureHost {
             ));
         }
         self.ended.retain(|collector| !collector.is_finished());
-        let bundle = new_bundle_dir(&self.captures_dir)?;
+        let captures_dir = self
+            .captures_dir
+            .clone()
+            .unwrap_or_else(|| crate::app_settings::capture_settings().captures_dir());
+        let bundle = new_bundle_dir(&captures_dir)?;
         let (sink, chunks) = mpsc::sync_channel(SINK_CAPACITY);
         if let Err(error) = audio.open_sink(sink, now) {
             remove_bundle(&bundle);
@@ -521,15 +700,17 @@ impl CaptureHost {
         // Unfinished from here until its collector or the finisher settles
         // it, whatever stop or cancel does meanwhile.
         lock(&self.outcomes).unfinished.push(bundle.clone());
+        self.input.recording(Some(&bundle));
         let (seal, sealed) = mpsc::sync_channel(1);
         let collector = {
             let engine = self.engine.clone();
             let start = start_request(now, bundle.clone());
             let jobs = jobs.clone();
             let outcomes = self.outcomes.clone();
+            let input = self.input.clone();
             thread::Builder::new()
                 .name("capture-audio".into())
-                .spawn(move || collect(&*engine, start, chunks, sealed, &jobs, &outcomes))
+                .spawn(move || collect(&*engine, start, chunks, sealed, &jobs, &outcomes, &input))
                 .inspect_err(|_| {
                     let _ = audio.close_sink(now);
                     remove_bundle(&bundle);
@@ -557,6 +738,8 @@ impl CaptureHost {
         let Some(active) = self.active.take() else {
             return Ok(self.report(false, None));
         };
+        // Input after the stop belongs to no capture.
+        self.input.recording(None);
         let closed = audio.close_sink(now).unwrap_or_else(|error| {
             tracing::warn!(%error, "could not close the capture sink");
             None
@@ -604,6 +787,263 @@ impl CaptureHost {
         }))
     }
 }
+
+/// While captures are on, notes every couple of seconds whether Scrawl's own
+/// app runs: it then owns the capture shortcut, and Hex doesn't match it.
+fn watch_scrawl() {
+    const EVERY: Duration = Duration::from_secs(2);
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    if !crate::app_settings::capture_on() {
+        crate::app_settings::set_scrawl_app_running(false);
+        return;
+    }
+    let mut last = LAST.lock().unwrap_or_else(|error| error.into_inner());
+    if last.is_some_and(|at| at.elapsed() < EVERY) {
+        return;
+    }
+    *last = Some(Instant::now());
+    let running = scrawl_running();
+    if running != crate::app_settings::scrawl_app_running() {
+        tracing::info!(
+            running,
+            "Scrawl's app owns the capture shortcut while it runs"
+        );
+    }
+    crate::app_settings::set_scrawl_app_running(running);
+}
+
+/// Whether Scrawl's own app (`dev.kitlangton.scrawl`) runs. Safe off the
+/// main thread.
+pub fn scrawl_running() -> bool {
+    objc2::rc::autoreleasepool(|_| scrawl_capture::capture::is_scrawl_app_running())
+}
+
+/// Asks Scrawl's own app to quit, as "Use Hex for captures" does.
+pub fn quit_scrawl() {
+    use objc2_app_kit::NSRunningApplication;
+    use objc2_foundation::NSString;
+    objc2::rc::autoreleasepool(|_| {
+        for app in NSRunningApplication::runningApplicationsWithBundleIdentifier(
+            &NSString::from_str(scrawl_capture::capture::SCRAWL_BUNDLE_ID),
+        ) {
+            if !app.terminate() {
+                tracing::warn!("Scrawl did not agree to quit");
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Input from Hex's event tap.
+
+/// What the session tap reports while a capture records.
+#[derive(Clone, Debug)]
+pub enum Tapped {
+    /// A pointer, scroll, or modifier event, in global top-left points.
+    Pointer(HostInput),
+    /// A fresh key press (never an autorepeat) and the modifiers held.
+    Key { code: u16, flags: u64 },
+}
+
+/// The capture is recording and its engine took input: the tap reports.
+static TAP_RECORDING: AtomicBool = AtomicBool::new(false);
+static TAP_INPUT: OnceLock<SyncSender<(CaptureInstant, Tapped)>> = OnceLock::new();
+static DROPPED_INPUT: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the session tap should report pointer and key input: only while
+/// a capture records.
+pub fn wants_input() -> bool {
+    TAP_RECORDING.load(Ordering::Acquire)
+}
+
+/// Called on the event tap's thread; never blocks. A full queue drops the
+/// event (counted, logged once the capture stops).
+pub fn report_input(at: CaptureInstant, input: Tapped) {
+    if !wants_input() {
+        return;
+    }
+    if let Some(sender) = TAP_INPUT.get()
+        && sender.try_send((at, input)).is_err()
+    {
+        DROPPED_INPUT.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// The modifiers in a CGEvent's flags.
+pub fn modifiers(flags: u64) -> Modifiers {
+    const SHIFT: u64 = 0x0002_0000;
+    const CONTROL: u64 = 0x0004_0000;
+    const OPTION: u64 = 0x0008_0000;
+    const COMMAND: u64 = 0x0010_0000;
+    Modifiers {
+        command: flags & COMMAND != 0,
+        control: flags & CONTROL != 0,
+        option: flags & OPTION != 0,
+        shift: flags & SHIFT != 0,
+    }
+}
+
+/// The recording capture's input target, shared by the host (which says
+/// which capture records), its collector (which attaches the engine's sink
+/// once the engine started), and the process's one `capture-input` thread.
+#[derive(Clone)]
+struct LiveInput(Arc<Mutex<InputState>>);
+
+#[derive(Default)]
+struct InputState {
+    recording: Option<PathBuf>,
+    target: Option<InputTarget>,
+}
+
+struct InputTarget {
+    bundle: PathBuf,
+    sink: InputSink,
+    t0: CaptureInstant,
+    rules: HostedInput,
+}
+
+impl LiveInput {
+    /// The process's one target and its `capture-input` thread.
+    fn shared() -> Result<Self> {
+        static SHARED: Mutex<Option<LiveInput>> = Mutex::new(None);
+        let mut shared = SHARED.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(live) = &*shared {
+            return Ok(live.clone());
+        }
+        let live = Self(Arc::default());
+        let (sender, received) = mpsc::sync_channel(INPUT_CAPACITY);
+        let forward = live.clone();
+        thread::Builder::new()
+            .name("capture-input".into())
+            .spawn(move || forward.forward(received))?;
+        let _ = TAP_INPUT.set(sender);
+        *shared = Some(live.clone());
+        Ok(live)
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, InputState> {
+        self.0.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// The host started (`Some`) or ended a capture.
+    fn recording(&self, bundle: Option<&Path>) {
+        let mut state = self.state();
+        state.recording = bundle.map(Path::to_path_buf);
+        state.target = None;
+        TAP_RECORDING.store(false, Ordering::Release);
+        let dropped = DROPPED_INPUT.swap(0, Ordering::Relaxed);
+        if dropped > 0 {
+            tracing::warn!(dropped, "capture input queue was full; dropped input");
+        }
+    }
+
+    /// The engine for `bundle` started; input flows unless it already ended.
+    fn attach(&self, bundle: &Path, sink: InputSink, t0: CaptureInstant) {
+        let mut state = self.state();
+        if state.recording.as_deref() != Some(bundle) {
+            return;
+        }
+        state.target = Some(InputTarget {
+            bundle: bundle.to_path_buf(),
+            sink,
+            t0,
+            rules: HostedInput::after_shortcut(),
+        });
+        TAP_RECORDING.store(true, Ordering::Release);
+    }
+
+    fn detach(&self, bundle: &Path) {
+        let mut state = self.state();
+        if state
+            .target
+            .as_ref()
+            .is_some_and(|target| target.bundle == bundle)
+        {
+            state.target = None;
+            TAP_RECORDING.store(false, Ordering::Release);
+        }
+    }
+
+    /// The `capture-input` thread: the engine's pure input rules turn each
+    /// tap event into the event Scrawl's own taps would have sent, on the
+    /// capture's clock; the engine then applies its ink, pin, and
+    /// own-window rules (Hex's windows are this process's).
+    fn forward(&self, received: Receiver<(CaptureInstant, Tapped)>) {
+        for (at, tapped) in received {
+            let mut state = self.state();
+            let Some(target) = state.target.as_mut() else {
+                continue;
+            };
+            let t_ms = at
+                .checked_duration_since(target.t0)
+                .map_or(0, |since| since.as_millis() as u64);
+            let input = match tapped {
+                Tapped::Pointer(input) => input,
+                Tapped::Key { code, flags } => HostInput::Key {
+                    name: scrawl_capture::hosted_input::key_name(
+                        code,
+                        crate::keyboard::command_character,
+                    ),
+                    z: crate::keyboard::key_code_for('z').is_ok_and(|z| z == code) || code == KEY_Z,
+                    modifiers: modifiers(flags),
+                },
+            };
+            if let Some(event) = target.rules.translate(t_ms, input) {
+                target.sink.send(event);
+            }
+        }
+    }
+}
+
+/// The capture shortcut in the listener's input: a fresh press toggles the
+/// capture; its autorepeats and release do nothing.
+#[derive(Default)]
+pub struct CaptureShortcut {
+    held: Option<u16>,
+}
+
+impl CaptureShortcut {
+    /// Whether `event` is a fresh press of the capture shortcut.
+    pub fn pressed(
+        &mut self,
+        event: crate::suppression::InputEvent,
+        hotkeys: crate::app_settings::RuntimeHotkeys,
+    ) -> bool {
+        use crate::suppression::InputEvent;
+        match event {
+            InputEvent::Key {
+                code,
+                down: true,
+                flags,
+            } => {
+                if self.held == Some(code) {
+                    return false;
+                }
+                let pressed = hotkeys
+                    .capture
+                    .is_some_and(|binding| binding.matches_key_press(code, flags));
+                if pressed {
+                    self.held = Some(code);
+                }
+                pressed
+            }
+            InputEvent::Key {
+                code, down: false, ..
+            } if self.held == Some(code) => {
+                self.held = None;
+                false
+            }
+            InputEvent::TapDisabled => {
+                self.held = None;
+                false
+            }
+            _ => false,
+        }
+    }
+}
+
+/// The ANSI Z key, when the layout has none.
+const KEY_Z: u16 = 6;
 
 /// Waits for `thread` until `deadline`, then leaves it running.
 fn join_by(thread: JoinHandle<()>, deadline: Instant, name: &str) {
@@ -669,10 +1109,17 @@ fn collect(
     sealed: Receiver<Seal>,
     jobs: &SyncSender<FinishJob>,
     outcomes: &Mutex<Outcomes>,
+    input: &LiveInput,
 ) {
     let t0 = CaptureInstant::from_nanos(start.t0_boot_ns);
     let bundle = start.bundle_dir.clone().unwrap_or_default();
-    let capture = match engine.start(start) {
+    let capture = engine.start(start);
+    if let Ok(capture) = &capture
+        && let Some(sink) = capture.input()
+    {
+        input.attach(&bundle, sink, t0);
+    }
+    let capture = match capture {
         Ok(capture) => capture,
         Err(error) => {
             tracing::error!(error = format!("{error:#}"), "could not start the capture");
@@ -693,6 +1140,7 @@ fn collect(
             CaptureAudio::Gap { from, through } => timeline.gap(from, through),
         }
     }
+    input.detach(&bundle);
     match sealed.recv() {
         Ok(Seal::Finish { through, closed }) => {
             // The screen stops now, not when the finisher gets to it.
@@ -895,9 +1343,12 @@ pub fn replay(wavs: &[PathBuf]) -> Result<PathBuf> {
     }
     let sample_rate = sample_rate.ok_or_else(|| eyre!("no WAV files"))?;
     let engine = Arc::new(TranscriptionEngine::start(Default::default())?);
-    let mut host = CaptureHost::start(Some(engine.clone())).ok_or_else(|| {
-        eyre!("the `capture` experiment is off; run with HEX_EXPERIMENTS=capture")
-    })?;
+    if !crate::app_settings::capture_available() {
+        return Err(eyre!(
+            "the `capture` experiment is off; run with HEX_EXPERIMENTS=capture"
+        ));
+    }
+    let mut host = CaptureHost::with(shared_engine(Some(&engine))?, None)?;
     let timeline = WavTimeline {
         samples: Arc::new(samples),
         sample_rate,
@@ -1287,7 +1738,7 @@ mod tests {
         let dir = temp_dir("control");
         let audio = FakeTimeline::default();
         let engine = FakeEngine::new(Arc::new(FakeTranscriber));
-        let mut host = CaptureHost::with(engine.clone(), dir.clone()).unwrap();
+        let mut host = CaptureHost::with(engine.clone(), Some(dir.clone())).unwrap();
 
         let idle = report(host.control(ScrawlCaptureAction::Stop, &audio));
         assert!(!idle.changed && idle.bundle.is_none());
@@ -1386,7 +1837,7 @@ mod tests {
             steps: Steps::default(),
             refuse: true,
         });
-        let mut host = CaptureHost::with(engine, dir.clone()).unwrap();
+        let mut host = CaptureHost::with(engine, Some(dir.clone())).unwrap();
         let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
             .bundle
             .unwrap();
@@ -1482,7 +1933,7 @@ mod tests {
         let audio = FakeTimeline::default();
         let (gate, gated) = mpsc::channel();
         let engine = FakeEngine::new(Arc::new(GatedTranscriber(Mutex::new(gated))));
-        let mut host = CaptureHost::with(engine.clone(), dir.clone()).unwrap();
+        let mut host = CaptureHost::with(engine.clone(), Some(dir.clone())).unwrap();
         let mut bundles = Vec::new();
         for _ in 0..MAX_FINISHING {
             let started = report(host.control(ScrawlCaptureAction::Start, &audio));
@@ -1532,7 +1983,7 @@ mod tests {
         let audio = FakeTimeline::default();
         let (gate, gated) = mpsc::channel();
         let engine = FakeEngine::new(Arc::new(GatedTranscriber(Mutex::new(gated))));
-        let mut host = CaptureHost::with(engine.clone(), dir.clone()).unwrap();
+        let mut host = CaptureHost::with(engine.clone(), Some(dir.clone())).unwrap();
         let steps = |engine: &FakeEngine| engine.steps.lock().unwrap().clone();
         let mut bundles = Vec::new();
         for _ in 0..2 {
@@ -1596,8 +2047,11 @@ mod tests {
         let dir = temp_dir("raced");
         let audio = FakeTimeline::default();
         let (release, released) = mpsc::channel();
-        let mut host =
-            CaptureHost::with(Arc::new(StallingEngine(Mutex::new(released))), dir.clone()).unwrap();
+        let mut host = CaptureHost::with(
+            Arc::new(StallingEngine(Mutex::new(released))),
+            Some(dir.clone()),
+        )
+        .unwrap();
         for _ in 0..3 {
             let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
                 .bundle
@@ -1630,8 +2084,11 @@ mod tests {
     fn shutdown_cancels_the_recording_capture_and_waits_for_its_cleanup() {
         let dir = temp_dir("shutdown");
         let audio = FakeTimeline::default();
-        let mut host =
-            CaptureHost::with(FakeEngine::new(Arc::new(FakeTranscriber)), dir.clone()).unwrap();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
         let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
             .bundle
             .unwrap();
@@ -1651,11 +2108,88 @@ mod tests {
     }
 
     #[test]
-    fn the_host_is_absent_while_the_experiment_is_off() {
-        // Nothing turns the experiment on in tests, so no host, engine,
-        // thread, or sink exists and the listener answers `feature-off`.
-        if !crate::experiments::enabled(crate::experiments::Experiment::Capture) {
+    fn the_host_is_absent_while_captures_are_off() {
+        // Captures are off by default, so no host, engine, thread, or sink
+        // exists and the listener answers `feature-off`.
+        assert!(!crate::app_settings::CaptureSettings::default().enabled);
+        if !crate::app_settings::capture_on() {
             assert!(CaptureHost::start(None).is_none());
         }
+    }
+
+    #[test]
+    fn the_shortcut_starts_and_a_later_press_stops() {
+        let dir = temp_dir("shortcut");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let started = report(host.toggle(CaptureInstant::now(), &audio));
+        assert!(started.changed);
+        let t0 = host.recording_since().unwrap();
+        // A bounce right after the start does nothing.
+        let bounce = report(host.toggle(t0 + Duration::from_millis(100), &audio));
+        assert!(!bounce.changed);
+        assert_eq!(bounce.state, ScrawlCaptureState::Recording);
+        let stopped = report(host.toggle(t0 + SHORTCUT_DEBOUNCE, &audio));
+        assert!(stopped.changed);
+        assert_eq!(stopped.state, ScrawlCaptureState::Idle);
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn input_reaches_only_the_capture_that_is_recording() {
+        let live = LiveInput(Arc::default());
+        let sink = InputSink::default();
+        let (first, second) = (PathBuf::from("/a.scrawl"), PathBuf::from("/b.scrawl"));
+        // A capture stopped before its engine started never takes input.
+        live.recording(Some(&first));
+        live.recording(None);
+        live.attach(&first, sink.clone(), t(0));
+        assert!(live.state().target.is_none());
+        // An old collector detaching never takes the new capture's input.
+        live.recording(Some(&second));
+        live.attach(&second, sink, t(0));
+        live.detach(&first);
+        assert!(live.state().target.is_some());
+        live.recording(None);
+        assert!(live.state().target.is_none());
+    }
+
+    #[test]
+    fn only_a_fresh_press_of_the_shortcut_counts() {
+        use crate::suppression::InputEvent;
+        let hotkeys = crate::app_settings::RuntimeHotkeys {
+            capture: Some(crate::app_settings::HotkeyBinding::capture_default().runtime()),
+            ..Default::default()
+        };
+        let code = crate::app_settings::HotkeyBinding::capture_default()
+            .key
+            .unwrap()
+            .code;
+        let flags = crate::app_settings::OPTION_KEY_MASK | crate::app_settings::SHIFT_KEY_MASK;
+        let key = |down, flags| InputEvent::Key { code, down, flags };
+        let mut shortcut = CaptureShortcut::default();
+        assert!(shortcut.pressed(key(true, flags), hotkeys));
+        // Holding the key repeats it.
+        assert!(!shortcut.pressed(key(true, flags), hotkeys));
+        assert!(!shortcut.pressed(key(false, flags), hotkeys));
+        assert!(shortcut.pressed(key(true, flags), hotkeys));
+        assert!(!shortcut.pressed(key(false, flags), hotkeys));
+        // The key without its modifiers is typing; with captures off, nothing.
+        assert!(!shortcut.pressed(key(true, 0), hotkeys));
+        assert!(!shortcut.pressed(key(false, 0), hotkeys));
+        assert!(!shortcut.pressed(key(true, flags), Default::default()));
+    }
+
+    #[test]
+    fn tap_flags_become_modifiers() {
+        let held = modifiers(0x0008_0000 | 0x0002_0000);
+        assert!(held.option && held.shift && !held.command && !held.control);
+        assert!(!held.shift_only());
+        assert!(modifiers(0x0002_0000).shift_only());
     }
 }

@@ -24,6 +24,26 @@ const EVENT_KEY_DOWN: u32 = 10;
 const EVENT_KEY_UP: u32 = 11;
 const EVENT_FLAGS_CHANGED: u32 = 12;
 const EVENT_OTHER_MOUSE_DOWN: u32 = 25;
+#[cfg(hex_capture)]
+const EVENT_LEFT_MOUSE_UP: u32 = 2;
+#[cfg(hex_capture)]
+const EVENT_RIGHT_MOUSE_UP: u32 = 4;
+#[cfg(hex_capture)]
+const EVENT_MOUSE_MOVED: u32 = 5;
+#[cfg(hex_capture)]
+const EVENT_LEFT_MOUSE_DRAGGED: u32 = 6;
+#[cfg(hex_capture)]
+const EVENT_RIGHT_MOUSE_DRAGGED: u32 = 7;
+#[cfg(hex_capture)]
+const EVENT_SCROLL_WHEEL: u32 = 22;
+#[cfg(hex_capture)]
+const EVENT_OTHER_MOUSE_DRAGGED: u32 = 27;
+#[cfg(hex_capture)]
+const KEYBOARD_EVENT_AUTOREPEAT: u32 = 8;
+#[cfg(hex_capture)]
+const SCROLL_WHEEL_DELTA_AXIS_1: u32 = 11;
+#[cfg(hex_capture)]
+const SCROLL_WHEEL_DELTA_AXIS_2: u32 = 12;
 const EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = u32::MAX - 1;
 const EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = u32::MAX;
 const KEYBOARD_EVENT_KEYCODE: u32 = 9;
@@ -66,6 +86,16 @@ unsafe extern "C" {
     fn CGEventGetFlags(event: EventRef) -> u64;
     fn CGEventGetTimestamp(event: EventRef) -> u64;
     fn CGEventGetIntegerValueField(event: EventRef, field: u32) -> i64;
+    #[cfg(hex_capture)]
+    fn CGEventGetLocation(event: EventRef) -> CgPoint;
+}
+
+#[cfg(hex_capture)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CgPoint {
+    x: f64,
+    y: f64,
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -389,6 +419,26 @@ const OBSERVATION_MASK: u64 = (1_u64 << EVENT_LEFT_MOUSE_DOWN)
     | (1_u64 << EVENT_RIGHT_MOUSE_DOWN)
     | (1_u64 << EVENT_FLAGS_CHANGED)
     | (1_u64 << EVENT_OTHER_MOUSE_DOWN);
+/// What the observation tap adds in builds with captures, while the
+/// `capture` experiment is on: the pointer moving, dragging, coming up, and
+/// scrolling. The callback drops them at once unless a capture records
+/// (`capture_host::wants_input`); they never reach the listener.
+#[cfg(hex_capture)]
+const CAPTURE_POINTER_MASK: u64 = (1_u64 << EVENT_LEFT_MOUSE_UP)
+    | (1_u64 << EVENT_RIGHT_MOUSE_UP)
+    | (1_u64 << EVENT_MOUSE_MOVED)
+    | (1_u64 << EVENT_LEFT_MOUSE_DRAGGED)
+    | (1_u64 << EVENT_RIGHT_MOUSE_DRAGGED)
+    | (1_u64 << EVENT_SCROLL_WHEEL)
+    | (1_u64 << EVENT_OTHER_MOUSE_DRAGGED);
+
+fn observation_mask() -> u64 {
+    #[cfg(hex_capture)]
+    if crate::app_settings::capture_available() {
+        return OBSERVATION_MASK | CAPTURE_POINTER_MASK;
+    }
+    OBSERVATION_MASK
+}
 
 fn run_event_tap(
     sender: Sender<ObservedInputEvent>,
@@ -438,7 +488,7 @@ fn run_event_tap(
         AttachedTap::create(
             ANNOTATED_SESSION_EVENT_TAP,
             LISTEN_ONLY_EVENT_TAP,
-            OBSERVATION_MASK,
+            observation_mask(),
             event_callback,
             context_ptr,
             current_run_loop,
@@ -542,15 +592,11 @@ unsafe extern "C" fn physical_event_callback(
 /// Escape and Hex's own shortcuts already act through their session events.
 fn is_chord_evidence(code: u16, flags: u64, hotkeys: RuntimeHotkeys) -> bool {
     code != ESCAPE_KEY_CODE
-        && ![
-            Some(hotkeys.dictation),
-            hotkeys.edit,
-            hotkeys.paste_last,
-            hotkeys.paste_meeting,
-        ]
-        .iter()
-        .flatten()
-        .any(|hotkey| hotkey.matches_key_press(code, flags))
+        && !hotkeys
+            .all()
+            .iter()
+            .flatten()
+            .any(|hotkey| hotkey.matches_key_press(code, flags))
 }
 
 /// HID-tap timestamps arrive as Mach ticks on Apple Silicon and as
@@ -608,6 +654,10 @@ unsafe extern "C" fn event_callback(
     {
         return event;
     }
+    #[cfg(hex_capture)]
+    if crate::capture_host::wants_input() && report_capture_input(event_type, event) {
+        return event;
+    }
     let input = match event_type {
         EVENT_FLAGS_CHANGED => {
             // SAFETY: CoreGraphics supplied a valid event to this callback.
@@ -653,6 +703,86 @@ unsafe extern "C" fn event_callback(
     if suppress { ptr::null_mut() } else { event }
 }
 
+/// Reports an event to a recording capture (`capture_host::report_input`)
+/// and whether it is one only a capture wants, which the listener never
+/// sees. Mouse downs, modifier changes, and keys also go on to the listener.
+#[cfg(hex_capture)]
+fn report_capture_input(event_type: u32, event: EventRef) -> bool {
+    use crate::capture_host::{Tapped, modifiers, report_input};
+    use scrawl_capture::hosted_input::HostInput;
+    // SAFETY: CoreGraphics supplied a valid event to this callback.
+    let at = CaptureInstant::from_nanos(unsafe { CGEventGetTimestamp(event) });
+    // SAFETY: CoreGraphics supplied a valid event.
+    let flags = unsafe { CGEventGetFlags(event) };
+    // SAFETY: CoreGraphics supplied a valid event; every event has a location.
+    let CgPoint { x, y } = unsafe { CGEventGetLocation(event) };
+    let held = modifiers(flags);
+    let (input, capture_only) = match event_type {
+        EVENT_LEFT_MOUSE_DOWN
+        | EVENT_RIGHT_MOUSE_DOWN
+        | EVENT_LEFT_MOUSE_UP
+        | EVENT_RIGHT_MOUSE_UP => (
+            Tapped::Pointer(HostInput::Button {
+                down: matches!(event_type, EVENT_LEFT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_DOWN),
+                right: matches!(event_type, EVENT_RIGHT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_UP),
+                x,
+                y,
+                modifiers: held,
+            }),
+            !matches!(event_type, EVENT_LEFT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_DOWN),
+        ),
+        EVENT_MOUSE_MOVED
+        | EVENT_LEFT_MOUSE_DRAGGED
+        | EVENT_RIGHT_MOUSE_DRAGGED
+        | EVENT_OTHER_MOUSE_DRAGGED => (
+            Tapped::Pointer(HostInput::Moved {
+                x,
+                y,
+                modifiers: held,
+            }),
+            true,
+        ),
+        EVENT_SCROLL_WHEEL => (
+            Tapped::Pointer(HostInput::Scroll {
+                x,
+                y,
+                // SAFETY: CoreGraphics supplied a valid scroll event.
+                dx: unsafe { CGEventGetIntegerValueField(event, SCROLL_WHEEL_DELTA_AXIS_2) } as f64,
+                // SAFETY: CoreGraphics supplied a valid scroll event.
+                dy: unsafe { CGEventGetIntegerValueField(event, SCROLL_WHEEL_DELTA_AXIS_1) } as f64,
+            }),
+            true,
+        ),
+        EVENT_FLAGS_CHANGED => (
+            Tapped::Pointer(HostInput::ModifiersChanged {
+                x,
+                y,
+                modifiers: held,
+            }),
+            false,
+        ),
+        // SAFETY: CoreGraphics supplied a valid keyboard event.
+        EVENT_KEY_DOWN
+            if unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_AUTOREPEAT) } == 0 =>
+        {
+            (
+                Tapped::Key {
+                    // SAFETY: CoreGraphics supplied a valid keyboard event.
+                    code: unsafe {
+                        CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) as u16
+                    },
+                    flags,
+                },
+                false,
+            )
+        }
+        EVENT_OTHER_MOUSE_DOWN | EVENT_KEY_DOWN | EVENT_KEY_UP => return false,
+        _ => return true,
+    };
+    report_input(at, input);
+    capture_only
+}
+
 fn send_input(context: &EventTapContext, event: InputEvent, capture_at: CaptureInstant) -> bool {
     let sequence = context.next_sequence.fetch_add(1, Ordering::Relaxed);
     context.pending.push(sequence, capture_at);
@@ -689,12 +819,7 @@ impl ShortcutSuppression {
         delivered: bool,
         escape_cancels: bool,
     ) -> bool {
-        let bindings = [
-            Some(hotkeys.dictation),
-            hotkeys.edit,
-            hotkeys.paste_last,
-            hotkeys.paste_meeting,
-        ];
+        let bindings = hotkeys.all();
         match input {
             InputEvent::Key {
                 code,
@@ -734,6 +859,7 @@ impl ShortcutSuppression {
                 edit: None,
                 paste_last: Some(paste_last),
                 paste_meeting: Some(paste_meeting),
+                capture: None,
             },
             delivered,
             false,
@@ -3897,6 +4023,33 @@ mod tests {
             option_binding(),
             true,
         ));
+    }
+
+    #[test]
+    fn the_capture_shortcut_is_suppressed_and_never_chord_evidence() {
+        let hotkeys = RuntimeHotkeys {
+            capture: Some(RuntimeHotkey {
+                modifiers: crate::app_settings::HotkeyModifiers {
+                    option: Some(crate::app_settings::ModifierSide::Either),
+                    shift: Some(crate::app_settings::ModifierSide::Either),
+                    ..Default::default()
+                },
+                key_code: Some(1),
+            }),
+            ..RuntimeHotkeys::default()
+        };
+        let flags = OPTION_KEY_MASK | SHIFT_KEY_MASK;
+        assert!(!is_chord_evidence(1, flags, hotkeys));
+        assert!(is_chord_evidence(1, flags, RuntimeHotkeys::default()));
+        let mut suppression = ShortcutSuppression::default();
+        let key = |down| InputEvent::Key {
+            code: 1,
+            down,
+            flags,
+        };
+        assert!(suppression.process_all(key(true), hotkeys, true, false));
+        assert!(suppression.process_all(key(false), hotkeys, true, false));
+        assert!(!suppression.process_all(key(true), RuntimeHotkeys::default(), true, false));
     }
 
     #[test]
