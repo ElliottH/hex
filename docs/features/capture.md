@@ -2,9 +2,10 @@
 
 Scrawl's capture engine hosted inside Hex, step 3 of
 [the plan](../plans/capture-in-hex.md). It runs the real `scrawl-capture`
-crate: it records the active display with ScreenCaptureKit and narration from
-Hex's microphone, transcribes the narration with word timestamps on Hex's
-loaded model, and writes a Scrawl bundle. No shortcut, input, overlay, or
+crate, imported into `crates/capture`: it records the active display with
+ScreenCaptureKit and narration from Hex's microphone, transcribes the
+narration with word timestamps on Hex's loaded model, and writes a Scrawl
+bundle. No shortcut, input, overlay, or
 routing yet.
 
 ```ts
@@ -58,10 +59,11 @@ hex capture stop                         // capture.stop
     ├── Keyframes decoded from recording.mp4 by scrawl-helper (beside `hex`: in
     │   Hex.app's Contents/MacOS or target/<profile>; or $SCRAWL_HELPER); helper
     │   missing -> the 480 px sampled frames
-    └── Transcription fails -> logged; the bundle has no words
+    └── Transcription fails -> logged; the bundle has no words, and the outcome says why
 
 hex capture cancel -> engine cancelled, sink closed, bundle removed
 hex capture status -> recording (bundle, elapsed), bundles still writing, last outcome
+                      (words, audio gaps, or why it has no transcript)
 Hex quits mid-capture -> cancelled, bundle removed; captures still writing stop
 transcribing between chunks and keep their audio (shutdown waits ≤ 2 s)
 ```

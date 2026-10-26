@@ -649,8 +649,16 @@ fn human_scrawl_capture(report: &super::ScrawlCaptureReport) -> String {
         let words = last
             .words
             .map_or_else(String::new, |words| format!(", {words} words"));
+        let gaps = last
+            .gaps
+            .filter(|gaps| *gaps > 0)
+            .map_or_else(String::new, |gaps| format!(", {gaps} audio gaps"));
+        let missing = last
+            .missing_transcript
+            .as_ref()
+            .map_or_else(String::new, |why| format!(", no transcript ({why})"));
         out.push_str(&format!(
-            "Last: {} {}{words}\n",
+            "Last: {} {}{words}{gaps}{missing}\n",
             last.stage,
             last.bundle.display()
         ));

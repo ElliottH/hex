@@ -19,7 +19,9 @@ else
 fi
 # HEX_CAPTURE=1 builds the `capture` experiment in (`--features capture`)
 # with Scrawl's `scrawl-helper` beside `hex`, where the engine looks for
-# it. Never for a public build: release-app.sh and validate-app.sh refuse it.
+# it. crates/capture/build.rs compiles the helper from crates/capture/helper
+# into target/release. Never for a public build: release-app.sh and
+# validate-app.sh refuse it.
 capture=${HEX_CAPTURE:-}
 case "$capture" in
   '' | 0) capture= ;;

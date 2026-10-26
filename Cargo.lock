@@ -4708,7 +4708,6 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "scrawl-capture"
 version = "0.3.13"
-source = "git+https://github.com/kitlangton/scrawl?rev=86d7d6c212ad5e464e0b3242194c34386bb4caf4#86d7d6c212ad5e464e0b3242194c34386bb4caf4"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -4726,6 +4725,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "png 0.18.1",
+ "scrawl-router",
  "screencapturekit",
  "serde",
  "serde_json",

@@ -107,7 +107,9 @@ builds with `--features capture`. A Hex built without the feature refuses
 `scrawl-capture` with `unsupported`; one with it but the experiment off
 refuses it with `feature-off`. `capture stop` replies at once with the bundle
 path while the words and files are written in the background; `capture status`
-lists bundles still writing and the last outcome. A start while two captures
+lists bundles still writing and the last outcome (`last`: `bundle`, `stage`
+of `done`, `failed`, or `cancelled`, and for a written bundle `words`, `gaps`,
+and `missing_transcript`, why it has no words). A start while two captures
 are still writing is refused with `busy`. Every action is idempotent.
 
 A CLI-started meeting is the same recording the menu bar starts: the menu-bar

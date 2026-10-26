@@ -1,16 +1,26 @@
 # Captures In Hex
 
-Status: step 3 is built on `dev` as an experiment behind a build option
-(off in every public build) on Scrawl's real
-engine, the `scrawl-capture` crate as a Git dependency (see
+Status: steps 2 and 3 are built on `dev` as an experiment behind a build
+option (off in every public build) on Scrawl's real engine, the
+`scrawl-capture` crate imported into `crates/capture` (see
 [Built so far](#built-so-far)); nothing ships, and Kit decides later whether
 the fold happens. This is the Hex side of ROADMAP "Fold Scrawl Into Hex": how
 Hex hosts Scrawl's capture engine without weakening dictation.
 
 ## Built so far
 
-Step 3 on `scrawl-capture` (Scrawl's `crates/capture`, branch `engine/split`,
-pinned by rev in `Cargo.toml`), without importing the crate (step 2):
+Step 2: `crates/capture` is Scrawl's `crates/capture` at `kitlangton/scrawl`
+`e351ddb` (branch `engine/split`), copied without history, package name
+`scrawl-capture` kept, with private test values replaced by synthetic ones,
+`cargo fmt`, and clippy fixes that change no behaviour. Hex depends on it by
+path. It sits in `[workspace] exclude`, so `cargo build`, `cargo test`, and
+`--workspace` never build it; it compiles only as the `capture` feature's
+macOS dependency, sharing the root `Cargo.lock` and `target/`. On macOS
+`scripts/check` and CI name it (`-p voice-control -p scrawl-capture
+--features capture`) to lint and test it. Scrawl's own changes now come over
+by hand.
+
+Step 3, `capture_host` on that crate:
 
 ```ts
 hex capture start|stop|cancel|status     // `--features capture`; POST /control `scrawl-capture`
@@ -28,7 +38,8 @@ hex capture start|stop|cancel|status     // `--features capture`; POST /control 
     │       ├── HexTranscriber -> parakeet::transcribe_with_words, 30 s chunks,
     │       │   each a foreground job on the dictation engine's loaded model
     │       ├── Scrawl writes recording.mp4, audio.wav, frames/, scrawl.json, summary.md
-    │       └── Hex makes every file 0600 and folder 0700
+    │       │   (its own files 0600) -> Finished { words, gaps, missing_transcript }
+    │       └── Hex makes every file 0600 and folder 0700 (recording.mp4, folders)
     └── cancel -> Capture::cancel, remove the bundle
 ```
 
@@ -37,17 +48,20 @@ hex capture start|stop|cancel|status     // `--features capture`; POST /control 
   `scrawl_capture::capture::{Engine, Capture, SealedCapture}` so the host's
   tests run without a screen. Hex implements the crate's `Host` (bounded
   `try_send` events, logs and metrics to tracing), `ConfigSource`, and
-  `Transcriber`.
+  `Transcriber`. `hex capture status` shows the last capture's words, audio
+  gaps, and why it has no transcript.
 - `ConfigSource` is the engine's only settings source; nothing on Hex's path
-  reads `~/.config/scrawl/config.json`. Hex has no capture settings yet, so
+  reads `~/.config/scrawl/config.json` (the crate reads Scrawl's config and
+  logs only after `enable_scrawl_host_defaults` or `enable_file_log`, which
+  Hex never calls). Hex has no capture settings yet, so
   `HexConfig` sets Scrawl's defaults deliberately: auto-crop on (display
   captures) and the `agentContext` summary format off.
 - The engine is `Engine::new(..).with_resources(SharedResources::none())`;
   Hex never calls `install_shared_resources`, so no ingest server (47777),
-  delivery retries, or global shortcuts. `scrawl_capture::log::set_sink`
-  routes the crate's process-wide log to tracing instead of
-  `~/Library/Logs/Scrawl/scrawl.log`; `CaptureHost::start` installs it before
-  building the engine. `Engine::new` and `Engine::start` call no TIS/TSM
+  delivery retries, or global shortcuts. `Engine::new` routes the crate's
+  process-wide log to `Host::log` when no sink is set, so each line reaches
+  Hex's tracing once and nothing goes to `~/Library/Logs/Scrawl`.
+  `Engine::new` and `Engine::start` call no TIS/TSM
   (layout-aware shortcuts are resolved only in `install_shared_resources`).
 - One capture records at a time. `stop` seals it and the capture-audio
   thread calls `Capture::stop` at once, ending ScreenCaptureKit, the window
@@ -62,7 +76,7 @@ hex capture start|stop|cancel|status     // `--features capture`; POST /control 
   fresh transcription engine, feeding WAV files instead of the microphone; it
   records the screen too (debug builds only, like every `hex dev` command).
 - Not built yet: the shortcut, input and Escape, overlays, routing, the pane,
-  settings import, coexistence, and the crate import.
+  settings import, and coexistence.
 
 ### Features and gating
 
@@ -79,10 +93,10 @@ hex capture start|stop|cancel|status     // `--features capture`; POST /control 
   `scripts/validate-app.sh` (run on every macOS release artifact) refuses a
   bundle with `Contents/MacOS/scrawl-helper` or a `hex` containing the
   capture host's start-up log line.
-- `scripts/check` and macOS CI test with `--features capture`; clippy uses
-  `--all-features`. The Nix package still vendors the Git source, so
-  `nix/package.nix` carries `outputHashes."scrawl-capture-0.3.13"`; bump it
-  with the rev.
+- `scripts/check` and macOS CI lint and test Hex and the crate with
+  `--features capture` (the crate's ~260 tests run in seconds). Linux,
+  Windows, and Nix builds never select it: the dependency is macOS-only and
+  the crate is outside the workspace.
 - Off: `phone` (ingest server, pairing), `mic` (the engine's own cpal stream),
   `input` (rdev taps), `hex-client`, `parakeet`, `cli`. `helper` stays on for
   `scrawl-helper`, which decodes `recording.mp4` into full-quality keyframes
@@ -118,7 +132,7 @@ Hex.app (one process, macOS only for captures)
 │  ├─ suppression             + capture shortcut, + pointer events while capturing
 │  ├─ dictation_audio         + bounded capture sink on the same timeline
 │  └─ transcription_engine    + foreground capture clip (after queued dictation)
-└─ crates/capture (package `scrawl-capture`, imported with history)
+└─ crates/capture (package `scrawl-capture`, imported without history)
    ├─ features on in Hex:  screen, helper (phone later, for iPhone ingest)
    └─ features off in Hex: input, mic, hex-client, parakeet, cli
 ```
@@ -132,9 +146,9 @@ own inside Hex.
 
 ## Workspace and builds
 
-- The root `Cargo.toml` gains `[workspace] members = [".", "crates/capture"]`.
-  The root stays the `voice-control` package; the rename to `hex` is a
-  separate decision.
+- The root `Cargo.toml` lists `crates/capture` in `[workspace] exclude`
+  (built). The root stays the `voice-control` package; the rename to `hex`
+  is a separate decision.
 - Hex depends on `scrawl-capture` only under
   `[target.'cfg(target_os = "macos")'.dependencies]`, with
   `default-features = false, features = ["screen", "helper"]` today (`phone`
@@ -143,7 +157,7 @@ own inside Hex.
   change.
 - `crates/capture/Cargo.toml` lists explicit versions (no `workspace = true`)
   so the Scrawl app can depend on it by Git revision until it retires.
-- macOS CI adds `cargo test -p scrawl-capture --locked`.
+- macOS CI lints and tests `-p scrawl-capture` with `--features capture` (built).
 - `crates/capture/build.rs` compiles the engine's Swift helper. Hex builds it
   with a Hex identity (`SCRAWL_HELPER_PLIST`), and `scripts/build-app.sh`
   copies and signs it into `Contents/MacOS/` (built for `HEX_CAPTURE=1`).
@@ -252,11 +266,10 @@ simulation, reprocess) mount under `hex dev capture` in debug builds.
 1. Scrawl prepares the engine on its own exploration branch (its inventory's
    refactors: `lib.rs`, pipeline out of `main.rs`, event, config, permission,
    clipboard and transcriber seams, one `Capture` type, Cargo features).
-2. Import `crates/capture` here with history (`git filter-repo` plus a
-   subtree merge), with the macOS-only dependency and CI.
+2. Import `crates/capture` here, with the macOS-only dependency and CI.
+   Built: copied without history from `e351ddb`.
 3. `capture_host` with the experiment gate, the capture sink, Parakeet words,
-   and a headless `hex capture start|stop` producing a bundle. Built ahead of
-   step 2, on `scrawl-capture` as a Git dependency.
+   and a headless `hex capture start|stop` producing a bundle. Built.
 4. Input and Escape, then the Rune capsule and ink overlay with scenes.
 5. Router in-process, the Captures pane, import, and coexistence.
 6. Compare Parakeet and SpeechAnalyzer word times on recorded captures.
@@ -275,24 +288,24 @@ Then answered at `86d7d6c`: `Capture::stop` returning a `SealedCapture`
 without global shortcuts, no TIS/TSM in `Engine::new`, and autocrop and
 `agentContext` from `ConfigSource`.
 
+Then answered at `e351ddb` (the imported commit): `Engine::new` bridges the
+crate's log to `Host::log` when no sink is set, and a library writes Scrawl's
+log file or reads its config only when asked; `Engine::start`'s docs say it
+blocks; bundle files Scrawl writes are `0600`; and `Finished` reports `gaps`
+and `missing_transcript`.
+
 Left from hosting the real engine:
 
-- `scrawl_log` writes to Scrawl's log file unless a host installs a sink;
-  make the sink part of `Engine` (or default to none in a library).
-  `log::set_sink`'s doc says `Engine::new` bridges to `Host::log` when no
-  sink is set, but at `86d7d6c` nothing does, so Hex sets the sink itself.
 - No audio-only target: every capture records the screen and needs Screen
   Recording. Hex's narration-only tests use a fake engine.
 - `Engine::start` blocks on target discovery and ScreenCaptureKit; Hex runs it
-  off the listener thread. Say so in its docs, or split it.
+  off the listener thread.
 - `finish` launches `scrawl-helper` to decode the movie, so a library host
   ships and signs a second executable (Hex does, with `HEX_CAPTURE=1`) or
   loses full-quality keyframes. Decoding in-process would drop it.
-- Bundle files are written with the process umask (0644); Hex tightens them
-  after `finish`. A `0600` writer would keep them private while recording too.
+- `recording.mp4`, the window log, and folders still get the process umask;
+  Hex tightens them after `finish`.
 - `phone`, `routing`, `delivery`, and the ingest HTTP code compile
   regardless of features, and the crate pulls a second `windows` (0.61) into
   `Cargo.lock` for its Windows target.
 - `anyhow` in the public traits makes a `color_eyre` host convert every error.
-- A transcriber error is only logged; `Finished` can't tell Hex that words
-  are missing, or how many gaps the audio had.

@@ -77,8 +77,17 @@ trait Sealed: Send {
     /// Removes the bundle.
     fn cancel(self: Box<Self>);
     /// Blocking: transcribes `audio`, picks keyframes, and writes the
-    /// bundle. Returns its word count.
-    fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<usize>;
+    /// bundle.
+    fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<Written>;
+}
+
+/// What a written capture reports.
+struct Written {
+    words: usize,
+    /// Spans of its audio that went missing.
+    gaps: usize,
+    /// Why it has no transcript, if it has none.
+    missing_transcript: Option<String>,
 }
 
 impl CaptureEngine for scrawl_capture::capture::Engine {
@@ -104,7 +113,7 @@ impl Sealed for scrawl_capture::capture::SealedCapture {
         scrawl_capture::capture::SealedCapture::cancel(*self);
     }
 
-    fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<usize> {
+    fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<Written> {
         let finished = scrawl_capture::capture::SealedCapture::finish(*self, Some(audio))?;
         tracing::info!(
             bundle = %finished.dir.display(),
@@ -112,7 +121,11 @@ impl Sealed for scrawl_capture::capture::SealedCapture {
             summary = %finished.summary,
             "capture written"
         );
-        Ok(finished.words)
+        Ok(Written {
+            words: finished.words,
+            gaps: finished.gaps,
+            missing_transcript: finished.missing_transcript,
+        })
     }
 }
 
@@ -143,7 +156,8 @@ fn start_request(t0: CaptureInstant, bundle: PathBuf) -> Start {
 
 /// Forwards events to a bounded channel (the `capture-events` thread logs
 /// them) and logs through tracing. Never blocks: a full channel drops the
-/// event.
+/// event. `Engine::new` also makes it the crate's process-wide log sink, so
+/// the engine's own log lines arrive here once, never in Scrawl's log file.
 struct HexHost {
     events: SyncSender<Event>,
 }
@@ -164,22 +178,6 @@ impl Host for HexHost {
     }
 }
 
-/// The engine's process-wide log, which parts of it use directly. Without
-/// it they write to Scrawl's log file.
-struct TracingLog;
-
-impl scrawl_capture::log::Sink for TracingLog {
-    fn log(&self, line: &str) {
-        tracing::info!(target: "hex::capture", "{line}");
-    }
-
-    fn metric(&self, name: &str, ms: f64) {
-        tracing::debug!(target: "hex::capture", name, ms, "capture metric");
-    }
-}
-
-/// Scrawl's defaults. Hex passes every bundle folder itself, so the
-/// configured captures folder is never consulted.
 /// The engine's settings, from Hex rather than `~/.config/scrawl`. Hex has
 /// no capture settings yet, so these are Scrawl's defaults, chosen here:
 /// auto-crop on (it applies to display captures), and the `agentContext`
@@ -283,8 +281,9 @@ fn new_bundle_dir(captures_dir: &Path) -> Result<PathBuf> {
     ))
 }
 
-/// Makes everything Scrawl wrote in `dir` owner-only: it writes with the
-/// process umask, inside the owner-only bundle folder.
+/// Makes everything in `dir` owner-only. Scrawl writes its manifest, audio,
+/// and frames `0600`, but the movie, the window log, and folders still get
+/// the process umask.
 fn restrict_bundle(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let mut pending = vec![dir.to_path_buf()];
@@ -372,12 +371,14 @@ struct Outcomes {
 }
 
 impl Outcomes {
-    fn settle(&mut self, bundle: PathBuf, stage: Stage, words: Option<usize>) {
+    fn settle(&mut self, bundle: PathBuf, stage: Stage, written: Option<Written>) {
         self.unfinished.retain(|unfinished| unfinished != &bundle);
         self.last = Some(ScrawlCaptureOutcome {
             bundle,
             stage: stage.label().into(),
-            words,
+            words: written.as_ref().map(|written| written.words),
+            gaps: written.as_ref().map(|written| written.gaps),
+            missing_transcript: written.and_then(|written| written.missing_transcript),
         });
     }
 }
@@ -413,8 +414,6 @@ impl CaptureHost {
         }
         // scripts/validate-app.sh refuses a binary containing this line.
         tracing::info!("capture experiment on: `hex capture` is available");
-        // Before any engine exists, so nothing reaches Scrawl's log file.
-        scrawl_capture::log::set_sink(Some(Arc::new(TracingLog)));
         let transcriber = Arc::new(HexTranscriber {
             engine: engine.as_ref().map(Arc::downgrade),
         });
@@ -638,13 +637,18 @@ fn finish_captures(jobs: Receiver<FinishJob>, outcomes: &Mutex<Outcomes>) {
         audio,
     } in jobs
     {
-        let gaps = audio.gaps.len();
         let finished = capture.finish(audio);
         restrict_bundle(&bundle);
         match finished {
-            Ok(words) => {
-                tracing::info!(bundle = %bundle.display(), words, gaps, "capture finished");
-                lock(outcomes).settle(bundle, Stage::Done, Some(words));
+            Ok(written) => {
+                tracing::info!(
+                    bundle = %bundle.display(),
+                    words = written.words,
+                    gaps = written.gaps,
+                    missing_transcript = written.missing_transcript.as_deref(),
+                    "capture finished"
+                );
+                lock(outcomes).settle(bundle, Stage::Done, Some(written));
             }
             Err(error) => {
                 tracing::error!(error = format!("{error:#}"), "capture failed");
@@ -1198,13 +1202,14 @@ mod tests {
             fs::remove_dir_all(&self.dir).unwrap();
         }
 
-        fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<usize> {
+        fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<Written> {
             use scrawl_capture::model::{CaptureMode, TargetFrame, TargetInfo};
             self.steps
                 .lock()
                 .unwrap()
                 .push(("finish", self.dir.clone()));
             let duration_ms = audio.duration_ms();
+            let gaps = audio.gaps.len();
             let target = TargetInfo {
                 mode: CaptureMode::Window,
                 app: None,
@@ -1238,7 +1243,11 @@ mod tests {
                 Default::default(),
                 Some(&*self.transcriber),
             )?;
-            Ok(bundle.transcript.words.len())
+            Ok(Written {
+                words: bundle.transcript.words.len(),
+                gaps,
+                missing_transcript: bundle.transcript.missing.map(|missing| missing.reason),
+            })
         }
     }
 
@@ -1308,6 +1317,9 @@ mod tests {
         let last = wait_for_last(&mut host, &audio, &bundle, true);
         assert_eq!(last.stage, "done");
         assert_eq!(last.words, Some(2));
+        // The fake audio ends before the stop, so the tail may count as a gap.
+        assert!(last.gaps.is_some());
+        assert_eq!(last.missing_transcript, None);
 
         // Hex's audio, on Hex's clock, into Hex's folder; nothing else.
         let start = engine.starts.lock().unwrap()[0].clone();

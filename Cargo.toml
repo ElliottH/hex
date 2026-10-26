@@ -8,8 +8,13 @@ repository = "https://github.com/anomalyco/hex"
 
 # Crates imported from Scrawl live under `crates/`. Plain `cargo build` and
 # `cargo test` still select only Hex; pass `--workspace` or `-p` for the others.
+# `crates/capture` is excluded so `--workspace` never builds it: it compiles
+# only as the `capture` feature's macOS dependency, and `-p scrawl-capture`
+# tests and lints it. The root package is a member without being listed;
+# listing "." would defeat `exclude`.
 [workspace]
-members = [".", "crates/router"]
+members = ["crates/router"]
+exclude = ["crates/capture"]
 
 [[test]]
 name = "keyboard_layout"
@@ -79,7 +84,7 @@ ratatui = "0.30.2"
 realfft = "3.5.0"
 rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
 screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
-scrawl-capture = { git = "https://github.com/kitlangton/scrawl", rev = "86d7d6c212ad5e464e0b3242194c34386bb4caf4", default-features = false, features = ["screen", "helper"], optional = true }
+scrawl-capture = { path = "crates/capture", default-features = false, features = ["screen", "helper"], optional = true }
 tokio = { version = "1.53.1", features = ["rt", "io-std"] }
 unicode-normalization = "0.1.25"
 

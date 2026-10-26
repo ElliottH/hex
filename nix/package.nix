@@ -92,7 +92,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
     outputHashes = {
       "transcribe-rs-0.3.11" = "sha256-MJJiug3LfbKsuHcL2+LJk95+j5kk/MWzb5ihdBlHLmE=";
       "rune-0.0.1" = "sha256-dqDrZxHbig9YGMz/mtOf4gxUz53+0wnrom267Xfpm+Y=";
-      "scrawl-capture-0.3.13" = "sha256-WsyYHDIA5MAk9KC8Y+0v06XbSMfs9MtrylJRNlleYVY=";
     };
   };
 

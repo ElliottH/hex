@@ -254,6 +254,13 @@ pub struct ScrawlCaptureOutcome {
     /// done, failed, or cancelled.
     pub stage: String,
     pub words: Option<usize>,
+    /// Spans of a written capture's audio that went missing.
+    #[serde(default)]
+    pub gaps: Option<usize>,
+    /// Why a written capture has no transcript: `no_audio`, or the engine's
+    /// reason.
+    #[serde(default)]
+    pub missing_transcript: Option<String>,
 }
 
 /// A refused or failed command, with a stable code (see `docs/cli.md`).
@@ -781,6 +788,8 @@ mod tests {
                     bundle: "/tmp/0.capture".into(),
                     stage: "done".into(),
                     words: Some(3),
+                    gaps: Some(1),
+                    missing_transcript: None,
                 }),
             })),
             ControlReply::error("busy", "Hex is busy"),

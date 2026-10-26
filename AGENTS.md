@@ -327,8 +327,10 @@ substitute for source inspection or a second roadmap.
   launch snapshot of `HEX_EXPERIMENTS` and `~/.config/hex/experiments`
   behind `experiments::enabled` and `hex experiments`. `capture` exists
   only in builds with its build option.
-- `capture_host`: Scrawl's capture engine (the `scrawl-capture` crate)
-  hosted in Hex for the `capture` experiment
+- `capture_host`: Scrawl's capture engine (the `scrawl-capture` crate in
+  `crates/capture`, copied from Scrawl's `engine/split` at `e351ddb` and
+  kept out of the workspace so only `--features capture` on macOS builds it;
+  `scripts/check` names it there) hosted in Hex for the `capture` experiment
   (`docs/plans/capture-in-hex.md`), compiled only as `cfg(hex_capture)`: a
   macOS build with the `capture` Cargo feature, a build option off in every
   public build (`HEX_CAPTURE=1 scripts/build-app.sh` bundles and signs
@@ -687,7 +689,6 @@ CoreAudio formats, AppleScript details, or event serialization.
   crates.io; never run `cargo publish`. Hex depends on `rune`, `rune-kit`, and
   `rune-theme-opencode` at one pinned Git rev in `Cargo.toml`; every pin bump
   must also update `cargoLock.outputHashes."rune-0.0.1"` in `nix/package.nix`
-  (likewise `"scrawl-capture-0.3.13"` for the `scrawl-capture` rev)
   and keep `windows` 0.62.2 for `gpu-allocator` in `Cargo.lock`.
 - At the start of each work round, bump Hex's Rune pin to Rune's `dev` head:
   read the `## dev` section of Rune's `CHANGELOG.md` since the current pin,
