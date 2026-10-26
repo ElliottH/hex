@@ -41,6 +41,9 @@ static CAPTURE_SETTINGS: OnceLock<RwLock<CaptureSettings>> = OnceLock::new();
 static SCRAWL_APP_RUNNING: AtomicBool = AtomicBool::new(false);
 #[cfg(hex_capture)]
 static CAPTURE_ON: AtomicBool = AtomicBool::new(false);
+/// Paste Last's keycaps once settings are applied; empty while it's off.
+#[cfg(hex_capture)]
+static PASTE_LAST_KEYCAPS: OnceLock<RwLock<Option<Vec<String>>>> = OnceLock::new();
 
 #[derive(Default)]
 struct RuntimeTranscriptionSelection {
@@ -1645,6 +1648,8 @@ impl AppSettings {
             .get_or_init(Default::default)
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.runtime_hotkeys();
+        #[cfg(hex_capture)]
+        publish_paste_last_keycaps(self.paste_last_hotkey.as_ref());
         set_transcription_selection(&self.transcription);
         set_microphone_selection(self.microphone.as_deref());
         #[cfg(target_os = "macos")]
@@ -2102,6 +2107,28 @@ pub fn runtime_hotkeys() -> RuntimeHotkeys {
     hotkeys
 }
 
+#[cfg(hex_capture)]
+fn publish_paste_last_keycaps(binding: Option<&HotkeyBinding>) {
+    *PASTE_LAST_KEYCAPS
+        .get_or_init(Default::default)
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) =
+        Some(binding.map(HotkeyBinding::keycaps).unwrap_or_default());
+}
+
+/// Paste Last's keycaps (`["⌥", "⌘", "V"]`), which open a routed capture
+/// capsule's list; empty while Paste Last is off, and the default's before
+/// settings are applied (scenes and tests).
+#[cfg(hex_capture)]
+pub fn paste_last_keycaps() -> Vec<String> {
+    PASTE_LAST_KEYCAPS
+        .get_or_init(Default::default)
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+        .unwrap_or_else(|| HotkeyBinding::paste_last_default().keycaps())
+}
+
 pub fn dictation_hotkey() -> RuntimeHotkey {
     runtime_hotkeys().dictation
 }
@@ -2254,6 +2281,24 @@ pub(crate) fn migrate_legacy_settings(path: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A routed capture capsule shows Paste Last's own keys on its list chip,
+    /// since that is the shortcut that opens the list: a fixed ⌥⇧V sent the
+    /// keystroke to the front app for anyone who rebound Paste Last.
+    #[cfg(hex_capture)]
+    #[test]
+    fn the_capsule_shows_paste_lasts_own_keys() {
+        assert_eq!(paste_last_keycaps(), ["⌥", "⇧", "V"]);
+        let rebound = HotkeyBinding {
+            modifiers: HotkeyModifiers::option_command(),
+            key: Some(HotkeyKey::named("v")),
+        };
+        publish_paste_last_keycaps(Some(&rebound));
+        assert_eq!(paste_last_keycaps(), ["⌥", "⌘", "V"]);
+        publish_paste_last_keycaps(None);
+        assert!(paste_last_keycaps().is_empty());
+        *PASTE_LAST_KEYCAPS.get().unwrap().write().unwrap() = None;
+    }
 
     #[test]
     fn the_setting_the_experiment_or_an_installed_driver_turns_the_voice_filter_on() {

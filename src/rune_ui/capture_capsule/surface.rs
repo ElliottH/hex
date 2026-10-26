@@ -66,7 +66,12 @@ pub(crate) const COUNT: TextStyle = MEDIUM.features("'tnum' 1");
 pub(crate) const SMALL: TextStyle = TextStyle::new(11.5, 530.0);
 pub(crate) const PROCESSING: &str = "Processing…";
 pub(crate) const UNDO_KEYS: &[&str] = &["esc"];
-pub(crate) const ASK_KEYS: &[&str] = &["⌥", "⇧", "V"];
+
+/// The Ask chip's keycaps: Paste Last's shortcut, which opens the list
+/// while a routed capsule shows; none while Paste Last is off.
+pub(crate) fn ask_keys() -> Vec<String> {
+    crate::app_settings::paste_last_keycaps()
+}
 
 /// The capsule unfolds from this fraction of its height, anchored on its
 /// top edge.
@@ -243,8 +248,11 @@ fn chip_width(label: f32) -> f32 {
     label + 2.0 * CHIP_PX
 }
 
-/// A chip with keycaps before its label.
+/// A chip with keycaps before its label, or a plain chip without any.
 pub(crate) fn keyed_width(keys: &[&str], label: &str, style: TextStyle) -> f32 {
+    if keys.is_empty() {
+        return chip_width(measure(label, style));
+    }
     keycaps_width(keys) + KEYCAP_GAP + measure(label, style) + 2.0 * CHIP_PX - 4.0
 }
 
@@ -350,7 +358,11 @@ fn done_row(done: &Done, routes: &[String], cap: f32, raw: &mut Vec<(Id, String,
         raw.push((
             Id::Ask,
             ask.clone(),
-            keyed_width(ASK_KEYS, ask, MEDIUM),
+            keyed_width(
+                &ask_keys().iter().map(String::as_str).collect::<Vec<_>>(),
+                ask,
+                MEDIUM,
+            ),
             false,
         ));
     }

@@ -35,9 +35,9 @@ use rune::{
 
 use self::flow::{Action, Done, Flow, Footer, Input, Lead, List, Mode, Pres};
 use self::surface::{
-    ASK_KEYS, CHIP_H, CHIP_PX, COUNT, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD,
-    LIST_Y, MEDIUM, PANEL_H, PANEL_W, PRESENCE_EXIT, PROCESSING, PROCESSING_TEXT_X, ROW_H,
-    SEG_ICON, SEG_ICON_GAP, SMALL, STRONG, Shown, Surface, TIMER, UNDO_KEYS, clock_width,
+    CHIP_H, CHIP_PX, COUNT, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD, LIST_Y,
+    MEDIUM, PANEL_H, PANEL_W, PRESENCE_EXIT, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON,
+    SEG_ICON_GAP, SMALL, STRONG, Shown, Surface, TIMER, UNDO_KEYS, ask_keys, clock_width,
     ellipsize, keycaps_width, measure, undo_label,
 };
 use super::controls::{Paint, keycaps};
@@ -912,7 +912,11 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 .hit()
                 .on_press_tx(press(id))
         }
-        Id::Ask => keyed(p, base, ASK_KEYS, &shown.ident, MEDIUM).on_press_tx(press(id)),
+        Id::Ask => {
+            let keys = ask_keys();
+            let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+            keyed(p, base, &keys, &shown.ident, MEDIUM).on_press_tx(press(id))
+        }
         Id::Paste => base
             .radius(CHIP_H * 0.5)
             .fill(c.bg_contrast)
@@ -950,15 +954,20 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
 /// A chip with keycaps before its label.
 fn keyed(p: Paint, base: El, keys: &[&str], name: &str, style: rune::TextStyle) -> El {
     let parts: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
-    base.radius(CHIP_H * 0.5)
+    let base = base
+        .radius(CHIP_H * 0.5)
         .gap(KEYCAP_GAP)
         .hover(p.k.c.hover)
-        .press(p.k.c.pressed)
-        .child(keycaps(p, "keys", &parts).w(keycaps_width(keys)))
-        .child(label(name, style, p.muted()))
-        .role("button")
-        .label(name.to_owned())
-        .hit()
+        .press(p.k.c.pressed);
+    if keys.is_empty() {
+        base
+    } else {
+        base.child(keycaps(p, "keys", &parts).w(keycaps_width(keys)))
+    }
+    .child(label(name, style, p.muted()))
+    .role("button")
+    .label(name.to_owned())
+    .hit()
 }
 
 /// The open capsule's field: what's typed and the caret, or the
