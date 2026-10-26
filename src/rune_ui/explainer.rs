@@ -17,7 +17,8 @@ use rune::{
 
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, KEY_GAP, KeySize, Paint, button, folds, keycap, row_switch,
+    ButtonKind, DESCRIPTION, KEY_GAP, KeySize, Paint, TRAY_PADDING, button, folds, key_tray,
+    keycap, row_switch,
 };
 use crate::desktop_i18n::tr;
 use crate::dictation::ShortcutMode;
@@ -27,6 +28,14 @@ const PADDING: f32 = 18.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_GAP: f32 = 10.0;
 const KEYCAP_WIDTH: f32 = KeySize::Large.min_width();
+/// Milliseconds between the keys of a chord going down, and coming up
+/// (see `key_down`).
+const CHORD_STAGGER_DOWN: f32 = 30.0;
+const CHORD_STAGGER_UP: f32 = 15.0;
+/// However long the chord, its last key goes down within this of the
+/// first and comes up within half of it, so even a 5-key chord is held
+/// whole through each of Double-tap to lock's 120 ms taps.
+const CHORD_SPREAD: f32 = 60.0;
 const VISUAL_GAP: f32 = 10.0;
 /// The lanes beside a card's keycaps are never narrower than this: a long
 /// chord widens the panel instead.
@@ -34,7 +43,7 @@ const MIN_LANES: f32 = 64.0;
 /// How far a widened panel stays inside the window.
 const WINDOW_MARGIN: f32 = 24.0;
 /// How much Double-tap to lock adds to the panel, until it has been laid out.
-const LOCK_ESTIMATE: f32 = 102.0;
+const LOCK_ESTIMATE: f32 = 106.0;
 /// The pen overhangs the lanes by 4 points above and below.
 const LANES_HEIGHT: f32 = 25.0;
 const LANE: f32 = 6.0;
@@ -349,7 +358,7 @@ pub(super) fn modal(ui: &Ui, cx: &Cx<Ui>, p: Paint) -> Option<[El; 2]> {
     ])
 }
 
-/// The keycaps' width until layout measures them: a one-glyph legend is
+/// The key tray's width until layout measures it: a one-glyph legend is
 /// square, a word about 7.5 points a letter.
 fn keys_estimate(keys: &[String]) -> f32 {
     let caps: f32 = keys
@@ -359,7 +368,7 @@ fn keys_estimate(keys: &[String]) -> f32 {
             letters => (14.0 + 7.5 * letters as f32).max(KEYCAP_WIDTH),
         })
         .sum();
-    caps + KEY_GAP * keys.len().saturating_sub(1) as f32
+    caps + KEY_GAP * keys.len().saturating_sub(1) as f32 + 2.0 * TRAY_PADDING
 }
 
 /// The panel is wide enough for each card's lanes to keep `MIN_LANES`
@@ -500,7 +509,21 @@ pub(super) fn flip_lock(ui: &mut Ui) {
     });
 }
 
-/// One keycap per key of the shortcut, pressing together, beside the lanes
+/// Whether key `index` of a `keys`-key chord is down `t` ms into the take.
+/// A chord's keys go down one after another from the press, then come up
+/// in the same order from its end, so each key rests between taps.
+fn key_down(script: &Script, keys: usize, index: usize, t: f32) -> bool {
+    let gaps = keys.saturating_sub(1).max(1) as f32;
+    let step_down = CHORD_STAGGER_DOWN.min(CHORD_SPREAD / gaps);
+    let step_up = CHORD_STAGGER_UP.min(CHORD_SPREAD / 2.0 / gaps);
+    let index = index as f32;
+    script
+        .presses
+        .iter()
+        .any(|&(d, u)| d + index * step_down <= t && t < u + index * step_up)
+}
+
+/// The shortcut's keys in one tray, pressing in turn, beside the lanes
 /// drawn `width` points wide, whose tape fades out over its first `fade`
 /// points.
 fn visual(
@@ -513,21 +536,22 @@ fn visual(
     fade: f32,
 ) -> El {
     let t = (now % LOOP) as f32;
-    let down = script.presses.iter().any(|&(d, u)| d <= t && t < u);
+    let down = |index: usize| key_down(script, keys.len(), index, t);
     let fill = |el: El| el.absolute(0.0, 0.0).w_full().h_full();
     row()
         .key("visual")
         .role("none")
-        .h(KeySize::Large.height())
+        .h(KeySize::Large.height() + 2.0 * TRAY_PADDING)
         .gap(VISUAL_GAP)
         .center_y()
-        .child(
-            row().key("keys").gap(KEY_GAP).children(
-                keys.iter()
-                    .enumerate()
-                    .map(|(index, label)| keycap(p, index, label, KeySize::Large, down)),
-            ),
-        )
+        .child(key_tray(
+            p,
+            "keys",
+            KeySize::Large,
+            keys.iter()
+                .enumerate()
+                .map(|(index, label)| keycap(p, index, label, KeySize::Large, down(index))),
+        ))
         .child(
             el().key("lanes")
                 .role("none")
@@ -853,6 +877,31 @@ mod tests {
                 assert!(start > 0.0 && end <= pen_x(width), "{start}..{end}");
             }
             assert!(script.presses.iter().all(|&(_, u)| u < DONE));
+        }
+    }
+
+    /// However long the chord, every press holds all its keys down
+    /// together, and every key comes back up before the next press.
+    #[test]
+    fn every_press_holds_the_whole_chord() {
+        for script in [HOLD, TOGGLE, LOCK] {
+            for keys in 1..=6 {
+                let all = |t: f32, down: bool| {
+                    (0..keys).all(|index| key_down(&script, keys, index, t) == down)
+                };
+                for (press, &(d, u)) in script.presses.iter().enumerate() {
+                    let held = (d as u32..u as u32)
+                        .filter(|&t| all(t as f32, true))
+                        .count();
+                    assert!(held >= 40, "{keys} keys held together {held} ms");
+                    if let Some(&(next, _)) = script.presses.get(press + 1) {
+                        assert!(
+                            (u as u32..next as u32).any(|t| all(t as f32, false)),
+                            "{keys} keys rest before the next press"
+                        );
+                    }
+                }
+            }
         }
     }
 

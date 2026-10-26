@@ -21,14 +21,18 @@ injects a failed shortcut save yet.
 model are ready. Commands and OpenCode are not required. General > Dictation >
 Shortcut accepts modifier-only, modifier-plus-key, standalone Fn/Globe, and
 standalone function-key bindings. Capturing a replacement suspends global matching.
-On macOS and Windows the recorder shows the modifiers held so far (`⌥ ⌘ …`);
-a key records them at once, and releasing them all records the most held.
-Saved shows for a second, then the recorder returns to Change shortcut. The
-recorder keeps one width in every state, so it and the macOS side picker beside
-it never move; with the picker showing, keycaps leave the side to it, and
-otherwise they name it (`Left ⌥`).
+The shortcut's keys sit in a recessed tray as tall as the recorder, between
+the macOS side picker and the recorder; with no shortcut the tray reads Off.
+On macOS and Windows the recorder shows the modifiers held so far as pressed
+keys (`⌥ ⌘ …`); a key records them at once, and releasing them all records the
+most held. Saved shows for a second, then the recorder returns to Change
+shortcut. The recorder keeps one width in every state, so it, the tray, and the
+side picker never move while it records; with the picker showing, keycaps leave
+the side to it, and otherwise they name it (`Left ⌥`).
 Checks: `a_recorder_shows_the_modifiers_held_so_far` in `rune_ui/tests.rs`,
-`the_shortcut_row_holds_still_through_every_face_and_side` in
+`the_shortcut_row_holds_still_through_every_face_and_side`,
+`a_new_shortcut_s_keys_stay_inside_their_tray`, and
+`esc_stays_on_the_recorder_however_many_keys_are_held` in
 `rune_ui/tests/panes.rs`, the `shortcut-row*` scenes, and the `ChordCapture`
 tests in `rune_ui/macos_host.rs` (no native end-to-end run).
 

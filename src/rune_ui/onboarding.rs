@@ -18,7 +18,8 @@ use rune_kit::{ButtonVariant, Progress, TextInput};
 use super::Request;
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, Paint, PushSize, button, card, keycaps, setting_row,
+    ButtonKind, DESCRIPTION, KeySize, Paint, PushSize, TRAY_PADDING, button, card, key_tray,
+    keycap, keycaps, setting_row,
 };
 use super::lists::{PermissionControl, allowed, permission_control};
 use super::platform::{Os, PlatformRequest, PlatformState};
@@ -631,7 +632,13 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
             .grow(1.0)
             .shrink()
     };
-    let line = row().key("practice-hint").gap(8.0).center_y();
+    // As tall as the keys' tray in every state, so the centred page never
+    // jumps when the hint changes.
+    let line = row()
+        .key("practice-hint")
+        .gap(8.0)
+        .center_y()
+        .min_h(KeySize::Small.height() + 2.0 * TRAY_PADDING);
     if view.reopen {
         return line
             .child(hint(
@@ -653,18 +660,16 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
         ));
     }
     let (dot, copy, color) = match view.practice {
-        Practice::Waiting => {
-            return line
-                .child(keycaps(p, "keys", &ui.settings.dictation_hotkey.keycaps()))
-                .child(hint(
-                    if holds(ui) {
-                        tr("Hold to talk")
-                    } else {
-                        tr("Press to talk")
-                    },
-                    p.faint(),
-                ));
-        }
+        Practice::Waiting => (
+            false,
+            if holds(ui) {
+                tr("Hold to talk")
+            } else {
+                tr("Press to talk")
+            }
+            .into(),
+            p.faint(),
+        ),
         Practice::Listening => (
             true,
             if holds(ui) {
@@ -705,6 +710,20 @@ fn practice_hint(ui: &Ui, p: Paint, view: &View, shortcut: &str) -> El {
             ));
         }
     };
+    // The shortcut's keys stay in one tray while it can be pressed, so a
+    // release springs them back up: held down while it records.
+    let down = matches!(view.practice, Practice::Listening) && holds(ui);
+    let line = line.child(key_tray(
+        p,
+        "keys",
+        KeySize::Small,
+        ui.settings
+            .dictation_hotkey
+            .keycaps()
+            .iter()
+            .enumerate()
+            .map(|(index, cap)| keycap(p, index, cap, KeySize::Small, down)),
+    ));
     let line = if dot {
         line.child(super::controls::pulsing_dot(p.danger()))
     } else {

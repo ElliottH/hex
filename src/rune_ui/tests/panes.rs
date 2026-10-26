@@ -535,8 +535,8 @@ fn the_shortcut_row_holds_still_through_every_face_and_side() {
         rt.state.capture = Capture::Idle;
         rt.invalidate();
         watch(&mut rt, at_rest, reduced);
-        // A chord has no side: the picker leaves beside the recorder, never
-        // under it, and the recorder keeps its right edge.
+        // A chord has no side: the picker leaves beside the keys, never
+        // under them, and the recorder keeps its right edge.
         let (x, y) = rt.find("dictation-hotkey").unwrap();
         rt.pointer_down(x, y);
         rt.pointer_up(x, y);
@@ -549,11 +549,139 @@ fn the_shortcut_row_holds_still_through_every_face_and_side() {
         key(&mut rt, Key::Text("d".into()), ctrl_alt);
         while rt.find("dictation-side").is_some() {
             let recorder = rect(&rt, "dictation-hotkey");
+            let keys = rect(&rt, "keys");
             let side = rect(&rt, "dictation-side");
             assert_eq!(recorder[0] + recorder[2], at_rest.1, "the recorder moved");
-            assert!(side[0] + side[2] <= recorder[0], "the picker slid under");
+            assert!(
+                side[0] + side[2] <= keys[0],
+                "the picker slid under the keys"
+            );
             rt.frame(1.0 / 60.0);
         }
+    }
+}
+
+#[test]
+fn esc_stays_on_the_recorder_however_many_keys_are_held() {
+    use crate::app_settings::{HotkeyModifiers, ModifierSide};
+    let mut rt = runtime("shortcut-row", true, PANE_SIZE);
+    tap(&mut rt, "dictation-hotkey");
+    let any = Some(ModifierSide::Either);
+    settings::hold(
+        &mut rt.state,
+        HotkeyModifiers {
+            control: any,
+            option: any,
+            shift: any,
+            command: any,
+            function: false,
+        },
+    );
+    refresh(&mut rt);
+    let recorder = rt
+        .elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some("dictation-hotkey"))
+        .unwrap()
+        .rect;
+    let (escape, opacity) = drawn(&rt, "dictation-hotkey/faces/listening/escape").unwrap();
+    assert_eq!(opacity, 1.0);
+    assert!(
+        escape[0] + escape[2] <= recorder[0] + recorder[2],
+        "esc is pushed out of the recorder"
+    );
+    let held = drawn(&rt, "dictation-hotkey/faces/listening/held")
+        .unwrap()
+        .0;
+    assert!(
+        held[0] + held[2] <= escape[0],
+        "the held keys run under esc"
+    );
+}
+
+#[test]
+fn a_new_shortcut_s_keys_stay_inside_their_tray() {
+    let mut rt = runtime("mac-settings", true, PANE_SIZE);
+    let binding = rt.state.settings.paste_last_hotkey.clone().unwrap();
+    // Every key and Off stay inside the well while it springs to the new
+    // width, entering and leaving alike; returns whether any was clipped.
+    let watch = |rt: &mut Runtime<Ui>| {
+        let mut clipped = false;
+        for _ in 0..45 {
+            rt.frame(1.0 / 60.0);
+            let elements = rt.elements();
+            let tray = elements
+                .iter()
+                .find(|e| e.path.ends_with("paste-last-control/recorder-slot/keys") && !e.exiting)
+                .expect("the tray stays")
+                .rect;
+            for e in elements.iter().filter(|e| {
+                e.path.contains("paste-last-control/recorder-slot/keys/")
+                    && e.key
+                        .as_deref()
+                        .is_some_and(|k| k.starts_with("keycap") || k == "off")
+            }) {
+                let [x, y, w, h] = e.visible;
+                let hidden = w <= 0.0 || h <= 0.0;
+                let inside = hidden
+                    || x >= tray[0] - 0.01
+                        && y >= tray[1] - 0.01
+                        && x + w <= tray[0] + tray[2] + 0.01
+                        && y + h <= tray[1] + tray[3] + 0.01;
+                assert!(
+                    inside,
+                    "{} pokes out of its tray {tray:?}: visible {:?}, rect {:?}, exiting {}, opacity {}",
+                    e.path, e.visible, e.rect, e.exiting, e.opacity
+                );
+                clipped |= w < e.rect[2] - 0.5 || h < e.rect[3] - 0.5;
+            }
+        }
+        clipped
+    };
+    rt.state.settings.paste_last_hotkey = None;
+    rt.invalidate();
+    assert!(watch(&mut rt), "the keys leave inside the well's clip");
+    rt.state.settings.paste_last_hotkey = Some(binding);
+    rt.invalidate();
+    assert!(watch(&mut rt), "the keys arrive inside the well's clip");
+}
+
+#[test]
+fn the_practice_keys_stay_and_spring_back_up_on_release() {
+    let mut rt = runtime("mac-onboarding-try", true, PANE_SIZE);
+    let cap = |rt: &Runtime<Ui>| {
+        drawn(rt, "practice-hint/keys/keycap0/cap")
+            .expect("the keys stay")
+            .0
+    };
+    let hint = |rt: &Runtime<Ui>| drawn(rt, "practice-hint").unwrap().0;
+    let (rest, line) = (cap(&rt), hint(&rt));
+    onboarding::input(&mut rt.state, Input::Dictation(Observation::Started));
+    refresh(&mut rt);
+    assert!(cap(&rt)[1] > rest[1] + 0.5, "held down while it records");
+    assert_eq!(hint(&rt), line, "the page holds still");
+    onboarding::input(&mut rt.state, Input::Dictation(Observation::Transcribing));
+    rt.invalidate();
+    let mut last = cap(&rt)[1];
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+        let now = cap(&rt)[1];
+        assert!(now <= last + 0.01, "the keys spring up, never back down");
+        assert_eq!(hint(&rt), line, "the page holds still");
+        last = now;
+    }
+    assert!((last - rest[1]).abs() < 0.05, "back at rest");
+    // A retry presses the keys standing up, from any outcome.
+    for outcome in [Observation::Discarded, Observation::Failed] {
+        onboarding::input(&mut rt.state, Input::Dictation(outcome));
+        refresh(&mut rt);
+        assert!((cap(&rt)[1] - rest[1]).abs() < 0.05, "up after {outcome:?}");
+        onboarding::input(&mut rt.state, Input::Dictation(Observation::Started));
+        refresh(&mut rt);
+        assert!(
+            cap(&rt)[1] > rest[1] + 0.5,
+            "pressed again after {outcome:?}"
+        );
     }
 }
 

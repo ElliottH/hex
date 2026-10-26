@@ -4,7 +4,8 @@
 //! type, radii, elevation, and motion come from the kit's tokens.
 
 use rune::{
-    Color, El, LoopSpec, SpringPair, TextEdit, TextStyle, Transition, Tx, col, el, row, text,
+    Color, Edge, El, LoopSpec, Shadow, Spring, SpringPair, TextEdit, TextStyle, Transition, Tx,
+    col, el, row, text,
 };
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Menu, MenuItem,
@@ -441,7 +442,11 @@ fn overlay_springs(p: Paint) -> SpringPair {
     SpringPair::new(p.k.motion.overlay, p.k.motion.overlay)
 }
 
-/// How big a keycap is: `Small` inside a control, `Large` on its own.
+/// How big a keycap is: `Small` in a row's tray, `Large` in the explainer.
+///
+/// Every key is a low-profile scissor key, after Apple's Magic Keyboard: a
+/// flat face on a cap whose skirt shows below it. A press sinks the face
+/// into the skirt; the key's bounds never change.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum KeySize {
     Small,
@@ -449,132 +454,226 @@ pub(super) enum KeySize {
 }
 
 impl KeySize {
-    /// Height, including the lip below the face.
+    /// Height, skirt included.
     pub(super) const fn height(self) -> f32 {
         match self {
             Self::Small => 22.0,
-            Self::Large => 30.0,
+            Self::Large => 28.0,
         }
     }
 
-    /// A one-glyph key is square, face and lip together.
+    /// A one-glyph key is square.
     pub(super) const fn min_width(self) -> f32 {
         self.height()
     }
 
-    /// How far the face stands above its base: the lip showing below it.
-    const fn depth(self) -> f32 {
+    /// The skirt showing below a key at rest.
+    const fn skirt(self) -> f32 {
         match self {
-            Self::Small => 2.5,
-            Self::Large => 4.0,
+            Self::Small => 1.5,
+            Self::Large => 2.0,
         }
     }
 
-    /// A press sinks the face most of the way, leaving a hairline of lip.
+    /// A press sinks the face most of the way, leaving a hairline of skirt.
     const fn travel(self) -> f32 {
-        self.depth() - 0.5
+        self.skirt() - KEY_RIM
+    }
+
+    const fn face_radius(self) -> f32 {
+        match self {
+            Self::Small => 4.0,
+            Self::Large => 5.0,
+        }
     }
 
     fn legend(self) -> TextStyle {
         match self {
-            Self::Small => DESCRIPTION,
-            Self::Large => TextStyle::new(12.5, 530.0).lh(16.0),
+            Self::Small => TextStyle::new(11.0, 400.0).lh(14.0),
+            Self::Large => TextStyle::new(13.0, 400.0).lh(16.0),
         }
     }
 }
 
-/// Seconds for the face to sink; it rises on the controls' spring.
-const KEY_PRESS: f32 = 0.07;
+/// The cap's rim beside and above the face.
+const KEY_RIM: f32 = 0.5;
+/// A face sinks fast and comes back up a little slower, both without bounce.
+const KEY_DOWN: Spring = Spring::new(0.08, 0.0);
+const KEY_UP: Spring = Spring::new(0.18, 0.0);
 /// Between the keycaps of a chord.
 pub(super) const KEY_GAP: f32 = 3.0;
+/// Between a tray's edge and its keys: a `Small` tray is as tall as a
+/// button.
+pub(super) const TRAY_PADDING: f32 = 3.0;
 
-/// One keycap per key of a shortcut.
+/// The keys' material, from the theme's tokens: in light a warm off-white
+/// face (the warning cream warms the neutral layers) on a cap that shades
+/// to warm grey; in dark a space-black face on a cap that falls to the
+/// deepest background.
+struct KeyMaterial {
+    cap_top: Color,
+    cap_bottom: Color,
+    face: Color,
+    ink: Color,
+    /// The tight shadow under the cap and the soft one it casts at rest.
+    contact: f32,
+    cast: f32,
+}
+
+impl KeyMaterial {
+    fn new(k: &Kit) -> Self {
+        let c = &k.c;
+        if k.dark {
+            let face = c.bg_base.mix(c.layer_01, 0.6);
+            Self {
+                cap_top: c.layer_03.mix(c.layer_04, 0.35),
+                cap_bottom: c.bg_deep,
+                face,
+                ink: c.text_base.mix(c.text_faint, 0.15),
+                contact: 0.8,
+                cast: 0.5,
+            }
+        } else {
+            let warm = c.warning.bg;
+            Self {
+                cap_top: c.white,
+                cap_bottom: c.layer_04.mix(c.text_faint, 0.28).mix(c.warning.fg, 0.05),
+                face: c.layer_02.mix(warm, 0.35),
+                ink: c.text_base.mix(c.text_muted, 0.15),
+                contact: 0.2,
+                cast: 0.12,
+            }
+        }
+    }
+}
+
+/// One tray of keys per shortcut: the keys sit in a well recessed into
+/// the surface, lit from above so its top edge falls into shadow. The well
+/// clips its keys, so while it springs to a new shortcut's width they never
+/// poke out over what is beside it.
+pub(super) fn key_tray(
+    p: Paint,
+    key: &str,
+    size: KeySize,
+    keys: impl IntoIterator<Item = El>,
+) -> El {
+    let k = p.k;
+    let c = &k.c;
+    let (top, bottom, rim, well) = if k.dark {
+        (
+            c.bg_deep,
+            c.bg_base.mix(c.layer_01, 0.7),
+            k.light(0.07),
+            0.6,
+        )
+    } else {
+        (
+            c.layer_04.mix(c.layer_03, 0.35),
+            c.layer_03.mix(c.layer_02, 0.6),
+            k.dark_a(0.07),
+            0.14,
+        )
+    };
+    // Concentric with the caps inside it.
+    let radius = size.face_radius() + KEY_RIM + TRAY_PADDING;
+    row()
+        .key(key)
+        .padding(TRAY_PADDING)
+        .gap(KEY_GAP)
+        .center_y()
+        .radius(radius)
+        .continuous_corners()
+        .clip_rounded(radius)
+        .fill(bottom)
+        .gradient(top, bottom)
+        .border(p.hair.max(0.5), rim)
+        .box_shadow(Shadow {
+            y: 1.0,
+            blur: 2.5,
+            color: k.dark_a(well),
+            inset: true,
+            ..Shadow::default()
+        })
+        .children(keys)
+}
+
+/// A shortcut's keys at rest, in one `Small` tray. Keys a new shortcut
+/// adds rise into the well, and keys it drops leave through its top.
 pub(super) fn keycaps(p: Paint, key: &str, parts: &[String]) -> El {
-    row().key(key).gap(KEY_GAP).children(
-        parts
-            .iter()
-            .enumerate()
-            .map(|(index, part)| keycap(p, index, part, KeySize::Small, false)),
+    key_tray(
+        p,
+        key,
+        KeySize::Small,
+        parts.iter().enumerate().map(|(index, part)| {
+            keycap(p, index, part, KeySize::Small, false).transition(tray_roll())
+        }),
     )
 }
 
-/// One key: a face on a base whose lip shows below it. A press sinks the
-/// face into the lip; the key's bounds never change.
-///
-/// A `Small` key sits inside a control, whose surface sets it off. A `Large`
-/// one stands on the bare panel, so its face is raised off the panel, lit
-/// from above, on a darker skirt, with a full-strength legend.
+/// In from the well's bottom, out through its top, inside its clip.
+pub(super) fn tray_roll() -> Transition {
+    Transition::push(Edge::Bottom)
+}
+
+/// One key: a face on a cap whose skirt shows below it. A press sinks the
+/// face into the skirt, tightens the cap's shadow and shades the face
+/// toward its bottom edge.
 pub(super) fn keycap(p: Paint, index: usize, label: &str, size: KeySize, down: bool) -> El {
     let k = p.k;
-    let c = &k.c;
-    let face_height = size.height() - size.depth();
-    // Inside a control the cap nests in the control's corners.
-    let radius = match size {
-        KeySize::Small => k.radius.sm,
-        KeySize::Large => k.radius.md,
+    let m = KeyMaterial::new(k);
+    let pressed = if down { 1.0 } else { 0.0 };
+    let travel = size.travel() * pressed;
+    let face_height = size.height() - KEY_RIM - size.skirt();
+    // Shadow offsets never spring, so the resting and pressed casts are two
+    // layers that trade strength.
+    let cast = |y: f32, blur: f32, strength: f32| Shadow {
+        y,
+        blur,
+        color: k.dark_a(m.cast * strength),
+        ..Shadow::default()
     };
-    // Each change springs with the spring of the state it heads to: in
-    // fast, back up on the controls' spring.
-    let spring = if down {
-        k.motion.control.with_duration(KEY_PRESS)
-    } else {
-        k.motion.control
-    };
-    // The Large face is opaque, so the skirt never shows through it. Colours
-    // mix in linear light, so a little white goes a long way.
-    let solid = |top: Color| c.bg_base.mix(top.alpha(1.0), top.a);
-    let (face_fill, lip, ink) = match size {
-        KeySize::Small => (
-            c.bg_base,
-            c.border_base,
-            if down { p.text() } else { p.muted() },
-        ),
-        KeySize::Large if k.dark => (solid(c.white.alpha(0.02)), c.bg_deep, p.text()),
-        KeySize::Large => (c.bg_base, c.border_base, p.text()),
-    };
-    // A pressed face sinks toward its skirt's shade.
-    let pressed = match size {
-        KeySize::Small => face_fill.mix(c.black, 0.05),
-        KeySize::Large => face_fill.mix(solid(lip), 0.35),
-    };
-    let mut base = el()
-        .key("base")
-        .role("none")
-        .absolute(0.0, size.depth())
-        .w_full()
-        .h(face_height)
-        .radius(radius)
-        .fill(lip);
-    let mut face = row()
+    let cap = col()
         .key("cap")
-        .min_w(size.min_width())
-        .h(face_height)
-        .px(match size {
-            KeySize::Small => 6.0,
-            KeySize::Large => 7.0,
-        })
-        .center()
-        .radius(radius)
-        .mt(if down { size.travel() } else { 0.0 })
-        .fill(if down { pressed } else { face_fill })
-        .border(p.hair, c.border_weak)
-        .motion(spring)
+        .px(KEY_RIM)
+        .pt(KEY_RIM)
+        .pb(size.skirt() - travel)
+        .radius(size.face_radius() + KEY_RIM)
+        .continuous_corners()
+        .fill(m.cap_bottom)
+        .gradient(m.cap_top, m.cap_bottom)
+        .shadow(0.5, 0.5, k.dark_a(m.contact))
+        .box_shadow(cast(size.skirt(), 2.0 * size.skirt(), 1.0 - pressed))
+        .box_shadow(cast(KEY_RIM, 2.0, pressed))
         .child(
-            text(label.to_string())
-                .key("label")
-                .font(size.legend())
-                .color(ink),
+            row()
+                .key("face")
+                .min_w(size.min_width() - 2.0 * KEY_RIM)
+                .h(face_height)
+                .px(match size {
+                    KeySize::Small => 6.0,
+                    KeySize::Large => 8.0,
+                })
+                .center()
+                .radius(size.face_radius())
+                .continuous_corners()
+                .fill(m.face)
+                .gradient(
+                    k.light(0.03 - 0.03 * pressed),
+                    k.dark_a(0.02 + 0.06 * pressed),
+                )
+                .child(
+                    text(label.to_string())
+                        .key("label")
+                        .font(size.legend())
+                        .color(m.ink),
+                ),
         );
-    if size == KeySize::Large {
-        base = base.border(p.hair, c.border_weak);
-        // The light falls on the face from above.
-        face = face.gradient(k.light(if down { 0.02 } else { 0.07 }), k.light(0.0));
-    }
     col()
         .key(format!("keycap{index}"))
         .h(size.height())
-        .child(base)
-        .child(face)
+        .pt(travel)
+        .motion(if down { KEY_DOWN } else { KEY_UP })
+        .child(cap)
 }
 
 pub(super) fn status_dot(color: Color) -> El {

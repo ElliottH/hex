@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 use rune::{Edge, El, Key, KeyEvent, Transition, Tx, col, row, spacer, text};
 
 use super::controls::{
-    ButtonKind, CardRow, Choice, DESCRIPTION, KeySize, Paint, button, described_row, folding,
-    icon_button, keycap, keycaps, link_row, note, pulsing_dot, section, segmented, select,
-    setting_row, sheet_button, status_dot, text_field, toggle_row,
+    ButtonKind, CardRow, Choice, DESCRIPTION, KEY_GAP, KeySize, Paint, button, described_row,
+    folding, icon_button, key_tray, keycap, keycaps, link_row, note, pulsing_dot, section,
+    segmented, select, setting_row, sheet_button, status_dot, text_field, toggle_row, tray_roll,
 };
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use super::{explainer, host};
@@ -554,10 +554,14 @@ fn shortcut_row(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
     )
 }
 
-/// The side picker (macOS), the recorder, and Clear for Paste last. The
-/// recorder keeps one width through every state, so the picker holds still;
-/// a new shortcut of another width moves them together on one spring.
+/// The side picker (macOS), the shortcut's keys in their tray, the
+/// recorder, and Clear for Paste last. The recorder keeps one width through
+/// every state, so the keys and the picker hold still; a new shortcut of
+/// another width moves them together on one spring.
 const CONTROL_GAP: f32 = 8.0;
+/// The key tray keeps a little more room on each side than the controls
+/// keep between them.
+const TRAY_GAP: f32 = CONTROL_GAP + 4.0;
 
 pub(super) fn shortcut_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
     let key = match target {
@@ -566,12 +570,41 @@ pub(super) fn shortcut_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El 
         ShortcutTarget::VoiceAction => "voice-action-shortcut-control",
     };
     let picker = super::platform_settings::side_selector(ui, p, target);
-    // The picker hangs off the recorder's left edge in the room its margin
+    // The picker hangs off the keys' left edge in the room its margin
     // keeps, so both stay put while either changes; a leaving picker fades
     // where it stands.
     let room = picker.as_ref().map_or(0.0, |_| {
-        super::platform_settings::SIDE_PICKER_WIDTH + CONTROL_GAP
+        super::platform_settings::SIDE_PICKER_WIDTH + TRAY_GAP
     });
+    let keys = match binding(&ui.settings, target) {
+        Some(binding) => keycaps(
+            p,
+            "keys",
+            &shortcut_caps(
+                binding,
+                super::platform_settings::picked_side(ui, target).is_some(),
+            ),
+        ),
+        None => key_tray(
+            p,
+            "keys",
+            KeySize::Small,
+            // Off trades places with the keys by rolling, never fading
+            // over them.
+            [row()
+                .key("off")
+                .h(KeySize::Small.height())
+                .px(5.0)
+                .center()
+                .transition(tray_roll())
+                .child(
+                    text(tr("Off"))
+                        .key("label")
+                        .font(DESCRIPTION)
+                        .color(p.faint()),
+                )],
+        ),
+    };
     let mut control = row()
         .key(key)
         .gap(CONTROL_GAP)
@@ -581,7 +614,10 @@ pub(super) fn shortcut_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El 
             row()
                 .key("recorder-slot")
                 .ml(room)
+                .gap(TRAY_GAP)
+                .center_y()
                 .children(picker.map(|picker| picker.pin(Some(-room), Some(0.0), None, None)))
+                .child(keys)
                 .child(hotkey_control(ui, p, target)),
         );
     if target == ShortcutTarget::PasteLast && ui.settings.paste_last_hotkey.is_some() {
@@ -856,7 +892,8 @@ fn transcription_status(ui: &Ui, p: Paint) -> Option<(String, rune::Color)> {
 /// What a recorder shows; each change rolls up into it from below.
 #[derive(Clone, Copy, PartialEq)]
 enum Face {
-    /// The shortcut's keycaps and what pressing does, or that it just saved.
+    /// What pressing does (Change shortcut), or that it just saved; the
+    /// shortcut's keys sit in their tray beside the recorder.
     Shortcut {
         saved: bool,
     },
@@ -876,18 +913,15 @@ enum Prompt {
 const RECORDER_HEIGHT: f32 = 28.0;
 /// Between the recorder's edge and a keycap at that edge.
 const RECORDER_CAP_INSET: f32 = 3.0;
+/// How far held keys that overflow the recorder fade out, and the room
+/// above and below them their shadows keep inside that clip.
+const HELD_FADE: f32 = 8.0;
+const HELD_SHADOW_ROOM: f32 = (RECORDER_HEIGHT - KeySize::Small.height()) / 2.0;
 
 /// The shortcut's recorder: a button that keeps the width of its widest
 /// face, so nothing beside it moves while it records, and swaps faces
 /// inside its own rounded clip.
 pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
-    let caps = match binding(&ui.settings, target) {
-        Some(binding) => shortcut_caps(
-            binding,
-            super::platform_settings::picked_side(ui, target).is_some(),
-        ),
-        None => vec![tr("Off").to_string()],
-    };
     let key = match target {
         ShortcutTarget::Dictation => "dictation-hotkey",
         ShortcutTarget::PasteLast => "paste-last-hotkey",
@@ -949,14 +983,14 @@ pub(super) fn hotkey_control(ui: &Ui, p: Paint, target: ShortcutTarget) -> El {
             .equal_columns(1)
             .clip_rounded(p.k.radius.md)
             .children(sizes.into_iter().enumerate().map(|(index, size)| {
-                recorder_face(p, &caps, size, false)
+                recorder_face(p, size, false)
                     .key(format!("size{index}"))
                     .role("none")
                     .grid_cell(0)
                     .opacity(0.0)
             }))
             .child(
-                recorder_face(p, &caps, face, true)
+                recorder_face(p, face, true)
                     .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                     .transition(roll()),
             ),
@@ -980,7 +1014,7 @@ fn face_label(face: Face) -> &'static str {
 
 /// One face of the recorder at its full height. Only the shown face
 /// (`live`) pulses.
-fn recorder_face(p: Paint, caps: &[String], face: Face, live: bool) -> El {
+fn recorder_face(p: Paint, face: Face, live: bool) -> El {
     let label_style = p.k.ty.ui_medium.lh(16.0);
     let label = |key: &str, copy: &str, color| text(copy).key(key).font(label_style).color(color);
     let face_row = |key: &str| row().key(key).h(RECORDER_HEIGHT).gap(8.0).center_y();
@@ -999,9 +1033,8 @@ fn recorder_face(p: Paint, caps: &[String], face: Face, live: bool) -> El {
                     .child(label("label", tr("Change shortcut"), p.text()))
             };
             face_row("shortcut")
-                .pl(RECORDER_CAP_INSET)
-                .pr(11.0)
-                .child(keycaps(p, "keys", caps))
+                .px(11.0)
+                .center()
                 .child(what.transition(roll()))
         }
         Face::Listening(prompt) => {
@@ -1010,23 +1043,34 @@ fn recorder_face(p: Paint, caps: &[String], face: Face, live: bool) -> El {
                 _ if live => pulsing_dot(p.danger()),
                 _ => status_dot(p.danger()),
             };
-            let prompt_el = match prompt {
-                Prompt::Press => label("prompt", tr("Press shortcut"), p.text()),
-                Prompt::Rejected(message) => label("rejected", message, p.danger()),
-                Prompt::Held(held) => {
-                    let held = HotkeyBinding {
-                        modifiers: held.without_side_constraints(),
-                        key: None,
-                    };
-                    row()
-                        .key("held")
-                        .gap(4.0)
-                        .center_y()
-                        .child(keycaps(p, "keys", &held.keycaps()))
-                        .child(label("ellipsis", "…", p.muted()))
-                }
-                Prompt::Saving => label("saving", tr("Saving…"), p.muted()),
-            };
+            let prompt_el =
+                match prompt {
+                    Prompt::Press => label("prompt", tr("Press shortcut"), p.text()),
+                    Prompt::Rejected(message) => label("rejected", message, p.danger()),
+                    Prompt::Held(held) => {
+                        let held = HotkeyBinding {
+                            modifiers: held.without_side_constraints(),
+                            key: None,
+                        };
+                        // Held keys stand on the recorder, down. Too many
+                        // to fit fade out at the right, so Esc stays.
+                        row()
+                            .key("held")
+                            .gap(4.0)
+                            .center_y()
+                            .shrink()
+                            .py(HELD_SHADOW_ROOM)
+                            .pr(HELD_FADE)
+                            .clip_fade(0.0, 0.0, HELD_FADE, 0.0)
+                            .child(row().key("keys").gap(KEY_GAP).children(
+                                held.keycaps().iter().enumerate().map(|(index, cap)| {
+                                    keycap(p, index, cap, KeySize::Small, true)
+                                }),
+                            ))
+                            .child(label("ellipsis", "…", p.muted()))
+                    }
+                    Prompt::Saving => label("saving", tr("Saving…"), p.muted()),
+                };
             let face = face_row("listening")
                 .pl(11.0)
                 .pr(RECORDER_CAP_INSET)
