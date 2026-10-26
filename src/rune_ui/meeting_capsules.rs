@@ -242,7 +242,8 @@ impl Capsule {
     }
 
     /// The recording pill follows the pointer and snaps to the nearest
-    /// corner on release.
+    /// corner on release. A cancelled drag (Escape, window blur) returns to
+    /// the corner it started from and saves nothing.
     fn drag(&mut self, drag: &Drag, tx: &mut Tx) {
         let Some(shift) = self.shift.clone() else {
             return;
@@ -250,6 +251,7 @@ impl Capsule {
         match drag.phase {
             Phase::Down => {}
             Phase::Move => shift(self.corner, drag.dx, drag.dy),
+            Phase::Up if drag.cancelled() => shift(self.corner, 0.0, 0.0),
             Phase::Up => {
                 let corner = primary_screen_size().map_or(self.corner, |screen| {
                     nearest_corner(self.corner, drag.dx, drag.dy, screen)
@@ -1503,6 +1505,36 @@ mod tests {
         rt.frame(0.0);
         // Off the main thread there is no screen to snap against, so it
         // returns to its corner.
+        assert_eq!(
+            moves.lock().unwrap().last(),
+            Some(&(MeetingIndicatorCorner::TopRight, 0.0, 0.0))
+        );
+        assert!(saved.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_cancelled_capsule_drag_returns_to_its_corner_without_saving() {
+        type Moves = Arc<Mutex<Vec<(MeetingIndicatorCorner, f32, f32)>>>;
+        let (mut rt, _, _) = runtime(live_recording("capsule-cancel"), false, true, RECORDING);
+        let (moves, saved): (Moves, Arc<Mutex<Vec<MeetingIndicatorCorner>>>) = Default::default();
+        let (record, save) = (moves.clone(), saved.clone());
+        rt.update(move |capsule, _| {
+            capsule.shift = Some(Arc::new(move |corner, dx, dy| {
+                record.lock().unwrap().push((corner, dx, dy));
+            }));
+            capsule.save_corner = Arc::new(move |corner| save.lock().unwrap().push(corner));
+        });
+        rt.frame(0.0);
+        let (x, y) = rt.find("pill").unwrap();
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_move(x - 400.0, y + 300.0);
+        rt.frame(0.0);
+        rt.key(rune::KeyEvent {
+            key: rune::Key::Escape,
+            mods: rune::Mods::default(),
+        });
+        rt.frame(0.0);
         assert_eq!(
             moves.lock().unwrap().last(),
             Some(&(MeetingIndicatorCorner::TopRight, 0.0, 0.0))

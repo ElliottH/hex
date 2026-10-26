@@ -546,7 +546,7 @@ pub(super) fn chosen_application(ui: &mut Ui, result: ChosenApplication) {
 
 /// Drags a transformation by its handle. Rows are keyed by position, so the
 /// pressed slot stays put while the rows reorder under it; the new order is
-/// saved once, on release.
+/// saved once, on release. A cancelled drag drops the pending order.
 fn drag_transformation(ui: &mut Ui, id: &str, start: usize, pitch: f32, d: &Drag) {
     match d.phase {
         Phase::Down => {
@@ -575,7 +575,7 @@ fn drag_transformation(ui: &mut Ui, id: &str, start: usize, pitch: f32, d: &Drag
             let Some(drag) = ui.modes.drag.take() else {
                 return;
             };
-            if drag.order != drag.committed {
+            if !d.cancelled() && drag.order != drag.committed {
                 update_mode(ui, |mode| mode.transformations = drag.order);
             }
         }

@@ -528,7 +528,8 @@ pub(super) fn remove_button(
 
 /// A horizontal slider: the label and value over a track you press or drag.
 /// `set` gets the position from zero through one and whether the gesture
-/// ended (save then, not on every move).
+/// ended (save then, not on every move). A cancelled drag (Escape, window
+/// blur) puts the value from the press back and never saves.
 pub(super) fn slider(
     p: Paint,
     key: &str,
@@ -550,6 +551,13 @@ pub(super) fn slider(
         .center_y()
         .on_drag(
             move |ui: &mut Ui, drag: &mut rune::Drag, _: &mut rune::Tx| {
+                if drag.phase == rune::Phase::Down {
+                    drag.data = value;
+                }
+                if drag.cancelled() {
+                    set(ui, drag.data, false);
+                    return;
+                }
                 let position = ((drag.x - knob / 2.0) / (drag.w - knob).max(1.0)).clamp(0.0, 1.0);
                 set(ui, position, drag.phase == rune::Phase::Up);
             },

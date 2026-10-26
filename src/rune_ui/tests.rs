@@ -661,6 +661,53 @@ fn mode_transformations_add_reorder_and_remove() {
 }
 
 #[test]
+fn escape_cancels_a_transformation_reorder_without_saving() {
+    let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
+    tap(&mut rt, "available-transformation0/add");
+    let order = |rt: &Runtime<Ui>| {
+        rt.state.settings.dictation_processing.modes[0]
+            .transformations
+            .clone()
+    };
+    let before = order(&rt);
+    let saves = saved(&rt);
+    let (x, y) = rt.find("transformation1/handle").expect("a drag handle");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    for step in 1..=8 {
+        rt.pointer_move(x, y - step as f32 * 5.0);
+        rt.frame(1.0 / 60.0);
+    }
+    key(&mut rt, Key::Escape, Mods::default());
+    rt.pointer_up(x, y - 40.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(order(&rt), before);
+    assert_eq!(saved(&rt), saves);
+    assert!(rt.state.modes.drag.is_none());
+}
+
+#[test]
+fn escape_restores_a_slider_dragged_from_its_press() {
+    let mut rt = runtime("mac-voice-filter", true, PANE_SIZE);
+    let strength = |rt: &Runtime<Ui>| rt.state.platform.tuning.strength;
+    let before = strength(&rt);
+    let saves = saved(&rt);
+    let (x, y) = rt.find("fun-slider-strength/track").expect("a slider");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    rt.pointer_move(x + 60.0, y);
+    rt.frame(1.0 / 60.0);
+    assert_ne!(strength(&rt), before);
+    key(&mut rt, Key::Escape, Mods::default());
+    rt.frame(1.0 / 60.0);
+    assert_eq!(strength(&rt), before);
+    rt.pointer_up(x + 60.0, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(strength(&rt), before);
+    assert_eq!(saved(&rt), saves);
+}
+
+#[test]
 fn a_chosen_file_joins_the_catalog_and_the_mode() {
     let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
     let application = crate::application_catalog::InstalledApplication {
