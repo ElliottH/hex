@@ -217,6 +217,10 @@ impl Id {
     }
 }
 
+/// Separates a note's text from the lead label it's beside, in its
+/// `ident`.
+const NOTE_OF: char = '\u{1f}';
+
 /// A piece of the capsule at rest. `ident` is what makes it the same
 /// piece across changes: a new label on the finished capsule's lead is a
 /// new piece that crossfades with the old, while the Undo chip stays
@@ -289,9 +293,11 @@ fn done_row(done: &Done, cap: f32, raw: &mut Vec<(Id, String, f32, bool)>) {
         false,
     ));
     if let Some(why) = &done.why {
+        // The note is a new piece whenever the lead's label is, so it
+        // crossfades beside it rather than sliding through the new label.
         raw.push((
             Id::Why,
-            why.clone(),
+            format!("{why}{NOTE_OF}{text}"),
             measure(why, SMALL) + LEAD_TRAIL * 0.5,
             false,
         ));
@@ -511,6 +517,11 @@ pub(crate) struct Shown {
 impl Shown {
     fn is(&self, item: &Item) -> bool {
         self.id == item.id && self.ident == item.ident
+    }
+
+    /// What it reads: its `ident`, less the lead a note belongs to.
+    pub(crate) fn text(&self) -> &str {
+        self.ident.split(NOTE_OF).next().unwrap_or_default()
     }
 }
 

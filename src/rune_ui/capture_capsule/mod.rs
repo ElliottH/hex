@@ -808,7 +808,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         }
         Id::Why => placed(row().center_y(), shown)
             .trace_name("why")
-            .child(label(&shown.ident, SMALL, p.faint())),
+            .child(label(shown.text(), SMALL, p.faint())),
         Id::Undo => {
             let seconds = match &surface.pres {
                 Pres::Done(Done {

@@ -675,11 +675,14 @@ impl Flow {
                 why: Some(format!("couldn't reach {}", short(to))),
                 ..Done::plain(Lead::Check, "Copied")
             }),
-            Phase::Sent(sent) => Pres::Done(Done {
-                why: sent.rule_saved.then(|| "rule saved".into()),
-                undo: undo_left(sent.at),
-                ..Done::plain(Lead::Check, format!("Sent to {}", short(&sent.to)))
-            }),
+            Phase::Sent(sent) => {
+                let undo = undo_left(sent.at);
+                Pres::Done(Done {
+                    why: sent.rule_saved.then(|| "rule saved".into()),
+                    undo,
+                    ..Done::plain(Lead::Check, sending(&sent.to, undo))
+                })
+            }
             Phase::Routed(routed) => Pres::Done(routed_done(routed, undo_left(routed.at))),
         }
     }
@@ -791,6 +794,14 @@ fn route_chips(route: &Route) -> Box<dyn Iterator<Item = (&Dest, Option<&str>)> 
     }
 }
 
+/// "Sending to X…" while a send can be taken back, then "Sent to X".
+fn sending(to: &str, undo: Option<u32>) -> String {
+    match undo {
+        Some(_) => format!("Sending to {}…", short(to)),
+        None => format!("Sent to {}", short(to)),
+    }
+}
+
 /// A session's name cut to [`ROUTE_NAME_MAX`] characters, so the
 /// capsule's widest state stays inside its panel.
 fn short(name: &str) -> String {
@@ -818,12 +829,14 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         .map(|(i, (dest, _))| route_label(i, &dest.name))
         .collect();
     let base = match &routed.route {
+        // While the send can be taken back, the runner-up rides along
+        // (⌥⇧V still opens the list); then the list's chip takes its place.
         Route::Rule { to, .. } => Done {
             why: Some("rule".into()),
             undo,
-            routes,
-            ask: Some("Elsewhere…".into()),
-            ..Done::plain(Lead::Check, format!("Sent to {}", short(to)))
+            routes: if undo.is_some() { routes } else { Vec::new() },
+            ask: undo.is_none().then(|| "Elsewhere…".into()),
+            ..Done::plain(Lead::Check, sending(to, undo))
         },
         // The chips are the ask; ⌥⇧V still opens the whole list.
         Route::Guess { .. } if !routes.is_empty() => Done {
@@ -1006,7 +1019,11 @@ mod tests {
         assert_eq!(at(11.2), Some(2));
         assert_eq!(at(12.5), Some(1));
         assert_eq!(at(13.0), None);
-        assert_eq!(done(&flow, 10.0).text, "Sent to SEER");
+        assert_eq!(done(&flow, 10.0).text, "Sending to SEER…");
+        assert_eq!(done(&flow, 10.0).routes.len(), 1);
+        // Once it can't be taken back, it's sent and the runner-up goes.
+        assert_eq!(done(&flow, 13.0).text, "Sent to SEER");
+        assert!(done(&flow, 13.0).routes.is_empty());
         assert_eq!(done(&flow, 10.0).why.as_deref(), Some("rule"));
         assert!((flow.next_due(10.0).unwrap() - 11.0).abs() < 1e-6);
         let actions = flow.input(Input::Escape, 11.0);
@@ -1032,7 +1049,7 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
+        assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
         assert_eq!(done(&flow, 1.0).undo, Some(3));
 
         let mut flow = Flow::new();
@@ -1045,7 +1062,7 @@ mod tests {
                 to: "HEX".into()
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
+        assert_eq!(done(&flow, 1.0).text, "Sending to HEX…");
     }
 
     #[test]
@@ -1154,7 +1171,7 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 2.0).text, "Sent to HOME");
+        assert_eq!(done(&flow, 2.0).text, "Sending to HOME…");
         assert_eq!(done(&flow, 2.0).undo, Some(3));
     }
 

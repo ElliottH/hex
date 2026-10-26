@@ -126,8 +126,9 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 ├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
 ├── Routing (Scrawl's routing.md), built and scene-tested; nothing feeds it until
 │   routing exists
-│   ├── A rule's send -> "Sent to X", Undo for 3 s (esc), the runner-up as a
-│   │   "Send to Y" chip that redirects at once, and ⌥⇧V for the list
+│   ├── A rule's send -> "Sending to X…", Undo for 3 s (esc), and the runner-up
+│   │   as a "Send to Y" chip that redirects at once; then "Sent to X" with an
+│   │   "Elsewhere…" chip for the list (⌥⇧V opens it throughout)
 │   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
 │   │   a chip sends at once; ⌥⇧V still opens the list
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list

@@ -8,7 +8,7 @@ use rune::Runtime;
 use rune::text::TextSystem;
 use scrawl_capture::capture::Stage;
 
-use super::flow::{Action, Delivered, Dest, Flow, Input, Mode, Pres, Route, Undone};
+use super::flow::{Action, Delivered, Dest, Flow, Input, Mode, Pres, Route, UNDO_S, Undone};
 use super::surface::{Id, PANEL_H, PANEL_W, TOP};
 use super::{CapsuleState, poll, trace_channels, view};
 
@@ -125,6 +125,11 @@ fn stills() -> Vec<(&'static str, Pres)> {
         ("saved", after(&[In(Input::Stage(Stage::Done))])),
         ("failed", after(&[In(failed())])),
         ("rule-sent", after(&routed(rule()))),
+        ("rule-final", {
+            let mut flow = Flow::new();
+            flow.input(Input::Routed(rule()), 0.0);
+            flow.pres(UNDO_S + 1.0)
+        }),
         ("guess", after(&routed(guess()))),
         ("guess-four", after(&routed(guess_four()))),
         (
@@ -243,7 +248,8 @@ fn every_state_draws_its_pieces() {
         ("processing", &["processing"]),
         ("saved", &["done"]),
         ("failed", &["done"]),
-        ("rule-sent", &["done", "why", "undo", "route0", "ask"]),
+        ("rule-sent", &["done", "why", "undo", "route0"]),
+        ("rule-final", &["done", "why", "ask"]),
         ("guess", &["done", "route0", "route1"]),
         (
             "guess-four",
@@ -365,6 +371,7 @@ const GOLDENS: &[&str] = &[
     "processing",
     "saved",
     "rule-sent",
+    "rule-final",
     "guess",
     "guess-four",
     "no-answer",
@@ -525,6 +532,14 @@ fn scripts() -> Vec<Script> {
                 (2.6, Click(Id::Route(2))),
             ],
             end: 4.4,
+        },
+        Script {
+            name: "rule-sends",
+            beats: vec![
+                (0.2, stage(Stage::Transcribing)),
+                (1.2, In(Input::Routed(rule()))),
+            ],
+            end: 6.0,
         },
         Script {
             name: "rule-runner-up",
