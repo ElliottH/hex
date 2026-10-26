@@ -326,13 +326,6 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             tr("Storage"),
             storage_rows(ui, p, &view, layer),
         ));
-        if view.imported {
-            content = content.child(note(
-                "scrawl-imported",
-                tr("Hex copied Scrawl's settings once and never changes Scrawl's files."),
-                p.muted(),
-            ));
-        }
     }
     super::scroll_body("scroll", content)
 }

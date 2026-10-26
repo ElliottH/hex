@@ -41,8 +41,6 @@ static CAPTURE_SETTINGS: OnceLock<RwLock<CaptureSettings>> = OnceLock::new();
 static SCRAWL_APP_RUNNING: AtomicBool = AtomicBool::new(false);
 #[cfg(hex_capture)]
 static CAPTURE_ON: AtomicBool = AtomicBool::new(false);
-#[cfg(hex_capture)]
-static SCRAWL_IMPORTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct RuntimeTranscriptionSelection {
@@ -1532,10 +1530,6 @@ impl AppSettings {
                 .write()
                 .unwrap_or_else(|error| error.into_inner()) = self.capture.clone();
             CAPTURE_ON.store(self.capture_on(), Ordering::Release);
-            SCRAWL_IMPORTED.store(
-                self.has_migration(SCRAWL_IMPORT_MIGRATION),
-                Ordering::Release,
-            );
         }
         HEX_MICROPHONE_ENABLED.store(self.experimental.hex_microphone, Ordering::Release);
         crate::hex_microphone::sync_from_settings(
@@ -2050,14 +2044,6 @@ pub fn capture_settings() -> CaptureSettings {
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
-}
-
-/// Hex read Scrawl's settings once, and Scrawl's settings file is there to
-/// have been read.
-#[cfg(hex_capture)]
-pub fn scrawl_settings_imported() -> bool {
-    SCRAWL_IMPORTED.load(Ordering::Acquire)
-        && scrawl_capture::handoff::default_config_path().exists()
 }
 
 /// Captures are on: [`capture_available`] and `capture.enabled`.

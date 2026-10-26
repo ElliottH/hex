@@ -284,7 +284,6 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     #[cfg(hex_capture)]
     ("Keep", ["Przechowuj", "保留", "保持期間", "Behalten", "Conservar"]),
     #[cfg(hex_capture)]
-    ("Hex copied Scrawl's settings once and never changes Scrawl's files.", ["Hex jednorazowo skopiował ustawienia Scrawl i nigdy nie zmienia plików Scrawl.", "Hex 已复制过一次 Scrawl 的设置，且从不修改 Scrawl 的文件。", "Hex は Scrawl の設定を一度だけコピーし、Scrawl のファイルは変更しません。", "Hex hat die Einstellungen von Scrawl einmal übernommen und ändert nie die Dateien von Scrawl.", "Hex copió una vez los ajustes de Scrawl y nunca cambia los archivos de Scrawl."]),
     ("Add application", ["Dodaj aplikację", "添加应用", "アプリを追加", "App hinzufügen", "Añadir aplicación"]),
     ("Add transformation", ["Dodaj transformację", "添加转换", "変換を追加", "Transformation hinzufügen", "Añadir transformación"]),
     ("Close", ["Zamknij", "关闭", "閉じる", "Schließen", "Cerrar"]),

@@ -1354,10 +1354,6 @@ impl ScrawlHost {
         if !running {
             changed |= update(&mut view.quitting_scrawl, false);
         }
-        changed |= update(
-            &mut view.imported,
-            crate::app_settings::scrawl_settings_imported(),
-        );
         changed
     }
 }

@@ -1714,8 +1714,8 @@ const SCENES: &[Scene] = &[
 
 /// The macOS window with every permission granted, meetings on, the Hex
 /// Microphone experiment on, and sample meetings and commands.
-/// The Scrawl pane with captures `enabled`, Scrawl's settings imported
-/// (its 3-day video retention), and `adjust` applied to what the host shows.
+/// The Scrawl pane with captures `enabled`, a 3-day video retention, and
+/// `adjust` applied to what the host shows.
 #[cfg(hex_capture)]
 fn scrawl_fixture(ui: &mut Ui, enabled: bool, adjust: fn(&mut platform::ScrawlView)) {
     *ui = mac_fixture();

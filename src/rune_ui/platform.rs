@@ -263,9 +263,6 @@ pub(super) struct ScrawlView {
     pub(super) scrawl_running: bool,
     /// Use Hex for captures was pressed and Scrawl has not quit yet.
     pub(super) quitting_scrawl: bool,
-    /// Hex read Scrawl's settings once (`app_settings`'s import), and they
-    /// were there to read.
-    pub(super) imported: bool,
     /// A captures folder that could not be revealed or chosen.
     pub(super) folder_error: Option<String>,
     /// Turning captures on or off failed (the pane sets it).
@@ -274,11 +271,10 @@ pub(super) struct ScrawlView {
 
 #[cfg(hex_capture)]
 impl ScrawlView {
-    /// Screen Recording allowed, Scrawl not running, its settings imported.
+    /// Screen Recording allowed and Scrawl not running.
     pub(super) fn preview() -> Self {
         Self {
             screen_recording: true,
-            imported: true,
             ..Self::default()
         }
     }
