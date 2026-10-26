@@ -291,7 +291,7 @@ where the work starts (the `capture_host` worker), not only in the window.
   onto Area · Window · Screen for 3.5 s (never folding while hovered) or until
   the first click, scroll, or stroke. A chip restarts rather than retargets:
   Window and Area discard the recording and turn the capsule into the picker.
-  The host side is built: `CaptureTarget`, `CaptureCommand::{Start, Discard}`
+  The host side is built: `CaptureTarget`, `CaptureCommand::{Start, Discard, Switch}`
   through `RecognitionControl::CaptureCommand`, `RecordingCapture::{target,
   worked}`, `SettledCapture::error`, and `begin_picking` for ⌥⇧S and Esc while
   the picker is open. The shortcut starts on its modifiers' release, as

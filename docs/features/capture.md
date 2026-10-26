@@ -62,6 +62,8 @@ Switching target                         // capture.switch; the capsule's chips
 │   the only kind that shows the switch chips (Area · Window · Screen)
 ├── First click, scroll, or ink stroke -> `worked`, so the chips fold
 ├── Screen -> the capsule folds the chips; the capture goes on
+├── CaptureCommand::Switch(target) -> discard and start in one step: no snapshot
+│   shows nothing recording in between (Scrawl's switch_recording)
 ├── Window or Area -> CaptureCommand::Discard: bundle removed, no outcome, gone
 │   from the snapshot at once (and from MAX_FINISHING), so the capsule becomes
 │   the picker
@@ -203,6 +205,7 @@ Checks:
   `a_click_with_the_chords_shift_still_held_is_no_pin`.
 - Switching, in capture_host.rs:
   `a_discarded_capture_leaves_no_trace_and_a_pick_takes_its_place`,
+  `a_switch_never_shows_nothing_recording`,
   `discarded_captures_never_count_against_the_writers`,
   `a_pick_that_cannot_start_says_why`,
   `the_first_click_or_scroll_means_work_started`, and

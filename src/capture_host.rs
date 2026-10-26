@@ -114,7 +114,10 @@ trait CaptureEngine: Send + Sync + 'static {
 
 /// What a capture records.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[expect(dead_code, reason = "the capture capsule (scrawl-capsule) picks these")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the capture capsule (scrawl-capsule) picks these")
+)]
 pub enum CaptureTarget {
     /// The display under the pointer, cropped to what changes: the
     /// shortcut's.
@@ -166,6 +169,11 @@ pub enum CaptureCommand {
     /// Drops the recording capture: its bundle is removed and it never
     /// settles, so the capsule can turn into the picker in its place.
     Discard,
+    /// Scrawl's `switch_recording`: drops the recording capture as
+    /// [`Self::Discard`] does and starts `target` in the same step, so no
+    /// snapshot shows nothing recording in between. With nothing recording,
+    /// only starts.
+    Switch(CaptureTarget),
 }
 
 /// A started capture.
@@ -787,6 +795,9 @@ struct Outcomes {
     unfinished: Vec<Unfinished>,
     last: Option<SettledCapture>,
     feed: &'static Feed,
+    /// A switch is between its discard and its start: views see neither
+    /// half alone ([`CaptureCommand::Switch`]).
+    held: bool,
 }
 
 struct Unfinished {
@@ -814,6 +825,7 @@ impl Outcomes {
             unfinished: Vec::new(),
             last: None,
             feed,
+            held: false,
         }
     }
 
@@ -948,7 +960,15 @@ impl Outcomes {
     }
 
     fn publish(&self) {
-        self.feed.publish(self.snapshot());
+        if !self.held {
+            self.feed.publish(self.snapshot());
+        }
+    }
+
+    /// Ends a hold, publishing what changed during it.
+    fn release(&mut self) {
+        self.held = false;
+        self.publish();
     }
 }
 
@@ -1167,6 +1187,14 @@ impl CaptureHost {
         let result = match command {
             CaptureCommand::Start(target) => self.begin(now, audio, target),
             CaptureCommand::Discard => self.end(now, audio, End::Discard),
+            CaptureCommand::Switch(target) => {
+                lock(&self.outcomes).held = true;
+                let switched = self
+                    .end(now, audio, End::Discard)
+                    .and_then(|_| self.begin(now, audio, target));
+                lock(&self.outcomes).release();
+                switched
+            }
         };
         result.unwrap_or_else(|error| ControlReply::error("failed", format!("{error:#}")))
     }
@@ -3041,6 +3069,53 @@ mod tests {
         assert!(!report(again).changed);
         host.shutdown(&audio);
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_switch_never_shows_nothing_recording() {
+        let feed: &'static Feed = Box::leak(Box::new(Feed::new()));
+        let dir = temp_dir("switch");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        lock(&host.outcomes).feed = feed;
+        let first = report(host.shortcut(ShortcutAction::Record, &audio))
+            .bundle
+            .unwrap();
+        let watch = feed.watch();
+        assert_eq!(watch.changed().unwrap().recording.unwrap().bundle, first);
+
+        let pick = CaptureTarget::Display { at: [5.0, 5.0] };
+        let switched = report(host.command(CaptureCommand::Switch(pick), &audio));
+        let second = switched.bundle.unwrap();
+        assert_ne!(first, second);
+        assert_eq!(switched.state, ScrawlCaptureState::Recording);
+        // One publish: the new recording, never the gap before it.
+        let seen = watch.changed().unwrap();
+        let recording = seen.recording.unwrap();
+        assert_eq!(
+            (recording.bundle, recording.target),
+            (second, TargetKind::Display)
+        );
+        assert!(seen.finishing.is_empty() && seen.last.is_none());
+        wait_until_idle_but_one(&host);
+        assert!(!first.exists());
+        assert!(lock(&host.outcomes).snapshot().last.is_none());
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    fn wait_until_idle_but_one(host: &CaptureHost) {
+        for _ in 0..1_000 {
+            if lock(&host.outcomes).unfinished.len() == 1 {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the discarded capture never settled");
     }
 
     #[test]
