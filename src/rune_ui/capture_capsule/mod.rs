@@ -318,8 +318,6 @@ pub(crate) struct CapsuleState {
     /// A capture started: the capsule moves to the display under the
     /// pointer, even while still up on another one.
     replace: bool,
-    /// A mouse button was down at the latest poll while the list was open.
-    pressed: bool,
     /// The keys Hex's tap hands the capsule ([`Flow::keys`]): the overlay
     /// never takes focus.
     keys: Option<(
@@ -354,7 +352,6 @@ impl CapsuleState {
             shown: false,
             follow: false,
             replace: false,
-            pressed: false,
             keys: None,
             picker: None,
             picker_mode: None,
@@ -509,7 +506,6 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
             overlay.set_follow_pointer(follow);
         }
     }
-    changed |= click_away(s, now, tx);
     take_keys(s, now);
     // The on-screen picker shows what the capsule picks.
     let picking = match s.surface.pres {
@@ -559,43 +555,6 @@ fn take_keys(s: &mut CapsuleState, now: f64) {
     }
 }
 
-/// While the list holds the keyboard, a press off the capsule closes it, so
-/// typing goes back to the app in front. The capsule lets those clicks
-/// through and never sees them, so it watches the buttons until the list
-/// closes.
-fn click_away(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
-    let listing =
-        s.overlay.is_some() && s.flow.keys(now) == Some(crate::capture_host::CapsuleKeys::List);
-    if !listing {
-        s.pressed = false;
-        return false;
-    }
-    let pressed = mouse_down();
-    let away = pressed && !s.pressed && !s.flow.hovered();
-    s.pressed = pressed;
-    tx.wake_after(CLICK_AWAY_EVERY);
-    if away {
-        s.apply(Input::ClickAway, now);
-        s.present(now);
-        s.live.sync(&s.surface);
-    }
-    away
-}
-
-const CLICK_AWAY_EVERY: Duration = Duration::from_millis(50);
-
-/// Whether any of the first three mouse buttons is down, session-wide.
-fn mouse_down() -> bool {
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
-    }
-    // kCGEventSourceStateCombinedSessionState: what the session sees.
-    const COMBINED: i32 = 0;
-    // SAFETY: a stateless query of the session's button state.
-    (0..3).any(|button| unsafe { CGEventSourceButtonState(COMBINED, button) })
-}
-
 fn key_input(key: crate::capture_host::CapsuleKey) -> Input {
     use crate::capture_host::CapsuleKey;
     match key {
@@ -608,6 +567,7 @@ fn key_input(key: crate::capture_host::CapsuleKey) -> Input {
         CapsuleKey::Down => Input::Move(1),
         CapsuleKey::Return { shift } => Input::Send { always: shift },
         CapsuleKey::Digit(digit) => Input::SendRow(usize::from(digit.saturating_sub(1))),
+        CapsuleKey::Press => Input::ClickAway,
     }
 }
 

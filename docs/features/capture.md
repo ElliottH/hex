@@ -155,8 +155,9 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a
-│   │       press off the capsule (button state polled while the list is open)
-│   │       closes the list and gives the keys back; hiding drops the grab
+│   │       press off the capsule (the tap reports mouse-downs while the list
+│   │       is open, and still delivers them) closes the list and gives the
+│   │       keys back; hiding drops the grab
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
 │   ├── Nothing fits, or no answer -> "Send to…" opens the list
 │   ├── Every written capture -> Paste (the one accent action) and Inspect, as

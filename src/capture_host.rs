@@ -2104,6 +2104,9 @@ pub enum CapsuleKey {
     },
     /// 1 to 9 typed in the list (otherwise text).
     Digit(u8),
+    /// A mouse button went down anywhere, while the list is open. The click
+    /// still reaches the app under it.
+    Press,
 }
 
 type OnCapsuleKey = Arc<dyn Fn(CapsuleKey) + Send + Sync>;
@@ -3964,11 +3967,13 @@ mod tests {
         assert!(!capsule_key(CapsuleKey::Shortcut));
         assert!(!capsule_key(CapsuleKey::Escape));
         assert!(capsule_key(CapsuleKey::OpenList));
+        assert!(!capsule_key(CapsuleKey::Press), "a press matters only to the list");
         second.set(CapsuleKeys::Route { escape: true });
         assert!(wants_escape());
         second.set(CapsuleKeys::List);
         assert!(list_open() && !wants_escape());
         assert!(capsule_key(CapsuleKey::Text("ho".into())));
+        assert!(capsule_key(CapsuleKey::Press));
         drop(second);
         assert!(!picking() && !list_open());
         assert!(!capsule_key(CapsuleKey::Escape));
@@ -3979,6 +3984,7 @@ mod tests {
                 (2, CapsuleKey::Escape),
                 (2, CapsuleKey::OpenList),
                 (2, CapsuleKey::Text("ho".into())),
+                (2, CapsuleKey::Press),
             ]
         );
     }

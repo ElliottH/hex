@@ -183,8 +183,8 @@ pub(crate) enum Input {
     /// The recording it shows left the snapshot with no outcome: a chip's
     /// discard (the picker is already up) or `hex capture discard`.
     Gone,
-    /// A click off the capsule: an open list closes, so typing goes back
-    /// to the app in front.
+    /// A mouse button went down while the list was open: off the capsule,
+    /// the list closes, so typing goes back to the app in front.
     ClickAway,
 }
 
@@ -417,10 +417,6 @@ impl Flow {
     }
 
     /// The pointer came onto the capsule or left it.
-    pub(crate) fn hovered(&self) -> bool {
-        self.hovered
-    }
-
     pub(crate) fn hover(&mut self, on: bool, now: f64) {
         self.hovered = on;
         if let (
@@ -531,7 +527,7 @@ impl Flow {
             (Phase::Routed(routed), Input::SendRow(row)) => {
                 send(routed, Some(row), false, now, &mut actions)
             }
-            (Phase::Routed(mut routed), Input::ClickAway) => {
+            (Phase::Routed(mut routed), Input::ClickAway) if !self.hovered => {
                 routed.open = None;
                 Phase::Routed(routed)
             }
@@ -1287,6 +1283,11 @@ mod tests {
         flow.input(Input::Routed(guess()), 0.0);
         flow.input(Input::OpenList, 0.5);
         assert_eq!(flow.keys(0.6), Some(CapsuleKeys::List));
+        // A press on the capsule is the capsule's own click.
+        flow.hover(true, 0.6);
+        flow.input(Input::ClickAway, 0.6);
+        assert_eq!(flow.keys(0.6), Some(CapsuleKeys::List));
+        flow.hover(false, 0.65);
         assert!(flow.input(Input::ClickAway, 0.7).is_empty());
         assert_eq!(flow.keys(0.8), Some(CapsuleKeys::Route { escape: false }));
         assert!(matches!(flow.pres(0.8), Pres::Done(_)));
