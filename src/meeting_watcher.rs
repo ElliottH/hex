@@ -159,7 +159,7 @@ pub(crate) fn controller_loop(
             );
         }
 
-        poll_recording(&mut recording, &events)?;
+        poll_recording(&mut recording, &mut detector, &events)?;
         reminders.poll(enabled, recording.is_some(), &events);
         pending_finals.poll(enabled, recording.is_some(), &events);
 
@@ -184,6 +184,10 @@ pub(crate) fn controller_loop(
                 }
                 Ok(None) => {}
             }
+        } else {
+            // Nothing is watched now: no answer read before this may come
+            // back as fresh when detection resumes.
+            browser.reset();
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -577,6 +581,7 @@ fn start_recording(
 
 fn poll_recording(
     recording: &mut Option<ActiveRecording>,
+    detector: &mut MeetingDetector,
     events: &SyncSender<ControllerEvent>,
 ) -> Result<()> {
     if let Some(active) = recording.as_mut() {
@@ -650,6 +655,9 @@ fn poll_recording(
                 true
             }
         };
+        if present {
+            detector.keep_snooze_alive();
+        }
         if active.presence.observe(present) {
             tracing::info!(application, "meeting application released the microphone");
             let _ = events.send(ControllerEvent::CallEnded {
@@ -662,10 +670,22 @@ fn poll_recording(
 
 /// How often a browser's tabs are queried while it holds the microphone.
 const TAB_QUERY_INTERVAL: Duration = Duration::from_secs(1);
-/// A tab query older than this no longer says what the browser shows.
+/// A tab query that finished longer ago than this no longer says what the
+/// browser shows.
 const TAB_QUERY_MAX_AGE: Duration = Duration::from_secs(5);
 
 type TabQuery = fn(&str) -> Result<ContextSnapshot>;
+
+/// A page and when its query finished.
+type Answer = Option<(ContextSnapshot, Instant)>;
+
+struct InFlight {
+    bundle_id: String,
+    /// The probe's generation when the query started; a reset since makes
+    /// the answer stale.
+    generation: u64,
+    answer: Receiver<Answer>,
+}
 
 /// Reads a browser's tabs off the controller thread, one query at a time. A
 /// query is an AppleScript round trip that can take seconds (it is killed
@@ -673,8 +693,8 @@ type TabQuery = fn(&str) -> Result<ContextSnapshot>;
 /// finished answer; it never waits for one.
 struct TabProbe {
     query: TabQuery,
-    /// The browser being queried and the channel its answer arrives on.
-    running: Option<(String, Receiver<Option<ContextSnapshot>>)>,
+    running: Option<InFlight>,
+    generation: u64,
     started: Option<Instant>,
     latest: Option<(String, ContextSnapshot, Instant)>,
 }
@@ -684,6 +704,7 @@ impl TabProbe {
         Self {
             query,
             running: None,
+            generation: 0,
             started: None,
             latest: None,
         }
@@ -691,15 +712,21 @@ impl TabProbe {
 
     /// The browser's newest answered page, or nothing yet.
     fn page(&mut self, bundle_id: &str, now: Instant) -> ContextSnapshot {
-        if let Some((queried, running)) = &self.running {
-            match running.try_recv() {
-                Ok(answer) => {
-                    self.latest = answer.map(|page| (queried.clone(), page, now));
-                    self.running = None;
+        let received = self
+            .running
+            .as_ref()
+            .map(|flight| (flight.generation, flight.answer.try_recv()));
+        match received {
+            Some((generation, Ok(answer))) => {
+                let queried = self.running.take().map(|flight| flight.bundle_id);
+                if generation == self.generation
+                    && let Some(queried) = queried
+                {
+                    self.latest = answer.map(|(page, at)| (queried, page, at));
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => self.running = None,
             }
+            Some((_, Err(mpsc::TryRecvError::Disconnected))) => self.running = None,
+            Some((_, Err(mpsc::TryRecvError::Empty))) | None => {}
         }
         if self.running.is_none()
             && self
@@ -717,11 +744,16 @@ impl TabProbe {
                         .map_err(
                             |error| tracing::debug!(%error, "could not read the browser's tabs"),
                         )
-                        .ok();
+                        .ok()
+                        .map(|page| (page, Instant::now()));
                     let _ = sender.send(answer);
                 });
             if spawned.is_ok() {
-                self.running = Some((bundle_id.to_string(), receiver));
+                self.running = Some(InFlight {
+                    bundle_id: bundle_id.to_string(),
+                    generation: self.generation,
+                    answer: receiver,
+                });
             }
         }
         match &self.latest {
@@ -735,11 +767,13 @@ impl TabProbe {
         }
     }
 
-    /// No browser holds the microphone: an answer, finished or still being
-    /// read, must not outlive the call.
+    /// Nothing is watched: an answer, finished or still being read, must not
+    /// outlive the call. A query in flight is not abandoned (it ends by its
+    /// own timeout, and no second one starts beside it); its answer is
+    /// dropped.
     fn reset(&mut self) {
         self.latest = None;
-        self.running = None;
+        self.generation += 1;
     }
 }
 
@@ -759,6 +793,11 @@ impl BrowserWatch {
         }
     }
 
+    fn reset(&mut self) {
+        self.probe.reset();
+        self.memory.forget();
+    }
+
     fn context(
         &mut self,
         application: Option<&ActiveMicrophoneApplication>,
@@ -768,11 +807,11 @@ impl BrowserWatch {
         let Some((application, bundle_id)) =
             browser.and_then(|application| Some((application, application.canonical_bundle_id()?)))
         else {
-            self.probe.reset();
-            self.memory.forget();
+            self.reset();
             return ContextSnapshot::default();
         };
         if snoozed(bundle_id) {
+            self.reset();
             return ContextSnapshot::default();
         }
         let now = Instant::now();
@@ -973,6 +1012,82 @@ mod tests {
         );
         thread::sleep(Duration::from_millis(100));
         assert_eq!(QUERIES.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_reset_drops_the_answer_in_flight_without_starting_a_second_query() {
+        use std::sync::atomic::AtomicUsize;
+        static QUERIES: AtomicUsize = AtomicUsize::new(0);
+        fn slow(_: &str) -> Result<ContextSnapshot> {
+            QUERIES.fetch_add(1, Ordering::SeqCst);
+            thread::sleep(Duration::from_millis(400));
+            Ok(banshee_tab())
+        }
+        let mut probe = TabProbe::new(slow);
+        probe.page("com.brave.Browser", Instant::now());
+        probe.reset();
+        // The first query is still running: no second one starts beside it.
+        thread::sleep(Duration::from_millis(100));
+        probe.page("com.brave.Browser", Instant::now());
+        assert_eq!(QUERIES.load(Ordering::SeqCst), 1);
+        // Once it finishes, its answer belongs to the earlier call.
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(
+            probe.page("com.brave.Browser", Instant::now()),
+            ContextSnapshot::default()
+        );
+        assert!(probe.latest.is_none());
+    }
+
+    #[test]
+    fn an_answer_is_dated_by_when_its_query_finished() {
+        fn quick(_: &str) -> Result<ContextSnapshot> {
+            Ok(banshee_tab())
+        }
+        let mut probe = TabProbe::new(quick);
+        let started = Instant::now();
+        probe.page("com.brave.Browser", started);
+        thread::sleep(Duration::from_millis(300));
+        // Polled well after the query finished: the answer is already old.
+        let polled = started + TAB_QUERY_MAX_AGE + Duration::from_secs(1);
+        assert_eq!(
+            probe.page("com.brave.Browser", polled),
+            ContextSnapshot::default()
+        );
+    }
+
+    #[test]
+    fn a_cold_tab_query_then_its_answer_leads_to_a_banshee_offer() {
+        fn banshee(_: &str) -> Result<ContextSnapshot> {
+            thread::sleep(Duration::from_millis(300));
+            Ok(banshee_tab())
+        }
+        let mut browser = BrowserWatch::new(banshee);
+        let mut detector = MeetingDetector::default();
+        let started = Instant::now();
+        let mut first = true;
+        let offer = loop {
+            assert!(started.elapsed() < Duration::from_secs(10), "no offer");
+            let context = browser.context(Some(&brave()), |_| false);
+            if first {
+                // The cold miss: the page is not known yet.
+                assert_eq!(context, ContextSnapshot::default());
+                first = false;
+            }
+            let candidate = candidate_from_microphone(&brave(), &context);
+            if let Some(detection) = detector.detect(candidate, &[]) {
+                break detection;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        let Detection::Offer(candidate) = offer else {
+            panic!("expected an offer, not {offer:?}");
+        };
+        assert_eq!(candidate.site.as_deref(), Some("banshee.app"));
+        // Offered at the known service's 2 s, not the 20 s of an unknown page.
+        // (That it counts from the first pass is checked on the detector.)
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     const MINUTE: i64 = 60_000;

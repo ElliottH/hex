@@ -76,9 +76,12 @@ Zoom / Teams / Slack huddle / FaceTime / browser call uses the microphone
          └── 20 s timeout -> Close                     // never records on timeout
   -> Same call is snoozed by key and app until off the microphone for 60 s,
      offered or recorded; stopping an automatic recording does not restart it
+     └── Absence counts from the last time the call app was on the microphone,
+         a gap included (sleep, Meetings off, a recording): an app that left
+         the microphone during a recording is not snoozed for another minute
   -> "Left the call" prompt after the call app is off the microphone for 3 s
   -> Times are wall-clock runs: observations more than 10 s apart (sleep, a
-     stalled loop) start the run again instead of counting the gap
+     stalled loop) start a stability run again instead of counting the gap
 
 Choices persist as `meetings.providers` (`key`, `label`, `policy`:
 `ask` / `always_record` / `never_offer`) in `settings.json`. Missing means Ask.
@@ -95,12 +98,21 @@ Graphics and Media`), and FaceTime uses `com.apple.avconferenced`.
 process to its canonical host app via parent PID lineage, CoreAudio's
 `kAudioProcessPropertyBundleID`, and `NSRunningApplication`. When Brave uses the
 microphone and is not snoozed, `ContextSnapshot::capture_for_meeting` in
-[context.rs](../../src/context.rs) inspects Brave's active and open tabs for a
-`meet.google.com` or `banshee.app` call even if Brave is behind another window or
-tab. That query is an AppleScript round trip, so the watcher starts it on its own
+[context.rs](../../src/context.rs) reads the active tab of Brave's front window,
+even if Brave is behind another window. Background tabs are not searched: a
+call open in one says nothing about which tab holds the microphone, and a
+voice note elsewhere would otherwise get a known service's 2 s threshold or
+trigger Always record. (A call in a background tab is therefore judged by the
+active tab's page, which is the unknown-page 20 s for a new site.) That query is
+an AppleScript round trip, so the watcher starts it on its own
 thread (at most one at a time, about once a second) and reads the newest answer,
-at most 5 s old; a slow or timed-out query (the existing 2 s limit) never holds
-up the loop. When no answer names a page, the last page a browser showed while
+at most 5 s after it finished; a slow or timed-out query (the existing 2 s
+limit) never holds up the loop. Answers and the remembered page are dropped
+while Hex records, Meetings is off, the browser is snoozed, or no browser holds
+the microphone; a query in flight at that moment is not repeated beside itself,
+and its answer is discarded. When a browser's page is found for a run already
+under way (the first pass had no answer yet), the run keeps counting, now
+toward the known service's 2 s. When no answer names a page, the last page a browser showed while
 it held the microphone names the call for 60 s (`BrowserPageMemory`), so the
 site survives a failed query or Hex being in front. Safari, Chrome, Firefox and
 Edge expose no URL, so their calls are unnamed unless the foreground context
@@ -125,12 +137,20 @@ Checks: `a_slow_loop_still_offers_an_unknown_browser_call_after_about_20_seconds
 `the_site_is_resolved_while_hex_is_in_front`,
 `a_page_seen_minutes_ago_no_longer_names_the_call`,
 `a_remembered_page_belongs_to_its_browser_and_its_call`,
-`a_slow_tab_query_never_holds_up_the_loop` and
+`finding_the_page_keeps_the_run_toward_the_known_threshold`,
+`a_voice_note_on_another_site_is_not_a_banshee_call`,
+`a_gap_with_the_app_absent_counts_as_absence`,
+`a_recorded_call_that_left_the_microphone_is_not_snoozed_for_another_minute`,
+`a_slow_tab_query_never_holds_up_the_loop`,
+`a_reset_drops_the_answer_in_flight_without_starting_a_second_query`,
+`an_answer_is_dated_by_when_its_query_finished`,
+`a_cold_tab_query_then_its_answer_leads_to_a_banshee_offer` and
 `a_snoozed_or_non_browser_application_is_not_queried` (meeting_watcher.rs),
+`the_meeting_tab_query_reads_only_the_active_tab` (context.rs),
 `a_browser_voice_note_is_not_offered_but_a_sustained_browser_call_is`,
 `offer_titles_name_the_service_site_or_browser_without_repeating_call`,
 `choices_apply_to_the_site_when_known_and_the_app_otherwise`,
-`always_record_starts_after_the_same_stability_count_as_an_offer`, and
+`always_record_starts_after_the_same_stability_time_as_an_offer`, and
 `never_offer_and_snoozed_calls_never_start` in
 [meeting_detection.rs](../../src/meeting_detection.rs);
 `meeting_providers_ask_by_default_and_legacy_never_offer_entries_stay_never` in

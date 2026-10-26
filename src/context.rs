@@ -337,30 +337,15 @@ end tell
 return ""
 "#;
 
-/// Returns the active tab's URL and title, unless a tab shows a known call
-/// (Google Meet, Banshee), which is returned instead wherever it is open.
+/// The active tab of Brave's front window, even when another app is in
+/// front. Background tabs are deliberately not searched: a call open in one
+/// says nothing about which tab is using the microphone.
 #[cfg(target_os = "macos")]
 const BRAVE_MEETING_TAB_SCRIPT: &str = r#"
-on isCallUrl(u)
-    return (u contains "meet.google.com/") or (u starts with "https://banshee.app") or (u starts with "https://www.banshee.app")
-end isCallUrl
-
 tell application "Brave Browser"
     if (count of windows) is 0 then return ""
     set activeTab to active tab of front window
-    set activeUrl to URL of activeTab
-    if my isCallUrl(activeUrl) then
-        return activeUrl & linefeed & (title of activeTab)
-    end if
-    repeat with w in windows
-        repeat with t in tabs of w
-            set u to URL of t
-            if my isCallUrl(u) then
-                return u & linefeed & (title of t)
-            end if
-        end repeat
-    end repeat
-    return activeUrl & linefeed & (title of activeTab)
+    return (URL of activeTab) & linefeed & (title of activeTab)
 end tell
 "#;
 
@@ -437,6 +422,12 @@ mod tests {
                 .unwrap(),
             ContextSnapshot::default()
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_meeting_tab_query_reads_only_the_active_tab() {
+        assert!(!BRAVE_MEETING_TAB_SCRIPT.contains("repeat"));
     }
 
     #[test]

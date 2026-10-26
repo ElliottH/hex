@@ -282,11 +282,22 @@ impl MeetingSource {
 
 #[derive(Default)]
 pub struct MeetingDetector {
-    pending: Option<(String, Run)>,
+    pending: Option<Pending>,
     offered: Option<String>,
     offered_application: Option<String>,
-    absent: Option<Run>,
+    /// When a candidate was last on the microphone (or known to be, while
+    /// recording); absence is counted from here, gaps included.
+    last_present: Option<Instant>,
     calendar: Option<CalendarSnooze>,
+}
+
+/// A candidate that has been on the microphone but is not yet stable.
+struct Pending {
+    key: String,
+    application: Option<String>,
+    /// A browser call whose page is not known (yet).
+    unresolved: bool,
+    run: Run,
 }
 
 /// A call the user already answered a calendar reminder for: recorded it,
@@ -324,6 +335,17 @@ impl MeetingDetector {
         self.calendar = Some(CalendarSnooze { keys, until_ms });
     }
 
+    /// The call that was offered is still on the microphone, as a running
+    /// recording's call app is: its snooze must last from now, not from the
+    /// last detection pass.
+    pub fn keep_snooze_alive(&mut self) {
+        self.keep_snooze_alive_at(Instant::now());
+    }
+
+    fn keep_snooze_alive_at(&mut self, now: Instant) {
+        self.last_present = Some(now);
+    }
+
     pub fn is_application_snoozed(&self, canonical_bundle_id: &str) -> bool {
         self.offered_application.as_deref() == Some(canonical_bundle_id)
     }
@@ -358,7 +380,7 @@ impl MeetingDetector {
         {
             // Still on the microphone: an earlier offer stays snoozed.
             self.pending = None;
-            self.absent = None;
+            self.last_present = Some(now);
             return None;
         }
         let candidate = self.observe_at(candidate, now, now_ms)?;
@@ -376,14 +398,14 @@ impl MeetingDetector {
     ) -> Option<MeetingCandidate> {
         let Some(candidate) = candidate else {
             self.pending = None;
-            let absent = self.absent.get_or_insert_with(|| Run::start(now));
-            if absent.extend(now) >= ABSENT_FOR_RESET {
+            let since = *self.last_present.get_or_insert(now);
+            if now.saturating_duration_since(since) >= ABSENT_FOR_RESET {
                 self.offered = None;
                 self.offered_application = None;
             }
             return None;
         };
-        self.absent = None;
+        self.last_present = Some(now);
         if self.offered.as_deref() == Some(&candidate.key)
             || (candidate.application.is_some()
                 && self.offered_application == candidate.application)
@@ -391,10 +413,28 @@ impl MeetingDetector {
             self.pending = None;
             return None;
         }
+        let unresolved = candidate.source == MeetingSource::BrowserCall && candidate.site.is_none();
         let held = match &mut self.pending {
-            Some((key, run)) if key == &candidate.key => run.extend(now),
+            Some(pending) if pending.key == candidate.key => pending.run.extend(now),
+            // The browser's page was found: the same browser has been on the
+            // microphone all along, so the run carries over.
+            Some(pending)
+                if pending.unresolved
+                    && candidate.site.is_some()
+                    && pending.application.is_some()
+                    && pending.application == candidate.application =>
+            {
+                pending.key = candidate.key.clone();
+                pending.unresolved = unresolved;
+                pending.run.extend(now)
+            }
             _ => {
-                self.pending = Some((candidate.key.clone(), Run::start(now)));
+                self.pending = Some(Pending {
+                    key: candidate.key.clone(),
+                    application: candidate.application.clone(),
+                    unresolved,
+                    run: Run::start(now),
+                });
                 Duration::ZERO
             }
         };
@@ -1296,6 +1336,110 @@ mod tests {
             offered(&watch.run_every(Some(&banshee), &[], 900, 900)),
             [2_700]
         );
+    }
+
+    #[test]
+    fn finding_the_page_keeps_the_run_toward_the_known_threshold() {
+        let unknown = candidate_from_microphone(&brave(), &ContextSnapshot::default()).unwrap();
+        let banshee = candidate_from_microphone(&brave(), &banshee_page()).unwrap();
+        // The page is found 1 s in: offered 2 s after the browser took the
+        // microphone, not 2 s after the page was found.
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&unknown), &[], 1_000).is_empty());
+        assert!(watch.run(Some(&banshee), &[], 1_000).is_empty());
+        assert_eq!(offered(&watch.run(Some(&banshee), &[], 500)), [2_000]);
+
+        // The time held while unresolved is never more than the browser held
+        // the microphone, and a different browser starts over.
+        let chrome = ActiveMicrophoneApplication {
+            pid: 400,
+            bundle_id: "com.google.Chrome.helper".into(),
+            name: "Google Chrome Helper".into(),
+        };
+        let chrome_unknown =
+            candidate_from_microphone(&chrome, &ContextSnapshot::default()).unwrap();
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&chrome_unknown), &[], 1_500).is_empty());
+        assert!(watch.run(Some(&banshee), &[], 2_000).is_empty());
+        assert_eq!(offered(&watch.run(Some(&banshee), &[], 500)), [3_500]);
+
+        // An unresolved page that is never found still needs 20 s.
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&unknown), &[], 20_000).is_empty());
+        assert_eq!(offered(&watch.run(Some(&unknown), &[], 500)), [20_000]);
+    }
+
+    #[test]
+    fn a_voice_note_on_another_site_is_not_a_banshee_call() {
+        // The browser's active tab is the page using the microphone; a
+        // Banshee tab open in the background is never read, so it can neither
+        // shorten the threshold nor trigger Always record.
+        let problems = candidate_from_microphone(
+            &brave(),
+            &context(
+                "Brave Browser",
+                Some("https://problems.kitlangton.com/"),
+                "Problems",
+            ),
+        )
+        .unwrap();
+        let choices = [
+            choice("banshee.app", MeetingPolicy::AlwaysRecord),
+            choice("problems.kitlangton.com", MeetingPolicy::NeverOffer),
+        ];
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&problems), &choices, 25_000).is_empty());
+
+        // Without a choice for that site it is the unknown-page 20 s, an offer.
+        let choices = [choice("banshee.app", MeetingPolicy::AlwaysRecord)];
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&problems), &choices, 2_500).is_empty());
+        assert_eq!(watch.run(Some(&problems), &choices, 20_000).len(), 1);
+    }
+
+    #[test]
+    fn a_gap_with_the_app_absent_counts_as_absence() {
+        let slack = slack_huddle();
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&slack), &[], 2_000).is_empty());
+        assert_eq!(watch.run(Some(&slack), &[], 500).len(), 1);
+        // The Mac slept, or Meetings was off, for a while; the call is over.
+        watch.skip(120_000);
+        assert!(watch.run(None, &[], 500).is_empty());
+        assert!(watch.run(Some(&slack), &[], 2_000).is_empty());
+        assert_eq!(watch.run(Some(&slack), &[], 500).len(), 1);
+
+        // Still on the microphone after the gap: still the same call.
+        watch.skip(120_000);
+        assert!(watch.run(Some(&slack), &[], 10_000).is_empty());
+    }
+
+    #[test]
+    fn a_recorded_call_that_left_the_microphone_is_not_snoozed_for_another_minute() {
+        let slack = slack_huddle();
+        let mut watch = Watch::new();
+        assert!(watch.run(Some(&slack), &[], 2_000).is_empty());
+        assert_eq!(watch.run(Some(&slack), &[], 500).len(), 1);
+        // Recorded for an hour; the app left the microphone after 5 minutes,
+        // so the first pass after Stop already ends the snooze.
+        watch.skip(3_600_000);
+        assert!(watch.run(None, &[], 500).is_empty());
+        assert!(watch.run(Some(&slack), &[], 2_000).is_empty());
+        assert_eq!(watch.run(Some(&slack), &[], 500).len(), 1);
+
+        // While the recording sees the app on the microphone, the snooze
+        // counts from the last such moment.
+        let mut watch = Watch::new();
+        watch.run(Some(&slack), &[], 2_500);
+        watch.skip(97_500);
+        watch
+            .detector
+            .keep_snooze_alive_at(watch.base + Duration::from_millis(watch.elapsed_ms));
+        assert!(watch.run(None, &[], 59_500).is_empty());
+        assert!(watch.run(Some(&slack), &[], 5_000).is_empty());
+        assert!(watch.run(None, &[], 61_000).is_empty());
+        assert!(watch.run(Some(&slack), &[], 2_000).is_empty());
+        assert_eq!(watch.run(Some(&slack), &[], 500).len(), 1);
     }
 
     fn banshee_page() -> ContextSnapshot {
