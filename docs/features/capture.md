@@ -96,6 +96,9 @@ hex capture stop                         // capture.stop
     ├── Words: 30 s chunks, each a foreground job on the dictation engine's model,
     │   after queued dictation, before meeting chunks; waits while dictation records
     │   or transcribes; never interrupts a live stream
+    ├── Word times moved earlier by the model's measured lag (Parakeet Unified
+    │   English: starts −280 ms, −520 ms after a ≥ 250 ms pause; ends −195 ms);
+    │   other models and Apple keep their own times
     ├── Past 20 min -> audio kept to 20 min, the rest one gap
     ├── recording.mp4, audio.wav, frames/, scrawl.json, summary.md; then every
     │   file 0600 and folder 0700

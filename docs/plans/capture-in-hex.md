@@ -268,9 +268,17 @@ where the work starts (the `capture_host` worker), not only in the window.
   meanwhile waits for one chunk at most. A chunk waits while dictation
   captures or transcribes, and the engine holds one that arrives during a live
   stream until the stream ends, so it never interrupts one.
-- Scrawl's spoken cues need measured word times. Until Parakeet's word times
-  are compared with SpeechAnalyzer's on recorded captures, the engine's Apple
-  helper path stays selectable (`hex settings set capture.transcriber apple`).
+- Scrawl's spoken cues need measured word times. Compared with Apple's
+  SpeechAnalyzer on 36 real captures (Oct 25), Parakeet Unified English's word
+  times run late: starts by a median 280 ms (about 520 ms after a pause), ends
+  by 180 ms, with no drift and no cost at the 30 s seams; raw, 53% of cue words
+  are over 300 ms late. `HexTranscriber` subtracts the lag fitted on half the
+  captures (`WORD_LAGS` in `capture_host`: starts 280 ms, or 520 ms when the
+  gap since the previous word's end is at least 250 ms; ends 195 ms), which
+  puts 96% of the other half's cue words within 300 ms of Apple. The lag is
+  keyed to the pinned model file: another model, or a new pin, keeps raw times
+  until it is measured again. The Apple helper path stays selectable
+  (`hex settings set capture.transcriber apple`).
 
 ## Interface
 
@@ -338,7 +346,8 @@ simulation, reprocess) mount under `hex dev capture` in debug builds.
    scenes.
 5. Router in-process, the Scrawl pane, import, and coexistence (the pane,
    import, and coexistence are built).
-6. Compare Parakeet and SpeechAnalyzer word times on recorded captures.
+6. Compare Parakeet and SpeechAnalyzer word times on recorded captures. Done
+   (Oct 25): Parakeet's lag is corrected in `capture_host`.
 
 The Oct 18 `experiment/scrawl` branch was a copy that drifted; `feat/capture`
 supersedes its capture sink and word transcriber, so it can be deleted.

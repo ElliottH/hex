@@ -48,7 +48,9 @@ use crate::control::{
 };
 use crate::dictation::StreamingResampler;
 use crate::dictation_audio::{CaptureAudio, CaptureSinkClosed, DictationAudio};
+use crate::transcription::TranscriptSegment;
 use crate::transcription_engine::TranscriptionEngine;
+use crate::transcription_models::{ModelRuntime, TranscriptionModelId};
 
 /// The sink's capacity in microphone chunks (about 10 ms each): seconds of
 /// slack before a stalled collector starts dropping audio as a gap.
@@ -295,26 +297,91 @@ impl Transcriber for HexTranscriber {
             crate::dictation::try_resample_for_parakeet(&audio.samples, audio.sample_rate)
                 .map_err(|error| anyhow::anyhow!(error))?
         };
-        let transcript = crate::parakeet::transcribe_with_words(engine, samples)
-            .map_err(|error| anyhow::anyhow!("{error:#}"))?;
         let (_, selection) = crate::app_settings::transcription_selection();
-        let ms = |value: i64| value.max(0) as u64;
+        let transcript = crate::parakeet::transcribe_with_words(engine, &selection, samples)
+            .map_err(|error| anyhow::anyhow!("{error:#}"))?;
         Ok(Some(TranscriptData {
             source: "hex".into(),
             model: Some(selection.model.as_str().into()),
             text: transcript.text,
-            words: transcript
-                .words
-                .into_iter()
-                .map(|word| WordTiming {
-                    t0: ms(word.start_ms),
-                    t1: ms(word.end_ms),
-                    text: word.text,
-                })
-                .collect(),
+            words: corrected_words(transcript.words, word_lag(selection.model)),
             ..TranscriptData::default()
         }))
     }
+}
+
+/// How late a model's word times run, in ms: the median against Apple's
+/// SpeechAnalyzer on 36 real captures (fitted on half, checked on the
+/// other half; no drift, and the 30 s chunk seams cost nothing). Starts run
+/// later after a pause.
+#[derive(Debug, PartialEq)]
+struct WordLag {
+    start: i64,
+    /// For a word whose gap since the previous word's end is at least
+    /// `pause`, and for the first word.
+    start_after_pause: i64,
+    pause: i64,
+    end: i64,
+}
+
+/// Each measured model with the pinned file it was measured on. A model or
+/// file without an entry keeps its raw times: changing the pin drops the
+/// correction until it is measured again (a test fails to say so).
+const WORD_LAGS: &[(TranscriptionModelId, &str, WordLag)] = &[(
+    TranscriptionModelId::ParakeetUnifiedEnglish,
+    // parakeet-unified-en-0.6b-Q8_0.gguf, measured 2026-10-25.
+    "4b50b6dd862bf6e346929aaf4f5eaacec003bfa3f56462d6c874b41ef2f38795",
+    WordLag {
+        start: 280,
+        start_after_pause: 520,
+        pause: 250,
+        end: 195,
+    },
+)];
+
+fn word_lag(model: TranscriptionModelId) -> Option<&'static WordLag> {
+    let ModelRuntime::Gguf(artifact) = crate::transcription_models::definition(model).runtime
+    else {
+        return None;
+    };
+    WORD_LAGS
+        .iter()
+        .find(|(id, sha256, _)| *id == model && *sha256 == artifact.sha256)
+        .map(|(_, _, lag)| lag)
+}
+
+/// The model's words in ms from the clip's start, moved earlier by `lag`.
+/// Pauses are judged on the raw times. Times stay at 0 or later, each word
+/// ends no earlier than it starts, and starts and ends never go backwards.
+/// Neighbours may overlap a little, as Apple's times do: starts move further
+/// than ends.
+fn corrected_words(words: Vec<TranscriptSegment>, lag: Option<&WordLag>) -> Vec<WordTiming> {
+    let mut previous_end: Option<i64> = None;
+    let (mut floor_t0, mut floor_t1) = (0, 0);
+    words
+        .into_iter()
+        .map(|word| {
+            let (mut t0, mut t1) = (word.start_ms, word.end_ms);
+            if let Some(lag) = lag {
+                let paused = previous_end.is_none_or(|end| t0 - end >= lag.pause);
+                previous_end = Some(t1);
+                t0 -= if paused {
+                    lag.start_after_pause
+                } else {
+                    lag.start
+                };
+                t1 -= lag.end;
+            }
+            let t0 = t0.max(floor_t0);
+            let t1 = t1.max(t0).max(floor_t1);
+            (floor_t0, floor_t1) = (t0, t1);
+            WordTiming {
+                t0: t0 as u64,
+                t1: t1 as u64,
+                text: word.text,
+            }
+        })
+        .collect()
 }
 
 /// Creates `dir` and missing parents owner-only, and makes `dir` itself
@@ -2570,5 +2637,66 @@ mod tests {
         drop(watch);
         outcomes.started(one, since);
         assert!(feed.watchers.lock().unwrap().is_empty());
+    }
+
+    fn words(times: &[(&str, i64, i64)]) -> Vec<TranscriptSegment> {
+        times
+            .iter()
+            .map(|&(text, start_ms, end_ms)| TranscriptSegment {
+                start_ms,
+                end_ms,
+                text: text.into(),
+            })
+            .collect()
+    }
+
+    fn times(words: &[WordTiming]) -> Vec<(u64, u64)> {
+        words.iter().map(|word| (word.t0, word.t1)).collect()
+    }
+
+    #[test]
+    fn word_times_move_earlier_by_the_measured_lag() {
+        let lag = word_lag(TranscriptionModelId::ParakeetUnifiedEnglish);
+        let corrected = corrected_words(
+            words(&[
+                // The first word counts as after a pause.
+                ("one", 600, 900),
+                ("two", 900, 1_200),
+                // 400 ms since "two" ended: a pause.
+                ("three", 1_600, 1_900),
+                // 200 ms: not a pause.
+                ("four", 2_100, 2_150),
+            ]),
+            lag,
+        );
+        assert_eq!(
+            times(&corrected),
+            [(80, 705), (620, 1_005), (1_080, 1_705), (1_820, 1_955)]
+        );
+        assert_eq!(corrected[2].text, "three");
+
+        // Times stay at 0 or later and never go backwards.
+        let clamped = corrected_words(
+            words(&[("a", 100, 150), ("b", 1_000, 1_300), ("c", 900, 950)]),
+            lag,
+        );
+        assert_eq!(times(&clamped), [(0, 0), (480, 1_105), (620, 1_105)]);
+    }
+
+    #[test]
+    fn only_a_measured_model_and_file_is_corrected() {
+        for (model, _, lag) in WORD_LAGS {
+            assert_eq!(
+                word_lag(*model),
+                Some(lag),
+                "{} has a new pinned file: measure its word lag again \
+                 (docs/plans/capture-in-hex.md) before keeping the correction",
+                model.as_str()
+            );
+        }
+        assert_eq!(word_lag(TranscriptionModelId::ParakeetV3), None);
+        assert_eq!(word_lag(TranscriptionModelId::AppleSpeech), None);
+        let raw = corrected_words(words(&[("one", 600, 900), ("two", 900, 1_200)]), None);
+        assert_eq!(times(&raw), [(600, 900), (900, 1_200)]);
     }
 }
