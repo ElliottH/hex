@@ -6,7 +6,7 @@ use rune::{El, TextEdit, edit_access, row};
 use rune_kit::{ControlSize, IconButton, IconButtonVariant, TextInput};
 
 use super::Ui;
-use super::controls::{InstantHover, Paint, note, section, setting_row};
+use super::controls::{Paint, note, section, setting_row};
 use super::lists::{remove_button, small_button};
 use crate::desktop_i18n::tr;
 use crate::vocabulary::{self, VocabularyEntry};
@@ -90,7 +90,6 @@ pub(super) fn section_view(ui: &Ui, p: Paint) -> El {
         .label(tr("Add term"))
         .on_press(add_row)
         .build(p.k)
-        .instant_hover()
         .key("add-term");
     let actions = row()
         .key("actions")
@@ -130,7 +129,6 @@ pub(super) fn section_view(ui: &Ui, p: Paint) -> El {
                             &mut ui.vocabulary.rows[index].0
                         }))
                         .build(p.k)
-                        .instant_hover()
                         .key("term"),
                 )
                 .child(
@@ -141,7 +139,6 @@ pub(super) fn section_view(ui: &Ui, p: Paint) -> El {
                             &mut ui.vocabulary.rows[index].1
                         }))
                         .build(p.k)
-                        .instant_hover()
                         .key("sounds-like")
                         .grow(1.0)
                         .shrink(),

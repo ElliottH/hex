@@ -53,8 +53,11 @@ either appearance.
    a hover or press fill; only the controls inside it react (a row that
    toggles is a `pressable_row`). Hover fills belong to things that are one
    clickable target: list rows, picker rows, sidebar items. Every `.hover(…)`
-   is followed by `.instant_hover()`, and so is a kit control's root, so hover
-   switches with no fade either way. Press and selection motion stay as the
+   needs nothing extra: the window's root sets
+   `.hover_motion_within(Anim::INSTANT, Anim::INSTANT)` (and each overlay
+   window's root does too), so every hover below it, kit controls and popups
+   included, switches with no fade either way. Never give an element its own
+   `hover_motion`. Press and selection motion stay as the
    kit draws them.
 6. **Verify by looking.** Render every view you touched with a `--snap` scene
    in light and dark (see [Verification](#verification)).

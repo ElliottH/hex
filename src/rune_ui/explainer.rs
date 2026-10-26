@@ -17,8 +17,8 @@ use rune::{
 
 use super::Ui;
 use super::controls::{
-    ButtonKind, DESCRIPTION, InstantHover, KEY_GAP, KeySize, Paint, TRAY_PADDING, button, folds,
-    key_tray, keycap, pressable_row, row_switch,
+    ButtonKind, DESCRIPTION, KEY_GAP, KeySize, Paint, TRAY_PADDING, button, folds, key_tray,
+    keycap, pressable_row, row_switch,
 };
 use crate::desktop_i18n::tr;
 use crate::dictation::ShortcutMode;
@@ -414,7 +414,6 @@ fn card(ui: &Ui, p: Paint, mode: ShortcutMode, title: &str, caption: &str, visua
             },
         )
         .hover(c.hover)
-        .instant_hover()
         .press(c.pressed)
         .on_press(move |ui: &mut Ui| pick(ui, mode))
         .child(visual)

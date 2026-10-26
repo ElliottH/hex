@@ -569,6 +569,45 @@ fn hover_leaves_at_once() {
     }
 }
 
+/// Every hover in the tree, kit controls' inner tracks included, is at rest
+/// or fully on one short frame after the pointer moves.
+fn assert_hover_is_binary(rt: &Runtime<Ui>, what: &str) {
+    for e in rt.elements().into_iter().filter(|e| !e.exiting) {
+        assert!(
+            e.hover == 0.0 || e.hover == 1.0,
+            "{what}: {} is fading: {}",
+            e.path,
+            e.hover
+        );
+    }
+}
+
+#[test]
+fn segments_and_switch_tracks_hover_at_once() {
+    let mut rt = runtime("portal", true, PANE_SIZE);
+    let targets = [
+        rt.find("shortcut-mode-control"),
+        rt.find("double-tap/switch"),
+    ];
+    for (target, name) in targets.into_iter().zip(["segment", "switch"]) {
+        let (x, y) = target.unwrap_or_else(|| panic!("no {name}"));
+        rt.pointer_move(x, y);
+        rt.frame(1.0 / 120.0);
+        assert_hover_is_binary(&rt, name);
+        assert!(
+            rt.elements().iter().any(|e| e.hover == 1.0),
+            "{name} hovers at once"
+        );
+        rt.pointer_move(x, y + 400.0);
+        rt.frame(1.0 / 120.0);
+        assert_hover_is_binary(&rt, name);
+        assert!(
+            rt.elements().iter().all(|e| e.hover == 0.0),
+            "{name} stops hovering at once"
+        );
+    }
+}
+
 #[test]
 fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
     let mut rt = runtime("voice-action-off", true, PANE_SIZE);

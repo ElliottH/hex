@@ -40,7 +40,9 @@ mod voice_action;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rune::{AppSpec, Cx, El, Icon, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, text};
+use rune::{
+    Anim, AppSpec, Cx, El, Icon, ScrollSpec, TextEdit, Tx, Waker, col, el, icon, row, text,
+};
 
 use crate::app_settings::{AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, ModifierSide};
 use crate::desktop_host::{
@@ -49,7 +51,7 @@ use crate::desktop_host::{
 };
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::transcription_models::TranscriptionModelId;
-use controls::{InstantHover, Paint};
+use controls::Paint;
 use host::{Backend, Request, ShortcutTarget};
 use settings::Capture;
 
@@ -1041,6 +1043,7 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         .key("window")
         .role("window")
         .fill(p.k.c.bg_deep)
+        .hover_motion_within(Anim::INSTANT, Anim::INSTANT)
         .child(sidebar(ui, p))
         .child(panel);
     if let Some(modal) = picker::modal(ui, p) {
@@ -1193,7 +1196,6 @@ fn update_status(ui: &Ui, p: Paint) -> Option<El> {
                 .center_y()
                 .radius(p.k.radius.sm)
                 .hover(c.hover)
-                .instant_hover()
                 .press(c.pressed)
                 .focusable(true)
                 .focus_ring(2.0, -2.0, c.border_focus)
@@ -1238,7 +1240,6 @@ fn nav_slot(p: Paint, pane: Pane, on: bool, above: f32, below: f32) -> El {
         .pt(above)
         .pb(below)
         .hover_group()
-        .instant_hover()
         .on_drag(move |ui: &mut Ui, d: &mut rune::Drag, tx: &mut Tx| {
             select_on_down(ui, d, tx, pane)
         })
@@ -1310,7 +1311,6 @@ fn quit_item(p: Paint) -> El {
         .center_y()
         .radius(p.k.radius.sm)
         .hover(c.hover)
-        .instant_hover()
         .press(c.pressed)
         .on_press(|ui: &mut Ui| ui.quit())
         .focusable(true)
