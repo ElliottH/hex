@@ -276,10 +276,13 @@ Record (offer, menu bar "Record Meeting", Meetings pane, or voice command)
      │   leaving -> eases back to compact (a held press keeps it open)
      ├── Drag -> follows the pointer; release -> snaps to the corner nearest
      │   its centre and saves recording_indicator_corner (window settings too)
-     ├── Copy new (N) -> copies the in-call turns not yet copied or pasted
+     ├── Copy new (N) -> copies the turns not yet copied or pasted, through
+     │   the click (see meetings.copy-through-now)
      │   ├── Shares Option-Control-V's cursor: either one advances both
-     │   ├── N = speaker turns waiting; disabled at 0; "Copied" for 1.5 s
-     │   └── Copies exactly the turns counted (the ticker's last read)
+     │   ├── N = speaker turns the ticker has seen; always enabled while
+     │   │   recording, since the latest speech may not be counted yet
+     │   ├── "Transcribing…" (disabled) while it waits, then copies; "Copied" for 1.5 s
+     │   └── The wait runs on its own thread, never on the main thread
      ├── Copy all -> the in-call transcript so far as speaker-turn Markdown;
      │   disabled until there is text
      │   └── Both read the Parakeet in-call transcript (TranscriptReader) once a
@@ -331,9 +334,10 @@ call", ready (15 s, Copy / Reveal, notes refresh) and a recording capsule
 (title, elapsed time, Copy new, Copy all, Open, Stop, in the configured
 corner, compact until hovered, dragged between corners) are ported. Copy new
 and Copy all are checked by
-`the_recording_capsule_copies_the_in_call_transcript` and rendered by
-`capsule_snapshots` (`recording-empty`, `-live`, `-copied`, `-open`,
-`-left`); they have not been clicked on a real Mac. Hover and the corner snap
+`the_recording_capsule_copies_the_in_call_transcript` and
+`copy_new_copies_the_transcript_read_through_the_click`, and rendered by
+`capsule_snapshots` (`recording-empty`, `-live`, `-transcribing`, `-copied`,
+`-open`, `-left`); they have not been clicked on a real Mac. Hover and the corner snap
 are checked by `the_recording_capsule_rests_compact_and_opens_under_the_pointer`,
 `dragging_the_recording_capsule_moves_it_and_snaps_to_a_corner`, and
 `a_released_capsule_snaps_to_the_corner_nearest_its_centre`; neither has been
@@ -370,7 +374,24 @@ While recording                                      // meetings.rolling
      │   incomplete; rebuilt from its WAV after Stop
      └── Model failure -> transcript.rolling.error.txt -> "Live transcript unavailable."
   -> Every in-call view reads it: Meetings pane, `hex meetings show`, MCP,
-     provisional titles, Option-Control-V (TranscriptReader)
+     provisional titles (TranscriptReader)
+
+Copy new or Option-Control-V while recording       // meetings.copy-through-now
+  -> The capture writer sends its partial blocks, then the request, in
+     capture order, so the request covers every sample received
+  -> The rolling worker answers it before any later audio:
+     ├── Queued chunks as usual (published to the snapshot)
+     ├── Each track's audio not yet in a chunk (no 6 s minimum), into a copy
+     │   of its transcript: the snapshot and later chunks are unaffected
+     ├── Waits for dictation like every meeting chunk; never a second model
+     └── The same echo and You-waits-for-Them rules as the snapshot
+  -> Each track remembers where the copy ended; its sentence ends there, so
+     the copied part and the rest of it publish as separate entries and the
+     paste cursor neither repeats nor drops either
+  -> Up to 3 s (COPY_TRANSCRIBE_WAIT): usually under 1 s; past that, or with
+     dictation holding the model, copies the in-call transcript as it is and
+     logs a warning
+  -> After Stop, or in another process: the in-call or final transcript
 
 Stop & Transcribe
   -> Flush tails -> finish pending chunks           // usually seconds
@@ -539,6 +560,12 @@ Other checks:
 `a_sentence_across_a_hard_cut_keeps_every_word`,
 `rolling_publishes_only_entries_a_later_seam_cannot_replace`,
 `a_capture_gap_restarts_the_track_after_it_instead_of_dropping_it`,
+`a_copy_includes_speech_up_to_the_click`,
+`repeated_copies_neither_repeat_nor_drop_words_as_later_chunks_overlap_them`,
+`a_copy_that_runs_out_of_time_gets_no_reply`,
+`a_copy_waits_out_dictation_and_a_preempted_chunk`,
+`a_copy_reaches_only_the_recording_this_process_runs`,
+`the_feed_forwards_a_copy_after_the_audio_before_it`,
 `a_backlog_skips_the_oldest_audio_and_marks_the_track_for_rebuilding`,
 `silent_chunks_are_not_transcribed`,
 `speaker_echo_of_remote_speech_is_dropped`, `word_level_echo_is_dropped_as_one_utterance`,
@@ -571,8 +598,11 @@ Final publication                                   // meetings.output
 Transcript ready capsule (15 s) -> Copy (Markdown or speaker turns fallback) / Reveal
 Meetings pane -> Row Copy (completed rows), detail Copy transcript, Reveal Markdown (or Reveal Files when none)
 Menu bar (idle) -> Copy Last Meeting Transcript
-Option-Control-V -> `MeetingPasteCursor` in `meeting.rs` over the rolling transcript
-├── Pastes settled turns added since the last successful paste
+Option-Control-V -> `MeetingPasteCursor` in `meeting.rs` over the transcript
+│   through the press (meetings.copy-through-now)
+├── Pastes turns added since the last successful paste
+├── Runs in order with dictation output: a dictation finished during its
+│   wait (at most 3 s) pastes after it
 ├── Remembers, per source, the capture time spans it pasted (spans within 1.5 s
 │   merge); an entry is new when its midpoint is outside them, so nothing
 │   repeats or drops when the final transcript replaces rolling after Stop, and
@@ -968,6 +998,10 @@ Granola import: see [granola-import.md](../plans/granola-import.md).
   falls more than 120 s behind skips audio until Stop rebuilds it.
 - The recording capsule's Copy new / Copy all are unverified on a real Mac
   screen; its count can trail the transcript by up to a second.
+- Copying through the click is checked with a fake model only; its real-Mac
+  latency and how often the 3 s wait runs out are unmeasured. The copy waits
+  for the next audio packet to arrive, so with both sources stopped it runs
+  out of time and copies the in-call transcript.
 - The Meetings pane is verified by Rune goldens rendered offscreen (on Linux
   and on hailmary's Metal), not on a Mac screen; the capsules have no golden.
 - Echo thresholds are tuned on two speaker-mode calls (2026-10-15 and

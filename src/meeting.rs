@@ -468,6 +468,7 @@ pub fn record(
         let mut rolling =
             transcript::Rolling::start(meeting_dir.clone(), transcription_selection.clone());
         let rolling_feed = rolling.feed();
+        let flush_registration = transcript::register_flusher(&manifest.id, rolling.flusher());
         let writer_dir = meeting_dir.clone();
         let writer = thread::spawn(move || write_tracks(&writer_dir, receiver, rolling_feed));
         let cleanup_failed_setup =
@@ -532,6 +533,7 @@ pub fn record(
         drop(titles);
         drop(live_chapters);
         keep_rename(&meeting_dir, &mut manifest);
+        drop(flush_registration);
         drop(system_capture);
         drop(microphone_capture);
         drop(sender);
@@ -1459,14 +1461,40 @@ pub fn format_meeting_delta(entries: &[TranscriptEntry]) -> Result<String> {
         .join("\n\n"))
 }
 
+/// How long a copy of new turns waits for the recording's audio up to the
+/// click to be transcribed. That is the next audio packet (milliseconds), a
+/// meeting chunk already running (well under a second on Metal), and each
+/// source's last few seconds (a few hundred milliseconds each), so it
+/// usually takes under a second; three seconds leaves room for a slower Mac
+/// or a short backlog while still feeling like a response to the click. A
+/// dictation in progress keeps the model, so the copy may run out of time
+/// instead.
+pub const COPY_TRANSCRIBE_WAIT: Duration = Duration::from_secs(3);
+
+/// What a copy of new turns reads for meeting `id`: while this process
+/// records it, the transcript through the click, waiting up to
+/// [`COPY_TRANSCRIBE_WAIT`] for it; past that, or otherwise, the in-call
+/// or final transcript as it is.
+pub fn entries_for_copy(id: &str) -> Result<Vec<TranscriptEntry>> {
+    match transcript::transcribe_up_to_now(id, COPY_TRANSCRIBE_WAIT) {
+        transcript::Flushed::Fresh(entries) => return Ok(entries),
+        transcript::Flushed::TimedOut => tracing::warn!(
+            meeting = id,
+            "the latest audio was not transcribed in time; copying what is ready"
+        ),
+        transcript::Flushed::NotRecording => {}
+    }
+    TranscriptReader::default().read(id)
+}
+
 /// Consumes new turns for `id` using the shared cursor, advancing only if
-/// `commit_output` succeeds. While recording they come from the rolling
-/// transcript, afterwards from the final one.
+/// `commit_output` succeeds. While recording they come from the transcript
+/// through now ([`entries_for_copy`]), afterwards from the final one.
 pub fn consume_delta_for_id(
     id: &str,
     commit_output: impl FnOnce(&str) -> Result<()>,
 ) -> Result<String> {
-    let entries = TranscriptReader::default().read(id)?;
+    let entries = entries_for_copy(id)?;
     shared_paste_cursor()
         .lock()
         .unwrap_or_else(|error| error.into_inner())

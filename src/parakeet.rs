@@ -955,6 +955,19 @@ impl Drop for DictationInference {
     }
 }
 
+/// Makes [`dictation_busy`] hold until dropped, as a dictation would.
+#[cfg(test)]
+pub(crate) struct DictationBusyForTest {
+    _busy: DictationInference,
+}
+
+#[cfg(test)]
+pub(crate) fn dictation_busy_for_test() -> DictationBusyForTest {
+    DictationBusyForTest {
+        _busy: DictationInference::begin(),
+    }
+}
+
 /// Whether dictation is capturing or running inference. Meeting
 /// transcription starts no chunk while this holds. A capture counts from its
 /// press: a chunk already running then finishes during the hold threshold
