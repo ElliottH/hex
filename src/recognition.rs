@@ -968,16 +968,16 @@ pub fn listen(
                 )?;
             }
         }
+        // The capture shortcut ignores keys while shortcuts are suspended or
+        // a programmatic dictation holds them, so their releases go unseen.
+        #[cfg(hex_capture)]
+        if hotkey_capture_suspended || programmatic.is_some() {
+            capture_shortcut.reset();
+        }
         while let Ok(observed) = input_monitor.events.try_recv() {
             let _acknowledge = input_monitor.acknowledge_after(observed);
             let input_event = observed.event;
             let capture_at = observed.capture_at;
-            #[cfg(hex_capture)]
-            if capture_shortcut.pressed(input_event, crate::app_settings::runtime_hotkeys())
-                && let Some(host) = capture_host.as_mut()
-            {
-                host.toggle(capture_at, &input);
-            }
             if programmatic.is_some() {
                 hotkeys.track_key_state(input_event, capture_at);
             }
@@ -999,6 +999,12 @@ pub fn listen(
             if hotkey_capture_suspended {
                 continue;
             }
+            #[cfg(hex_capture)]
+            if capture_shortcut.pressed(input_event, crate::app_settings::runtime_hotkeys())
+                && let Some(host) = capture_host.as_mut()
+            {
+                host.toggle(capture_at, &input);
+            }
             if voice.is_some() && input_event.is_escape_down() {
                 voice = None;
                 end_capture(
@@ -1018,7 +1024,7 @@ pub fn listen(
             if !hotkeys.any_recording()
                 && input_event.is_escape_down()
                 && let Some(host) = capture_host.as_mut()
-                && host.recording_since().is_some()
+                && host.recording_since(&input).is_some()
             {
                 host.control(crate::control::ScrawlCaptureAction::Cancel, &input);
                 feedback::play(Tone::Cancel);
@@ -1240,8 +1246,8 @@ pub fn listen(
         }
         #[cfg(hex_capture)]
         let capture_recording = capture_host
-            .as_ref()
-            .is_some_and(|host| host.recording_since().is_some());
+            .as_mut()
+            .is_some_and(|host| host.recording_since(&input).is_some());
         #[cfg(not(hex_capture))]
         let capture_recording = false;
         input_monitor.set_escape_cancels(

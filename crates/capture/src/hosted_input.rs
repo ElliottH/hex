@@ -81,11 +81,12 @@ impl HostedInput {
         Self::default()
     }
 
-    /// For a capture started by a chord that holds `⇧` (such as `⌥⇧S`): `⇧` must come up once
-    /// before it draws ink.
-    pub fn after_shortcut() -> Self {
+    /// For a capture that starts with `⇧` already held, as when a chord such as `⌥⇧S` started
+    /// it: that `⇧` must come up once before it draws ink. A host passes the live session state,
+    /// so a capture started without `⇧` held inks from its first stroke.
+    pub fn with_shift_held(held: bool) -> Self {
         Self {
-            await_shift_release: true,
+            await_shift_release: held,
         }
     }
 
@@ -99,7 +100,11 @@ impl HostedInput {
                 y,
                 modifiers,
             } => {
-                let shift_only = modifiers.shift_only();
+                let shift_only = pure_shift_state(
+                    modifiers.shift,
+                    modifiers.others(),
+                    &mut self.await_shift_release,
+                );
                 Some(if down {
                     InputEvent::ButtonDown {
                         t_ms,
@@ -267,10 +272,41 @@ mod tests {
     #[test]
     fn a_capture_started_by_its_shortcut_waits_for_shift_to_come_up() {
         // The first event a host sees may already be ⌥ coming up with ⇧ still held.
-        let mut input = HostedInput::after_shortcut();
+        let mut input = HostedInput::with_shift_held(true);
         assert!(!moved(&mut input, SHIFT));
         assert!(!moved(&mut input, Modifiers::default()));
         assert!(moved(&mut input, SHIFT));
+    }
+
+    #[test]
+    fn a_capture_started_without_shift_held_inks_from_the_first_stroke() {
+        let mut input = HostedInput::with_shift_held(false);
+        assert!(moved(&mut input, SHIFT));
+    }
+
+    #[test]
+    fn a_click_with_the_chords_shift_still_held_is_no_pin() {
+        let mut input = HostedInput::with_shift_held(true);
+        let click = |input: &mut HostedInput, down, modifiers| match input.translate(
+            1,
+            HostInput::Button {
+                down,
+                right: false,
+                x: 0.0,
+                y: 0.0,
+                modifiers,
+            },
+        ) {
+            Some(
+                InputEvent::ButtonDown { shift_only, .. } | InputEvent::ButtonUp { shift_only, .. },
+            ) => shift_only,
+            other => panic!("{other:?}"),
+        };
+        assert!(!click(&mut input, true, SHIFT));
+        assert!(!click(&mut input, false, SHIFT));
+        // ⇧ comes up and goes down again: now it pins.
+        assert!(!click(&mut input, true, Modifiers::default()));
+        assert!(click(&mut input, true, SHIFT));
     }
 
     #[test]

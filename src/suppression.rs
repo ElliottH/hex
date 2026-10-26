@@ -655,9 +655,15 @@ unsafe extern "C" fn event_callback(
         return event;
     }
     #[cfg(hex_capture)]
-    if crate::capture_host::wants_input() && report_capture_input(event_type, event) {
-        return event;
-    }
+    let capture_key = if crate::capture_host::wants_input() {
+        match report_capture_input(event_type, event) {
+            CaptureTap::Only => return event,
+            CaptureTap::Shared => None,
+            CaptureTap::Key(key) => Some(key),
+        }
+    } else {
+        None
+    };
     let input = match event_type {
         EVENT_FLAGS_CHANGED => {
             // SAFETY: CoreGraphics supplied a valid event to this callback.
@@ -700,14 +706,33 @@ unsafe extern "C" fn event_callback(
         context.escape_cancels.load(Ordering::Acquire),
     );
     context.activity.observe(input, suppress);
+    // A key Hex consumed (its shortcuts, Escape) was never the app's chord.
+    #[cfg(hex_capture)]
+    if let Some(key) = capture_key
+        && !suppress
+    {
+        crate::capture_host::report_input(capture_at, key);
+    }
     if suppress { ptr::null_mut() } else { event }
 }
 
-/// Reports an event to a recording capture (`capture_host::report_input`)
-/// and whether it is one only a capture wants, which the listener never
-/// sees. Mouse downs, modifier changes, and keys also go on to the listener.
+/// What the session tap does with an event while a capture records.
 #[cfg(hex_capture)]
-fn report_capture_input(event_type: u32, event: EventRef) -> bool {
+enum CaptureTap {
+    /// Reported; only a capture wants it, so the listener never sees it.
+    Only,
+    /// Reported, and it goes on to the listener too (mouse downs, modifier
+    /// changes) or isn't a capture's (key ups, other buttons).
+    Shared,
+    /// A fresh key press: reported after suppression, only if it reaches
+    /// the app, and never while a shortcut is being recorded.
+    Key(crate::capture_host::Tapped),
+}
+
+/// Reports a pointer or modifier event to a recording capture
+/// (`capture_host::report_input`) and says what else happens to the event.
+#[cfg(hex_capture)]
+fn report_capture_input(event_type: u32, event: EventRef) -> CaptureTap {
     use crate::capture_host::{Tapped, modifiers, report_input};
     use scrawl_capture::hosted_input::HostInput;
     // SAFETY: CoreGraphics supplied a valid event to this callback.
@@ -765,22 +790,21 @@ fn report_capture_input(event_type: u32, event: EventRef) -> bool {
         EVENT_KEY_DOWN
             if unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_AUTOREPEAT) } == 0 =>
         {
-            (
-                Tapped::Key {
-                    // SAFETY: CoreGraphics supplied a valid keyboard event.
-                    code: unsafe {
-                        CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) as u16
-                    },
-                    flags,
-                },
-                false,
-            )
+            return CaptureTap::Key(Tapped::Key {
+                // SAFETY: CoreGraphics supplied a valid keyboard event.
+                code: unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) as u16 },
+                flags,
+            });
         }
-        EVENT_OTHER_MOUSE_DOWN | EVENT_KEY_DOWN | EVENT_KEY_UP => return false,
-        _ => return true,
+        EVENT_OTHER_MOUSE_DOWN | EVENT_KEY_DOWN | EVENT_KEY_UP => return CaptureTap::Shared,
+        _ => return CaptureTap::Only,
     };
     report_input(at, input);
-    capture_only
+    if capture_only {
+        CaptureTap::Only
+    } else {
+        CaptureTap::Shared
+    }
 }
 
 fn send_input(context: &EventTapContext, event: InputEvent, capture_at: CaptureInstant) -> bool {
@@ -1581,11 +1605,18 @@ mod tests {
 
     // Drive the real callback without installing a tap or posting global input.
     fn callback_input(timestamps_and_events: &[(u64, InputEvent)]) -> Vec<ObservedInputEvent> {
+        callback_input_with(false, timestamps_and_events)
+    }
+
+    fn callback_input_with(
+        escape_cancels: bool,
+        timestamps_and_events: &[(u64, InputEvent)],
+    ) -> Vec<ObservedInputEvent> {
         let (sender, receiver) = mpsc::channel();
         let mut context = EventTapContext {
             sender,
             activity: InputActivity::default(),
-            escape_cancels: Arc::new(AtomicBool::new(false)),
+            escape_cancels: Arc::new(AtomicBool::new(escape_cancels)),
             key_tap: AtomicPtr::new(ptr::null_mut()),
             observation_tap: AtomicPtr::new(ptr::null_mut()),
             physical_tap: AtomicPtr::new(ptr::null_mut()),
@@ -1630,6 +1661,46 @@ mod tests {
             }
         }
         receiver.try_iter().collect()
+    }
+
+    #[cfg(hex_capture)]
+    #[test]
+    fn a_capture_logs_only_keys_that_reach_the_app() {
+        const ESCAPE: u16 = 53;
+        const K: u16 = 40;
+        let now = capture_time().as_nanos();
+        let tapped = crate::capture_host::tapped_while(|| {
+            callback_input_with(
+                true,
+                &[
+                    // Escape cancels the capture: Hex consumes it.
+                    (
+                        now,
+                        InputEvent::Key {
+                            code: ESCAPE,
+                            down: true,
+                            flags: 0,
+                        },
+                    ),
+                    // ⌘K goes to the app, so the capture logs it.
+                    (
+                        now + 1,
+                        InputEvent::Key {
+                            code: K,
+                            down: true,
+                            flags: COMMAND_KEY_MASK,
+                        },
+                    ),
+                ],
+            );
+        });
+        assert!(
+            matches!(
+                tapped.as_slice(),
+                [crate::capture_host::Tapped::Key { code: K, .. }]
+            ),
+            "{tapped:?}"
+        );
     }
 
     #[test]

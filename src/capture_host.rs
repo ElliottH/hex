@@ -877,7 +877,11 @@ impl CaptureHost {
                     stopped.shutdown(audio);
                 }
             }
-            _ => {}
+            (true, true) => {
+                if let Some(host) = host {
+                    host.reap(CaptureInstant::now(), audio);
+                }
+            }
         }
     }
 
@@ -905,15 +909,18 @@ impl CaptureHost {
         })
     }
 
-    /// Whether a capture is recording, and since when.
-    pub fn recording_since(&self) -> Option<CaptureInstant> {
+    /// Whether a capture is recording, and since when. A capture whose
+    /// engine failed to start is ended first, so it never holds Escape or
+    /// turns the next shortcut press into a stop.
+    pub fn recording_since(&mut self, audio: &impl AudioTimeline) -> Option<CaptureInstant> {
+        self.reap(CaptureInstant::now(), audio);
         self.active.as_ref().map(|active| active.t0)
     }
 
     /// The capture shortcut: starts a capture, or stops the recording one
     /// unless it started within [`SHORTCUT_DEBOUNCE`].
     pub fn toggle(&mut self, at: CaptureInstant, audio: &impl AudioTimeline) -> ControlReply {
-        let action = match self.recording_since() {
+        let action = match self.recording_since(audio) {
             None => ScrawlCaptureAction::Start,
             Some(t0) if at.checked_duration_since(t0).unwrap_or_default() < SHORTCUT_DEBOUNCE => {
                 return self.report(false, None);
@@ -1198,15 +1205,40 @@ static TAP_RECORDING: AtomicBool = AtomicBool::new(false);
 static TAP_INPUT: OnceLock<SyncSender<(CaptureInstant, Tapped)>> = OnceLock::new();
 static DROPPED_INPUT: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(test)]
+thread_local! {
+    static TEST_TAP: std::cell::RefCell<Option<Vec<Tapped>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` on this thread as if a capture recorded, and returns what the
+/// tap reported to it.
+#[cfg(test)]
+pub fn tapped_while(f: impl FnOnce()) -> Vec<Tapped> {
+    TEST_TAP.set(Some(Vec::new()));
+    f();
+    TEST_TAP.take().unwrap_or_default()
+}
+
 /// Whether the session tap should report pointer and key input: only while
 /// a capture records.
 pub fn wants_input() -> bool {
+    #[cfg(test)]
+    if TEST_TAP.with_borrow(Option::is_some) {
+        return true;
+    }
     TAP_RECORDING.load(Ordering::Acquire)
 }
 
 /// Called on the event tap's thread; never blocks. A full queue drops the
 /// event (counted, logged once the capture stops).
 pub fn report_input(at: CaptureInstant, input: Tapped) {
+    #[cfg(test)]
+    if TEST_TAP
+        .with_borrow_mut(|tapped| tapped.as_mut().map(|tapped| tapped.push(input.clone())))
+        .is_some()
+    {
+        return;
+    }
     if !wants_input() {
         return;
     }
@@ -1295,7 +1327,11 @@ impl LiveInput {
             bundle: bundle.to_path_buf(),
             sink,
             t0,
-            rules: HostedInput::after_shortcut(),
+            // ⇧ held now is left from the chord that started it (⌥⇧S) or
+            // held before it; it inks only once it came up.
+            rules: HostedInput::with_shift_held(
+                modifiers(scrawl_capture::capture::modifier_flags()).shift,
+            ),
         });
         TAP_RECORDING.store(true, Ordering::Release);
     }
@@ -1387,6 +1423,12 @@ impl CaptureShortcut {
             }
             _ => false,
         }
+    }
+
+    /// Forgets a held key whose release the listener will not see, as while
+    /// shortcuts are suspended, so the next press counts.
+    pub fn reset(&mut self) {
+        self.held = None;
     }
 }
 
@@ -2405,6 +2447,39 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_start_ends_before_escape_or_the_shortcut_sees_it() {
+        let dir = temp_dir("failed");
+        let audio = FakeTimeline::default();
+        let (release, released) = mpsc::channel();
+        let mut host = CaptureHost::with(
+            Arc::new(StallingEngine(Mutex::new(released))),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let first = report(host.toggle(CaptureInstant::now(), &audio))
+            .bundle
+            .unwrap();
+        release.send(()).unwrap();
+        for _ in 0..1_000 {
+            if lock(&host.outcomes).idle() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        // No control call came between: the next look ends it.
+        assert_eq!(host.recording_since(&audio), None);
+        assert!(!first.exists());
+        // So the next press starts a capture instead of stopping one.
+        let second = report(host.toggle(CaptureInstant::now(), &audio));
+        assert!(second.changed);
+        assert_eq!(second.state, ScrawlCaptureState::Recording);
+        assert_ne!(second.bundle.as_ref(), Some(&first));
+        release.send(()).unwrap();
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_failed_start_raced_by_stop_never_wedges_later_starts() {
         let dir = temp_dir("raced");
         let audio = FakeTimeline::default();
@@ -2490,7 +2565,7 @@ mod tests {
         .unwrap();
         let started = report(host.toggle(CaptureInstant::now(), &audio));
         assert!(started.changed);
-        let t0 = host.recording_since().unwrap();
+        let t0 = host.recording_since(&audio).unwrap();
         // A bounce right after the start does nothing.
         let bounce = report(host.toggle(t0 + Duration::from_millis(100), &audio));
         assert!(!bounce.changed);
@@ -2545,6 +2620,11 @@ mod tests {
         assert!(!shortcut.pressed(key(true, 0), hotkeys));
         assert!(!shortcut.pressed(key(false, 0), hotkeys));
         assert!(!shortcut.pressed(key(true, flags), Default::default()));
+
+        // A release lost while shortcuts were suspended never eats a press.
+        assert!(shortcut.pressed(key(true, flags), hotkeys));
+        shortcut.reset();
+        assert!(shortcut.pressed(key(true, flags), hotkeys));
     }
 
     #[test]

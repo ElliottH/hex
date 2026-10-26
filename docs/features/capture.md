@@ -56,9 +56,12 @@ First launch with the experiment on      // capture.import
 While a capture records                  // capture.input
 ├── The existing session tap adds mouse down/up/drag/scroll and Shift (no second tap)
 ├── -> Capture::input() through a bounded queue; full -> events dropped and counted
+├── Keys pressed in the app -> logged; keys Hex consumes (its shortcuts, Esc) and
+│   anything while a shortcut is being recorded -> not logged
 ├── Scrawl's rules in the engine (hosted_input): Shift drag inks, a click pins,
 │   clicks on Hex's own windows ignored
-└── Started by ⌥⇧S -> Shift must come up once before it can ink
+└── Shift still held from ⌥⇧S -> must come up once before it can ink; Shift up
+    at the start -> the first Shift drag inks
 
 hex capture start                        // capture.start; needs a listening Hex
 ├── Creates <captures folder>/<unix ms>.scrawl (owner-only) -> reply: recording + bundle path
@@ -66,7 +69,8 @@ hex capture start                        // capture.start; needs a listening Hex
 ├── Copies the dictation timeline from now into a bounded sink (no second stream)
 ├── In the background: Scrawl's engine starts on the active display
 │   ├── Needs Screen Recording for Hex (or the terminal running it)
-│   └── Fails to start -> sink closed, bundle removed, last outcome `failed`
+│   └── Fails to start -> sink closed, bundle removed, last outcome `failed`;
+│       Esc and the next ⌥⇧S see nothing recording
 ├── Release microphone while idle -> the capture keeps the microphone open
 └── Already recording -> unchanged, same bundle
 
@@ -168,10 +172,14 @@ Checks:
 - Shortcut and input, in capture_host.rs: `the_host_is_absent_while_captures_are_off`,
   `the_shortcut_starts_and_a_later_press_stops`,
   `input_reaches_only_the_capture_that_is_recording`, `tap_flags_become_modifiers`,
-  `only_a_fresh_press_of_the_shortcut_counts`;
-  `the_capture_shortcut_is_suppressed_and_never_chord_evidence` in suppression.rs;
+  `only_a_fresh_press_of_the_shortcut_counts`,
+  `a_failed_start_ends_before_escape_or_the_shortcut_sees_it`;
+  `the_capture_shortcut_is_suppressed_and_never_chord_evidence` and
+  `a_capture_logs_only_keys_that_reach_the_app` in suppression.rs;
   the ink and click rules in hosted_input.rs, including
-  `a_capture_started_by_its_shortcut_waits_for_shift_to_come_up`.
+  `a_capture_started_by_its_shortcut_waits_for_shift_to_come_up`,
+  `a_capture_started_without_shift_held_inks_from_the_first_stroke`, and
+  `a_click_with_the_chords_shift_still_held_is_no_pin`.
 - Pane: `captures_default_off_and_refuse_a_shortcut_in_use` and
   `retention_names_presets_and_imported_days` in rune_ui/scrawl.rs; scenes
   `mac-scrawl-off`, `mac-scrawl`, `mac-scrawl-running`, `mac-scrawl-permission`
