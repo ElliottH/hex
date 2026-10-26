@@ -2,7 +2,7 @@ use std::cell::UnsafeCell;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,8 +17,11 @@ const HEX_MICROPHONE_SAMPLE_RATE: u32 = 48_000;
 /// Capacity of the lock-free capture-to-sink ring buffer in 48 kHz mono samples (~341 ms).
 const RING_CAPACITY: usize = 16_384;
 const RING_MASK: usize = RING_CAPACITY - 1;
-/// Maximum queued frames before the consumer skips ahead to bound added latency (< 16 ms).
+/// Queued frames, beyond one producer burst and one consumer pull, before the
+/// consumer skips ahead to bound added latency (16 ms).
 const MAX_RING_LATENCY_FRAMES: usize = 768;
+/// Upper bound on the producer burst the latency cap makes room for (~85 ms).
+const MAX_PRODUCER_BURST_FRAMES: usize = RING_CAPACITY / 4;
 
 pub fn is_hex_virtual_device_name(name: &str) -> bool {
     let trimmed = name.trim();
@@ -34,6 +37,8 @@ struct HexMicRingBuffer {
     read_pos: AtomicUsize,
     underflows: AtomicU64,
     overflows: AtomicU64,
+    /// Largest number of frames the producer delivers in one capture callback.
+    producer_burst: AtomicUsize,
 }
 
 unsafe impl Sync for HexMicRingBuffer {}
@@ -46,12 +51,29 @@ impl HexMicRingBuffer {
             read_pos: AtomicUsize::new(0),
             underflows: AtomicU64::new(0),
             overflows: AtomicU64::new(0),
+            producer_burst: AtomicUsize::new(0),
         }
     }
 
     fn clear(&self) {
         let w = self.write_pos.load(Ordering::Relaxed);
         self.read_pos.store(w, Ordering::Release);
+        self.producer_burst.store(0, Ordering::Relaxed);
+    }
+
+    /// Records the frames one capture callback delivers, so the latency cap
+    /// leaves room for a whole callback. A device delivering 20 ms at a time
+    /// (a 24 kHz Bluetooth headset) would otherwise lose audio on every callback.
+    fn note_producer_burst(&self, frames: usize) {
+        self.producer_burst
+            .fetch_max(frames.min(MAX_PRODUCER_BURST_FRAMES), Ordering::Relaxed);
+    }
+
+    fn counters(&self) -> (u64, u64) {
+        (
+            self.underflows.load(Ordering::Relaxed),
+            self.overflows.load(Ordering::Relaxed),
+        )
     }
 
     /// Pushes samples from the producer without blocking or allocating.
@@ -88,7 +110,8 @@ impl HexMicRingBuffer {
     }
 
     /// Pulls `dst.len()` samples for the real-time consumer without blocking.
-    /// Zero-fills on underflow and skips ahead if queued latency exceeds `MAX_RING_LATENCY_FRAMES`.
+    /// Zero-fills on underflow and skips ahead once more than
+    /// `MAX_RING_LATENCY_FRAMES` beyond one producer burst are queued.
     fn pop_slice(&self, dst: &mut [f32]) -> usize {
         let needed = dst.len();
         if needed == 0 {
@@ -97,12 +120,15 @@ impl HexMicRingBuffer {
         let write = self.write_pos.load(Ordering::Acquire);
         let mut read = self.read_pos.load(Ordering::Relaxed);
         let mut available = write.wrapping_sub(read);
+        let burst = self.producer_burst.load(Ordering::Relaxed);
+        let slack = MAX_RING_LATENCY_FRAMES / 2;
+        let limit = MAX_RING_LATENCY_FRAMES.max(burst + slack) + needed;
 
         if available > RING_CAPACITY {
             read = write;
             available = 0;
-        } else if available > MAX_RING_LATENCY_FRAMES + needed {
-            let keep = (MAX_RING_LATENCY_FRAMES / 2) + needed;
+        } else if available > limit {
+            let keep = limit - slack;
             read = write.wrapping_sub(keep);
             available = keep;
             self.overflows.fetch_add(1, Ordering::Relaxed);
@@ -294,53 +320,149 @@ pub fn sync_from_settings(mode: VoiceFilterMode, comfort_noise: bool, strength: 
     }
 }
 
-/// Called from `src/audio.rs` capture callback. Never blocks, never allocates.
-pub fn push_capture_samples(samples: &[f32], sample_rate: u32) {
-    if samples.is_empty() || sample_rate == 0 {
-        return;
-    }
-    let sink_active = SINK_STREAMING.load(Ordering::Relaxed);
-    let demo_recording = DEMO_RECORDING_ACTIVE.load(Ordering::Relaxed);
-    if !sink_active && !demo_recording {
-        return;
+/// One microphone stream's connection to Hex Microphone. Every capture stream
+/// has one, but only the dictation listener's current stream switches it on
+/// (`CaptureFeedSwitch`): the ring has a single producer, and a second stream
+/// on the same microphone, such as a meeting recording's, would interleave a
+/// duplicate of every callback into it.
+pub struct CaptureFeed {
+    enabled: Arc<AtomicBool>,
+    resampler: Option<LinearResampler>,
+}
+
+/// Turns one stream's `CaptureFeed` on or off from outside the audio callback.
+#[derive(Clone)]
+pub struct CaptureFeedSwitch(Arc<AtomicBool>);
+
+impl CaptureFeedSwitch {
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::Release);
     }
 
-    if sample_rate == HEX_MICROPHONE_SAMPLE_RATE {
-        if sink_active {
-            CAPTURE_RING.push_slice(samples);
-        }
-        if demo_recording {
-            append_demo_recording_samples(samples);
-        }
-        return;
+    #[cfg(test)]
+    pub fn is_on(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+/// A switched-off feed for a capture stream delivering `sample_rate` audio.
+pub fn capture_feed(sample_rate: u32) -> (CaptureFeed, CaptureFeedSwitch) {
+    let enabled = Arc::new(AtomicBool::new(false));
+    let feed = CaptureFeed {
+        enabled: enabled.clone(),
+        resampler: (sample_rate != HEX_MICROPHONE_SAMPLE_RATE && sample_rate > 0)
+            .then(|| LinearResampler::new(sample_rate)),
+    };
+    (feed, CaptureFeedSwitch(enabled))
+}
+
+impl CaptureFeed {
+    /// Called from the capture callback. Never blocks, never allocates.
+    pub fn push(&mut self, samples: &[f32]) {
+        let sink_active = SINK_STREAMING.load(Ordering::Relaxed);
+        let demo_recording = DEMO_RECORDING_ACTIVE.load(Ordering::Relaxed);
+        self.push_to(
+            sink_active.then_some(&CAPTURE_RING),
+            demo_recording,
+            samples,
+        );
     }
 
-    // Resample to 48 kHz in stack chunks without heap allocation.
-    let ratio = f64::from(HEX_MICROPHONE_SAMPLE_RATE) / f64::from(sample_rate);
-    let total_out = ((samples.len() as f64) * ratio).round() as usize;
-    if total_out == 0 {
-        return;
+    fn push_to(&mut self, ring: Option<&HexMicRingBuffer>, demo: bool, samples: &[f32]) {
+        if samples.is_empty() || !self.enabled.load(Ordering::Acquire) || (ring.is_none() && !demo)
+        {
+            if let Some(resampler) = &mut self.resampler {
+                resampler.reset();
+            }
+            return;
+        }
+        let deliver = |chunk: &[f32]| {
+            if let Some(ring) = ring {
+                ring.push_slice(chunk);
+            }
+            if demo {
+                append_demo_recording_samples(chunk);
+            }
+        };
+        let frames = match &mut self.resampler {
+            None => {
+                deliver(samples);
+                samples.len()
+            }
+            Some(resampler) => resampler.process(samples, deliver),
+        };
+        if let Some(ring) = ring {
+            ring.note_producer_burst(frames);
+        }
     }
-    let mut stack_buf = [0.0_f32; 512];
-    let mut out_idx = 0usize;
-    while out_idx < total_out {
-        let chunk_len = (total_out - out_idx).min(stack_buf.len());
-        for (i, slot) in stack_buf.iter_mut().take(chunk_len).enumerate() {
-            let src_pos = ((out_idx + i) as f64) / ratio;
-            let idx0 = (src_pos.floor() as usize).min(samples.len() - 1);
-            let idx1 = (idx0 + 1).min(samples.len() - 1);
-            let frac = (src_pos - (idx0 as f64)) as f32;
-            let s0 = samples[idx0];
-            let s1 = samples[idx1];
-            *slot = s0 + (s1 - s0) * frac;
+}
+
+/// Linear interpolation to 48 kHz that carries its phase and last sample
+/// across callbacks, so block boundaries neither step nor gain or lose frames.
+struct LinearResampler {
+    /// Input frames per output frame.
+    step: f64,
+    /// Next output position in input frames, relative to the current block;
+    /// -1 is the previous block's last sample.
+    position: f64,
+    previous: f32,
+    primed: bool,
+}
+
+impl LinearResampler {
+    fn new(sample_rate: u32) -> Self {
+        Self {
+            step: f64::from(sample_rate) / f64::from(HEX_MICROPHONE_SAMPLE_RATE),
+            position: 0.0,
+            previous: 0.0,
+            primed: false,
         }
-        if sink_active {
-            CAPTURE_RING.push_slice(&stack_buf[..chunk_len]);
+    }
+
+    fn reset(&mut self) {
+        self.primed = false;
+    }
+
+    /// Resamples `input` in stack chunks handed to `emit`; returns the frames emitted.
+    fn process(&mut self, input: &[f32], mut emit: impl FnMut(&[f32])) -> usize {
+        let Some(&last) = input.last() else {
+            return 0;
+        };
+        if !self.primed {
+            self.previous = input[0];
+            self.position = -1.0;
+            self.primed = true;
         }
-        if demo_recording {
-            append_demo_recording_samples(&stack_buf[..chunk_len]);
+        let end = (input.len() - 1) as f64;
+        let mut chunk = [0.0_f32; 512];
+        let mut filled = 0;
+        let mut total = 0;
+        while self.position < end {
+            let floor = self.position.floor();
+            let frac = (self.position - floor) as f32;
+            let index = floor as isize;
+            let a = if index < 0 {
+                self.previous
+            } else {
+                input[index as usize]
+            };
+            let b = input[(index + 1) as usize];
+            chunk[filled] = a + (b - a) * frac;
+            filled += 1;
+            if filled == chunk.len() {
+                emit(&chunk);
+                total += filled;
+                filled = 0;
+            }
+            self.position += self.step;
         }
-        out_idx += chunk_len;
+        if filled > 0 {
+            emit(&chunk[..filled]);
+            total += filled;
+        }
+        self.position -= input.len() as f64;
+        self.previous = last;
+        total
     }
 }
 
@@ -1299,6 +1421,9 @@ mod macos_hal {
         };
     }
 
+    /// How often a streaming sink logs new ring underflows and overflows.
+    const RING_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
     struct IoContext {
         engine: HexMicEngine,
     }
@@ -1432,18 +1557,44 @@ mod macos_hal {
                 "Hex Microphone virtual sink streaming started"
             );
 
+            let started = CAPTURE_RING.counters();
+            let mut reported = started;
+            let mut last_report = Instant::now();
             while crate::app_settings::hex_microphone_enabled()
                 && device_is_alive(sink_id)
                 && crate::audio::audio_service_restart_generation() == restart_gen
             {
                 thread::sleep(Duration::from_millis(250));
+                if last_report.elapsed() >= RING_REPORT_INTERVAL {
+                    last_report = Instant::now();
+                    let now = CAPTURE_RING.counters();
+                    // Only while an app reads Hex Microphone: an idle released
+                    // microphone underflows on every callback by design.
+                    let in_use = translate_uid_to_device(HEX_MICROPHONE_UID)
+                        .is_some_and(device_is_running_somewhere);
+                    if in_use && now != reported {
+                        tracing::info!(
+                            underflows = now.0 - reported.0,
+                            overflows = now.1 - reported.1,
+                            interval_s = RING_REPORT_INTERVAL.as_secs(),
+                            "Hex Microphone ring glitched"
+                        );
+                    }
+                    reported = now;
+                }
             }
 
             SINK_STREAMING.store(false, Ordering::Release);
             let _ = unsafe { AudioDeviceStop(sink_id, proc_id) };
             let _ = unsafe { AudioDeviceDestroyIOProcID(sink_id, proc_id) };
+            let stopped = CAPTURE_RING.counters();
             CAPTURE_RING.clear();
-            tracing::info!(device_id = sink_id, "Hex Microphone virtual sink stopped");
+            tracing::info!(
+                device_id = sink_id,
+                underflows = stopped.0 - started.0,
+                overflows = stopped.1 - started.1,
+                "Hex Microphone virtual sink stopped"
+            );
         }
     }
 }
@@ -1482,6 +1633,150 @@ mod tests {
             ring.queued_frames() <= MAX_RING_LATENCY_FRAMES,
             "expected ring buffer to bound latency to <= {MAX_RING_LATENCY_FRAMES}, got {}",
             ring.queued_frames()
+        );
+    }
+
+    struct PassThrough {
+        underflows: u64,
+        overflows: u64,
+        /// Output samples that do not continue the input ramp by one.
+        discontinuities: usize,
+    }
+
+    /// Runs capture streams on one microphone (each callback delivering
+    /// `capture_frames` of a 48 kHz ramp to every feed) against a sink pulling
+    /// `sink_frames`, with small deterministic jitter, and checks the output
+    /// after the first 100 ms continues the ramp.
+    fn simulate_pass_through(
+        feeds: &mut [CaptureFeed],
+        capture_frames: usize,
+        sink_frames: usize,
+        seconds: f64,
+    ) -> PassThrough {
+        let ring = HexMicRingBuffer::new();
+        let rate = f64::from(HEX_MICROPHONE_SAMPLE_RATE);
+        let capture_period = capture_frames as f64 / rate;
+        let sink_period = sink_frames as f64 / rate;
+        let (mut capture_at, mut sink_at) = (0.003, 0.0);
+        let mut seed = 1_u64;
+        let mut jitter = || {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            ((seed >> 11) as f64) / ((1_u64 << 53) as f64) * 0.000_5
+        };
+        let mut next = 1.0_f32;
+        let mut out = vec![0.0_f32; sink_frames];
+        let mut last: Option<f32> = None;
+        let mut warm = None;
+        let mut discontinuities = 0;
+        while sink_at < seconds {
+            if capture_at + jitter() <= sink_at + jitter() {
+                let block: Vec<f32> = (0..capture_frames).map(|i| next + i as f32).collect();
+                next += capture_frames as f32;
+                for feed in feeds.iter_mut() {
+                    feed.push_to(Some(&ring), false, &block);
+                }
+                capture_at += capture_period;
+            } else {
+                ring.pop_slice(&mut out);
+                sink_at += sink_period;
+                if sink_at < 0.1 {
+                    continue;
+                }
+                warm.get_or_insert(ring.counters());
+                for &sample in &out {
+                    if last.is_some_and(|last| sample != last + 1.0) {
+                        discontinuities += 1;
+                    }
+                    last = Some(sample);
+                }
+            }
+        }
+        let (start, end) = (warm.unwrap(), ring.counters());
+        PassThrough {
+            underflows: end.0 - start.0,
+            overflows: end.1 - start.1,
+            discontinuities,
+        }
+    }
+
+    fn switched_on_feed(sample_rate: u32) -> CaptureFeed {
+        let (feed, switch) = capture_feed(sample_rate);
+        switch.set(true);
+        feed
+    }
+
+    #[test]
+    fn a_meeting_stream_on_the_same_microphone_does_not_double_the_feed() {
+        let listener = switched_on_feed(48_000);
+        let (meeting, meeting_switch) = capture_feed(48_000);
+        assert!(!meeting_switch.is_on(), "streams start switched off");
+
+        let result = simulate_pass_through(&mut [listener, meeting], 512, 256, 10.0);
+
+        assert_eq!(result.underflows, 0);
+        assert_eq!(result.overflows, 0);
+        assert_eq!(result.discontinuities, 0);
+
+        // Both feeding, as every stream did before, repeats each callback and
+        // skips ahead about 90 times a second.
+        let doubled = simulate_pass_through(
+            &mut [switched_on_feed(48_000), switched_on_feed(48_000)],
+            512,
+            256,
+            10.0,
+        );
+        assert!(doubled.overflows > 500 && doubled.discontinuities > 500);
+    }
+
+    #[test]
+    fn a_callback_larger_than_the_latency_cap_passes_through_whole() {
+        // A 24 kHz Bluetooth headset delivers 480 frames, 960 at 48 kHz, per callback.
+        let result = simulate_pass_through(&mut [switched_on_feed(48_000)], 960, 256, 10.0);
+
+        assert_eq!(result.underflows, 0);
+        assert_eq!(result.overflows, 0);
+        assert_eq!(result.discontinuities, 0);
+    }
+
+    #[test]
+    fn resampling_is_continuous_across_callbacks() {
+        let tone: Vec<f32> = (0..24_000)
+            .map(|i| (i as f32 * 2.0 * std::f32::consts::PI * 440.0 / 24_000.0).sin())
+            .collect();
+        let resample = |block: usize| {
+            let mut resampler = LinearResampler::new(24_000);
+            let mut out = Vec::new();
+            for chunk in tone.chunks(block) {
+                resampler.process(chunk, |frames| out.extend_from_slice(frames));
+            }
+            out
+        };
+        let whole = resample(tone.len());
+        let callbacks = resample(480);
+        assert_eq!(callbacks.len(), whole.len());
+        let worst = whole
+            .iter()
+            .zip(&callbacks)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            worst < 1e-5,
+            "block boundaries changed the signal by {worst}"
+        );
+
+        // 44.1 kHz blocks do not resample to a whole number of 48 kHz frames;
+        // rounding each callback would drift the clock by hundreds of ppm.
+        let mut resampler = LinearResampler::new(44_100);
+        let block = vec![0.0_f32; 512];
+        let frames: usize = (0..441 * 10)
+            .map(|_| resampler.process(&block, |_| {}))
+            .sum();
+        let expected = 512 * 441 * 10 * 48_000 / 44_100;
+        assert!(
+            frames.abs_diff(expected) <= 1,
+            "expected {expected} frames, got {frames}"
         );
     }
 

@@ -560,7 +560,10 @@ or the driver installed                  // fun.hex-microphone; macOS
 │       ├── Dual waveform -> You vs Call hears with highlighted dictation span
 │       └── Explicit playback -> Play what call hears | Play your voice
 ├── Live microphone capture -> Raw audio to Hex transcription (unmodified)
-│   └── Lock-free ring -> 48 kHz virtual sink -> Raised-cosine fade on intentional hold
+│   ├── Source -> Hex's dictation microphone (Automatic skips a Bluetooth headset), never a meeting's second stream
+│   ├── Lock-free ring -> 48 kHz virtual sink -> Raised-cosine fade on intentional hold
+│   │   └── Not dictating -> bit-exact pass-through; non-48 kHz inputs resample continuously
+│   └── Ring underflows/overflows -> process.log each minute while an app reads it, and on sink stop
 └── Offline CLI -> hex dev voice-filter render <in.wav> --mode <m> --dictation <start>-<end> -o <out.wav>
 ```
 
@@ -573,6 +576,10 @@ and [rune_ui/fun.rs](../../src/rune_ui/fun.rs). Checks:
 `all_nine_modes_render_finite_and_expected_levels`,
 `raised_cosine_fade_has_no_step_discontinuity`,
 `ring_buffer_transfers_samples_and_handles_underflow_and_overflow`,
+`a_meeting_stream_on_the_same_microphone_does_not_double_the_feed`,
+`a_callback_larger_than_the_latency_cap_passes_through_whole`,
+`resampling_is_continuous_across_callbacks`,
+`only_the_listeners_current_input_feeds_hex_microphone`,
 `driver_plugin_loopback_streams_at_48khz_under_20ms_latency`,
 `driver_plist_version_and_status_mismatch_are_detected`,
 `osascript_failure_classifies_user_cancel_and_errors`,
@@ -584,7 +591,10 @@ Scenes: `mac-voice-filter`, `mac-voice-filter-muted`,
 `mac-voice-filter-driver-missing`.
 Proof limit: in-process `dlopen` loopback proves the compiled driver's 48 kHz
 `WriteMix`/`ReadInput` path at 5.33 ms (256 frames), not an interactive macOS
-admin authorization prompt or an active Slack/Zoom call.
+admin authorization prompt or an active Slack/Zoom call. The pass-through
+checks simulate callback timing and sizes; clock drift between the microphone
+and the virtual device is not corrected, so a skip or zero-fill click every
+minute or two remains possible.
 
 ## Recover And Maintain
 
