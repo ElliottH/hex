@@ -355,6 +355,11 @@ const CAPTURE_KEYS: &[Key] = &[
         RETENTION_DAYS,
         "Days a capture is kept; none keeps it",
     ),
+    key(
+        "capture.routing",
+        Kind::Json,
+        "Where captures go among OpenCode sessions: Scrawl's router settings (autoSend, sites, apps, smartRouting, …) as a JSON object",
+    ),
 ];
 #[cfg(hex_capture)]
 const RETENTION_DAYS: Kind = Kind::Integer { min: 1, max: 3650 };
@@ -893,6 +898,27 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), keys().count(), "a key is listed twice");
+    }
+
+    #[cfg(hex_capture)]
+    #[test]
+    fn capture_routing_is_set_as_one_object_without_a_jev_key() {
+        let settings = AppSettings::default();
+        let value = r#"{"smartRouting": true, "sites": {"https://example.com": "ses_a"},
+            "jevApiKey": "not-a-real-key"}"#;
+        let change = apply(&settings, "capture.routing", value, false, &rules()).unwrap();
+        let config = change.settings.capture.routing.config();
+        assert!(config.smart_routing);
+        assert_eq!(config.sites.len(), 1);
+        assert_eq!(config.jev_api_key, None);
+        let shown = get(&change.settings, "capture.routing").unwrap();
+        assert!(!shown[0].value.to_string().contains("not-a-real-key"));
+        assert_eq!(
+            apply(&settings, "capture.routing", "[", false, &rules())
+                .unwrap_err()
+                .code,
+            "invalid-value"
+        );
     }
 
     #[test]

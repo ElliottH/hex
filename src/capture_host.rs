@@ -52,6 +52,19 @@ use crate::transcription::TranscriptSegment;
 use crate::transcription_engine::TranscriptionEngine;
 use crate::transcription_models::{ModelRuntime, TranscriptionModelId};
 
+mod library;
+mod routing;
+
+pub use library::{
+    explain as explain_capture, list as list_captures, send as send_capture, show as show_capture,
+};
+pub use routing::CaptureRoute;
+#[expect(
+    unused_imports,
+    reason = "the capture capsule (scrawl-capsule) reads routes"
+)]
+pub use routing::{RouteAnswer, RouteDelivery, RouteDest};
+
 /// The sink's capacity in microphone chunks (about 10 ms each): seconds of
 /// slack before a stalled collector starts dropping audio as a gap.
 const SINK_CAPACITY: usize = 512;
@@ -155,7 +168,7 @@ pub enum TargetKind {
 
 /// What the capture capsule asks of the host, through
 /// `RecognitionControl::CaptureCommand`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(
     not(test),
     expect(
@@ -174,6 +187,17 @@ pub enum CaptureCommand {
     /// snapshot shows nothing recording in between. With nothing recording,
     /// only starts.
     Switch(CaptureTarget),
+    /// Sends the newest written capture (`snapshot().last`) to `to` now: a
+    /// session ID, or a name its route lists, suggestions first. A send
+    /// already elsewhere is taken back first. `always` also saves a rule
+    /// sending its site or app there from now on.
+    Send { to: String, always: bool },
+    /// Takes back the newest capture's send: a rule's send waiting out
+    /// [`routing::UNDO`] never goes; one OpenCode took is withdrawn unless
+    /// the session already acted on it.
+    Undo,
+    /// Takes back the newest capture's send and sends it to `to`.
+    Redirect { to: String },
 }
 
 /// A started capture.
@@ -196,6 +220,11 @@ trait Sealed: Send {
     /// Blocking: transcribes `audio`, picks keyframes, and writes the
     /// bundle.
     fn finish(self: Box<Self>, audio: RecordedAudio) -> anyhow::Result<Written>;
+    /// The apps in front when it stopped, for routing; `None` when it isn't
+    /// routed.
+    fn route_context(&self) -> Option<scrawl_capture::capture::RouteContext> {
+        None
+    }
 }
 
 /// What a written capture reports.
@@ -247,6 +276,10 @@ impl Sealed for scrawl_capture::capture::SealedCapture {
             gaps: finished.gaps,
             missing_transcript: finished.missing_transcript,
         })
+    }
+
+    fn route_context(&self) -> Option<scrawl_capture::capture::RouteContext> {
+        Some(scrawl_capture::capture::SealedCapture::route_context(self).clone())
     }
 }
 
@@ -603,6 +636,8 @@ struct FinishJob {
     bundle: PathBuf,
     capture: Box<dyn Sealed>,
     audio: RecordedAudio,
+    /// What the router saw when it stopped.
+    look: Option<routing::Look>,
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +690,9 @@ pub struct SettledCapture {
     pub missing_transcript: Option<String>,
     /// Why a capture failed, when Hex knows.
     pub error: Option<String>,
+    /// Where a written capture goes, while captures are sent to OpenCode
+    /// (`capture.routing`'s `autoSend`).
+    pub route: Option<CaptureRoute>,
 }
 
 impl SettledCapture {
@@ -891,11 +929,22 @@ impl Outcomes {
     }
 
     fn settle(&mut self, bundle: PathBuf, stage: Stage, written: Option<Written>) {
-        self.settle_with(bundle, stage, written, None);
+        self.settle_with(bundle, stage, written, None, None);
     }
 
     fn fail(&mut self, bundle: PathBuf, error: String) {
-        self.settle_with(bundle, Stage::Failed, None, Some(error));
+        self.settle_with(bundle, Stage::Failed, None, Some(error), None);
+    }
+
+    /// A written capture's route changed; only the newest capture's shows.
+    fn routed(&mut self, bundle: &Path, route: CaptureRoute) {
+        if let Some(last) = self.last.as_mut()
+            && last.bundle == bundle
+            && last.route.as_ref() != Some(&route)
+        {
+            last.route = Some(route);
+            self.publish();
+        }
     }
 
     fn settle_with(
@@ -904,6 +953,7 @@ impl Outcomes {
         stage: Stage,
         written: Option<Written>,
         error: Option<String>,
+        route: Option<CaptureRoute>,
     ) {
         let discarded = self
             .find(&bundle)
@@ -918,6 +968,7 @@ impl Outcomes {
                 gaps: written.as_ref().map(|written| written.gaps),
                 missing_transcript: written.and_then(|written| written.missing_transcript),
                 error,
+                route,
             });
         }
         self.publish();
@@ -999,6 +1050,8 @@ pub struct CaptureHost {
     retention: Option<(SyncSender<()>, JoinHandle<()>)>,
     outcomes: SharedOutcomes,
     finisher: Option<(SyncSender<FinishJob>, JoinHandle<()>)>,
+    /// The `capture-route` thread.
+    routes: Option<routing::Routes>,
     /// Collectors of ended captures, until they exit.
     ended: Vec<JoinHandle<()>>,
 }
@@ -1062,12 +1115,14 @@ impl CaptureHost {
         *LIVE_OUTCOMES
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = Arc::downgrade(&outcomes);
+        let routes = routing::Routes::start(outcomes.clone())?;
         let (jobs, queued) = mpsc::sync_channel(MAX_FINISHING);
         let finisher = {
             let outcomes = outcomes.clone();
+            let routes = routes.jobs();
             thread::Builder::new()
                 .name("capture-finish".into())
-                .spawn(move || finish_captures(queued, &outcomes))?
+                .spawn(move || finish_captures(queued, &outcomes, &routes))?
         };
         Ok(Self {
             engine,
@@ -1077,6 +1132,7 @@ impl CaptureHost {
             retention: None,
             outcomes,
             finisher: Some((jobs, finisher)),
+            routes: Some(routes),
             ended: Vec::new(),
         })
     }
@@ -1195,6 +1251,11 @@ impl CaptureHost {
                 lock(&self.outcomes).release();
                 switched
             }
+            CaptureCommand::Send { to, always } => {
+                Ok(self.route(routing::Job::Send { to, always }))
+            }
+            CaptureCommand::Undo => Ok(self.route(routing::Job::Undo)),
+            CaptureCommand::Redirect { to } => Ok(self.route(routing::Job::Redirect { to })),
         };
         result.unwrap_or_else(|error| ControlReply::error("failed", format!("{error:#}")))
     }
@@ -1214,6 +1275,9 @@ impl CaptureHost {
         if let Some((jobs, finisher)) = self.finisher.take() {
             drop(jobs);
             join_by(finisher, deadline, "capture-finish");
+        }
+        if let Some(routes) = self.routes.take() {
+            routes.stop(deadline);
         }
         if let Some((nudge, retention)) = self.retention.take() {
             drop(nudge);
@@ -1333,6 +1397,15 @@ impl CaptureHost {
         tracing::info!(bundle = %active.bundle.display(), ?end, "capture ended");
         let ended = (end != End::Discard).then_some(active.bundle);
         Ok(self.report(true, ended))
+    }
+
+    /// Hands the capsule's route command to the `capture-route` thread,
+    /// which acts on the newest capture.
+    fn route(&self, job: routing::Job) -> ControlReply {
+        if !self.routes.as_ref().is_some_and(|routes| routes.send(job)) {
+            return ControlReply::error("busy", "the capture router is not taking requests");
+        }
+        self.report(true, None)
     }
 
     fn report(&self, changed: bool, ended: Option<PathBuf>) -> ControlReply {
@@ -1879,12 +1952,18 @@ fn log_events(events: Receiver<Event>) {
 }
 
 /// The `capture-finish` thread: writes stopped captures in order, one at a
-/// time, and settles each outcome.
-fn finish_captures(jobs: Receiver<FinishJob>, outcomes: &Mutex<Outcomes>) {
+/// time, copies each to the clipboard, settles each outcome, and hands
+/// written ones to the `capture-route` thread.
+fn finish_captures(
+    jobs: Receiver<FinishJob>,
+    outcomes: &Mutex<Outcomes>,
+    routes: &SyncSender<routing::Job>,
+) {
     for FinishJob {
         bundle,
         capture,
         audio,
+        look,
     } in jobs
     {
         let finished = capture.finish(audio);
@@ -1898,13 +1977,37 @@ fn finish_captures(jobs: Receiver<FinishJob>, outcomes: &Mutex<Outcomes>) {
                     missing_transcript = written.missing_transcript.as_deref(),
                     "capture finished"
                 );
-                lock(outcomes).settle(bundle, Stage::Done, Some(written));
+                copy_to_clipboard(&bundle);
+                let route = look.as_ref().map(|_| CaptureRoute::looking());
+                lock(outcomes).settle_with(bundle.clone(), Stage::Done, Some(written), None, route);
+                if let Some(look) = look {
+                    let job = routing::Job::Written {
+                        bundle: bundle.clone(),
+                        look,
+                    };
+                    if !routing::send(routes, job) {
+                        lock(outcomes).routed(&bundle, routing::unrouted());
+                    }
+                }
             }
             Err(error) => {
                 tracing::error!(error = format!("{error:#}"), "capture failed");
                 lock(outcomes).settle(bundle, Stage::Failed, None);
             }
         }
+    }
+}
+
+/// Copies a written capture to the clipboard, as Scrawl does: its summary,
+/// ready to paste into an agent.
+fn copy_to_clipboard(bundle: &Path) {
+    if cfg!(test) {
+        return;
+    }
+    let copied =
+        objc2::rc::autoreleasepool(|_| scrawl_capture::handoff::copy_bundle_to_clipboard(bundle));
+    if let Err(error) = copied {
+        tracing::warn!(error = format!("{error:#}"), "could not copy the capture");
     }
 }
 
@@ -1959,6 +2062,8 @@ fn collect(
         Ok(Seal::Finish { through, closed }) => {
             // The screen stops now, not when the finisher gets to it.
             let capture = capture.stop();
+            // The tab and terminal in front now, read while it is written.
+            let look = capture.route_context().and_then(routing::look);
             let audio = timeline.finish(through, closed);
             // Starts are refused while the queue is full, so it has room
             // unless Hex is stopping.
@@ -1966,6 +2071,7 @@ fn collect(
                 bundle: bundle.clone(),
                 capture,
                 audio,
+                look,
             };
             match jobs.try_send(job) {
                 Ok(()) => return,
@@ -3168,6 +3274,36 @@ mod tests {
     }
 
     #[test]
+    fn route_commands_wait_for_a_routed_capture() {
+        let dir = temp_dir("route");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let commands = [
+            CaptureCommand::Send {
+                to: "ses_a".into(),
+                always: true,
+            },
+            CaptureCommand::Redirect { to: "Alpha".into() },
+            CaptureCommand::Undo,
+        ];
+        for command in commands {
+            assert!(report(host.command(command, &audio)).changed);
+        }
+        host.shutdown(&audio);
+        let snapshot = lock(&host.outcomes).snapshot();
+        assert_eq!(snapshot.last, None);
+        assert!(matches!(
+            host.command(CaptureCommand::Undo, &audio),
+            ControlReply::Error { code, .. } if code == "busy"
+        ));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn the_first_click_or_scroll_means_work_started() {
         let live = LiveInput(Arc::default());
         let outcomes = SharedOutcomes::default();
@@ -3399,9 +3535,22 @@ mod tests {
         );
         let last = done.last.clone().unwrap();
         assert_eq!(
-            (last.bundle, last.stage, last.words),
-            (one.clone(), Stage::Done, Some(3))
+            (last.bundle, last.stage, last.words, last.route),
+            (one.clone(), Stage::Done, Some(3), None)
         );
+
+        // Only the newest capture's route shows.
+        outcomes.routed(&two, CaptureRoute::looking());
+        assert_eq!(watch.changed(), None);
+        outcomes.routed(&one, CaptureRoute::looking());
+        let routed = watch.changed().unwrap();
+        assert_eq!(
+            routed.last.clone().unwrap().route,
+            Some(CaptureRoute::looking())
+        );
+        outcomes.routed(&one, CaptureRoute::looking());
+        assert_eq!(watch.changed(), None);
+        let done = routed;
 
         // The engine's own Done and other late progress change nothing.
         outcomes.progress(&one, Stage::Done);
