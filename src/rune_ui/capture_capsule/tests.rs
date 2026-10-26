@@ -1431,6 +1431,109 @@ fn the_picker_records_what_it_shows_and_comes_to_rest() {
     );
 }
 
+fn picker_runtime(aim: Aim) -> Runtime<PickerState> {
+    let mut state = PickerState::still(aim, false);
+    state.set_act(Arc::new(|_| {}));
+    let mut rt = Runtime::with_text(
+        state,
+        picker::view,
+        (DISPLAY[0], DISPLAY[1]),
+        env(true),
+        text(),
+    );
+    rt.poll = Some(picker::poll);
+    rt.frame(0.0);
+    rt
+}
+
+fn run_for(rt: &mut Runtime<PickerState>, secs: f64) {
+    for _ in 0..(secs * FPS).round() as usize {
+        rt.frame(1.0 / FPS);
+    }
+}
+
+/// A second display may sit left of or above the primary, at a negative
+/// origin. The picker's rect is global, so it targets the primary display;
+/// targeting the one under the pointer would add that origin twice.
+#[test]
+fn the_picker_covers_the_display_under_the_pointer_wherever_it_sits() {
+    assert_eq!(picker::DISPLAY, rune::DisplayTarget::Primary);
+    let mut rt = picker_runtime(picker_aim(Mode::Window, [100.0, 100.0]));
+    for (display, pointer, local) in [
+        (
+            [-1440.0, -200.0, 1440.0, 900.0],
+            [-500.0, 100.0],
+            [940.0, 300.0],
+        ),
+        (
+            [0.0, -1080.0, 1920.0, 1080.0],
+            [960.0, -40.0],
+            [960.0, 1040.0],
+        ),
+        (
+            [1512.0, 0.0, 2560.0, 1440.0],
+            [1600.0, 700.0],
+            [88.0, 700.0],
+        ),
+    ] {
+        let moved = Arc::new(Mutex::new(Vec::new()));
+        let record = moved.clone();
+        rt.update(move |s, tx| {
+            let mut record = record.lock().unwrap();
+            record.push(s.place_on(Mode::Window, display, pointer, tx));
+            // Still on it: nothing moves.
+            record.push(s.place_on(Mode::Window, display, [pointer[0] + 4.0, pointer[1]], tx));
+        });
+        assert_eq!(
+            *moved.lock().unwrap(),
+            [true, false],
+            "a hop to {display:?} is a change"
+        );
+        let aim = rt.state.aim().unwrap();
+        assert_eq!(aim.display, display);
+        assert_eq!(aim.pointer, Some(local));
+        assert_eq!(
+            picker::placement(display),
+            rune::OverlayPlacement::Rect {
+                x: display[0],
+                y: display[1],
+                width: display[2],
+                height: display[3]
+            }
+        );
+    }
+}
+
+/// After a pick the picker fades while the capture starts. A start that
+/// never comes back brings it back after the retry wait; a new mode chosen
+/// meanwhile opens it again at once.
+#[test]
+fn a_pick_that_goes_nowhere_brings_the_picker_back() {
+    let mut rt = picker_runtime(picker_aim(Mode::Window, [480.0, 320.0]));
+    rt.update(|s, tx| {
+        s.want(Some(Mode::Window));
+        tx.wake_after(std::time::Duration::ZERO);
+    });
+    run_for(&mut rt, 0.5);
+    assert!(rt.state.showing());
+    rt.update(|s, tx| s.dragged(rune::Phase::Down, [480.0, 320.0], false, tx));
+    run_for(&mut rt, 0.5);
+    assert!(!rt.state.showing(), "it fades for the capture");
+    run_for(&mut rt, 2.0);
+    assert!(rt.state.showing(), "the start never came: it's back");
+
+    rt.update(|s, tx| s.dragged(rune::Phase::Down, [480.0, 320.0], false, tx));
+    run_for(&mut rt, 0.5);
+    assert!(!rt.state.showing());
+    rt.update(|s, tx| {
+        s.want(Some(Mode::Area));
+        tx.wake_after(std::time::Duration::ZERO);
+    });
+    run_for(&mut rt, 0.2);
+    assert!(rt.state.showing(), "a new mode brings it back");
+    assert_eq!(rt.state.aim().unwrap().mode, Mode::Area);
+}
+
 /// `HEX_CAPSULE_SNAPS=<folder>` writes the picker's stills, light and dark;
 /// `HEX_CAPSULE_MOTION=<folder>` its motion-lint traces in
 /// `<folder>/runs/<script>-<variant>/`, and with `HEX_CAPSULE_FRAMES=1` its

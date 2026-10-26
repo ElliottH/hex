@@ -167,6 +167,9 @@ pub(crate) enum Input {
     Undone(Undone),
     /// The ✕, or anything that should just close it.
     Dismiss,
+    /// The recording it shows left the snapshot with no outcome: a chip's
+    /// discard (the picker is already up) or a switch that couldn't start.
+    Gone,
 }
 
 /// What the host should do about an input or a click.
@@ -442,6 +445,7 @@ impl Flow {
                 chips_until: chips_until
                     .map(|until| until.min(until - CHIPS_OPEN_S + CHIPS_MIN_S).max(now)),
             },
+            (Phase::Recording { .. }, Input::Gone) => Phase::Hidden,
             (Phase::Selecting(mode), Input::Record) => {
                 actions.push(Action::Record(mode));
                 Phase::Selecting(mode)
@@ -1030,6 +1034,20 @@ mod tests {
 
         flow.input(Input::Stage(Stage::Done), 20.0);
         assert_eq!(flow.keys(20.0), None);
+    }
+
+    #[test]
+    fn a_recording_that_leaves_unseen_hides_the_capsule_but_not_the_picker() {
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.input(Input::Gone, 1.0);
+        assert_eq!(flow.pres(1.0), Pres::Hidden);
+
+        flow.input(Input::Stage(Stage::Recording), 2.0);
+        flow.input(Input::Chips, 2.1);
+        flow.click(super::super::surface::Id::Mode(Mode::Area), 2.5);
+        flow.input(Input::Gone, 2.6);
+        assert!(matches!(flow.pres(2.6), Pres::Selecting { .. }));
     }
 
     #[test]

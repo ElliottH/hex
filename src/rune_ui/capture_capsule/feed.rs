@@ -27,6 +27,9 @@ pub(crate) struct Follow {
     /// The settled capture the previous snapshot held: `None` before the
     /// first snapshot, so an outcome from before Hex started moves nothing.
     last_seen: Option<Option<PathBuf>>,
+    /// The captures the previous snapshot held recording or finishing: a
+    /// failure among them is a background capture's, never a start's.
+    under_way: Vec<PathBuf>,
     /// The shown capture's route as last seen, and whether its answer
     /// reached the capsule.
     route: Option<CaptureRoute>,
@@ -49,7 +52,25 @@ impl Follow {
         }
         let last = snapshot.last.as_ref().map(|last| last.bundle.clone());
         let previous = self.last_seen.replace(last.clone());
+        let under_way = std::mem::replace(
+            &mut self.under_way,
+            snapshot
+                .recording
+                .iter()
+                .map(|recording| recording.bundle.clone())
+                .chain(
+                    snapshot
+                        .finishing
+                        .iter()
+                        .map(|finishing| finishing.bundle.clone()),
+                )
+                .collect(),
+        );
+        // A start's failure, never one under a recording (that's newer) or
+        // a capture's that was already under way.
         if let (Some(previous), Some(failed)) = (previous, &snapshot.last)
+            && snapshot.recording.is_none()
+            && !under_way.contains(&failed.bundle)
             && previous.as_ref() != Some(&failed.bundle)
             && failed.stage == Stage::Failed
             && self
@@ -150,12 +171,18 @@ impl Follow {
                 finishing.stage
             };
             (&finishing.bundle, stage)
-        } else {
-            let last = snapshot
-                .last
-                .as_ref()
-                .filter(|last| Some(&last.bundle) == followed)?;
+        } else if let Some(last) = snapshot
+            .last
+            .as_ref()
+            .filter(|last| Some(&last.bundle) == followed)
+        {
             (&last.bundle, last.stage)
+        } else {
+            // A recording shown that left with no outcome: discarded, or
+            // a switch whose new start failed. It never comes back.
+            self.shown
+                .take_if(|(_, stage)| *stage == Stage::Recording)?;
+            return Some(Input::Gone);
         };
         if self
             .shown
@@ -500,9 +527,70 @@ mod tests {
         a.recording.as_mut().unwrap().worked = true;
         assert_eq!(follow.next(&a), [Input::Worked]);
         assert_eq!(follow.next(&a), [], "work folds the chips once");
-        // A chip discarded it: nothing settles, and the capsule stays the
-        // picker it turned into.
+        // A chip discarded it: nothing settles. The capsule is the picker
+        // by then, which a gone recording leaves alone (flow's test).
+        assert_eq!(follow.next(&CaptureSnapshot::default()), [Input::Gone]);
         assert_eq!(follow.next(&CaptureSnapshot::default()), []);
+    }
+
+    /// A switch discards the recording and starts another; when the start
+    /// fails before any snapshot shows it, the timer must not count on.
+    #[test]
+    fn a_recording_that_leaves_with_no_outcome_ends_the_capsule() {
+        let mut follow = Follow::default();
+        follow.next(&recording("a"));
+        assert_eq!(follow.next(&CaptureSnapshot::default()), [Input::Gone]);
+        // The host's failure for the start that never showed follows.
+        let mut failed = settled("b", Stage::Failed);
+        failed.last.as_mut().unwrap().error = Some("too many captures finishing".into());
+        assert_eq!(
+            follow.next(&failed),
+            [Input::Failed(
+                Failure::Start,
+                Some("too many captures finishing".into())
+            )]
+        );
+    }
+
+    #[test]
+    fn a_background_failure_never_takes_over_the_capture_it_follows() {
+        let mut follow = Follow::default();
+        follow.next(&recording("a"));
+        let mut both = recording("b");
+        both.finishing = finishing("a", Stage::Writing, false).finishing;
+        assert_eq!(follow.next(&both), [Input::Stage(Stage::Recording)]);
+        // "a" fails while "b" records: the timer and chips stay as they are.
+        let mut a_failed = recording("b");
+        a_failed.last = settled("a", Stage::Failed).last;
+        assert_eq!(follow.next(&a_failed), []);
+        // "c", written beside "b", fails: "b" stays shown.
+        let mut b_writing = finishing("b", Stage::Writing, false);
+        b_writing
+            .finishing
+            .extend(finishing("c", Stage::Writing, false).finishing);
+        assert_eq!(follow.next(&b_writing), [Input::Stage(Stage::Writing)]);
+        let mut c_failed = finishing("b", Stage::Writing, false);
+        c_failed.last = settled("c", Stage::Failed).last;
+        assert_eq!(follow.next(&c_failed), []);
+        assert_eq!(
+            follow.next(&settled("b", Stage::Done)),
+            [Input::Stage(Stage::Done)]
+        );
+    }
+
+    /// A start that fails before any snapshot shows it is the newest thing
+    /// asked for, so it shows even while an older capture is written.
+    #[test]
+    fn a_start_that_fails_unseen_shows_over_an_older_capture() {
+        let mut follow = Follow::default();
+        follow.next(&recording("a"));
+        follow.next(&finishing("a", Stage::Writing, false));
+        let mut b_failed = finishing("a", Stage::Writing, false);
+        b_failed.last = settled("b", Stage::Failed).last;
+        assert_eq!(
+            follow.next(&b_failed),
+            [Input::Failed(Failure::Start, None)]
+        );
     }
 
     fn dest(name: &str, why: &str) -> RouteDest {

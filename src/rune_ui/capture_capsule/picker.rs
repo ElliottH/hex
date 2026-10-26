@@ -458,6 +458,17 @@ impl PickerState {
         self.want = mode;
     }
 
+    /// Whether the scene shows, rather than fading out or gone.
+    #[cfg(test)]
+    pub(crate) fn showing(&self) -> bool {
+        self.scene.on
+    }
+
+    #[cfg(test)]
+    pub(crate) fn aim(&self) -> Option<&Aim> {
+        self.aim.as_ref()
+    }
+
     /// Moves the scene to the aim. True when it changed.
     fn restage(&mut self) -> bool {
         let Some(aim) = &self.aim else {
@@ -572,14 +583,25 @@ impl PickerState {
     }
 
     /// Opens on the display under the pointer, or moves there: the hidden
-    /// pose lands on it now and fades in next poll.
-    fn place(&mut self, mode: Mode, tx: &mut Tx) {
-        let Some((display, pointer)) = pointer_display() else {
-            return;
-        };
+    /// pose lands on it now and fades in next poll. True when it moved, so
+    /// the poll commits that pose.
+    fn place(&mut self, mode: Mode, tx: &mut Tx) -> bool {
+        pointer_display()
+            .is_some_and(|(display, pointer)| self.place_on(mode, display, pointer, tx))
+    }
+
+    /// [`Self::place`] on `display`, a global frame, with the pointer at
+    /// the global `pointer`.
+    pub(super) fn place_on(
+        &mut self,
+        mode: Mode,
+        display: [f32; 4],
+        pointer: [f32; 2],
+        tx: &mut Tx,
+    ) -> bool {
         let fresh = self.aim.as_ref().is_none_or(|aim| aim.display != display);
         if !fresh {
-            return;
+            return false;
         }
         let windows = self.aim.take().and_then(|aim| aim.windows);
         let pointer = [pointer[0] - display[0], pointer[1] - display[1]];
@@ -595,12 +617,7 @@ impl PickerState {
             drag: None,
         });
         if let Some(overlay) = &self.overlay {
-            overlay.set_placement(Some(rune::OverlayPlacement::Rect {
-                x: display[0],
-                y: display[1],
-                width: display[2],
-                height: display[3],
-            }));
+            overlay.set_placement(Some(placement(display)));
             overlay.resize((display[2], display[3]));
         }
         // On another display it starts over: hidden there now, fading in
@@ -611,6 +628,7 @@ impl PickerState {
         self.off_since = None;
         tx.instant();
         tx.wake_after(Duration::ZERO);
+        true
     }
 
     /// Asks for the windows, off the main thread.
@@ -761,7 +779,7 @@ pub(crate) fn poll(s: &mut PickerState, now: f64, tx: &mut Tx) -> bool {
         let mode = aim.mode;
         if now - s.looked >= DISPLAY_EVERY.as_secs_f64() {
             s.looked = now;
-            s.place(mode, tx);
+            changed |= s.place(mode, tx);
         }
         tx.wake_after(DISPLAY_EVERY);
     }
@@ -796,6 +814,22 @@ pub(crate) fn poll(s: &mut PickerState, now: f64, tx: &mut Tx) -> bool {
     changed
 }
 
+/// Where the picker covers `display`, a global frame (top-left origin, as
+/// Scrawl's screens give it). Rune reads a rect from its display's
+/// top-left, so the overlay targets the primary display (whose top-left is
+/// the global origin), never the one under the pointer, which would add
+/// that display's origin a second time.
+pub(super) const DISPLAY: rune::DisplayTarget = rune::DisplayTarget::Primary;
+
+pub(super) fn placement(display: [f32; 4]) -> rune::OverlayPlacement {
+    rune::OverlayPlacement::Rect {
+        x: display[0],
+        y: display[1],
+        width: display[2],
+        height: display[3],
+    }
+}
+
 /// The picker overlay, as the app and the capsule hold it.
 #[derive(Clone)]
 pub(crate) struct PickerOverlay {
@@ -810,11 +844,11 @@ impl PickerOverlay {
         app: &mut rune::App<S>,
         act: impl Fn(Action) + Send + Sync + 'static,
     ) -> Self {
-        use rune::{DisplayTarget, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec};
+        use rune::{OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec};
         let spec = OverlaySpec::new("Hex capture picker", (1440.0, 900.0), view)
             .options(OverlayOptions {
                 placement: Some(OverlayPlacement::FullScreen),
-                display: DisplayTarget::UnderPointer,
+                display: DISPLAY,
                 // Under the capsule, so its chips still take clicks.
                 level: OverlayLevel::AboveStatus,
                 exclude_from_capture: true,

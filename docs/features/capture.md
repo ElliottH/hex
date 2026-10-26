@@ -103,7 +103,9 @@ A cabled iPhone                          // capture.phone
 
 The capsule                              // capture.capsule (rune_ui/capture_capsule)
 ├── A Rune overlay at the top of the pointer's display that never takes focus
-│   and lets clicks through except on its live chips, buttons, and list;
+│   and lets clicks through except on its live chips, buttons, and list; a
+│   new recording brings it to the pointer's display even while it's up on
+│   another;
 │   its window id goes to the engine (`Host::own_windows`, one id per role, so a
 │   recreated window replaces the old one), so recordings leave it out
 ├── Follows `capture_host::watch()`: Recording from the instant `recording` is
@@ -113,7 +115,11 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   recording (`screen`), then "Couldn't save the capture"; a failed send ->
 │   "Couldn't send to X". Each keeps its `error`, or "Screen Recording is off"
 │   when it isn't granted; a start that fails before any snapshot showed it
-│   recording still shows
+│   recording still shows, but never over a newer recording, and a capture
+│   already under way that fails in the background never takes it over
+├── A shown recording that leaves with no outcome (a switch whose new start
+│   failed, `hex capture discard`) -> the capsule leaves; the picker a chip
+│   opened stays
 ├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips, plus
 │   iPhone while the snapshot names a cabled phone, for 3.5 s
 │   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on

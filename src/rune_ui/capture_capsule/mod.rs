@@ -315,6 +315,9 @@ pub(crate) struct CapsuleState {
     overlay: Option<OverlayHandle<CapsuleState>>,
     shown: bool,
     follow: bool,
+    /// A capture started: the capsule moves to the display under the
+    /// pointer, even while still up on another one.
+    replace: bool,
     /// The keys Hex's tap hands the capsule ([`Flow::keys`]): the overlay
     /// never takes focus.
     keys: Option<(
@@ -348,6 +351,7 @@ impl CapsuleState {
             overlay: None,
             shown: false,
             follow: false,
+            replace: false,
             keys: None,
             picker: None,
             picker_mode: None,
@@ -390,6 +394,7 @@ impl CapsuleState {
             Input::Stage(scrawl_capture::capture::Stage::Recording)
         ) {
             self.recording_since = Some(now);
+            self.replace = true;
         }
         let actions = self.flow.input(input, now);
         self.dispatch(actions);
@@ -486,6 +491,12 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
                 overlay.hide();
             }
         }
+    }
+    // Shown, it stays put; a new capture brings it to the pointer.
+    if std::mem::take(&mut s.replace)
+        && let Some(overlay) = &s.overlay
+    {
+        overlay.set_display(rune::DisplayTarget::UnderPointer);
     }
     // The picker follows the pointer between displays.
     let follow = matches!(s.surface.pres, Pres::Selecting { .. });
