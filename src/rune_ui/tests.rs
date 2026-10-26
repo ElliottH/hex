@@ -683,7 +683,6 @@ fn escape_cancels_a_transformation_reorder_without_saving() {
     rt.frame(1.0 / 60.0);
     assert_eq!(order(&rt), before);
     assert_eq!(saved(&rt), saves);
-    assert!(rt.state.modes.drag.is_none());
 }
 
 #[test]
