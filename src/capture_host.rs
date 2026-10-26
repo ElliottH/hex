@@ -121,7 +121,20 @@ trait CaptureEngine: Send + Sync + 'static {
                 height,
                 &list_selectable_windows(),
             )),
+            CaptureTarget::Phone => Target::Phone {
+                device: None,
+                name: None,
+            },
         })
+    }
+
+    /// The names of the cabled iPhones. Blocking: it runs `scrawl-helper
+    /// devices`, which reads the USB registry and asks for no permission.
+    fn phones(&self) -> anyhow::Result<Vec<String>> {
+        Ok(scrawl_capture::helper::devices()?
+            .into_iter()
+            .map(|phone| phone.name)
+            .collect())
     }
 }
 
@@ -143,6 +156,10 @@ pub enum CaptureTarget {
     /// A rect in global top-left points, kept to the display holding its
     /// centre.
     Area { rect: [f64; 4] },
+    /// The first cabled iPhone ([`CaptureSnapshot::phone`]), mirrored in a
+    /// window while it records. The narration is Hex's microphone timeline,
+    /// as for the screen; the mirror opens no microphone.
+    Phone,
 }
 
 impl CaptureTarget {
@@ -152,6 +169,7 @@ impl CaptureTarget {
             Self::Display { .. } => TargetKind::Display,
             Self::Window { .. } => TargetKind::Window,
             Self::Area { .. } => TargetKind::Area,
+            Self::Phone => TargetKind::Phone,
         }
     }
 }
@@ -164,6 +182,7 @@ pub enum TargetKind {
     Display,
     Window,
     Area,
+    Phone,
 }
 
 /// What the capture capsule asks of the host, through
@@ -179,6 +198,9 @@ pub enum TargetKind {
 pub enum CaptureCommand {
     /// Starts a capture on the picker's pick; nothing while one records.
     Start(CaptureTarget),
+    /// Looks for a cabled iPhone off the listener's thread;
+    /// [`CaptureSnapshot::phone`] follows. Each start also looks.
+    FindPhone,
     /// Drops the recording capture: its bundle is removed and it never
     /// settles, so the capsule can turn into the picker in its place.
     Discard,
@@ -627,6 +649,7 @@ enum Seal {
 struct Active {
     bundle: PathBuf,
     t0: CaptureInstant,
+    target: TargetKind,
     seal: SyncSender<Seal>,
     collector: JoinHandle<()>,
 }
@@ -655,6 +678,9 @@ pub struct CaptureSnapshot {
     pub finishing: Vec<FinishingCapture>,
     /// The most recent capture that finished, failed, or was cancelled.
     pub last: Option<SettledCapture>,
+    /// The cabled iPhone's name, when one was found at the last look
+    /// ([`CaptureCommand::FindPhone`]): the capsule's iPhone chip.
+    pub phone: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -721,6 +747,7 @@ impl Feed {
                 recording: None,
                 finishing: Vec::new(),
                 last: None,
+                phone: None,
             }),
             watchers: Mutex::new(Vec::new()),
         }
@@ -832,6 +859,10 @@ struct Outcomes {
     /// settled exactly once, by its collector or by the finisher.
     unfinished: Vec<Unfinished>,
     last: Option<SettledCapture>,
+    phone: Option<String>,
+    /// The iPhone mirror ended on its own; the listener's next
+    /// [`CaptureHost::reap`] finishes the capture.
+    phone_ended: bool,
     feed: &'static Feed,
     /// A switch is between its discard and its start: views see neither
     /// half alone ([`CaptureCommand::Switch`]).
@@ -862,6 +893,8 @@ impl Outcomes {
         Self {
             unfinished: Vec::new(),
             last: None,
+            phone: None,
+            phone_ended: false,
             feed,
             held: false,
         }
@@ -936,6 +969,13 @@ impl Outcomes {
         self.settle_with(bundle, Stage::Failed, None, Some(error), None);
     }
 
+    fn phone(&mut self, phone: Option<String>) {
+        if self.phone != phone {
+            self.phone = phone;
+            self.publish();
+        }
+    }
+
     /// A written capture's route changed; only the newest capture's shows.
     fn routed(&mut self, bundle: &Path, route: CaptureRoute) {
         if let Some(last) = self.last.as_mut()
@@ -983,6 +1023,7 @@ impl Outcomes {
     fn snapshot(&self) -> CaptureSnapshot {
         let mut snapshot = CaptureSnapshot {
             last: self.last.clone(),
+            phone: self.phone.clone(),
             ..CaptureSnapshot::default()
         };
         for unfinished in self
@@ -1054,6 +1095,8 @@ pub struct CaptureHost {
     routes: Option<routing::Routes>,
     /// Collectors of ended captures, until they exit.
     ended: Vec<JoinHandle<()>>,
+    /// A `capture-phone` thread is looking for an iPhone.
+    looking: Arc<AtomicBool>,
 }
 
 impl CaptureHost {
@@ -1134,6 +1177,7 @@ impl CaptureHost {
             finisher: Some((jobs, finisher)),
             routes: Some(routes),
             ended: Vec::new(),
+            looking: Arc::default(),
         })
     }
 
@@ -1242,6 +1286,10 @@ impl CaptureHost {
         self.reap(now, audio);
         let result = match command {
             CaptureCommand::Start(target) => self.begin(now, audio, target),
+            CaptureCommand::FindPhone => {
+                self.find_phone();
+                Ok(self.report(false, None))
+            }
             CaptureCommand::Discard => self.end(now, audio, End::Discard),
             CaptureCommand::Switch(target) => {
                 lock(&self.outcomes).held = true;
@@ -1285,9 +1333,48 @@ impl CaptureHost {
         }
     }
 
+    /// Looks for a cabled iPhone on a `capture-phone` thread, one look at a
+    /// time, and publishes what it finds as [`CaptureSnapshot::phone`].
+    fn find_phone(&self) {
+        if self.looking.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let looking = self.looking.clone();
+        let engine = self.engine.clone();
+        let outcomes = self.outcomes.clone();
+        let spawned = thread::Builder::new()
+            .name("capture-phone".into())
+            .spawn(move || {
+                let phone = engine
+                    .phones()
+                    .inspect_err(|error| tracing::debug!(%error, "could not look for an iPhone"))
+                    .ok()
+                    .and_then(|phones| phones.into_iter().next());
+                lock(&outcomes).phone(phone);
+                looking.store(false, Ordering::Release);
+            });
+        if let Err(error) = spawned {
+            tracing::warn!(%error, "could not look for an iPhone");
+            self.looking.store(false, Ordering::Release);
+        }
+    }
+
     /// Ends a capture whose engine failed to start: its collector exited on
-    /// its own and settled the failure.
+    /// its own and settled the failure. Finishes an iPhone capture whose
+    /// mirror ended on its own (unplugged, never found, or no camera
+    /// access): what it recorded is written, or why it recorded nothing
+    /// fails it.
     fn reap(&mut self, now: CaptureInstant, audio: &impl AudioTimeline) {
+        if std::mem::take(&mut lock(&self.outcomes).phone_ended)
+            && self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.target == TargetKind::Phone)
+        {
+            tracing::info!("the iPhone mirror ended; finishing its capture");
+            let _ = self.end(now, audio, End::Finish);
+            return;
+        }
         if self
             .active
             .as_ref()
@@ -1363,9 +1450,11 @@ impl CaptureHost {
         self.active = Some(Active {
             bundle,
             t0: now,
+            target: target.kind(),
             seal,
             collector,
         });
+        self.find_phone();
         Ok(self.report(true, None))
     }
 
@@ -1938,6 +2027,16 @@ fn join_by(thread: JoinHandle<()>, deadline: Instant, name: &str) {
 /// the host's outcomes, and so to the snapshot.
 fn log_events(events: Receiver<Event>) {
     for event in events {
+        if let Event::PhoneEnded = event {
+            tracing::info!("the iPhone mirror ended on its own");
+            let live = LIVE_OUTCOMES
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .upgrade();
+            if let Some(outcomes) = live {
+                lock(&outcomes).phone_ended = true;
+            }
+        }
         if let Event::Progress { bundle, stage } = event {
             tracing::info!(bundle = %bundle.display(), stage = stage.label(), "capture progress");
             let live = LIVE_OUTCOMES
@@ -2520,6 +2619,7 @@ mod tests {
         starts: Mutex<Vec<Start>>,
         steps: Steps,
         refuse: bool,
+        phones: Vec<String>,
     }
 
     /// What each capture did, in order: `stop`, then `finish` once its
@@ -2533,6 +2633,7 @@ mod tests {
                 starts: Mutex::default(),
                 steps: Steps::default(),
                 refuse: false,
+                phones: Vec::new(),
             })
         }
     }
@@ -2555,8 +2656,17 @@ mod tests {
         fn target(&self, target: CaptureTarget) -> anyhow::Result<Target> {
             match target {
                 CaptureTarget::Window { id: 0 } => anyhow::bail!("the window closed"),
+                CaptureTarget::Phone => Ok(Target::Phone {
+                    device: None,
+                    name: None,
+                }),
                 _ => Ok(Target::ActiveDisplay),
             }
+        }
+
+        /// No `scrawl-helper`.
+        fn phones(&self) -> anyhow::Result<Vec<String>> {
+            Ok(self.phones.clone())
         }
     }
 
@@ -2770,6 +2880,7 @@ mod tests {
             starts: Mutex::default(),
             steps: Steps::default(),
             refuse: true,
+            phones: Vec::new(),
         });
         let mut host = CaptureHost::with(engine, Some(dir.clone())).unwrap();
         let bundle = report(host.control(ScrawlCaptureAction::Start, &audio))
@@ -3175,6 +3286,67 @@ mod tests {
         assert!(!report(again).changed);
         host.shutdown(&audio);
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_iphone_capture_narrates_with_hex_audio_and_finishes_when_its_mirror_ends() {
+        let dir = temp_dir("phone");
+        let audio = FakeTimeline::default();
+        let engine = Arc::new(FakeEngine {
+            transcriber: Arc::new(FakeTranscriber),
+            starts: Mutex::default(),
+            steps: Steps::default(),
+            refuse: false,
+            phones: vec!["iPhone".into()],
+        });
+        let mut host = CaptureHost::with(engine.clone(), Some(dir.clone())).unwrap();
+        host.command(CaptureCommand::FindPhone, &audio);
+        wait_for(|| lock(&host.outcomes).snapshot().phone.as_deref() == Some("iPhone"));
+
+        let bundle = report(host.command(CaptureCommand::Start(CaptureTarget::Phone), &audio))
+            .bundle
+            .unwrap();
+        let recording = lock(&host.outcomes).snapshot().recording.unwrap();
+        assert_eq!(recording.target, TargetKind::Phone);
+        wait_for(|| !engine.starts.lock().unwrap().is_empty());
+        let start = engine.starts.lock().unwrap()[0].clone();
+        assert!(matches!(start.target, Target::Phone { .. }));
+        assert_eq!(start.audio, AudioIn::External);
+
+        // Unplugged: the next look at the host finishes what it recorded.
+        lock(&host.outcomes).phone_ended = true;
+        assert_eq!(host.recording_since(&audio), None);
+        let last = wait_for_last(&mut host, &audio, &bundle, true);
+        assert_eq!(last.stage, "done");
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_mirror_ending_never_stops_a_screen_capture() {
+        let dir = temp_dir("phone-ended");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        report(host.shortcut(ShortcutAction::Record, &audio));
+        lock(&host.outcomes).phone_ended = true;
+        assert!(host.recording_since(&audio).is_some());
+        assert!(!lock(&host.outcomes).phone_ended);
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    fn wait_for(done: impl Fn() -> bool) {
+        for _ in 0..1_000 {
+            if done() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("timed out");
     }
 
     #[test]
