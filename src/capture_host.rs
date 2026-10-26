@@ -141,13 +141,6 @@ trait CaptureEngine: Send + Sync + 'static {
 
 /// What a capture records.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the capsule has no on-screen window or area picker yet"
-    )
-)]
 pub enum CaptureTarget {
     /// The display under the pointer, cropped to what changes: the
     /// shortcut's.
@@ -377,7 +370,7 @@ impl Host for HexHost {
 
 /// Hex's windows a capture leaves out of its recording, one per role. A
 /// capture reads them when it starts.
-static OWN_WINDOWS: Mutex<[Option<u32>; 2]> = Mutex::new([None, None]);
+static OWN_WINDOWS: Mutex<[Option<u32>; 3]> = Mutex::new([None, None, None]);
 
 /// Which of Hex's windows a capture leaves out.
 #[derive(Clone, Copy, Debug)]
@@ -385,6 +378,8 @@ pub enum OwnWindow {
     Capsule,
     /// Click-through, so a click on it never counts as a click on Hex.
     Ink,
+    /// The on-screen picker, hidden before the capture it starts records.
+    Picker,
 }
 
 /// Leaves `window` out of every later capture's recording, replacing the

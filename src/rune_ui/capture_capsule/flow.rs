@@ -194,10 +194,14 @@ pub(crate) enum Input {
 }
 
 /// What the host should do about an input or a click.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Action {
-    /// Start recording in this mode.
+    /// Start recording in this mode: the capsule's Record, or the capture
+    /// shortcut while it picks. The picker turns it into [`Self::Start`]
+    /// on what it shows; without one, it records the pointer's display.
     Record(Mode),
+    /// Start recording what the picker picked on screen.
+    Start(crate::capture_host::CaptureTarget),
     /// Switch the recording's mode.
     Switch(Mode),
     Finish,
@@ -450,9 +454,7 @@ impl Flow {
                     .map(|until| until.min(until - CHIPS_OPEN_S + CHIPS_MIN_S).max(now)),
             },
             (Phase::Selecting(mode), Input::Record) => {
-                if mode.shows_record() {
-                    actions.push(Action::Record(mode));
-                }
+                actions.push(Action::Record(mode));
                 Phase::Selecting(mode)
             }
             (_, Input::Pick(mode)) => Phase::Selecting(mode),
@@ -993,6 +995,11 @@ mod tests {
         assert_eq!(
             flow.input(Input::Record, 0.5),
             [Action::Record(Mode::Screen)]
+        );
+        flow.input(Input::Pick(Mode::Window), 0.6);
+        assert_eq!(
+            flow.input(Input::Record, 0.7),
+            [Action::Record(Mode::Window)]
         );
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Recording), 0.0);

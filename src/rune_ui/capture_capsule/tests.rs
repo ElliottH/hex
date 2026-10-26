@@ -1005,3 +1005,427 @@ fn ink_overlay_stills_and_frames() {
         }
     }
 }
+
+// ── The on-screen picker ────────────────────────────────────────────────
+
+use super::picker::{self, Aim, PickerState};
+
+/// The picker's display in the stills and clips, in points.
+const DISPLAY: [f32; 2] = [960.0, 600.0];
+
+fn picker_aim(mode: Mode, pointer: [f32; 2]) -> Aim {
+    picker::tests::aim(mode, pointer)
+}
+
+fn picker_stills() -> Vec<(&'static str, Aim)> {
+    vec![
+        ("onscreen-window", picker_aim(Mode::Window, [800.0, 470.0])),
+        (
+            "onscreen-area",
+            Aim {
+                drag: Some([300.0, 180.0]),
+                ..picker_aim(Mode::Area, [640.0, 420.0])
+            },
+        ),
+        ("onscreen-screen", picker_aim(Mode::Screen, [480.0, 300.0])),
+    ]
+}
+
+/// What a picker clip does, on the frame clock.
+#[derive(Clone)]
+enum Do {
+    Want(Option<Mode>),
+    /// Glides the pointer to here over `.1` seconds.
+    Move([f32; 2], f64),
+    Press([f32; 2]),
+    /// Drags to here over `.1` seconds, then releases.
+    Drag([f32; 2], f64),
+}
+
+struct PickerScript {
+    name: &'static str,
+    start: Aim,
+    beats: Vec<(f64, Do)>,
+    end: f64,
+}
+
+fn picker_scripts() -> Vec<PickerScript> {
+    vec![
+        PickerScript {
+            name: "onscreen-window",
+            start: picker_aim(Mode::Window, [80.0, 520.0]),
+            beats: vec![
+                (0.1, Do::Want(Some(Mode::Window))),
+                (0.7, Do::Move([300.0, 200.0], 0.5)),
+                (1.5, Do::Move([780.0, 480.0], 0.5)),
+                (2.3, Do::Move([60.0, 560.0], 0.5)),
+                (3.1, Do::Move([480.0, 320.0], 0.5)),
+                (3.9, Do::Press([480.0, 320.0])),
+                // The capture records: the capsule stops picking.
+                (4.2, Do::Want(None)),
+            ],
+            end: 5.0,
+        },
+        PickerScript {
+            name: "onscreen-area",
+            start: picker_aim(Mode::Area, [240.0, 160.0]),
+            beats: vec![
+                (0.1, Do::Want(Some(Mode::Area))),
+                // Too small to record: it closes onto the release.
+                (0.6, Do::Press([240.0, 160.0])),
+                (0.6, Do::Drag([262.0, 178.0], 0.15)),
+                (1.0, Do::Move([300.0, 180.0], 0.5)),
+                (1.8, Do::Press([300.0, 180.0])),
+                (1.8, Do::Drag([660.0, 440.0], 0.8)),
+                (3.0, Do::Want(None)),
+            ],
+            end: 3.8,
+        },
+        PickerScript {
+            name: "onscreen-modes",
+            start: picker_aim(Mode::Window, [380.0, 260.0]),
+            beats: vec![
+                (0.1, Do::Want(Some(Mode::Window))),
+                (1.0, Do::Want(Some(Mode::Area))),
+                (1.8, Do::Want(Some(Mode::Screen))),
+                (2.6, Do::Want(Some(Mode::Window))),
+                (3.4, Do::Want(None)),
+            ],
+            end: 4.2,
+        },
+    ]
+}
+
+/// A hand's glide: it starts and lands without a jolt.
+fn ease(t: f64) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    (t * t * t * (t * (6.0 * t - 15.0) + 10.0)) as f32
+}
+
+fn lerp(a: [f32; 2], b: [f32; 2], t: f32) -> [f32; 2] {
+    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+}
+
+/// A glide or drag under way, and whether it's a drag that releases at
+/// the end.
+#[derive(Clone, Copy)]
+struct Glide {
+    from: [f32; 2],
+    to: [f32; 2],
+    start: f64,
+    secs: f64,
+    drag: bool,
+}
+
+impl Glide {
+    fn new(from: [f32; 2], to: [f32; 2], start: f64, secs: f64, drag: bool) -> Self {
+        Self {
+            from,
+            to,
+            start,
+            secs,
+            drag,
+        }
+    }
+}
+
+/// The picker's samples: its opacity and the target's rect.
+struct PickerSample {
+    t: f64,
+    opacity: f32,
+    target: Option<[f32; 4]>,
+    animating: bool,
+}
+
+/// Plays `script` at 60 fps, handing every frame to `frame`.
+fn play_picker(
+    script: &PickerScript,
+    variant: Variant,
+    dark: bool,
+    trace: Option<rune_motion::MotionTrace>,
+    mut frame: impl FnMut(&mut Runtime<PickerState>, usize),
+) -> (Vec<PickerSample>, Vec<Action>) {
+    let mut state = PickerState::still(script.start.clone(), false);
+    let actions: Arc<Mutex<Vec<Action>>> = Arc::default();
+    let record = actions.clone();
+    state.set_act(Arc::new(move |action| record.lock().unwrap().push(action)));
+    let mut rt = Runtime::with_text(
+        state,
+        picker::view,
+        (DISPLAY[0], DISPLAY[1]),
+        env(dark),
+        text(),
+    );
+    rt.poll = Some(picker::poll);
+    rt.set_system_reduced_motion(variant == Variant::Reduced);
+    rt.scene.set_trace(trace);
+    rt.frame(0.0);
+    let mut pointer = script.start.pointer.unwrap_or([0.0, 0.0]);
+    let mut glide: Option<Glide> = None;
+    let mut next = 0;
+    let mut samples = Vec::new();
+    let frames = (script.end * FPS).round() as usize;
+    for index in 0..=frames {
+        let t = index as f64 / FPS;
+        while next < script.beats.len() && script.beats[next].0 <= t + 1e-9 {
+            match script.beats[next].1.clone() {
+                Do::Want(mode) => rt.update(move |s, tx| {
+                    s.want(mode);
+                    tx.wake_after(std::time::Duration::ZERO);
+                }),
+                Do::Move(to, secs) => glide = Some(Glide::new(pointer, to, t, secs, false)),
+                Do::Drag(to, secs) => glide = Some(Glide::new(pointer, to, t, secs, true)),
+                Do::Press(at) => {
+                    pointer = at;
+                    rt.update(move |s, tx| s.dragged(rune::Phase::Down, at, false, tx));
+                }
+            }
+            next += 1;
+        }
+        if let Some(Glide {
+            from,
+            to,
+            start,
+            secs,
+            drag,
+        }) = glide
+        {
+            let k = ((t - start) / secs).min(1.0);
+            pointer = lerp(from, to, ease(k));
+            let at = pointer;
+            rt.update(move |s, tx| {
+                if drag {
+                    s.dragged(rune::Phase::Move, at, false, tx);
+                } else {
+                    s.moved(at, tx);
+                }
+            });
+            if k >= 1.0 {
+                glide = None;
+                if drag {
+                    rt.update(move |s, tx| s.dragged(rune::Phase::Up, at, false, tx));
+                }
+            }
+        }
+        let animating = rt.frame(if index == 0 { 0.0 } else { 1.0 / FPS });
+        let elements = rt.elements();
+        let opacity = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("layer"))
+            .map_or(0.0, |e| e.opacity);
+        let target = elements
+            .iter()
+            .find(|e| e.key.as_deref() == Some("target"))
+            .map(|e| e.rect);
+        rt.trace_channel("picker.alpha", "level", opacity);
+        samples.push(PickerSample {
+            t,
+            opacity,
+            target,
+            animating,
+        });
+        frame(&mut rt, index);
+    }
+    if let Some(mut trace) = rt.scene.take_trace() {
+        trace.flush().unwrap();
+    }
+    let actions = actions.lock().unwrap().clone();
+    (samples, actions)
+}
+
+/// What's wrong with a picker clip: the target jumping while it shows, or
+/// frames still asked for long after the last beat. A spring leaving rest
+/// speeds up, so a jump is a big first step from rest that the next frame
+/// doesn't keep up (a grow across the display moves far on its first frame,
+/// and further on its second).
+fn picker_faults(script: &PickerScript, variant: Variant, samples: &[PickerSample]) -> Vec<String> {
+    let mut faults = Vec::new();
+    for i in 2..samples.len().saturating_sub(1) {
+        let (Some(before), Some(prev), Some(rect), Some(after)) = (
+            samples[i - 2].target,
+            samples[i - 1].target,
+            samples[i].target,
+            samples[i + 1].target,
+        ) else {
+            continue;
+        };
+        if samples[i].opacity <= 0.05 || variant != Variant::Calm {
+            continue;
+        }
+        for k in 0..4 {
+            let step = (rect[k] - prev[k]).abs();
+            let was = (prev[k] - before[k]).abs();
+            let next = (after[k] - rect[k]).abs();
+            if step > 40.0 && was < 0.5 && next < step {
+                faults.push(format!(
+                    "{} {} at {:.3} s: the target jumps from rest {prev:?} → {rect:?}",
+                    script.name,
+                    variant.name(),
+                    samples[i].t
+                ));
+            }
+        }
+    }
+    let last = script.beats.last().map_or(0.0, |b| b.0);
+    if let Some(late) = samples.iter().find(|s| s.t > last + 1.0 && s.animating) {
+        faults.push(format!(
+            "{} {}: still asks for frames at {:.3} s",
+            script.name,
+            variant.name(),
+            late.t
+        ));
+    }
+    faults
+}
+
+#[test]
+fn the_picker_records_what_it_shows_and_comes_to_rest() {
+    let mut faults = Vec::new();
+    let mut picks = Vec::new();
+    for script in picker_scripts() {
+        for variant in [Variant::Calm, Variant::Reduced] {
+            let (samples, actions) = play_picker(&script, variant, true, None, |_, _| {});
+            faults.extend(picker_faults(&script, variant, &samples));
+            if variant == Variant::Calm {
+                picks.push((script.name, actions));
+            }
+        }
+    }
+    assert!(faults.is_empty(), "{faults:#?}");
+    use crate::capture_host::CaptureTarget;
+    assert_eq!(
+        picks,
+        vec![
+            (
+                "onscreen-window",
+                vec![Action::Start(CaptureTarget::Window { id: 1 })]
+            ),
+            (
+                "onscreen-area",
+                vec![Action::Start(CaptureTarget::Area {
+                    rect: [300.0, 180.0, 360.0, 260.0]
+                })]
+            ),
+            ("onscreen-modes", vec![]),
+        ]
+    );
+}
+
+/// `HEX_CAPSULE_SNAPS=<folder>` writes the picker's stills, light and dark;
+/// `HEX_CAPSULE_MOTION=<folder>` its motion-lint traces in
+/// `<folder>/runs/<script>-<variant>/`, and with `HEX_CAPSULE_FRAMES=1` its
+/// calm frames in `<folder>/frames/<script>-calm-<theme>/`.
+#[test]
+fn picker_stills_and_motion() {
+    use rune::render::{OFFSCREEN_FORMAT, Offscreen, Renderer};
+    let snaps = std::env::var_os("HEX_CAPSULE_SNAPS").map(std::path::PathBuf::from);
+    let motion = std::env::var_os("HEX_CAPSULE_MOTION").map(std::path::PathBuf::from);
+    if snaps.is_none() && motion.is_none() {
+        return;
+    }
+    let frames = std::env::var_os("HEX_CAPSULE_FRAMES").is_some();
+    let gpu = rune::render::Gpu::try_new(rune::render::Gpu::instance(), None).ok();
+    let (w, h) = ((DISPLAY[0] * 2.0) as u32, (DISPLAY[1] * 2.0) as u32);
+    let mut parts = gpu.as_ref().map(|gpu| {
+        (
+            Renderer::new(&gpu.device, OFFSCREEN_FORMAT),
+            Offscreen::new(&gpu.device, w, h),
+        )
+    });
+    let mut draw = |rt: &mut Runtime<PickerState>, path: &std::path::Path| {
+        let (Some(gpu), Some((renderer, target))) = (&gpu, &mut parts) else {
+            return;
+        };
+        renderer.prepare(
+            &gpu.device,
+            &gpu.queue,
+            &mut rt.text.atlas,
+            &rt.instances,
+            (w, h),
+        );
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut encoder, &target.view, rt.clear_color());
+        target.copy(&mut encoder);
+        gpu.queue.submit([encoder.finish()]);
+        rune::render::write_png(path, w, h, &target.read(&gpu.device)).unwrap();
+    };
+    if let Some(folder) = &snaps {
+        std::fs::create_dir_all(folder).unwrap();
+        for (name, aim) in picker_stills() {
+            for dark in [false, true] {
+                let theme = if dark { "dark" } else { "light" };
+                let state = PickerState::still(aim.clone(), true);
+                let mut rt = Runtime::with_text(
+                    state,
+                    picker::view,
+                    (DISPLAY[0], DISPLAY[1]),
+                    env(dark),
+                    text(),
+                );
+                rt.frame(0.0);
+                draw(&mut rt, &folder.join(format!("{name}-{theme}.png")));
+            }
+        }
+    }
+    let Some(folder) = motion else {
+        return;
+    };
+    let mut report = Vec::new();
+    for script in picker_scripts() {
+        for variant in [Variant::Calm, Variant::Reduced] {
+            for dark in [true, false] {
+                let theme = if dark { "dark" } else { "light" };
+                let framed = frames && variant == Variant::Calm;
+                let trace = dark.then(|| {
+                    let run =
+                        folder
+                            .join("runs")
+                            .join(format!("{}-{}", script.name, variant.name()));
+                    std::fs::create_dir_all(&run).unwrap();
+                    let header = rune_motion::TraceHeader {
+                        launch: format!("{}-{}", script.name, variant.name()),
+                        width: DISPLAY[0],
+                        height: DISPLAY[1],
+                        hz: FPS as f32,
+                        scale: 2.0,
+                    };
+                    let file = std::fs::File::create(run.join("trace.jsonl")).unwrap();
+                    rune_motion::MotionTrace::new(file, &header)
+                        .unwrap()
+                        .host("picker")
+                });
+                if trace.is_none() && !framed {
+                    continue;
+                }
+                let out = folder.join("frames").join(format!(
+                    "{}-{}-{theme}",
+                    script.name,
+                    variant.name()
+                ));
+                if framed {
+                    std::fs::create_dir_all(&out).unwrap();
+                }
+                let (samples, _) = play_picker(&script, variant, dark, trace, |rt, index| {
+                    if framed {
+                        draw(rt, &out.join(format!("{index:04}.png")));
+                    }
+                });
+                if dark {
+                    let found = picker_faults(&script, variant, &samples);
+                    report.push(format!(
+                        "{} {}: {} frames, {}",
+                        script.name,
+                        variant.name(),
+                        samples.len(),
+                        if found.is_empty() {
+                            "no faults".to_owned()
+                        } else {
+                            found.join("; ")
+                        }
+                    ));
+                }
+            }
+        }
+    }
+    std::fs::write(folder.join("onscreen-report.txt"), report.join("\n") + "\n").unwrap();
+}

@@ -396,8 +396,14 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     // The capture capsule and ink overlay, with the `capture` experiment on.
     #[cfg(hex_capture)]
     if crate::app_settings::capture_available() {
-        use crate::rune_ui::capture_capsule::{CaptureCapsule, feed, ink::InkOverlay};
-        let capsule = CaptureCapsule::install(&mut app, feed::act);
+        use crate::rune_ui::capture_capsule::{
+            CaptureCapsule, feed, ink::InkOverlay, picker::PickerOverlay,
+        };
+        let picker = PickerOverlay::install(&mut app, feed::act);
+        let aim = picker.clone();
+        let capsule =
+            CaptureCapsule::install(&mut app, move |action| feed::act(aim.resolve(action)));
+        capsule.attach(picker);
         feed::follow(capsule, InkOverlay::install(&mut app));
     }
     let pump = Pump {

@@ -141,7 +141,8 @@ pub(crate) fn follow(capsule: CaptureCapsule, ink: InkOverlay) {
 
 /// Carries out a press or key on the capsule: Finish and Cancel end the
 /// capture as `hex capture stop|cancel` would, a chip discards the
-/// recording, and Screen records the display under the pointer. Runs on the
+/// recording, the picker starts what it picked, and Record (or the
+/// shortcut) without a pick records the display under the pointer. Runs on the
 /// main thread, so it only queues the commands.
 pub(crate) fn act(action: Action) {
     use crate::control::ScrawlCaptureAction;
@@ -151,9 +152,11 @@ pub(crate) fn act(action: Action) {
         Action::Finish => vec![scrawl(ScrawlCaptureAction::Stop)],
         Action::Cancel => vec![scrawl(ScrawlCaptureAction::Cancel)],
         Action::Discard => vec![command(CaptureCommand::Discard)],
-        Action::Record(Mode::Screen) => vec![command(screen())],
-        // Recording an iPhone, picking a window or an area on screen, and
-        // routing are not built.
+        Action::Start(target) => vec![command(CaptureCommand::Start(target))],
+        // What the picker would record, when it has nothing to record yet
+        // (its windows still load): the pointer's display.
+        Action::Record(Mode::Screen | Mode::Window | Mode::Area) => vec![command(screen())],
+        // Recording an iPhone and routing are not built.
         other => {
             tracing::info!(
                 ?other,

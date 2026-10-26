@@ -17,6 +17,7 @@
 pub(crate) mod feed;
 pub(crate) mod flow;
 pub(crate) mod ink;
+pub(crate) mod picker;
 pub(crate) mod surface;
 
 #[cfg(test)]
@@ -317,6 +318,9 @@ pub(crate) struct CapsuleState {
     /// While the picker shows, Hex's tap hands it the capture shortcut and
     /// Escape: the overlay never takes focus.
     picking: Option<crate::capture_host::Picking>,
+    /// The on-screen picker, and the mode it was last told to pick.
+    picker: Option<picker::PickerOverlay>,
+    picker_mode: Option<Mode>,
     /// A still for goldens: it rests, nothing plays.
     still: bool,
     /// Draws a plain backdrop behind the capsule (stills and clips), so its
@@ -342,6 +346,8 @@ impl CapsuleState {
             shown: false,
             follow: false,
             picking: None,
+            picker: None,
+            picker_mode: None,
             still: false,
             backdrop: false,
         }
@@ -497,6 +503,17 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
             });
         }
     }
+    // The on-screen picker shows what the capsule picks.
+    let picking = match s.surface.pres {
+        Pres::Selecting { mode, .. } => Some(mode),
+        _ => None,
+    };
+    if s.picker_mode != picking {
+        s.picker_mode = picking;
+        if let Some(picker) = &s.picker {
+            picker.set(picking);
+        }
+    }
     if let Some(wake) = wake {
         tx.wake_after(Duration::from_secs_f64(wake.max(0.0)));
     }
@@ -564,6 +581,16 @@ impl CaptureCapsule {
         let handle = overlay.clone();
         overlay.update(move |s, _| s.overlay = Some(handle));
         Self { overlay }
+    }
+
+    /// Shows `picker` while the capsule picks a window, an area, or the
+    /// screen.
+    pub(crate) fn attach(&self, picker: picker::PickerOverlay) {
+        self.overlay.update(move |s, tx| {
+            s.picker_mode = None;
+            s.picker = Some(picker);
+            tx.wake_after(Duration::ZERO);
+        });
     }
 
     /// Moves the capsule; safe from any thread.
