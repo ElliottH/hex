@@ -17,6 +17,7 @@ use super::settings::{cancel_capture, shortcut_control};
 use super::{Menu, ShortcutTarget, Ui};
 use crate::app_settings::{AppSettings, CaptureTranscriber};
 use crate::desktop_i18n::{tr, tr_fill};
+use crate::onboarding::{PermissionAction, PermissionKind};
 
 fn description(enabled: bool) -> &'static str {
     if enabled {
@@ -190,13 +191,17 @@ fn shortcut_rows(ui: &Ui, p: Paint, view: &ScrawlView) -> Vec<El> {
                 "screen-recording-allow",
                 if view.screen_recording {
                     PermissionControl::Allowed
-                } else if view.screen_recording_asked {
+                } else if ui.platform.asked(PermissionKind::ScreenRecording) {
                     PermissionControl::Waiting
                 } else {
                     PermissionControl::Allow
                 },
                 ButtonKind::Secondary,
-                |ui: &mut Ui| scrawl_request(ui, ScrawlRequest::ScreenRecording),
+                |ui: &mut Ui| {
+                    ui.ask(PlatformRequest::Permission(PermissionAction::ShowGuide(
+                        PermissionKind::ScreenRecording,
+                    )))
+                },
             ),
         ));
     }
@@ -386,6 +391,89 @@ mod tests {
         });
         set_enabled(&mut list, true).unwrap();
         assert!(list.capture.enabled);
+    }
+
+    /// The Scrawl pane drawn from `scene`, laid out headlessly.
+    fn pane(scene: &str) -> rune::Runtime<Ui> {
+        use crate::rune_ui::{SCENES, Service};
+        let mut state = Ui::with(AppSettings::default(), Service::Fixture(Vec::new()));
+        let (_, apply) = SCENES.iter().find(|(name, _)| *name == scene).unwrap();
+        apply(&mut state);
+        let env = rune::Env {
+            system_dark: true,
+            scale: 1.0,
+        };
+        let text =
+            rune::text::TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
+        let mut rt =
+            rune::Runtime::with_text(state, crate::rune_ui::view, (980.0, 760.0), env, text);
+        rt.settle_all();
+        rt.frame(0.0);
+        rt
+    }
+
+    fn tap(rt: &mut rune::Runtime<Ui>, key: &str) {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("no element {key}"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        for _ in 0..60 {
+            rt.frame(1.0 / 60.0);
+        }
+    }
+
+    fn asked(rt: &rune::Runtime<Ui>) -> &[PlatformRequest] {
+        match &rt.state.host {
+            crate::rune_ui::platform::PlatformHost::Fixture(sent) => sent,
+            _ => panic!("scenes record platform requests"),
+        }
+    }
+
+    const ALLOW: &str = "screen-recording-allow";
+
+    #[test]
+    fn granted_screen_recording_shows_allowed_and_asks_nothing() {
+        let mut rt = pane("mac-scrawl");
+        assert!(
+            rt.find(&format!("{ALLOW}-control/mark/ink/check"))
+                .is_some(),
+            "already granted reads Allowed"
+        );
+        tap(&mut rt, ALLOW);
+        assert!(asked(&rt).is_empty(), "Allowed is not a button");
+    }
+
+    #[test]
+    fn screen_recording_allow_opens_the_permission_guide() {
+        let mut rt = pane("mac-scrawl-permission");
+        tap(&mut rt, ALLOW);
+        assert_eq!(
+            asked(&rt),
+            [PlatformRequest::Permission(PermissionAction::ShowGuide(
+                PermissionKind::ScreenRecording
+            ))]
+        );
+        assert!(
+            rt.find(&format!("{ALLOW}-control/mark/dot")).is_some(),
+            "waits with a dot"
+        );
+        // The fixture grants on the second ask.
+        tap(&mut rt, ALLOW);
+        assert!(rt.state.platform.scrawl.as_ref().unwrap().screen_recording);
+        assert!(
+            rt.find(&format!("{ALLOW}-control/mark/ink/check"))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn opening_the_pane_reads_screen_recording_again() {
+        let mut rt = pane("mac-scrawl");
+        tap(&mut rt, "nav-general");
+        tap(&mut rt, "nav-scrawl");
+        assert_eq!(
+            asked(&rt),
+            [PlatformRequest::Scrawl(ScrawlRequest::Refresh)]
+        );
     }
 
     #[test]

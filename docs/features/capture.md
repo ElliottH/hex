@@ -36,8 +36,12 @@ Settings › Experiments › Scrawl          // capture.pane
 ├── Send-to list (capture.list_hotkey, default ⌥⇧V) -> the capsule's list; a key
 │   is required, refused on overlap like the shortcut. Paste Last defaults to
 │   ⌥⇧V too, so turning captures on is refused until one of them is rebound
-├── Screen Recording -> Allow asks macOS once, then opens its System Settings list;
-│   never part of onboarding (macOS also asks at the first capture)
+├── Screen Recording -> read (preflight, never a prompt) once a second and again
+│   when the pane opens or the window becomes key; granted -> Allowed, no button
+│   └── Allow -> rechecks, then the onboarding permission guide over System
+│       Settings' list (PermissionKind::ScreenRecording), as for Input
+│       Monitoring; flips to Allowed on the next read. Never part of onboarding
+│       (macOS also asks at the first capture). Check: rune_ui::scrawl tests
 ├── Transcriber (capture.transcriber) -> Parakeet (default) | Apple
 ├── Captures folder (capture.folder, default Scrawl's) -> Reveal | choose another
 ├── Keep (capture.media_days / bundle_days) -> Scrawl's presets, or imported days

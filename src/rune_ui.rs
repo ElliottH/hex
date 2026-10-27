@@ -756,7 +756,19 @@ impl Ui {
                 .note_asked(crate::onboarding::PermissionKind::Microphone),
             platform::PlatformRequest::Permission(
                 crate::onboarding::PermissionAction::ShowGuide(kind),
-            ) => self.platform.note_asked(*kind),
+            ) => {
+                // Previews grant Screen Recording on the second ask, as for
+                // system audio.
+                #[cfg(hex_capture)]
+                if *kind == crate::onboarding::PermissionKind::ScreenRecording
+                    && self.host.is_fixture()
+                    && self.platform.asked(*kind)
+                    && let Some(view) = self.platform.scrawl.as_mut()
+                {
+                    view.screen_recording = true;
+                }
+                self.platform.note_asked(*kind);
+            }
             platform::PlatformRequest::SystemAudio => {
                 let kind = crate::onboarding::PermissionKind::SystemAudio;
                 // Previews grant on the second ask, so a scene can play
@@ -767,25 +779,12 @@ impl Ui {
                 self.platform.note_asked(kind);
             }
             #[cfg(hex_capture)]
-            platform::PlatformRequest::Scrawl(request) => {
+            platform::PlatformRequest::Scrawl(platform::ScrawlRequest::QuitScrawl) => {
                 let fixture = self.host.is_fixture();
                 if let Some(view) = self.platform.scrawl.as_mut() {
-                    match request {
-                        platform::ScrawlRequest::ScreenRecording => {
-                            // Previews grant on the second ask, as for
-                            // system audio.
-                            if fixture && view.screen_recording_asked {
-                                view.screen_recording = true;
-                            }
-                            view.screen_recording_asked = true;
-                        }
-                        platform::ScrawlRequest::QuitScrawl => {
-                            view.quitting_scrawl = true;
-                            if fixture {
-                                view.scrawl_running = false;
-                            }
-                        }
-                        _ => {}
+                    view.quitting_scrawl = true;
+                    if fixture {
+                        view.scrawl_running = false;
                     }
                 }
             }
@@ -897,6 +896,10 @@ impl Ui {
         match pane {
             Pane::History => self.history.reload(),
             Pane::HudLab => self.ask(platform::PlatformRequest::ConfigureHud(self.platform.hud)),
+            #[cfg(hex_capture)]
+            Pane::Scrawl => self.ask(platform::PlatformRequest::Scrawl(
+                platform::ScrawlRequest::Refresh,
+            )),
             _ => {}
         }
     }
@@ -1101,7 +1104,19 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     if let Some(tour) = onboarding::overlay(ui, p) {
         layer.push(tour);
     }
-    rune_kit::root(window, layer).on_window_focus(explainer::window_focused)
+    rune_kit::root(window, layer).on_window_focus(window_focused)
+}
+
+fn window_focused(ui: &mut Ui, focused: bool, tx: &mut Tx) {
+    explainer::window_focused(ui, focused, tx);
+    // Screen Recording is often switched on in System Settings, so the
+    // Scrawl pane reads it again as soon as Hex comes back.
+    #[cfg(hex_capture)]
+    if focused && ui.pane == Pane::Scrawl && ui.platform.scrawl.is_some() {
+        ui.ask(platform::PlatformRequest::Scrawl(
+            platform::ScrawlRequest::Refresh,
+        ));
+    }
 }
 
 /// macOS draws the traffic lights over the sidebar (Rune's window has a

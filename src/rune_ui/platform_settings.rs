@@ -52,6 +52,11 @@ fn permission_copy(
             tr("Screen & System Audio Recording"),
             tr("Required to hear the other participants."),
         ),
+        PermissionKind::ScreenRecording => (
+            "permission-screen-recording",
+            tr("Screen Recording"),
+            tr("Lets a capture record your screen"),
+        ),
     }
 }
 
