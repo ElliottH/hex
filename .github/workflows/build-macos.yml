@@ -18,6 +18,10 @@ on:
       version:
         type: string
         required: true
+      channel:
+        description: The release channel this build is published on, compiled in as HEX_BUILD_CHANNEL (src/updater.rs)
+        type: string
+        required: true
       environment:
         description: The GitHub environment holding the Apple secrets (release or release-dev)
         type: string
@@ -39,6 +43,7 @@ jobs:
     env:
       VOICE_CONTROL_TEAM_ID: 5NZ4Q7NXJ4
       HEX_VERSION: ${{ inputs.version }}
+      HEX_BUILD_CHANNEL: ${{ inputs.channel }}
     steps:
       - name: Require the signing secrets
         id: secrets

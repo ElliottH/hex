@@ -1481,17 +1481,16 @@ fn update_channel_row(ui: &Ui, p: Paint) -> Option<El> {
             | DesktopUpdateStatus::Downloading
             | DesktopUpdateStatus::Available
             | DesktopUpdateStatus::ReadyToRestart
+            | DesktopUpdateStatus::SwitchAvailable { .. }
     );
     if !updates {
         return None;
     }
-    let shown = ui.settings.updates.channel.unwrap_or(
-        if crate::updater::is_dev_build(env!("CARGO_PKG_VERSION")) {
-            UpdateChannel::Dev
-        } else {
-            UpdateChannel::Stable
-        },
-    );
+    let shown = ui
+        .settings
+        .updates
+        .channel
+        .unwrap_or_else(crate::updater::build_channel);
     let labels: Vec<&str> = UpdateChannel::ALL
         .iter()
         .map(|channel| tr(channel.label()))

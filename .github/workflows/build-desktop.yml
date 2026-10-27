@@ -20,6 +20,10 @@ on:
       version:
         required: true
         type: string
+      channel:
+        description: The release channel this build is published on, compiled in as HEX_BUILD_CHANNEL (src/updater.rs); empty for test builds
+        type: string
+        default: ""
       test-build:
         type: boolean
         default: false
@@ -60,6 +64,7 @@ jobs:
     container: archlinux:base-devel
     env:
       HEX_VERSION: ${{ inputs.version }}
+      HEX_BUILD_CHANNEL: ${{ inputs.channel }}
     steps:
       - name: Install build dependencies
         run: |
@@ -94,6 +99,7 @@ jobs:
           runuser -u builder -- env HOME=/home/builder \
             HEX_RELEASE_SOURCE="$GITHUB_WORKSPACE/source" \
             HEX_RELEASE_DIST="$GITHUB_WORKSPACE/dist" \
+            HEX_BUILD_CHANNEL="$HEX_BUILD_CHANNEL" \
             CARGO_BUILD_JOBS=4 BLA_VENDOR=OpenBLAS OPENSSL_NO_VENDOR=1 \
             CC=clang CXX=clang++ \
             sh -c 'rustup default stable && tools/scripts/build-linux.sh'
@@ -125,6 +131,7 @@ jobs:
             dumpbin_host: Hostarm64\\arm64
     env:
       HEX_VERSION: ${{ inputs.version }}
+      HEX_BUILD_CHANNEL: ${{ inputs.channel }}
       HEX_WINDOWS_ARCH: ${{ matrix.arch }}
       # Compiled into src/windows_updater.rs: test builds never self-update.
       HEX_TEST_BUILD: ${{ inputs.test-build && '1' || '' }}

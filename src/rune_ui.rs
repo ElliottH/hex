@@ -1187,12 +1187,17 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
         nav = nav.child(slot);
     }
     let action = match ui.view.as_ref().map(|view| &view.update_status) {
-        Some(DesktopUpdateStatus::ReadyToRestart) => {
-            Some((tr("Restart to update"), DesktopAction::RestartIntoUpdate))
-        }
+        Some(DesktopUpdateStatus::ReadyToRestart) => Some((
+            tr("Restart to update").to_owned(),
+            DesktopAction::RestartIntoUpdate,
+        )),
         Some(DesktopUpdateStatus::Available) => {
-            Some((tr("Download update"), DesktopAction::OpenUpdate))
+            Some((tr("Download update").to_owned(), DesktopAction::OpenUpdate))
         }
+        Some(DesktopUpdateStatus::SwitchAvailable { channel, version }) => Some((
+            crate::updater::switch_label(channel, version),
+            DesktopAction::ConfirmUpdateSwitch,
+        )),
         _ => None,
     };
     // An available update is a state, not the screen's main action.
@@ -1206,7 +1211,7 @@ fn sidebar(ui: &Ui, p: Paint) -> El {
             .child(controls::button(
                 p,
                 "sidebar-update",
-                label,
+                &label,
                 controls::ButtonKind::Secondary,
                 move |ui: &mut Ui, _| ui.send(Request::Desktop(action.clone())),
             ))
@@ -1249,7 +1254,8 @@ fn update_status(ui: &Ui, p: Paint) -> Option<El> {
     Some(match &ui.view.as_ref()?.update_status {
         DesktopUpdateStatus::Unavailable
         | DesktopUpdateStatus::Available
-        | DesktopUpdateStatus::ReadyToRestart => return None,
+        | DesktopUpdateStatus::ReadyToRestart
+        | DesktopUpdateStatus::SwitchAvailable { .. } => return None,
         DesktopUpdateStatus::Managed => status(tr("Managed by your organization")),
         DesktopUpdateStatus::Checking => status(tr("Checking for updates…")),
         DesktopUpdateStatus::Downloading => status(tr("Downloading update")),

@@ -998,6 +998,7 @@ impl LinuxDesktopHost {
             DesktopAction::CheckForUpdates
             | DesktopAction::OpenUpdate
             | DesktopAction::RestartIntoUpdate
+            | DesktopAction::ConfirmUpdateSwitch
             | DesktopAction::WindowFocused => {
                 if matches!(action, DesktopAction::RestartIntoUpdate)
                     && let Some(marker) = reopen_marker()

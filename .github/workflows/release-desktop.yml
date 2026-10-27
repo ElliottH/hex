@@ -162,6 +162,7 @@ jobs:
     with:
       sha: ${{ needs.resolve.outputs.sha }}
       version: ${{ needs.resolve.outputs.release-version }}
+      channel: ${{ needs.resolve.outputs.release-channel }}
       signing-environment: ${{ needs.resolve.outputs.environment }}
     # Azure Artifact Signing (OIDC); the values live in the signing environment.
     secrets:
@@ -178,6 +179,7 @@ jobs:
     with:
       sha: ${{ needs.resolve.outputs.sha }}
       version: ${{ needs.resolve.outputs.release-version }}
+      channel: ${{ needs.resolve.outputs.release-channel }}
       # The Apple secrets live in this environment.
       environment: ${{ needs.resolve.outputs.environment }}
       optional: ${{ needs.resolve.outputs.channel != 'stable' }}

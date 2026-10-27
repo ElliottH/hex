@@ -994,9 +994,9 @@ impl UpdateChannel {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct UpdateSettings {
-    /// `None` follows the build: dev builds (`X.Y.Z-dev.N`) update from
-    /// `dev`, every other build from its install's channel (`stable`
-    /// unless an installer receipt names another).
+    /// `None` follows the build: the channel it was published on (stamped at
+    /// build time), else `dev` for a dev version, else its install's channel.
+    /// Another channel than the build's is a switch the user confirms.
     pub channel: Option<UpdateChannel>,
 }
 

@@ -142,7 +142,7 @@ struct StatusItemController {
     meeting_separator: Retained<NSMenuItem>,
     meeting_button: RefCell<(String, bool)>,
     update: Option<Retained<NSMenuItem>>,
-    update_title: Cell<&'static str>,
+    update_title: RefCell<String>,
     _menu: Retained<NSMenu>,
     target: Retained<StatusItemTarget>,
     model_items: Vec<(TranscriptionModelId, Retained<NSMenuItem>)>,
@@ -263,7 +263,7 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
         Some(add_item(
             &menu,
             &target,
-            update_title(&crate::desktop_host::DesktopUpdateStatus::Checking),
+            &update_title(&crate::desktop_host::DesktopUpdateStatus::Checking),
             sel!(checkForUpdates:),
             mtm,
         ))
@@ -302,7 +302,7 @@ pub fn install() -> Result<Receiver<StatusItemAction>> {
             meeting_separator,
             meeting_button: RefCell::new((String::new(), false)),
             update,
-            update_title: Cell::new("Check for Updates…"),
+            update_title: RefCell::new("Check for Updates…".into()),
             _menu: menu,
             target,
             model_items,
@@ -507,12 +507,15 @@ fn menu_title(title: &str) -> String {
     format!("{}…", cut.trim_end())
 }
 
-fn update_title(status: &crate::desktop_host::DesktopUpdateStatus) -> &'static str {
+fn update_title(status: &crate::desktop_host::DesktopUpdateStatus) -> String {
     use crate::desktop_host::DesktopUpdateStatus;
     match status {
-        DesktopUpdateStatus::ReadyToRestart => "Restart to Update",
-        DesktopUpdateStatus::Available => "Download Update…",
-        _ => "Check for Updates…",
+        DesktopUpdateStatus::ReadyToRestart => "Restart to Update".into(),
+        DesktopUpdateStatus::Available => "Download Update…".into(),
+        DesktopUpdateStatus::SwitchAvailable { channel, version } => {
+            format!("{}…", crate::updater::switch_label(channel, version))
+        }
+        _ => "Check for Updates…".into(),
     }
 }
 
@@ -526,9 +529,10 @@ pub fn update_software(status: &crate::desktop_host::DesktopUpdateStatus) {
             return;
         };
         if let Some(item) = &controller.update
-            && controller.update_title.replace(title) != title
+            && *controller.update_title.borrow() != title
         {
-            item.setTitle(&NSString::from_str(title));
+            item.setTitle(&NSString::from_str(&title));
+            controller.update_title.replace(title);
         }
     });
 }
