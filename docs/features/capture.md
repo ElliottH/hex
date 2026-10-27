@@ -72,6 +72,21 @@ First launch with the experiment on      // capture.import
 ├── The binding is swallowed, never chord evidence for dictation
 └── Hold the dictation shortcut mid-capture -> dictation pastes as usual
 
+While a capture records                  // capture.quiet
+├── Start -> a recording-environment session with General's While dictating
+│   (read at each start; captures have no setting of their own): mutes output
+│   or pauses Music, Spotify, VLC; Do nothing changes nothing. No idle-sleep
+│   assertion, and it never counts as an intentional dictation
+├── Stop, cancel, discard, failed start, captures off, quit -> released; a
+│   switch carries it to the next capture without restoring in between
+└── Dictation mid-capture -> each effect is held from the first session that
+    wants it to the last, so neither unmutes or resumes what the other still
+    holds; a While dictating change mid-capture composes too (the capture keeps
+    media paused, the dictation mutes). Only what Hex
+    changed is restored. The dictation stop tone plays at once while the capture
+    keeps output muted. Check: recording_environment tests (overlap both ways),
+    capture_host a_capture_stays_quiet_until_it_stops_is_cancelled_or_hex_quits
+
 Switching target                         // capture.switch; the capsule's chips
 ├── Started by the shortcut -> the snapshot's recording says `target: Pointer`,
 │   the only kind that shows the switch chips (Area · Window · Screen)

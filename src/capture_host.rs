@@ -17,6 +17,11 @@
 //! capture's `InputSink` through the engine's pure input rules
 //! (`scrawl_capture::hosted_input`).
 //!
+//! While a capture records it holds a recording-environment session with
+//! "While dictating" (`recording_audio_behavior`, read at each start),
+//! released when it stops, is cancelled, or Hex quits; dictation's own
+//! session composes with it.
+//!
 //! Views never reach into the host: every change to a capture (started,
 //! the screen recording, stopped, the engine's stages, settled) publishes
 //! one [`CaptureSnapshot`], which [`snapshot`] reads and [`watch`] wakes on.
@@ -49,6 +54,7 @@ use crate::control::{
 };
 use crate::dictation::StreamingResampler;
 use crate::dictation_audio::{CaptureAudio, CaptureSinkClosed, DictationAudio};
+use crate::recording_environment::{RecordingEnvironmentController, RecordingEnvironmentSession};
 use crate::transcription::TranscriptSegment;
 use crate::transcription_engine::TranscriptionEngine;
 use crate::transcription_models::{ModelRuntime, TranscriptionModelId};
@@ -753,6 +759,8 @@ struct Active {
     target: TargetKind,
     seal: SyncSender<Seal>,
     collector: JoinHandle<()>,
+    /// "While dictating", held until the capture stops.
+    quiet: Option<RecordingEnvironmentSession>,
 }
 
 /// A stopped capture and its audio, waiting for the finisher.
@@ -1197,13 +1205,22 @@ pub struct CaptureHost {
     ended: Vec<JoinHandle<()>>,
     /// A `capture-phone` thread is looking for an iPhone.
     looking: Arc<AtomicBool>,
+    /// Mutes or pauses other audio while a capture records; `None` (a
+    /// replay) leaves it alone.
+    environment: Option<RecordingEnvironmentController>,
+    /// Tests pin the policy; captures otherwise follow "While dictating".
+    #[cfg(test)]
+    audio_behavior: Option<crate::app_settings::RecordingAudioBehavior>,
 }
 
 impl CaptureHost {
     /// The host when captures are on (the `capture` experiment and
     /// `capture.enabled`); otherwise `None`, and no engine, thread, sink, or
     /// folder is created.
-    pub fn start(engine: Option<Arc<TranscriptionEngine>>) -> Option<Self> {
+    pub fn start(
+        engine: Option<Arc<TranscriptionEngine>>,
+        environment: &RecordingEnvironmentController,
+    ) -> Option<Self> {
         if !crate::app_settings::capture_on() {
             return None;
         }
@@ -1211,6 +1228,7 @@ impl CaptureHost {
         tracing::info!("capture experiment on: `hex capture` is available");
         let host = shared_engine(engine.as_ref()).and_then(|engine| {
             let mut host = Self::with(engine, None)?;
+            host.environment = Some(environment.clone());
             host.start_retention()?;
             Ok(host)
         });
@@ -1223,6 +1241,7 @@ impl CaptureHost {
     pub fn reconcile(
         host: &mut Option<Self>,
         engine: Option<&Arc<TranscriptionEngine>>,
+        environment: &RecordingEnvironmentController,
         audio: &impl AudioTimeline,
     ) {
         static RETRY_AT: Mutex<Option<Instant>> = Mutex::new(None);
@@ -1233,7 +1252,7 @@ impl CaptureHost {
                 if retry_at.is_some_and(|at| Instant::now() < at) {
                     return;
                 }
-                *host = Self::start(engine.cloned());
+                *host = Self::start(engine.cloned(), environment);
                 *retry_at = host.is_none().then(|| Instant::now() + START_RETRY);
             }
             (false, false) => {
@@ -1278,6 +1297,9 @@ impl CaptureHost {
             routes: Some(routes),
             ended: Vec::new(),
             looking: Arc::default(),
+            environment: None,
+            #[cfg(test)]
+            audio_behavior: None,
         })
     }
 
@@ -1372,7 +1394,7 @@ impl CaptureHost {
         let now = CaptureInstant::now();
         self.reap(now, audio);
         let result = match action {
-            ScrawlCaptureAction::Start => self.begin(now, audio, CaptureTarget::Pointer),
+            ScrawlCaptureAction::Start => self.begin(now, audio, CaptureTarget::Pointer, None),
             ScrawlCaptureAction::Stop => self.end(now, audio, End::Finish),
             ScrawlCaptureAction::Cancel => self.end(now, audio, End::Cancel),
             ScrawlCaptureAction::Status => Ok(self.report(false, None)),
@@ -1385,7 +1407,7 @@ impl CaptureHost {
         let now = CaptureInstant::now();
         self.reap(now, audio);
         let result = match command {
-            CaptureCommand::Start(target) => self.begin(now, audio, target),
+            CaptureCommand::Start(target) => self.begin(now, audio, target, None),
             CaptureCommand::FindPhone => {
                 self.find_phone();
                 Ok(self.report(false, None))
@@ -1495,9 +1517,11 @@ impl CaptureHost {
         }
         lock(&self.outcomes).held = true;
         let discarded = self.active.as_ref().map(|active| active.bundle.clone());
+        // Output stays muted or media paused from one capture to the next.
+        let quiet = self.active.as_mut().and_then(|active| active.quiet.take());
         let switched = self
             .end(now, audio, End::Discard)
-            .and_then(|_| self.begin(now, audio, target));
+            .and_then(|_| self.begin(now, audio, target, quiet));
         let mut outcomes = lock(&self.outcomes);
         if let (Some(bundle), true) = (discarded, self.active.is_none()) {
             let error = match &switched {
@@ -1509,6 +1533,19 @@ impl CaptureHost {
         }
         outcomes.release();
         switched
+    }
+
+    /// The session that applies "While dictating" to a capture starting
+    /// now. Sending it never blocks: the environment's own thread mutes or
+    /// pauses.
+    fn quiet(&self) -> Option<RecordingEnvironmentSession> {
+        let environment = self.environment.as_ref()?;
+        #[cfg(test)]
+        if let Some(behavior) = self.audio_behavior {
+            return Some(environment.begin_capture(behavior));
+        }
+        let behavior = crate::app_settings::recording_audio_behavior();
+        Some(environment.begin_capture(behavior))
     }
 
     /// Why no capture can start now, besides one already recording.
@@ -1529,11 +1566,14 @@ impl CaptureHost {
         })
     }
 
+    /// Starts a capture, holding "While dictating" with `quiet` when a
+    /// switch carries the previous capture's session over.
     fn begin(
         &mut self,
         now: CaptureInstant,
         audio: &impl AudioTimeline,
         target: CaptureTarget,
+        quiet: Option<RecordingEnvironmentSession>,
     ) -> Result<ControlReply> {
         if self.active.is_some() {
             return Ok(self.report(false, None));
@@ -1589,6 +1629,7 @@ impl CaptureHost {
             target: target.kind(),
             seal,
             collector,
+            quiet: quiet.or_else(|| self.quiet()),
         });
         self.find_phone();
         Ok(self.report(true, None))
@@ -1600,11 +1641,12 @@ impl CaptureHost {
         audio: &impl AudioTimeline,
         end: End,
     ) -> Result<ControlReply> {
-        let Some(active) = self.active.take() else {
+        let Some(mut active) = self.active.take() else {
             return Ok(self.report(false, None));
         };
         // Input after the stop belongs to no capture.
         self.input.recording(None);
+        drop(active.quiet.take());
         let closed = audio.close_sink(now).unwrap_or_else(|error| {
             tracing::warn!(%error, "could not close the capture sink");
             None
@@ -3639,7 +3681,9 @@ mod tests {
         // exists and the listener answers `feature-off`.
         assert!(!crate::app_settings::CaptureSettings::default().enabled);
         if !crate::app_settings::capture_on() {
-            assert!(CaptureHost::start(None).is_none());
+            assert!(
+                CaptureHost::start(None, &RecordingEnvironmentController::for_test()).is_none()
+            );
         }
     }
 
@@ -3867,6 +3911,53 @@ mod tests {
         assert!(!first.exists());
         assert!(lock(&host.outcomes).snapshot().last.is_none());
         host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_capture_stays_quiet_until_it_stops_is_cancelled_or_hex_quits() {
+        use crate::recording_environment::Effect::Mute;
+        use crate::recording_environment::observed::{
+            self,
+            Event::{Held, Restored},
+        };
+        let dir = temp_dir("quiet");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let (environment, events) = observed::controller();
+        host.environment = Some(environment.clone());
+        host.audio_behavior = Some(crate::app_settings::RecordingAudioBehavior::Mute);
+        let settled = || observed::settled(&environment, &events);
+
+        let start = |host: &mut CaptureHost| {
+            report(host.control(ScrawlCaptureAction::Start, &audio))
+                .bundle
+                .unwrap()
+        };
+        start(&mut host);
+        assert_eq!(settled(), [Held(Mute)]);
+        // A switch keeps output muted from one capture to the next.
+        let switch = CaptureCommand::Switch(CaptureTarget::Pointer);
+        let bundle = report(host.command(switch, &audio)).bundle.unwrap();
+        assert_eq!(settled(), []);
+        report(host.control(ScrawlCaptureAction::Stop, &audio));
+        assert_eq!(settled(), [Restored(Mute)]);
+        wait_for_last(&mut host, &audio, &bundle, true);
+
+        let bundle = start(&mut host);
+        assert_eq!(settled(), [Held(Mute)]);
+        report(host.control(ScrawlCaptureAction::Cancel, &audio));
+        assert_eq!(settled(), [Restored(Mute)]);
+        wait_for_last(&mut host, &audio, &bundle, true);
+
+        start(&mut host);
+        assert_eq!(settled(), [Held(Mute)]);
+        host.shutdown(&audio);
+        assert_eq!(settled(), [Restored(Mute)]);
         fs::remove_dir_all(dir).ok();
     }
 

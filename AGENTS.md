@@ -73,7 +73,8 @@ substitute for source inspection or a second roadmap.
   (`open_capture_sink`/`close_capture_sink`) that copies the same timeline to
   a Scrawl capture.
 - `recording_environment`: serialized RAII ownership of idle-sleep prevention,
-  output muting, and supported media-player pause/resume behavior.
+  output muting, and supported media-player pause/resume behavior, each held
+  from the first dictation or capture session that wants it to the last.
 - `dictation_processor`: the one OpenCode client and ordered processing policy
   for macOS, Windows, and Linux: context-selected corrections, deadline-bounded
   OpenCode rewrite profiles with corrected-transcript fallback, the ranked
@@ -672,8 +673,12 @@ CoreAudio formats, AppleScript details, or event serialization.
   microphone, installs a tap of its own, or loads a model: it copies the dictation
   timeline through a bounded sink that records a gap rather than block, so a
   stalled capture never stalls dictation, and while a sink is open the
-  release-while-idle close waits for it. One capture engine per process, one
-  capture recording at a time. Its words are foreground requests on the
+  release-while-idle close waits for it. While a capture records it holds a
+  recording-environment session with the same "While dictating" policy
+  (`recording_audio_behavior`, read at each start; no capture setting),
+  released at stop, cancel, or quit; it composes with dictation's,
+  so neither restores what the other still holds. One capture engine per
+  process, one capture recording at a time. Its words are foreground requests on the
   dictation engine's loaded model in 30 s chunks: after dictation already
   sent, before meeting chunks, never a second model, and dictation output is
   unchanged. A chunk waits while dictation captures or transcribes and never

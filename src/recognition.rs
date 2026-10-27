@@ -405,6 +405,8 @@ pub fn listen(
     let mut last_update = Instant::now();
     let mut recognition_origin = None::<RecognitionOrigin>;
     let recording_environment = RecordingEnvironmentController::start();
+    #[cfg(hex_capture)]
+    let capture_environment = recording_environment.clone();
     let (mut microphone_revision, microphone) = crate::app_settings::microphone_selection();
     let dictation_worker = DictationWorker::start(
         input_monitor.activity.clone(),
@@ -421,7 +423,8 @@ pub fn listen(
         dictation_worker.engine(),
     )?;
     #[cfg(hex_capture)]
-    let mut capture_host = crate::capture_host::CaptureHost::start(dictation_worker.engine());
+    let mut capture_host =
+        crate::capture_host::CaptureHost::start(dictation_worker.engine(), &capture_environment);
     #[cfg(hex_capture)]
     let mut capture_shortcut = crate::capture_host::CaptureShortcut::default();
     let (mut transcription_revision, _) = crate::app_settings::transcription_selection();
@@ -496,6 +499,7 @@ pub fn listen(
         crate::capture_host::CaptureHost::reconcile(
             &mut capture_host,
             dictation_worker.engine().as_ref(),
+            &capture_environment,
             &input,
         );
         if let Some(controls) = &controls {
