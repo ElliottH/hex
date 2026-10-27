@@ -359,7 +359,11 @@ jobs:
           brew tap anomalyco/tap
           cp hex.rb "$(brew --repo anomalyco/tap)/Casks/hex.rb"
           brew style --cask anomalyco/tap/hex
-          brew audit --cask --strict --online anomalyco/tap/hex
+          # Before a stable release exists, the livecheck on the stable
+          # manifest has nothing to compare against.
+          except=
+          [ "$CHANNEL" = stable ] || except=--except=livecheck_version
+          brew audit --cask --strict --online $except anomalyco/tap/hex
       - name: Push to anomalyco/homebrew-tap
         if: needs.resolve.outputs.channel == 'stable'
         env:
