@@ -1215,11 +1215,12 @@ fn output_section(ui: &Ui, p: Paint) -> El {
 }
 
 /// An advanced setting is off its default, so Advanced stays open to show
-/// it: the microphone released while idle, or Double-tap only where its row
-/// shows.
+/// it: the microphone released while idle, Double-tap only where its row
+/// shows, or a chosen update channel.
 fn advanced_in_use(settings: &AppSettings) -> bool {
     settings.release_microphone_while_idle
         || (double_tap_only_applies(settings) && settings.double_tap_only)
+        || settings.updates.channel.is_some()
 }
 
 fn double_tap_only_applies(settings: &AppSettings) -> bool {
@@ -1282,7 +1283,7 @@ fn advanced_toggle(ui: &Ui, p: Paint, pinned: bool) -> El {
 /// microphone's idle release and Double-tap only.
 fn advanced_rows(ui: &Ui, p: Paint) -> Vec<CardRow> {
     let settings = &ui.settings;
-    vec![
+    let mut rows: Vec<CardRow> = vec![
         setting_row(
             p,
             "microphone-mode",
@@ -1339,7 +1340,9 @@ fn advanced_rows(ui: &Ui, p: Paint) -> Vec<CardRow> {
                 )
             }),
         ),
-    ]
+    ];
+    rows.extend(update_channel_row(ui, p).map(CardRow::from));
+    rows
 }
 
 fn release_confirmation(ui: &Ui, p: Paint) -> El {
@@ -1464,7 +1467,6 @@ fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             layer,
         ),
     ));
-    rows.extend(update_channel_row(ui, p));
     section(p, "application", tr("Application"), rows)
 }
 
@@ -1511,6 +1513,7 @@ fn update_channel_row(ui: &Ui, p: Paint) -> Option<El> {
                 // Choosing the channel already in effect saves nothing, so an
                 // unset channel keeps following the build.
                 let channel = UpdateChannel::ALL[index];
+                ui.advanced = true;
                 if channel != shown
                     && ui.update(|settings| settings.updates.channel = Some(channel))
                 {
