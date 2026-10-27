@@ -169,10 +169,11 @@ fn rule_sent() -> Vec<Step> {
     ]
 }
 
-/// A saved rule's send, taken back at once: the suggestions again.
+/// A saved rule's send, taken back at once (esc, after the inputs before
+/// it, where a click would jump the queue): the suggestions again.
 fn taken_back() -> Vec<Step> {
     let mut steps = rule_sent();
-    steps.push(Step::Click(Id::Undo));
+    steps.push(Step::Input(Input::Escape));
     steps
 }
 
