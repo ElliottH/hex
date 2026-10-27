@@ -170,9 +170,15 @@ pub(crate) fn app(connect: host::Connect) -> rune::App<Ui> {
         .on_close(on_close)
         .compositor(hero::HeroCompositor::default());
     let window = app.handle();
-    window.update({
+    // Nothing shown reads the handle, so this asks for no frame. The first
+    // frame's poll ran without it, so the window's tick starts from here.
+    window.update_if({
         let window = window.clone();
-        move |ui, _| ui.window = Some(window)
+        move |ui, tx| {
+            ui.window = Some(window);
+            tx.wake_after(WINDOW_TICK);
+            false
+        }
     });
     app
 }

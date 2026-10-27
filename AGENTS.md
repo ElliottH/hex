@@ -384,14 +384,17 @@ CoreAudio formats, AppleScript details, or event serialization.
   Uncached headless lookups retain live-layout resolution, with all native
   lookup and snapshot construction serialized by the same lock.
 - macOS launch order: `main` calls `rune::prewarm_gpu()` right after parsing
-  the command line, only when it will run the app with its window (`hex app`
-  without Rune's headless flags, or the bundled executable with no command),
-  never for a CLI command. `macos_rune` sets up the status item, Dock policy,
-  HUD, main menu, reopen handler, and pump timer once, after the window's
-  first frame (`App::on_ready` queues it as a frameless `update_if`), or at
-  most 1 s after the loop starts if no frame comes; a launch without a window
-  sets them up in the loop's first turn. Nothing the window's first frame
-  needs may wait on them.
+  the command line, only when it will run the app (`hex app` without Rune's
+  headless flags, or the bundled executable with no command), never for a CLI
+  command. A hidden or login launch prewarms too and Rune drops it: whether
+  the window opens depends on settings, which load after the keyboard layout.
+  `macos_rune` observes AppKit's will-terminate before the loop runs, so a
+  terminate at any point drains workers. It sets up the status item, Dock
+  policy, HUD, main menu, reopen handler, and pump timer once, after the
+  window's first frame (`App::on_ready` queues it as a frameless `update_if`),
+  or at most 1 s after the loop starts if no frame comes; a launch without a
+  window sets them up in the loop's first turn. Nothing the window's first
+  frame needs may wait on them.
 - Another app's global shortcut (Carbon hotkeys, such as Spaceman's Option-1)
   consumes its key before the session taps. A listen-only HID tap reports key
   presses as chord evidence only: it discards an early hold or pending gesture

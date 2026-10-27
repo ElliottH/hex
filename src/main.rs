@@ -552,7 +552,8 @@ fn main() -> Result<()> {
         .and_then(|path| path.file_stem().map(ToOwned::to_owned));
     let bundled_watcher = is_bundled_app_executable(executable_name.as_deref());
     // The app's GPU device and render pipeline start on a thread now, while
-    // the rest of launch runs; its first window takes them.
+    // the rest of launch runs; its first window takes them, and Rune drops
+    // them when the app opens none.
     if opens_app(cli.command.as_ref(), bundled_watcher) {
         rune::prewarm_gpu();
     }
@@ -1060,8 +1061,11 @@ fn is_bundled_app_executable(name: Option<&std::ffi::OsStr>) -> bool {
     name.is_some_and(|name| name == "voice-control-watch" || name == "hex")
 }
 
-/// Whether this launch runs the app with its window: `hex app` without
-/// Rune's own (headless) flags, or the bundled executable with no command.
+/// Whether this launch runs the app: `hex app` without Rune's own (headless)
+/// flags, or the bundled executable with no command. A hidden or login launch
+/// counts too, though it opens no window and Rune drops the prewarmed GPU:
+/// whether the window opens depends on settings, which may load only after
+/// the keyboard layout (`macos_rune::run`).
 #[cfg(target_os = "macos")]
 fn opens_app(command: Option<&Command>, bundled_watcher: bool) -> bool {
     match command {
@@ -1243,16 +1247,45 @@ mod tests {
     }
 
     #[test]
-    fn only_window_launches_prewarm_the_gpu() {
-        let opens = |arguments: &[&str], bundled| {
+    fn only_app_launches_prewarm_the_gpu() {
+        let opens = |arguments: &[&str]| {
+            let arguments = mcp_alias_arguments(arguments.iter().map(Into::into).collect());
+            let bundled =
+                is_bundled_app_executable(std::path::Path::new(&arguments[0]).file_stem());
             opens_app(Cli::parse_from(arguments).command.as_ref(), bundled)
         };
-        assert!(opens(&["hex"], true));
-        assert!(opens(&["hex", "app"], false));
-        assert!(!opens(&["hex", "app", "--", "--snap", "/tmp/a.png"], false));
-        assert!(!opens(&["voice-control"], false));
-        for command in ["status", "mcp", "history", "quit"] {
-            assert!(!opens(&["hex", command], true), "{command}");
+        assert!(opens(&["hex"]));
+        assert!(opens(&["/Applications/Hex.app/Contents/MacOS/hex"]));
+        assert!(opens(&["voice-control", "app"]));
+        assert!(opens(&[
+            "voice-control",
+            "app",
+            "--device",
+            "MacBook Pro Microphone"
+        ]));
+        assert!(!opens(&[
+            "voice-control",
+            "app",
+            "--",
+            "--snap",
+            "/tmp/a.png"
+        ]));
+        assert!(!opens(&["voice-control"]));
+        assert!(!opens(&["hex-service"]));
+        assert!(!opens(&["hex-meetings-mcp"]));
+        for command in [
+            &["status"][..],
+            &["quit"],
+            &["mcp"],
+            &["history"],
+            &["listen"],
+            &["meetings", "list"],
+            &["settings", "list"],
+            &["capture", "status"],
+            &["dev", "dashboard"],
+        ] {
+            let arguments = [&["hex"][..], command].concat();
+            assert!(!opens(&arguments), "{command:?}");
         }
     }
 }

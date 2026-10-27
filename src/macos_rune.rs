@@ -235,9 +235,9 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()> {
-    if MainThreadMarker::new().is_none() {
+    let Some(mtm) = MainThreadMarker::new() else {
         return Err(eyre!("desktop startup requires the main thread"));
-    }
+    };
     shutdown.store(false, Ordering::Relaxed);
     crate::keyboard::initialize_layout()?;
     crate::updater::finish_on_launch();
@@ -452,11 +452,15 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
             tracing::warn!(%error, "could not flush the event log before quitting");
         }
     });
+    // AppKit's terminate may come from the loop's first turn, so its observer
+    // is in place before the loop runs; the rest of `target` waits below.
+    let target = MenuTarget::new(mtm);
+    observe_termination(&target);
     // The status item, HUD, and main menu wait for the window's first frame
     // so it reaches the screen without them; a launch without a window sets
     // them up in the loop's first turn. None of these updates change what the
     // window shows, so none asks for a frame.
-    LAUNCH_PUMP.with(|slot| *slot.borrow_mut() = Some(pump));
+    LAUNCH.with(|slot| *slot.borrow_mut() = Some(Launch { pump, target }));
     if open_at_launch {
         let ready = window.clone();
         app = app.on_ready(move |_| {
@@ -670,8 +674,30 @@ struct PumpState {
 
 thread_local! {
     static PUMP: RefCell<Option<PumpState>> = const { RefCell::new(None) };
-    /// The pump until [`start_main_thread`] takes it, once.
-    static LAUNCH_PUMP: RefCell<Option<Pump>> = const { RefCell::new(None) };
+    /// What [`start_main_thread`] takes, once.
+    static LAUNCH: RefCell<Option<Launch>> = const { RefCell::new(None) };
+}
+
+struct Launch {
+    pump: Pump,
+    /// Already observing AppKit's terminate ([`observe_termination`]).
+    target: Retained<MenuTarget>,
+}
+
+/// AppKit's terminate (the quit Apple event, logout) calls `exit` right after
+/// this notification, so Hex finishes there ([`crate::process_exit`]).
+fn observe_termination(target: &MenuTarget) {
+    // SAFETY: the target outlives the observer (kept in LAUNCH, then PUMP,
+    // for the app's life), and the selector matches its method.
+    unsafe {
+        let _: () = msg_send![
+            &*objc2_foundation::NSNotificationCenter::defaultCenter(),
+            addObserver: target,
+            selector: sel!(applicationWillTerminate:),
+            name: objc2_app_kit::NSApplicationWillTerminateNotification,
+            object: std::ptr::null::<AnyObject>(),
+        ];
+    }
 }
 
 /// Starts the main-thread setup after `seconds` if the window's first frame
@@ -691,7 +717,7 @@ fn start_main_thread() {
         tracing::error!("Hex's main-thread setup ran off the main thread");
         return;
     };
-    let Some(mut pump) = LAUNCH_PUMP.with(|slot| slot.borrow_mut().take()) else {
+    let Some(Launch { mut pump, target }) = LAUNCH.with(|slot| slot.borrow_mut().take()) else {
         return;
     };
     pump.status_actions = match crate::status_item::install() {
@@ -711,8 +737,9 @@ fn start_main_thread() {
             ),
     );
     let indicator = DictationIndicatorUi::new();
-    let target = MenuTarget::new(mtm);
     install_main_menu(&target, mtm);
+    // Inside the loop, once AppKit has started, so its own Apple event setup
+    // can't replace this handler.
     // SAFETY: the target outlives the handler (kept in PUMP for the app's
     // life), and the selector matches its method.
     unsafe {
@@ -722,13 +749,6 @@ fn start_main_thread() {
             andSelector: sel!(handleReopen:withReplyEvent:),
             forEventClass: CORE_EVENT_CLASS,
             andEventID: REOPEN_APPLICATION,
-        ];
-        let _: () = msg_send![
-            &*objc2_foundation::NSNotificationCenter::defaultCenter(),
-            addObserver: &*target,
-            selector: sel!(applicationWillTerminate:),
-            name: objc2_app_kit::NSApplicationWillTerminateNotification,
-            object: std::ptr::null::<AnyObject>(),
         ];
     }
     let block = RcBlock::new(|_: std::ptr::NonNull<NSTimer>| {
@@ -1024,7 +1044,7 @@ impl Pump {
 }
 
 objc2::define_class!(
-    /// The main menu's and the reopen Apple event's target.
+    /// The main menu's, the reopen Apple event's, and AppKit terminate's target.
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
     struct MenuTarget;
