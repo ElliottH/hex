@@ -4,7 +4,8 @@
 //!
 //! - **withdrawn**: still in the session's inbox, so it's cancelled there.
 //! - **reverted**: it started a turn and nothing was said after it, so the turn is interrupted
-//!   and a revert to it is staged with its file changes (like the TUI's /undo; not committed).
+//!   and the session is reverted to before it with its file changes, staged and committed, so
+//!   the send and its turn are deleted (no /redo).
 //! - **disowned**: it joined running work, or more came after it, so a short follow-up tells
 //!   the session to ignore it instead of undoing the session's own work.
 //! - **gone**: no record, or the session or message no longer exists.
@@ -130,7 +131,7 @@ impl Report {
         let session = self.session.as_deref().unwrap_or("its session");
         match self.undone {
             Undone::Withdrawn => format!("Withdrawn from {session} before it was read"),
-            Undone::Reverted => format!("Reverted {session} to before it (redo with /redo)"),
+            Undone::Reverted => format!("Removed it and its turn from {session}"),
             Undone::Disowned => format!("Told {session} to ignore it"),
             Undone::Gone => "Nothing to undo: the send or its session is gone".to_owned(),
             Undone::TooOld => "Too old to undo (routing.undoWindowSec)".to_owned(),
@@ -460,8 +461,11 @@ fn timeline(session: &str, message: &str, api: &Api) -> Result<Option<Timeline>>
     }))
 }
 
-/// Stops the turn it started and stages a revert to before it, files too. Once the turn is
-/// stopped, anything but a staged revert disowns it, which also wakes the session.
+/// Stops the turn it started and reverts the session to before it, files too: staged, then
+/// committed, so the send and its turn are deleted. A staged revert left alone still shows in
+/// clients that don't read `session.revert` (the Rune desktop), and whatever is prompted next
+/// commits it. Once the turn is stopped, anything but a revert disowns it, which also wakes
+/// the session.
 fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
     let interrupt = format!("/api/session/{session}/interrupt?resume=false");
     if found((api.post)(&interrupt, &json!({})))?.is_none() {
@@ -482,7 +486,7 @@ fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
             Err(err) => return disown_or(session, api, err),
         }
         match (api.post)(&stage, &body) {
-            Ok(_) => return Ok(Undone::Reverted),
+            Ok(_) => return Ok(commit(session, api)),
             // Busy while the interrupted turn winds down.
             Err(err) if opencode::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
             Err(err) if opencode::http_status(&err) == Some(404) => return Ok(Undone::Gone),
@@ -497,6 +501,27 @@ fn revert(session: &str, message: &str, api: &Api) -> Result<Undone> {
     }
     scrawl_log("undo: the session stayed busy; disowning");
     disown(session, api)
+}
+
+/// Commits the staged revert. One that can't be committed stays staged: the session won't run
+/// it, and the next prompt commits it.
+fn commit(session: &str, api: &Api) -> Undone {
+    let path = format!("/api/session/{session}/revert/commit");
+    for _ in 0..STAGE_TRIES {
+        match (api.post)(&path, &json!({})) {
+            Ok(_) => return Undone::Reverted,
+            Err(err) if opencode::http_status(&err) == Some(409) => (api.pause)(STAGE_WAIT),
+            Err(err) if opencode::http_status(&err) == Some(404) => return Undone::Gone,
+            Err(err) => {
+                scrawl_log(format!(
+                    "undo: couldn't commit the revert ({err:#}); left staged"
+                ));
+                return Undone::Reverted;
+            }
+        }
+    }
+    scrawl_log("undo: the session stayed busy; revert left staged");
+    Undone::Reverted
 }
 
 /// After an interrupt, a failed request still owes the session a message: disown, or give
@@ -627,6 +652,12 @@ mod tests {
         on_interrupt: Option<Arrival>,
         /// The server stops answering stage requests.
         stage_unreachable: bool,
+        /// The message a revert is staged to, until it's committed.
+        staged: Option<String>,
+        /// Commit answers 409 this many times first.
+        commit_busy: usize,
+        /// The server stops answering commit requests.
+        commit_unreachable: bool,
         calls: Vec<String>,
     }
 
@@ -687,6 +718,24 @@ mod tests {
             if path.ends_with("/revert/stage") && f.busy > 0 {
                 f.busy -= 1;
                 return Err(status(409));
+            }
+            if path.ends_with("/revert/stage") {
+                f.staged = body["messageID"].as_str().map(str::to_owned);
+            }
+            if path.ends_with("/revert/commit") {
+                if f.commit_unreachable {
+                    return Err(anyhow!("Could not connect"));
+                }
+                if f.commit_busy > 0 {
+                    f.commit_busy -= 1;
+                    return Err(status(409));
+                }
+                // Deletes the boundary message and everything after it.
+                if let Some(to) = f.staged.take()
+                    && let Some(at) = f.messages.iter().position(|m| m["id"] == to.as_str())
+                {
+                    f.messages.truncate(at);
+                }
             }
             if path.contains("/interrupt") {
                 match f.on_interrupt.take() {
@@ -844,11 +893,49 @@ mod tests {
                 && stages[2].contains(r#""files":true"#),
             "{stages:?}"
         );
-        assert!(
-            posted("/revert/commit").is_empty(),
-            "staged only, so it can be redone"
-        );
+        // Committed at once: a staged revert still shows in the Rune desktop, and the next
+        // prompt (Kit pasting the capture again) would commit it anyway.
+        assert_eq!(posted("/revert/commit").len(), 1);
+        FAKE.with(|f| {
+            let f = f.borrow();
+            assert_eq!(f.staged, None);
+            assert_eq!(
+                f.messages,
+                vec![reply(), idle()],
+                "the send and its turn are gone"
+            );
+        });
         assert!(posted("/prompt").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_revert_that_cannot_be_committed_is_left_staged() {
+        // Busy while the turn winds down: retried.
+        let dir = temp_dir("commit-busy");
+        let id = sent(&dir, true);
+        set(Fake {
+            messages: vec![idle(), mine(), reply()],
+            commit_busy: 2,
+            ..Fake::default()
+        });
+        assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Reverted);
+        assert_eq!(posted("/revert/commit").len(), 3);
+        FAKE.with(|f| assert_eq!(f.borrow().messages, vec![idle()]));
+        let _ = std::fs::remove_dir_all(dir);
+
+        // Unreachable: staged, the session won't run it, and nothing is said to it.
+        let dir = temp_dir("commit-down");
+        let id = sent(&dir, true);
+        set(Fake {
+            messages: vec![idle(), mine(), reply()],
+            commit_unreachable: true,
+            ..Fake::default()
+        });
+        assert_eq!(undo_now(&dir, &id).unwrap().undone, Undone::Reverted);
+        assert_eq!(posted("/revert/commit").len(), 1);
+        assert!(posted("/prompt").is_empty());
+        FAKE.with(|f| assert_eq!(f.borrow().staged.as_deref(), Some("msg_mine")));
         let _ = std::fs::remove_dir_all(dir);
     }
 
