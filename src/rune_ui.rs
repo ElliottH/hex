@@ -986,7 +986,13 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     }
     changed |= ui.modes.poll(ui.live());
     changed |= modes::poll_chooser(ui);
+    let login_unknown = ui.platform.login_item.is_none();
     changed |= ui.host.poll(&mut ui.platform);
+    // macOS reports the login item moments after launch; its switch replaces
+    // "Checking…" at once instead of fading in and reflowing the row.
+    if login_unknown && ui.platform.login_item.is_some() {
+        tx.instant();
+    }
     if ui.pane == Pane::Meetings
         && meetings::available(ui)
         && let Some(listed) = ui.host.meetings()
