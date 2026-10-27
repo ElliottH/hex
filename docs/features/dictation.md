@@ -761,6 +761,18 @@ behaviors. The cross-application flag explicitly allows the overlay to join
 another application's fullscreen Space (#75); panel style flags on an ordinary
 `NSWindow` were not sufficient.
 
+At the top position the capsule sits 12 pt below the menu bar, or below the
+notch (`NSScreen.safeAreaInsets`) where a fullscreen Space hides the menu bar
+and `visibleFrame` reaches the top of a notched screen. Screens without a notch
+and normal Spaces keep their position. Check: `scripts/check
+dictation_indicator::tests::top_capsule` covers the math only; placement over a
+fullscreen app on a notched Mac is not yet observed.
+
+A dictation shortcut that is a bare modifier is not consumed, so other apps see
+a modifier tap on release. On October 27, 2026 a Raycast hotkey on an Option
+tap activated Slack on every Option dictation, which switched Kit out of a
+fullscreen Space before the paste; Hex itself never activates on paste.
+
 **Observed September 14, 2026:** the unmodified HUD was not found on screen over
 a native fullscreen TextEdit fixture. Changing only the window class to
 `NSPanel` did not produce a visible HUD in the initial check. The candidate with
