@@ -313,6 +313,13 @@ impl Hotkeys {
             edit.recover_stale_keys();
         }
     }
+
+    fn break_chords(&mut self, now: CaptureInstant) {
+        self.dictation.break_chord(now);
+        if let Some(edit) = &mut self.edit {
+            edit.break_chord(now);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1233,6 +1240,15 @@ pub fn listen(
                     indicator.send(DictationIndicatorEvent::Failed);
                 }
             }
+        }
+        // Only once every queued edge is handled, so a release already seen
+        // ends the press first.
+        if voice.is_none()
+            && edit_pending_since.is_none()
+            && !hotkey_capture_suspended
+            && input_monitor.pending_events().oldest().is_none()
+        {
+            hotkeys.break_chords(CaptureInstant::now());
         }
         let mut received_worker_event = false;
         while let Some(event) = dictation_worker.try_recv() {

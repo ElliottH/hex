@@ -1137,6 +1137,8 @@ pub struct DictationHotkey {
     function_modifier: (CaptureInstant, Option<bool>),
     // Recent HID key presses, which another app's shortcut may have hidden.
     physical_key_downs: VecDeque<(CaptureInstant, u16, HidTiming)>,
+    // When the held modifier-only press Hex owns is due its chord breaker.
+    chord_break_at: Option<CaptureInstant>,
 }
 
 impl DictationHotkey {
@@ -1183,6 +1185,7 @@ impl DictationHotkey {
             recovery_updated_keys: HashSet::new(),
             function_modifier: (CaptureInstant::ZERO, None),
             physical_key_downs: VecDeque::new(),
+            chord_break_at: None,
         }
     }
 
@@ -1240,6 +1243,7 @@ impl DictationHotkey {
         self.state = State::IDLE;
         self.pressed_keys.clear();
         self.stale_keys_neutral_since = None;
+        self.chord_break_at = None;
         was_recording.then_some(HotkeyAction::Cancel)
     }
 
@@ -1253,6 +1257,7 @@ impl DictationHotkey {
         self.state = State::Locked;
         self.pressed_keys.clear();
         self.stale_keys_neutral_since = None;
+        self.chord_break_at = None;
         true
     }
 
@@ -1280,6 +1285,7 @@ impl DictationHotkey {
     pub fn suppress_until_release(&mut self) {
         self.state = State::Dirty;
         self.stale_keys_neutral_since = None;
+        self.chord_break_at = None;
     }
 
     // Call only after draining input. Polling repairs bookkeeping, never capture boundaries.
@@ -1348,6 +1354,7 @@ impl DictationHotkey {
         if !locked {
             self.state = State::IDLE;
         }
+        self.chord_break_at = None;
         self.stale_keys_neutral_since = None;
         self.recovery_ignore_through = Some(sampled_through);
         self.recovery_updated_keys.clear();
@@ -1435,6 +1442,79 @@ impl DictationHotkey {
     }
 
     pub fn process(&mut self, event: InputEvent, now: CaptureInstant) -> Option<HotkeyAction> {
+        let was_locked = matches!(self.state, State::Locked);
+        let action = self.process_event(event, now);
+        self.track_chord_break(event, now, action, was_locked);
+        action
+    }
+
+    /// A bare modifier passes through to other apps, so a hold reads to them
+    /// as a tap on release (Raycast's Option-tap hotkey, for one). Once Hex
+    /// owns the press (a hold past the threshold, a Toggle start, or the press
+    /// that finishes a lock) it is owed one chord breaker while still held.
+    fn track_chord_break(
+        &mut self,
+        event: InputEvent,
+        now: CaptureInstant,
+        action: Option<HotkeyAction>,
+        was_locked: bool,
+    ) {
+        if self.binding.key_code.is_some() || self.binding.modifiers.function {
+            self.chord_break_at = None;
+            return;
+        }
+        let released = match event {
+            InputEvent::Flags(flags) | InputEvent::Key { flags, .. } => {
+                !self.binding.required_modifiers_down(flags)
+            }
+            InputEvent::TapDisabled => true,
+            InputEvent::PhysicalKeyDown { .. } | InputEvent::MouseDown => false,
+        };
+        match action {
+            Some(HotkeyAction::Start) if matches!(self.state, State::Recording { .. }) => {
+                self.chord_break_at = Some(if self.toggle {
+                    now
+                } else {
+                    now + MINIMUM_HOLD_DURATION
+                });
+            }
+            Some(HotkeyAction::Finish) if was_locked && !released => {
+                self.chord_break_at = Some(now);
+            }
+            Some(_) => self.chord_break_at = None,
+            None if released => self.chord_break_at = None,
+            None => {}
+        }
+    }
+
+    /// Whether the held press is due its chord breaker at `now`; true at most
+    /// once per press.
+    pub fn take_chord_break(&mut self, now: CaptureInstant) -> bool {
+        let due = self.chord_break_at.is_some_and(|due_at| now >= due_at);
+        if due {
+            self.chord_break_at = None;
+        }
+        due
+    }
+
+    /// Posts the chord breaker the held press is due, if its modifiers are
+    /// still physically down. The posted key carries Hex's marker, so neither
+    /// tap sees it.
+    pub fn break_chord(&mut self, now: CaptureInstant) {
+        if !self.take_chord_break(now) {
+            return;
+        }
+        // SAFETY: A read-only query of the documented HID system state.
+        let flags = unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) };
+        if !self.binding.required_modifiers_down(flags) {
+            return;
+        }
+        if let Err(error) = crate::keyboard::post_chord_breaker(flags) {
+            tracing::warn!(shortcut = self.shortcut_name(), %error, "chord breaker failed");
+        }
+    }
+
+    fn process_event(&mut self, event: InputEvent, now: CaptureInstant) -> Option<HotkeyAction> {
         self.stale_keys_neutral_since = None;
         if matches!(event, InputEvent::TapDisabled) {
             let was_recording = self.is_recording();
@@ -1737,17 +1817,11 @@ mod tests {
         fn CGEventSetIntegerValueField(event: EventRef, field: u32, value: i64);
     }
 
-    // Drive the real callback without installing a tap or posting global input.
-    fn callback_input(timestamps_and_events: &[(u64, InputEvent)]) -> Vec<ObservedInputEvent> {
-        callback_input_with(false, timestamps_and_events)
-    }
-
-    fn callback_input_with(
+    fn test_tap_context(
         escape_cancels: bool,
-        timestamps_and_events: &[(u64, InputEvent)],
-    ) -> Vec<ObservedInputEvent> {
+    ) -> (EventTapContext, mpsc::Receiver<ObservedInputEvent>) {
         let (sender, receiver) = mpsc::channel();
-        let mut context = EventTapContext {
+        let context = EventTapContext {
             sender,
             activity: InputActivity::default(),
             escape_cancels: Arc::new(AtomicBool::new(escape_cancels)),
@@ -1758,6 +1832,19 @@ mod tests {
             pending: PendingInputEvents::default(),
             next_sequence: AtomicU64::new(0),
         };
+        (context, receiver)
+    }
+
+    // Drive the real callback without installing a tap or posting global input.
+    fn callback_input(timestamps_and_events: &[(u64, InputEvent)]) -> Vec<ObservedInputEvent> {
+        callback_input_with(false, timestamps_and_events)
+    }
+
+    fn callback_input_with(
+        escape_cancels: bool,
+        timestamps_and_events: &[(u64, InputEvent)],
+    ) -> Vec<ObservedInputEvent> {
+        let (mut context, receiver) = test_tap_context(escape_cancels);
         for &(timestamp, input) in timestamps_and_events {
             // SAFETY: This locally owned event and context live through the callback.
             unsafe {
@@ -3557,6 +3644,192 @@ mod tests {
             edit.process(InputEvent::Flags(NO_FLAGS), now + Duration::from_secs(1)),
             Some(HotkeyAction::Finish)
         );
+    }
+
+    #[test]
+    fn a_held_modifier_only_shortcut_breaks_the_chord_once_after_the_hold_threshold() {
+        let now = capture_time();
+        let mut hotkey = test_hotkey(false, now);
+        for press in [now, now + Duration::from_secs(5)] {
+            assert_eq!(
+                hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), press),
+                Some(HotkeyAction::Start)
+            );
+            assert!(!hotkey.take_chord_break(press + Duration::from_millis(299)));
+            assert!(hotkey.take_chord_break(press + MINIMUM_HOLD_DURATION));
+            assert!(!hotkey.take_chord_break(press + Duration::from_secs(2)));
+            assert_eq!(
+                hotkey.process(InputEvent::Flags(NO_FLAGS), press + Duration::from_secs(3)),
+                Some(HotkeyAction::Finish)
+            );
+            assert!(!hotkey.take_chord_break(press + Duration::from_secs(4)));
+        }
+    }
+
+    #[test]
+    fn short_taps_chords_and_other_bindings_never_break_the_chord() {
+        let now = capture_time();
+        let later = now + Duration::from_secs(1);
+
+        let mut tap = test_hotkey(false, now);
+        tap.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        tap.process(
+            InputEvent::Flags(NO_FLAGS),
+            now + Duration::from_millis(200),
+        );
+        assert!(!tap.take_chord_break(later));
+
+        for (chord, cause) in [
+            (option_key(0, true, OPTION_KEY_MASK), DiscardCause::Key),
+            (hid_key(18), DiscardCause::HidKey),
+            (InputEvent::MouseDown, DiscardCause::Mouse),
+            (
+                InputEvent::Flags(OPTION_KEY_MASK | SHIFT_KEY_MASK),
+                DiscardCause::ExtraModifier,
+            ),
+        ] {
+            let mut hotkey = test_hotkey(false, now);
+            hotkey.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+            assert_eq!(
+                hotkey.process(chord, now + Duration::from_millis(100)),
+                Some(HotkeyAction::Discard(cause))
+            );
+            assert!(!hotkey.take_chord_break(later), "{cause:?}");
+        }
+
+        // A key held past the threshold is already a chord to other apps.
+        let mut held_key = test_hotkey(false, now);
+        held_key.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        held_key.process(
+            option_key(0, true, OPTION_KEY_MASK),
+            now + Duration::from_millis(400),
+        );
+        assert!(!held_key.take_chord_break(later));
+
+        // Keyed shortcuts are consumed, and Globe's own tap action is the system's.
+        let mut keyed = DictationHotkey::with_binding(false, now, true, shift_space_binding());
+        assert_eq!(
+            keyed.process(shift_space_event(true), now),
+            Some(HotkeyAction::Start)
+        );
+        let mut globe = DictationHotkey::with_binding(false, now, true, function_binding());
+        assert_eq!(
+            globe.process(InputEvent::Flags(FUNCTION_KEY_MASK), now),
+            Some(HotkeyAction::Start)
+        );
+        assert!(!keyed.take_chord_break(later));
+        assert!(!globe.take_chord_break(later));
+
+        // A suspended press (Voice Action took over, or a refused start) owes nothing.
+        let mut suspended = test_hotkey(false, now);
+        suspended.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        suspended.suspend();
+        assert!(!suspended.take_chord_break(later));
+    }
+
+    #[test]
+    fn locked_and_toggle_captures_break_the_chord_only_for_presses_hex_owns() {
+        let now = capture_time();
+        let at = |ms| now + Duration::from_millis(ms);
+
+        // Double-tap lock: both presses are taps, which stay taps.
+        let mut locked = test_hotkey(false, now);
+        locked.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        locked.process(InputEvent::Flags(NO_FLAGS), at(100));
+        locked.process(InputEvent::Flags(OPTION_KEY_MASK), at(200));
+        locked.process(InputEvent::Flags(NO_FLAGS), at(300));
+        assert!(locked.is_locked());
+        assert!(!locked.take_chord_break(at(2_000)));
+        // The press that finishes the lock is Hex's.
+        assert_eq!(
+            locked.process(InputEvent::Flags(OPTION_KEY_MASK), at(3_000)),
+            Some(HotkeyAction::Finish)
+        );
+        assert!(locked.take_chord_break(at(3_000)));
+        assert!(!locked.take_chord_break(at(3_050)));
+        // Released before the loop got to it: nothing to break.
+        let mut programmatic = test_hotkey(false, now);
+        assert!(programmatic.lock());
+        programmatic.process(InputEvent::Flags(OPTION_KEY_MASK), at(1_000));
+        programmatic.process(InputEvent::Flags(NO_FLAGS), at(1_060));
+        assert!(!programmatic.take_chord_break(at(1_060)));
+
+        // Toggle: the starting press is Hex's at once while held.
+        let mut toggle = test_hotkey(false, now);
+        toggle.set_toggle(true);
+        toggle.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        assert!(toggle.take_chord_break(now));
+        toggle.process(InputEvent::Flags(NO_FLAGS), at(80));
+        assert!(toggle.is_locked());
+        assert!(!toggle.take_chord_break(at(1_000)));
+        toggle.process(InputEvent::Flags(OPTION_KEY_MASK), at(2_000));
+        assert!(toggle.take_chord_break(at(2_000)));
+    }
+
+    #[test]
+    fn voice_action_promotion_breaks_its_own_chord_after_its_hold() {
+        let now = capture_time();
+        let mut dictation = test_hotkey(false, now);
+        let mut edit = DictationHotkey::new_without_paste(
+            now,
+            RuntimeHotkey {
+                modifiers: crate::app_settings::modifiers_from_flags(
+                    OPTION_KEY_MASK | COMMAND_KEY_MASK,
+                ),
+                key_code: None,
+            },
+        );
+        let option = InputEvent::Flags(OPTION_KEY_MASK);
+        dictation.process(option, now);
+        edit.process(option, now);
+        assert!(dictation.take_chord_break(now + MINIMUM_HOLD_DURATION));
+
+        let promoted = now + Duration::from_millis(500);
+        let chord = InputEvent::Flags(OPTION_KEY_MASK | COMMAND_KEY_MASK);
+        dictation.process(chord, promoted);
+        assert_eq!(edit.process(chord, promoted), Some(HotkeyAction::Start));
+        dictation.suspend();
+        assert!(!edit.take_chord_break(promoted + Duration::from_millis(299)));
+        assert!(edit.take_chord_break(promoted + MINIMUM_HOLD_DURATION));
+        assert!(!edit.take_chord_break(promoted + Duration::from_secs(2)));
+        assert!(!dictation.take_chord_break(promoted + Duration::from_secs(2)));
+    }
+
+    /// The chord breaker is posted through both taps; its mark keeps it from
+    /// becoming the user's chord or HID chord evidence.
+    #[test]
+    fn marked_chord_breaker_never_reaches_the_shortcut_machines() {
+        for marked in [true, false] {
+            let (mut context, receiver) = test_tap_context(false);
+            // SAFETY: This locally owned event and context live through both callbacks.
+            unsafe {
+                let event = CGEventCreate(ptr::null_mut());
+                assert!(!event.is_null());
+                CGEventSetType(event, EVENT_KEY_DOWN);
+                CGEventSetFlags(event, OPTION_KEY_MASK);
+                CGEventSetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE, 0x44);
+                if marked {
+                    CGEventSetIntegerValueField(
+                        event,
+                        EVENT_SOURCE_USER_DATA,
+                        crate::keyboard::SYNTHETIC_EVENT_MARKER,
+                    );
+                }
+                let user_info = (&mut context as *mut EventTapContext).cast();
+                let returned = event_callback(ptr::null_mut(), EVENT_KEY_DOWN, event, user_info);
+                assert_eq!(returned, event);
+                let returned =
+                    physical_event_callback(ptr::null_mut(), EVENT_KEY_DOWN, event, user_info);
+                assert_eq!(returned, event);
+                CFRelease(event.cast_const());
+            }
+            let observed = receiver.try_iter().count();
+            if marked {
+                assert_eq!(observed, 0);
+            } else {
+                assert_eq!(observed, 2, "an unmarked key is the user's chord");
+            }
+        }
     }
 
     #[test]

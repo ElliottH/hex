@@ -66,8 +66,10 @@ Ordinary hold                            // lock activation is mapped below
   ├── Early unrelated shortcut/click -> Discard   // not intentional dictation
   │   └── Includes another app's global shortcut  // dictate.hidden-chord
   │       (Spaceman's Option-1) -> Seen at HID -> Discard, no double-tap lock
-  └── Modifier-only hold + any key, at any time -> Discard  // dictate.held-chord
-      (key reaches the app; locked and toggle captures keep recording)
+  ├── Modifier-only hold + any key, at any time -> Discard  // dictate.held-chord
+  │   (key reaches the app; locked and toggle captures keep recording)
+  └── Modifier-only hold past 300 ms -> One unassigned key press  // dictate.chord-breaker
+      -> Other apps' modifier-tap hotkeys see a chord, not a tap
 
 Ordinary shortcut -> No recording mute/pause or idle-sleep prevention
 Intentional recording -> No automatic duration limit
@@ -109,6 +111,39 @@ threshold. Any non-modifier key pressed while a modifier-only shortcut is still
 held now discards the capture, with no transcription or paste. Keyed shortcuts
 keep the 300 ms rule. Check:
 `held_modifier_only_shortcut_plus_any_key_discards_after_the_hold_threshold`.
+
+**Changed October 27, 2026 (chord breaker):** a bare-modifier shortcut is not
+consumed, so other apps saw an Option dictation as an Option tap on release. A
+Raycast hotkey on an Option tap activated Slack on every dictation, switching
+Kit out of a fullscreen Space before the paste. Tap detectors (Raycast,
+Karabiner's `to_if_alone`, AutoHotkey's Start-menu mask) cancel a tap when any
+key goes down while the modifier is held. Once Hex owns a modifier-only press
+it now posts one press of key code 0x44 under the modifiers held at that
+moment, once per press and only while they are still physically down:
+
+```ts
+Hold past 300 ms (Hold mode, or a held second tap) -> Chord breaker
+Toggle start press, press that finishes a lock     -> Chord breaker at once
+Short tap, chord discard, double-tap lock taps     -> Nothing (still a tap)
+Keyed shortcuts (consumed), Globe/Fn (system tap)  -> Nothing
+Voice Action ⌥⌘, including promotion               -> Its own, after its hold
+```
+
+0x44 is a hole in the virtual key codes (between keypad `*` and `+`): no
+keyboard sends it, it has no system action, and of the 264 layouts macOS ships
+only Unicode Hex Input maps it (to U+0000, never with Option alone). The event
+carries Hex's synthetic marker, so neither of Hex's taps reads it as a key,
+a chord, or HID evidence. Source: `DictationHotkey::break_chord` in
+[suppression.rs](../../src/suppression.rs), `post_chord_breaker` in
+[keyboard.rs](../../src/keyboard.rs), called from the listener loop once no
+input is pending. Checks:
+`a_held_modifier_only_shortcut_breaks_the_chord_once_after_the_hold_threshold`,
+`short_taps_chords_and_other_bindings_never_break_the_chord`,
+`locked_and_toggle_captures_break_the_chord_only_for_presses_hex_owns`,
+`voice_action_promotion_breaks_its_own_chord_after_its_hold`,
+`marked_chord_breaker_never_reaches_the_shortcut_machines`. Not yet observed
+with Raycast on a physical keyboard; an app focused on a non-text view might
+beep at an unhandled key, which is also unobserved.
 
 ### Shortcut Mode
 
@@ -768,10 +803,9 @@ and normal Spaces keep their position. Check: `scripts/check
 dictation_indicator::tests::top_capsule` covers the math only; placement over a
 fullscreen app on a notched Mac is not yet observed.
 
-A dictation shortcut that is a bare modifier is not consumed, so other apps see
-a modifier tap on release. On October 27, 2026 a Raycast hotkey on an Option
-tap activated Slack on every Option dictation, which switched Kit out of a
-fullscreen Space before the paste; Hex itself never activates on paste.
+Hex itself never activates on paste. Another app's modifier-tap hotkey once
+switched Spaces before the paste; the [chord breaker](#hold-and-short-taps)
+keeps a held bare-modifier dictation from reading as a tap.
 
 **Observed September 14, 2026:** the unmodified HUD was not found on screen over
 a native fullscreen TextEdit fixture. Changing only the window class to

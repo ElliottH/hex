@@ -418,6 +418,11 @@ CoreAudio formats, AppleScript details, or event serialization.
 - Recording audio behavior and idle-sleep prevention begin only after the
   intentional-hold threshold. Ordinary shortcut chords must not mute output,
   pause media, or prevent sleep.
+- A modifier-only shortcut (not Globe/Fn) passes through, so once Hex owns
+  the press (hold past the threshold, Toggle start, lock-finishing press)
+  it posts one marked press of unassigned key code 0x44 while the modifiers
+  are still down, so other apps' modifier-tap hotkeys read a chord. Short
+  taps and chords never get one, and it never reaches Hex's state machines.
 - The start tone confirms the shortcut press itself, not the hold threshold: it
   is provisional, sounds after a 40 ms chord grace, and a chord, short tap,
   cancel, or Voice Action takeover retracts it (silently inside the grace, else
