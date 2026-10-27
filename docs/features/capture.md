@@ -154,6 +154,9 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   It stays, sent nowhere, until a pick or a dismissal; a click away folds
 │   │   it to "Taken back" with "Elsewhere…". Esc or ✕ dismisses: "Kept ·
 │   │   hex capture send latest", the bundle untouched
+│   ├── Too late to take back -> the same list, the session marked "has it",
+│   │   folded "Sent to X · too late to take back"; a pick sends a copy there,
+│   │   and Esc or ✕ just closes
 │   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
 │   │   a chip sends at once
 │   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
@@ -429,6 +432,7 @@ Checks:
   `paste_takes_back_a_waiting_send_and_the_capsule_stays_gone`,
   `undoing_a_rule_send_reopens_the_list_until_a_pick`,
   `undoing_a_pick_reopens_the_list_it_came_from`,
+  `too_late_to_take_back_offers_the_list_for_a_copy`,
   `the_capsule_takes_only_the_keys_its_state_needs`,
   `the_hints_keys_stay_inside_their_trays`, goldens
   `tests/golden/capture-capsule-*.png`, and

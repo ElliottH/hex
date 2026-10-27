@@ -406,9 +406,12 @@ struct Routed {
     /// When the rule sent it, for the Undo countdown.
     at: f64,
     open: Option<Open>,
-    /// A send was taken back: it stays, sent nowhere, until a pick or a
-    /// dismissal, and never leaves by itself.
+    /// An Undo answered: it stays, offering the list again, until a pick
+    /// or a dismissal, and never leaves by itself.
     taken_back: bool,
+    /// The Undo came too late: this session already has it, and a pick
+    /// sends a copy elsewhere.
+    already_with: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -490,7 +493,9 @@ impl Flow {
             (
                 _,
                 Phase::Routed(Routed {
-                    taken_back: true, ..
+                    taken_back: true,
+                    already_with: None,
+                    ..
                 }),
             ) => Some(Cue::TakenBack),
             (Phase::Recording { .. } | Phase::Selecting(_), Phase::Hidden)
@@ -610,6 +615,7 @@ impl Flow {
                 at: now,
                 open: None,
                 taken_back: false,
+                already_with: None,
             }),
             (Phase::Routed(mut routed), Input::OpenList) => {
                 if routed.open.is_none() && !matches!(routed.route, Route::Unreachable { .. }) {
@@ -654,13 +660,19 @@ impl Flow {
                 Phase::Routed(routed)
             }
             (phase, Input::ClickAway) => phase,
-            // Taken back, Escape is the dismissal: the bundle is kept.
+            // Taken back, Escape is the dismissal: the bundle is kept. Too
+            // late, it's where it went.
             (
                 Phase::Routed(Routed {
-                    taken_back: true, ..
+                    taken_back: true,
+                    already_with,
+                    ..
                 }),
                 Input::Escape | Input::Dismiss,
-            ) => Phase::Kept { at: now },
+            ) => match already_with {
+                None => Phase::Kept { at: now },
+                Some(_) => Phase::Hidden,
+            },
             (Phase::Routed(mut routed), Input::Escape) => {
                 if routed.open.take().is_some() {
                     Phase::Routed(routed)
@@ -685,36 +697,35 @@ impl Flow {
             }
             // Pasted or dismissed: the take-back it asked for says nothing.
             (Phase::Hidden, Input::Undone(_)) => Phase::Hidden,
-            // A take-back never ends the capture: the list comes back with
-            // the same sessions, the one it went to last, until a pick or a
-            // dismissal.
-            (phase, Input::Undone(Undone::TakenBack)) => {
-                let back = match phase {
-                    Phase::Routed(Routed { route, .. }) => match &route {
-                        Route::Rule { to, .. } => {
-                            let to = to.clone();
-                            Some((route, to))
-                        }
-                        _ => None,
-                    },
-                    Phase::Sent(Sent {
-                        to,
-                        back: Some(route),
-                        ..
-                    }) => Some((route, to)),
-                    _ => None,
+            // An Undo never ends the capture: the list comes back with the
+            // same sessions, the one it went to last, until a pick or a
+            // dismissal. Too late to take back, a pick sends a copy.
+            (phase, Input::Undone(undone)) => {
+                let (route, to) = match phase {
+                    Phase::Routed(Routed { route, .. }) if rule_to(&route).is_some() => {
+                        let to = rule_to(&route);
+                        (Some(route), to)
+                    }
+                    Phase::Sent(Sent { to, back, .. }) => (back, Some(to)),
+                    other if undone == Undone::TooLate => {
+                        self.phase = other;
+                        return actions;
+                    }
+                    _ => (None, None),
                 };
-                back.and_then(|(route, to)| offered_again(route, &to, now))
-                    .map_or(Phase::TakenBack { at: now }, Phase::Routed)
+                let too_late = undone == Undone::TooLate;
+                match (route, &to) {
+                    (Some(route), Some(to)) => offered_again(route, to, too_late, now),
+                    _ => None,
+                }
+                .map_or_else(
+                    || match (too_late, to) {
+                        (true, Some(to)) => Phase::TooLate { to, at: now },
+                        _ => Phase::TakenBack { at: now },
+                    },
+                    Phase::Routed,
+                )
             }
-            (phase, Input::Undone(Undone::TooLate)) => match phase {
-                Phase::Sent(Sent { to, .. })
-                | Phase::Routed(Routed {
-                    route: Route::Rule { to, .. },
-                    ..
-                }) => Phase::TooLate { to, at: now },
-                other => other,
-            },
             (_, Input::Escape | Input::Dismiss) => Phase::Hidden,
             (phase, _) => phase,
         };
@@ -1086,10 +1097,18 @@ fn send(
     })
 }
 
-/// The open list again after the send to `to` was taken back: the same
-/// sessions as a guess, `to` moved last, nothing sent. `None` when there's
-/// nothing to list.
-fn offered_again(route: Route, to: &str, now: f64) -> Option<Routed> {
+/// Where a rule sent it.
+fn rule_to(route: &Route) -> Option<String> {
+    match route {
+        Route::Rule { to, .. } => Some(to.clone()),
+        _ => None,
+    }
+}
+
+/// The open list again after an Undo of the send to `to`: the same
+/// sessions as a guess, `to` moved last. Taken back, nothing is sent; too
+/// late, `to` keeps it. `None` when there's nothing to list.
+fn offered_again(route: Route, to: &str, too_late: bool, now: f64) -> Option<Routed> {
     let (mut suggested, mut recent, site) = match route {
         Route::Rule {
             suggested, recent, ..
@@ -1107,7 +1126,7 @@ fn offered_again(route: Route, to: &str, now: f64) -> Option<Routed> {
             .into_iter()
             .partition(|dest| dest.name != to);
         others.extend(last.into_iter().map(|dest| Dest {
-            why: "taken back".into(),
+            why: if too_late { "has it" } else { "taken back" }.into(),
             ..dest
         }));
         *rows = others;
@@ -1127,6 +1146,7 @@ fn offered_again(route: Route, to: &str, now: f64) -> Option<Routed> {
             selected: 0,
         }),
         taken_back: true,
+        already_with: too_late.then(|| to.to_owned()),
     })
 }
 
@@ -1196,7 +1216,17 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         // Sent nowhere, it waits for a pick: ⌥⇧V or a click reopens the list.
         _ if routed.taken_back => Done {
             ask: Some("Elsewhere…".into()),
-            ..Done::plain(Lead::Check, "Taken back")
+            why: routed
+                .already_with
+                .as_ref()
+                .map(|_| "too late to take back".into()),
+            ..Done::plain(
+                Lead::Check,
+                match &routed.already_with {
+                    Some(to) => format!("Sent to {}", short(to)),
+                    None => "Taken back".into(),
+                },
+            )
         },
         // While the send can be taken back, the runner-up rides along
         // (⌥⇧V still opens the list); then the list's chip takes its place.
@@ -1617,6 +1647,44 @@ mod tests {
         let late = undo_s() + 0.5;
         assert!(flow.click(Id::Close, late).is_empty());
         assert_eq!(flow.pres(late), Pres::Hidden);
+    }
+
+    #[test]
+    fn too_late_to_take_back_offers_the_list_for_a_copy() {
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        flow.input(Input::Escape, 1.0);
+        flow.input(Input::Undone(Undone::TooLate), 1.2);
+        let shown = done(&flow, 1.2);
+        assert_eq!(shown.text, "Sent to SEER");
+        assert_eq!(shown.why, None, "open, the field takes the why's place");
+        assert_eq!(rows(&flow, 1.2), ["HEX", "HOME", "SEER", "BOARD"]);
+        let (_, list) = shown.open.unwrap();
+        assert_eq!(list.suggested[2].why, "has it");
+        assert!(flow.take_cues().is_empty(), "nothing was taken back");
+        assert!(!flow.tick(1_000.0), "it waits for a pick");
+        // Pick 2: a copy goes to #2.
+        assert_eq!(
+            flow.input(Input::SendRow(1), 1_000.0),
+            [Action::Send {
+                to: "ses_home".into(),
+                always: None
+            }]
+        );
+        assert_eq!(done(&flow, 1_000.0).text, "Sending to HOME");
+
+        // Folded, it says where it is; dismissed, it just goes.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        flow.input(Input::Escape, 1.0);
+        flow.input(Input::Undone(Undone::TooLate), 1.2);
+        flow.input(Input::ClickAway, 2.0);
+        let folded = done(&flow, 2.0);
+        assert_eq!(folded.text, "Sent to SEER");
+        assert_eq!(folded.why.as_deref(), Some("too late to take back"));
+        assert_eq!(folded.ask.as_deref(), Some("Elsewhere…"));
+        flow.input(Input::Escape, 3.0);
+        assert_eq!(flow.pres(3.0), Pres::Hidden);
     }
 
     #[test]
