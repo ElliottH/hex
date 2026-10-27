@@ -252,6 +252,8 @@ pub(crate) enum Action {
 pub(crate) enum Lead {
     Check,
     Warning,
+    /// The capture's first frame, in the check's place once it's decoded.
+    Thumbnail,
 }
 
 /// A moment the capsule marks with a sound ([`Flow::take_cues`]).
@@ -319,9 +321,6 @@ pub(crate) struct Done {
     pub(crate) why: Option<String>,
     /// It can still be taken back: the Undo chip shows, with no countdown.
     pub(crate) undo: bool,
-    /// The route chips' labels, best first ("Send to SEER", "HEX", …).
-    /// The flow names none now: a saved rule has no runner-up.
-    pub(crate) routes: Vec<String>,
     /// The ⌥⇧V chip's label.
     pub(crate) ask: Option<String>,
     /// Its keycaps, the list's shortcut as saved when shown, so a change
@@ -340,7 +339,6 @@ impl Done {
             text: text.into(),
             why: None,
             undo: false,
-            routes: Vec::new(),
             ask: None,
             ask_keys: Vec::new(),
             open: None,
@@ -1654,7 +1652,6 @@ fn routed_done(routed: &Routed, undo: bool) -> Done {
         // The suggestions hang under a finished capsule that keeps Paste
         // and Inspect, and its note.
         Some(open) if !open.typing => Done {
-            routes: Vec::new(),
             ask: None,
             open: Some((String::new(), list(&routed.route, open))),
             hand_off: true,
@@ -1664,7 +1661,6 @@ fn routed_done(routed: &Routed, undo: bool) -> Done {
         Some(open) => Done {
             why: None,
             undo: false,
-            routes: Vec::new(),
             ask: None,
             open: Some((open.query.clone(), list(&routed.route, open))),
             ..base
@@ -1957,7 +1953,6 @@ mod tests {
         assert_eq!(done(&flow, 10.0).lead, Lead::Check);
         assert_eq!(done(&flow, 10.0).ask, None, "Undo, as a pick has");
         assert_eq!(done(&flow, 15.0).ask, None, "nothing after the window");
-        assert!(done(&flow, 10.0).routes.is_empty(), "no runner-up");
         assert_eq!(done(&flow, 10.0).why.as_deref(), Some("rule"));
         let actions = flow.input(Input::Undo, 11.0);
         assert_eq!(actions, vec![Action::Undo { to: "SEER".into() }]);
@@ -2545,11 +2540,8 @@ mod tests {
         assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
         assert!(done(&flow, 1.0).undo);
 
-        // The router names no runner-up beside a saved rule.
         let mut flow = Flow::new();
         flow.input(Input::Routed(rule()), 0.0);
-        assert!(done(&flow, 0.0).routes.is_empty());
-        assert!(flow.click(Id::Route(0), 1.0).is_empty());
         assert_eq!(done(&flow, 1.0).text, "Sent to SEER");
     }
 
@@ -2730,7 +2722,7 @@ mod tests {
         let mut flow = Flow::new();
         flow.input(Input::Routed(guess()), 0.0);
         let asked = done(&flow, 0.0);
-        assert!(asked.routes.is_empty() && asked.ask.is_none());
+        assert!(asked.ask.is_none());
         assert!(
             asked.hand_off,
             "Paste and Inspect stay beside the suggestions"
@@ -2746,10 +2738,7 @@ mod tests {
             list.footer,
             Footer::Always("problems.kitlangton.com".into())
         );
-        assert!(
-            open.ask.is_none() && open.routes.is_empty(),
-            "the field takes the chips' place"
-        );
+        assert!(open.ask.is_none(), "the field takes the chips' place");
         flow.input(Input::Type("ho".into()), 1.5);
         let (_, list) = done(&flow, 1.5).open.unwrap();
         assert_eq!(list.rows().count(), 1);

@@ -124,7 +124,7 @@ fn side(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
                 .color(p.k.c.text_muted)
         }))
         .child(states(p).px(0.0))
-        .child(tuning(p, pg, SIDE_W, false))
+        .child(tuning(p, pg, SIDE_W - 2.0 * super::CARD_PAD, false))
         .child(log(p, pg).px(0.0));
     col()
         .key("capsule-side-scroll")

@@ -14,11 +14,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant};
+use rune_kit::{Button, ButtonVariant, ControlSize, SegmentedControl, Switch};
 
 use super::flow::{Action, Cue, Delivered, Dest, Failure, Input, Route, Undone};
 use super::surface::{Id, PANEL_H, PANEL_W};
-use super::tuning::{self, Tuning};
+use super::tuning::{self, ListFooter, TopLine, Tuning};
 use super::{CapsuleState, Mode, capsule, tone};
 use crate::rune_ui::controls::{DESCRIPTION, Paint};
 use crate::rune_ui::lists::slider_in;
@@ -28,9 +28,12 @@ pub(crate) use stories::add as stories;
 
 /// How much slow motion slows the capsule.
 const SLOW: f64 = 0.25;
-const SIDEBAR_W: f32 = 360.0;
-const WINDOW: (f32, f32) = (PANEL_W + SIDEBAR_W, 800.0);
-const SLIDER_W: f32 = SIDEBAR_W - 48.0;
+const SIDEBAR_W: f32 = 340.0;
+const WINDOW: (f32, f32) = (PANEL_W + SIDEBAR_W, 760.0);
+/// The panel's and its cards' insets.
+const PAD: f32 = 16.0;
+const CARD_PAD: f32 = 12.0;
+const SLIDER_W: f32 = SIDEBAR_W - 2.0 * PAD - 2.0 * CARD_PAD;
 
 /// Something the playground does to the capsule at a time.
 #[derive(Clone, Debug)]
@@ -403,9 +406,9 @@ pub(super) fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
         return el();
     };
     let p = Paint::new(cx.system_dark(), cx.env().scale);
-    if pg.slow {
-        cx.time_scale(SLOW as f32);
-    }
+    // The window keeps its clock's scale between views, so it's set every
+    // time, or slow motion would stay on.
+    cx.time_scale(if pg.slow { SLOW as f32 } else { 1.0 });
     if pg.reduced {
         cx.reduced_motion(true);
     }
@@ -415,45 +418,97 @@ pub(super) fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
         .size(PANEL_W, PANEL_H)
         .fill(p.k.c.layer_03)
         .child(capsule(p, &s.surface, &s.live, cx));
-    let left = col()
-        .key("left")
+    let controls = col()
+        .key("controls")
         .w(PANEL_W)
-        .gap(14.0)
-        .child(stage)
+        .gap(20.0)
+        .padding(PAD)
         .child(states(p))
         .child(flow_controls(p, pg))
         .child(log(p, pg));
+    let left = col().key("left").w(PANEL_W).h_full().child(stage).child(
+        col()
+            .key("controls-scroll")
+            .w(PANEL_W)
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(rune::ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(controls),
+    );
     row()
         .key("playground")
-        .size(WINDOW.0, WINDOW.1)
+        .w_full()
+        .h_full()
         .fill(p.k.c.bg_base)
         .child(left)
         .child(panel(p, pg))
 }
 
+/// A button that does something once; settings that stay on or off are
+/// [`switch`]es.
 fn button(
     p: Paint,
     key: &str,
     label: &str,
-    on: bool,
+    primary: bool,
     press: impl Fn(&mut CapsuleState, &mut Tx) + 'static,
 ) -> El {
     Button::new(label)
-        .variant(if on {
+        .variant(if primary {
             ButtonVariant::Contrast
         } else {
             ButtonVariant::Neutral
         })
+        .control_size(ControlSize::Regular)
         .on_press_tx(press)
         .build(p.k)
         .key(key)
 }
 
+/// A setting that stays on or off: its name, and a switch that shows it.
+fn switch(
+    p: Paint,
+    key: &str,
+    label: &str,
+    on: bool,
+    flip: impl Fn(&mut Playground, &mut Tx) + 'static,
+) -> El {
+    row()
+        .key(key)
+        .h(28.0)
+        .center_y()
+        .justify_between()
+        .child(text(label).key("label").font(p.k.ty.ui).color(p.text()))
+        .child(
+            Switch::new(on)
+                .label(label)
+                .hide_label()
+                .on_toggle_tx(move |s: &mut CapsuleState, tx: &mut Tx| {
+                    if let Some(pg) = s.playground.as_mut() {
+                        flip(pg, tx);
+                    }
+                    tx.wake_after(Duration::ZERO);
+                })
+                .build(p.k),
+        )
+}
+
 fn heading(p: Paint, title: &str) -> El {
     text(title)
         .key(format!("h-{title}"))
-        .font(p.k.ty.ui_medium.lh(16.0))
-        .color(p.k.c.text_muted)
+        .font(p.k.ty.small_medium.lh(16.0))
+        .color(p.muted())
+}
+
+/// A titled group of controls on its own card.
+fn section(p: Paint, key: &str, title: &str, body: El) -> El {
+    col().key(key).gap(8.0).child(heading(p, title)).child(
+        body.padding(CARD_PAD)
+            .radius(p.k.radius.md)
+            .fill(p.k.c.layer_02),
+    )
 }
 
 /// A button that sends the capsule straight to a state.
@@ -473,8 +528,7 @@ fn states(p: Paint) -> El {
     col()
         .key("states")
         .gap(8.0)
-        .px(14.0)
-        .child(heading(p, "States"))
+        .child(heading(p, "Jump to"))
         .child(
             row()
                 .key("row-1")
@@ -552,51 +606,57 @@ fn states(p: Paint) -> El {
 }
 
 fn flow_controls(p: Paint, pg: &Playground) -> El {
-    col()
-        .key("flow")
-        .gap(8.0)
-        .px(14.0)
-        .child(heading(p, "Flow"))
+    let switches = row()
+        .key("switches")
+        .gap(24.0)
         .child(
-            row()
-                .key("flow-row")
-                .gap(6.0)
-                .flex_wrap()
-                .child(button(p, "play", "Play the whole flow", false, |s, tx| {
-                    if let Some(pg) = s.playground.as_mut() {
+            col()
+                .key("a")
+                .w(200.0)
+                .child(switch(p, "rule", "Saved rule", pg.rule, |pg, _| {
+                    pg.rule = !pg.rule;
+                }))
+                .child(switch(p, "loop", "Loop", pg.looping, |pg, _| {
+                    pg.looping = !pg.looping;
+                    if pg.looping && pg.queue.is_empty() {
                         pg.play();
-                    }
-                    tx.wake_after(Duration::ZERO);
-                }))
-                .child(button(p, "rule", "Saved rule", pg.rule, |s, _| {
-                    if let Some(pg) = s.playground.as_mut() {
-                        pg.rule = !pg.rule;
-                    }
-                }))
-                .child(button(p, "loop", "Loop", pg.looping, |s, tx| {
-                    if let Some(pg) = s.playground.as_mut() {
-                        pg.looping = !pg.looping;
-                        if pg.looping && pg.queue.is_empty() {
-                            pg.play();
-                        }
-                    }
-                    tx.wake_after(Duration::ZERO);
-                }))
-                .child(button(p, "slow", "Slow motion", pg.slow, |s, _| {
-                    if let Some(pg) = s.playground.as_mut() {
-                        pg.slow = !pg.slow;
-                    }
-                }))
-                .child(button(p, "reduced", "Reduce Motion", pg.reduced, |s, _| {
-                    if let Some(pg) = s.playground.as_mut() {
-                        pg.reduced = !pg.reduced;
                     }
                 })),
         )
+        .child(
+            col()
+                .key("b")
+                .w(200.0)
+                .child(switch(p, "slow", "Slow motion", pg.slow, |pg, _| {
+                    pg.slow = !pg.slow;
+                }))
+                .child(switch(
+                    p,
+                    "reduced",
+                    "Reduce Motion",
+                    pg.reduced,
+                    |pg, _| {
+                        pg.reduced = !pg.reduced;
+                    },
+                )),
+        );
+    col().key("flow").gap(8.0).child(heading(p, "Flow")).child(
+        row()
+            .key("flow-row")
+            .gap(24.0)
+            .center_y()
+            .child(button(p, "play", "Play the whole flow", true, |s, tx| {
+                if let Some(pg) = s.playground.as_mut() {
+                    pg.play();
+                }
+                tx.wake_after(Duration::ZERO);
+            }))
+            .child(switches),
+    )
 }
 
 fn log(p: Paint, pg: &Playground) -> El {
-    let mut lines = col().key("log").gap(2.0).px(14.0);
+    let mut lines = col().key("log").gap(2.0);
     for (i, line) in pg.log.iter().enumerate() {
         lines = lines.child(
             text(line.clone())
@@ -620,7 +680,13 @@ fn knob(
     unit: &str,
     set: fn(&mut Tuning, f32),
 ) -> El {
-    let display = format!("{value:.3}{unit}");
+    let display = if unit == " s" && value >= 1.0 {
+        format!("{value:.1}{unit}")
+    } else if unit == " s" {
+        format!("{:.0} ms", value * 1000.0)
+    } else {
+        format!("{value:.2}{unit}")
+    };
     slider_in(
         p,
         key,
@@ -643,7 +709,7 @@ macro_rules! spring {
     ($p:expr, $w:expr, $t:expr, $field:ident, $label:expr) => {
         col()
             .key(stringify!($field))
-            .gap(6.0)
+            .gap(10.0)
             .child(knob(
                 ($p, $w),
                 "duration",
@@ -665,6 +731,11 @@ macro_rules! spring {
     };
 }
 
+/// A section's card around controls `w` wide.
+fn card(key: &str, w: f32) -> El {
+    col().key(key).w(w + 2.0 * CARD_PAD).gap(14.0)
+}
+
 fn panel(p: Paint, pg: &Playground) -> El {
     col()
         .key("panel-scroll")
@@ -681,10 +752,63 @@ fn panel(p: Paint, pg: &Playground) -> El {
 /// switch Hex's sounds and set their volume; inside Hex those stay Hex's.
 fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
     let t = pg.tuning;
-    let mut body = col()
-        .key("tuning")
-        .gap(12.0)
-        .child(heading(p, "Undo"))
+    let card = |key: &str| card(key, w);
+    let lines: Vec<&str> = TopLine::ALL.iter().map(|m| m.label()).collect();
+    let picked = TopLine::ALL.iter().position(|m| *m == t.top_line);
+    let top_line = card("top-line-card").child(
+        SegmentedControl::new(&lines, picked)
+            .width(Some(w))
+            .on_pick(|s: &mut CapsuleState, i: usize, _: &mut Tx| {
+                if let Some(pg) = s.playground.as_mut() {
+                    let mut tuning = pg.tuning;
+                    tuning.top_line = TopLine::ALL[i];
+                    pg.set_tuning(tuning);
+                }
+            })
+            .build(p.k)
+            .key("top-line"),
+    );
+    let footers: Vec<&str> = ListFooter::ALL.iter().map(|m| m.label()).collect();
+    let picked = ListFooter::ALL.iter().position(|m| *m == t.list_footer);
+    let list_footer = card("list-footer-card").child(
+        SegmentedControl::new(&footers, picked)
+            .width(Some(w))
+            .on_pick(|s: &mut CapsuleState, i: usize, _: &mut Tx| {
+                if let Some(pg) = s.playground.as_mut() {
+                    let mut tuning = pg.tuning;
+                    tuning.list_footer = ListFooter::ALL[i];
+                    pg.set_tuning(tuning);
+                }
+            })
+            .build(p.k)
+            .key("list-footer"),
+    );
+    // Everything changes together: the walls move while the content blurs,
+    // scales and fades over them.
+    let transition = card("transition-card")
+        .gap(18.0)
+        .child(spring!(p, w, t, island, "Walls"))
+        .child(spring!(p, w, t, content_in, "Content in"))
+        .child(spring!(p, w, t, content_out, "Content out"))
+        .child(knob(
+            (p, w),
+            "content-blur",
+            "Content blur",
+            t.content_blur,
+            (0.0, 4.0),
+            " pt",
+            |t, v| t.content_blur = v,
+        ))
+        .child(knob(
+            (p, w),
+            "content-scale",
+            "Content scale",
+            t.content_scale,
+            (0.9, 1.0),
+            "",
+            |t, v| t.content_scale = v,
+        ));
+    let timing = card("timing-card")
         .child(knob(
             (p, w),
             "undo",
@@ -692,43 +816,51 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
             t.undo_s as f32,
             (2.0, 10.0),
             " s",
-            |t, v| {
-                t.undo_s = f64::from((v * 2.0).round() / 2.0);
-            },
+            |t, v| t.undo_s = f64::from((v * 2.0).round() / 2.0),
         ))
-        .child(heading(p, "Sound"))
-        .child(
-            row()
-                .key("sound-row")
-                .gap(6.0)
-                .flex_wrap()
-                .children(standalone.then(|| {
-                    button(p, "sound", "Sound", pg.sound, |s, _| {
-                        if let Some(pg) = s.playground.as_mut() {
-                            pg.sound = !pg.sound;
-                            crate::feedback::set_enabled(pg.sound);
-                        }
-                    })
-                }))
-                .children(
-                    [
-                        ("Start", Cue::Start),
-                        ("Stop", Cue::Stop),
-                        ("Sent", Cue::Sent),
-                        ("Undo", Cue::TakenBack),
-                        ("Failed", Cue::Failed),
-                    ]
-                    .into_iter()
-                    .map(|(label, cue)| {
-                        button(p, &format!("tone-{label}"), label, false, move |s, _| {
-                            if let Some(pg) = s.playground.as_mut() {
-                                pg.note(format!("♪ {cue:?}"));
-                            }
-                            crate::feedback::play(tone(cue));
-                        })
-                    }),
-                ),
-        )
+        .child(knob(
+            (p, w),
+            "done-hold",
+            "Finished capsule stays",
+            t.done_hold_s as f32,
+            (3.0, 30.0),
+            " s",
+            |t, v| t.done_hold_s = f64::from(v.round()),
+        ))
+        .child(knob(
+            (p, w),
+            "brief-hold",
+            "Taken back or failed stays",
+            t.brief_hold_s as f32,
+            (1.0, 10.0),
+            " s",
+            |t, v| t.brief_hold_s = f64::from((v * 2.0).round() / 2.0),
+        ))
+        .child(knob(
+            (p, w),
+            "chips-open",
+            "Chips stay open",
+            t.chips_open_s as f32,
+            (1.0, 8.0),
+            " s",
+            |t, v| t.chips_open_s = f64::from((v * 2.0).round() / 2.0),
+        ));
+    let tones = [
+        ("Start", Cue::Start),
+        ("Stop", Cue::Stop),
+        ("Sent", Cue::Sent),
+        ("Undo", Cue::TakenBack),
+        ("Failed", Cue::Failed),
+    ];
+    // Standalone, the playground switches Hex's sounds and sets their
+    // volume; inside Hex those stay Hex's.
+    let sound = card("sound-card")
+        .children(standalone.then(|| {
+            switch(p, "sound", "Sound", pg.sound, |pg, _| {
+                pg.sound = !pg.sound;
+                crate::feedback::set_enabled(pg.sound);
+            })
+        }))
         .children(standalone.then(|| {
             slider_in(
                 p,
@@ -745,111 +877,65 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
                 },
             )
         }))
-        .child(heading(p, "Holds"))
-        .child(knob(
-            (p, w),
-            "done-hold",
-            "Finished capsule stays",
-            t.done_hold_s as f32,
-            (3.0, 30.0),
-            " s",
-            |t, v| {
-                t.done_hold_s = f64::from(v.round());
-            },
-        ))
-        .child(knob(
-            (p, w),
-            "brief-hold",
-            "Taken back / failed stays",
-            t.brief_hold_s as f32,
-            (1.0, 10.0),
-            " s",
-            |t, v| {
-                t.brief_hold_s = f64::from((v * 2.0).round() / 2.0);
-            },
-        ))
-        .child(knob(
-            (p, w),
-            "chips-open",
-            "Chips stay open",
-            t.chips_open_s as f32,
-            (1.0, 8.0),
-            " s",
-            |t, v| {
-                t.chips_open_s = f64::from((v * 2.0).round() / 2.0);
-            },
-        ))
-        .child(heading(p, "Timings"))
-        .child(knob(
-            (p, w),
-            "shell-wait",
-            "Walls wait (narrowing)",
-            t.shell_wait_s,
-            (0.0, 0.2),
-            " s",
-            |t, v| {
-                t.shell_wait_s = v;
-            },
-        ))
-        .child(knob(
-            (p, w),
-            "stagger",
-            "Chip stagger",
-            t.stagger_s,
-            (0.0, 0.05),
-            " s",
-            |t, v| {
-                t.stagger_s = v;
-            },
-        ))
-        .child(knob(
-            (p, w),
-            "reveal-enter",
-            "Content fade-in",
-            t.reveal_enter_s,
-            (0.05, 0.4),
-            " s",
-            |t, v| {
-                t.reveal_enter_s = v;
-            },
-        ))
-        .child(heading(p, "Springs"))
-        .child(spring!(p, w, t, island, "Walls"))
+        .child(
+            row()
+                .key("tones")
+                .gap(6.0)
+                .flex_wrap()
+                .children(tones.into_iter().map(|(label, cue)| {
+                    button(p, &format!("tone-{label}"), label, false, move |s, _| {
+                        if let Some(pg) = s.playground.as_mut() {
+                            pg.note(format!("♪ {cue:?}"));
+                        }
+                        crate::feedback::play(tone(cue));
+                    })
+                })),
+        );
+    let springs = card("springs-card")
+        .gap(18.0)
         .child(spring!(p, w, t, island_scale, "Entry"))
-        .child(spring!(p, w, t, reveal_open, "Chips open"))
-        .child(spring!(p, w, t, reveal_close, "Chips close"))
-        .child(spring!(p, w, t, switch_width, "Mode switch"))
-        .child(spring!(p, w, t, switch_slide, "Switch slide"))
-        .child(spring!(p, w, t, highlight, "Highlight"))
-        .child(spring!(p, w, t, presence_exit, "Exit"));
-    body = body.child(
-        row()
-            .key("copy-row")
-            .gap(6.0)
-            .child(button(
-                p,
-                "copy",
-                if pg.copied { "Copied" } else { "Copy values" },
-                true,
-                |s, tx| {
+        .child(spring!(p, w, t, highlight, "Highlight"));
+    let copy = col()
+        .key("copy")
+        .gap(8.0)
+        .child(
+            row()
+                .key("copy-row")
+                .gap(6.0)
+                .child(button(
+                    p,
+                    "copy",
+                    if pg.copied { "Copied" } else { "Copy values" },
+                    true,
+                    |s, tx| {
+                        if let Some(pg) = s.playground.as_mut() {
+                            tx.copy(pg.tuning.to_rust());
+                            pg.copied = true;
+                        }
+                    },
+                ))
+                .child(button(p, "reset", "Reset", false, |s, _| {
                     if let Some(pg) = s.playground.as_mut() {
-                        tx.copy(pg.tuning.to_rust());
-                        pg.copied = true;
+                        pg.set_tuning(tuning::DEFAULT);
                     }
-                },
-            ))
-            .child(button(p, "reset", "Reset", false, |s, _| {
-                if let Some(pg) = s.playground.as_mut() {
-                    pg.set_tuning(tuning::DEFAULT);
-                }
-            })),
-    );
-    body = body.child(
-        text("Values apply to the next change. Copy values copies tuning.rs's DEFAULT.")
-            .key("hint")
-            .font(DESCRIPTION)
-            .color(p.faint())
-            .wrap(),
-    );
-    body
+                })),
+        )
+        .child(
+            text("Values apply to the next change. Copy values copies tuning.rs's DEFAULT.")
+                .key("hint")
+                .font(DESCRIPTION)
+                .color(p.faint())
+                .w(w + 2.0 * CARD_PAD)
+                .wrap(),
+        );
+    col()
+        .key("tuning")
+        .gap(20.0)
+        .child(section(p, "top-line", "Top line", top_line))
+        .child(section(p, "list-footer", "List footer", list_footer))
+        .child(section(p, "transition", "Transition", transition))
+        .child(section(p, "timing", "Timing", timing))
+        .child(section(p, "sound", "Sound", sound))
+        .child(section(p, "springs", "Springs", springs))
+        .child(copy)
 }

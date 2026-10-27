@@ -175,7 +175,8 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   only the send going (its tone), Queued (then Sent), how an Undo ended,
 │   and a failed send
 │   ├── A rule Kit saved -> the only send that goes by itself, at once, with
-│   │   no countdown: "Sent to X" and the same quiet Undo button (click only, no key) for 5 s that a
+│   │   no countdown: "Sent to X" and the same quiet Undo (click only, no key)
+│   │   for 5 s that a
 │   │   pick gets, no ring or drain; ✕ closes. The Sent tone plays when the
 │   │   router says it went. No runner-up chip, since the router names none
 │   │   beside a saved rule; when the Undo window ends the capsule leaves by
@@ -185,14 +186,14 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── The Undo chip counts nothing down: the capsule reads the same for the
 │   │   whole window and wakes once, when it ends
 │   ├── Anything else with somewhere to go (a guess, nothing fitting, no
-│   │   answer) -> "Copied" with the suggestions open under it, Paste and
-│   │   Inspect still beside it; nothing sends until Kit picks
+│   │   answer) -> "Copied" with the suggestions open under it and Paste
+│   │   beside it; nothing sends until Kit picks
 │   │   ├── Up to three rows, suggested then recent, numbered 1-3; the first
 │   │   │   carries its reason in the accent
 │   │   ├── "Always send <site> here" (a guess with a site) -> ticked, the pick
 │   │   │   also saves that rule
 │   │   ├── 1-3 or a click -> sends at once: "Sent to X", the Sent tone, and a
-│   │   │   quiet Undo button for the same 5 s, with no ring or drain; ✕ closes;
+│   │   │   quiet Undo for the same 5 s, with no ring or drain; ✕ closes;
 │   │   │   the capsule then leaves by itself with its exit
 │   │   ├── The list shortcut -> the full list with its search field
 │   │   ├── Esc -> not Hex's here: it goes to the app in front
@@ -242,14 +243,43 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │       is open, and still delivers them) closes the list and gives the
 │   │       keys back; hiding drops the grab
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
-│   ├── Every written capture -> Paste (the one accent action) and Inspect, as
-│   │   Scrawl's capsule has
+│   ├── The top line is calm: the label, its note, one action, and ✕. Undo
+│   │   while a send can be taken back, else Paste and Inspect as two quiet
+│   │   icons (tooltips "Paste the capture", "Open the capture") for a written
+│   │   capture, else "Elsewhere…". Where to send it is only ever the list
+│   │   under the capsule, which is never narrower than LIST_W; the capsule
+│   │   widens with it. Two looks while Kit picks (tuning `top_line`):
+│   │   TopLine::Quiet (default) says the label in quiet MEDIUM ink;
+│   │   TopLine::Icons says it in STRONG and drops a plain "Copied" for the
+│   │   lead alone
+│   ├── The lead is the capture's first frame (`frames/frame-01.png`, else the
+│   │   contact sheet), cropped to a small rounded card once the bundle is
+│   │   written and decoded off the UI thread; until then, or without one, a
+│   │   check. A warning keeps its glyph
 │   │   ├── Paste -> CaptureCommand::Paste: the contact sheet, then the summary,
 │   │   │   into the app in front; a send still in its Undo window is taken back
-│   │   └── Inspect -> CaptureCommand::Inspect: opens the contact sheet (Hex has
-│   │       no review window, and opening the bundle could launch Scrawl.app)
+│   │   └── Inspect -> CaptureCommand::Inspect: opens the contact sheet (Hex
+│   │       has no review window, and opening the bundle could launch
+│   │       Scrawl.app)
+│   ├── Undo is a click only, with no shortcut: Escape meant for another app
+│   │   was taking sends back
+│   ├── Shortcuts read as quiet text after what they do, on its baseline,
+│   │   never keycaps (those are Settings'): "Elsewhere… ⌥⇧V",
+│   │   and the list's footer "Send 1–3", "Send to X ⏎", "Keep copied esc",
+│   │   "Always for <site> ⇧⏎". The footer sits apart from the rows in one of
+│   │   two looks while Kit picks (tuning `list_footer`): ListFooter::Band
+│   │   (default), a full-width band on its own fill under a rule, or
+│   │   ListFooter::Well, a rounded well inset like the rows
 │   └── Long names give way together so the widest row stays inside the panel
-└── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
+├── Every change moves at once, as Dynamic Island's: the walls and what stays
+│   travel on `island` (0.30 s, bounce 0.12), while everything leaving and
+│   everything arriving blurs (`content_blur` 3 pt), scales toward the
+│   capsule's middle (`content_scale` 0.92), and fades over that same move
+│   (`content_in` 0.30 s, `content_out` 0.24 s). Nothing staggers, and nothing
+│   waits for a wall or for other content; only an entry takes two frames
+│   (the origin pose, then rest). The list under the capsule comes and goes
+│   on the same springs. The playground's Transition card tunes all of it
+└── Reduce Motion -> travel jumps, nothing blurs or scales; opacity still fades
 
 The on-screen picker                     // capture.picker (capture_capsule/picker.rs)
 ├── A full-screen Rune overlay on the pointer's display, under the capsule,
@@ -388,7 +418,7 @@ Where it goes                            // capture.route; capture.routing's aut
 │   └── Unreachable -> the look read no sessions (OpenCode slow past the look's
 │       deadline, down, or refusing); a warning in process.log with the error, and
 │       the capsule reads "Couldn't reach OpenCode" with why ("didn't answer in
-│       time"), keeping Paste and Inspect
+│       time"), keeping Paste
 ├── An answer for a capsule already closed (dismissed, or past its hold)
 │   leaves it closed; `hex capture list` and `send` still offer the capture
 ├── The capsule's commands act only on `last`, the newest routed capture:
@@ -555,15 +585,18 @@ Checks:
   `shift_return_in_a_rules_list_saves_a_rule_elsewhere`,
   `an_answer_after_the_capsule_closed_leaves_it_closed`,
   `the_capsule_takes_only_the_keys_its_state_needs`,
-  `the_hints_keys_stay_inside_their_trays`, goldens
+  `shortcuts_read_as_one_quiet_word`, `the_capsule_draws_no_keycaps`,
+  `a_written_copy_offers_paste_and_inspect_as_icons`,
+  `every_change_moves_at_once`,
+  `entry_lands_the_pose_instantly_then_springs_to_rest_with_its_content`, goldens
   `tests/golden/capture-capsule-*.png`, and
   `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
   scripted state change per frame, Calm and Reduce Motion, for no pops,
   jumps, or jiggle. `HEX_CAPSULE_MOTION` also writes rune-motion traces for
   motion-lint. `cues_mark_start_stop_sent_and_taking_back`,
   `nothing_heard_says_so`, and `a_capture_with_no_words_says_nothing_was_heard`
-  cover the tones and the empty transcript. Observed (Oct 26, pro, before rules sent at once): all 22
-  capsule runs pass lint.
+  cover the tones and the empty transcript. Observed (Oct 27, worker, r19 motion): all 28
+  capsule runs, Calm and Reduce Motion, pass lint.
 - Playground: `hex capsule-playground` (feature builds; hidden), or
   `scripts/build-capsule-playground.sh` for an ad-hoc signed
   `Hex Playground.app`, runs the real capsule in a window of its own against a

@@ -658,27 +658,6 @@ impl KeySize {
             Self::Large => 8.0,
         }
     }
-
-    /// A key's width, rims included, for a legend this many points wide.
-    fn key_width(self, legend: f32) -> f32 {
-        (legend + 2.0 * self.face_padding()).max(self.min_width() - 2.0 * KEY_RIM) + 2.0 * KEY_RIM
-    }
-
-    /// A tray's width around keys with legends this many points wide, as
-    /// [`key_tray`] lays them out.
-    #[cfg_attr(
-        not(hex_capture),
-        expect(
-            dead_code,
-            reason = "only the capture capsule sizes a tray before layout"
-        )
-    )]
-    pub(super) fn tray_width(self, legends: impl IntoIterator<Item = f32>) -> f32 {
-        let (sum, count) = legends.into_iter().fold((0.0, 0), |(sum, count), legend| {
-            (sum + self.key_width(legend), count + 1)
-        });
-        sum + KEY_GAP * (count.max(1) - 1) as f32 + 2.0 * TRAY_PADDING
-    }
 }
 
 /// The cap's rim beside and above the face.

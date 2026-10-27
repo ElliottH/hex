@@ -37,13 +37,16 @@ use rune::{
 
 use self::flow::{Action, Cue, Done, Flow, Footer, Input, Lead, List, Mode, Pres};
 use self::surface::{
-    CHIP_H, CHIP_PX, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD, LIST_Y, MEDIUM,
-    PANEL_H, PANEL_W, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON, SEG_ICON_GAP, SMALL, STRONG,
-    Shown, Surface, TIMER, UNDO_LABEL, clock_width, ellipsize, keycaps_width, measure,
+    CHIP_H, CHIP_PX, HEADER_H, HINT_GAP, Id, LEAD_TEXT_X, LIST_PAD, LIST_Y, MEDIUM, PANEL_H,
+    PANEL_W, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON, SEG_ICON_GAP, SMALL, STRONG, Shown,
+    Surface, THUMB_H, THUMB_W, THUMB_X, TIMER, UNDO_LABEL, chord, clock_width, done_style,
+    done_text_x, ellipsize, measure,
 };
-use super::controls::{Paint, keycaps};
+use self::tuning::ListFooter;
+use super::controls::Paint;
 
-/// Peak blur (pt) of content entering or leaving in place.
+/// Peak blur (pt) of the picker's badge and the list's rows softening in
+/// place.
 const PRESENCE_BLUR: f32 = 1.5;
 /// How long the capsule's exit gets before its overlay hides, in animation
 /// seconds.
@@ -53,13 +56,21 @@ const LIST_RADIUS: f32 = 14.0;
 const ROW_RADIUS: f32 = 8.0;
 const ROW_PX: f32 = 10.0;
 const NUMBER_W: f32 = 10.0;
-pub(crate) const FOOTER_H: f32 = surface::FOOTER_H;
-const FOOTER_GAP: f32 = 24.0;
+/// The rows' numbers: the names' weight in tabular digits, so 1 and 4
+/// fill the same column.
+const NUMBER: rune::TextStyle = MEDIUM.features("'tnum' 1");
+/// Above a section after the first, and under its header's words.
+const SECTION_GAP: f32 = 4.0;
+const HEADER_PB: f32 = 4.0;
+/// Between one hint and the next.
+const HINTS_GAP: f32 = 16.0;
+/// The list footer's band (A) and well (B).
+const BAND_H: f32 = 32.0;
+const WELL_H: f32 = 28.0;
 /// rune-kit's checkbox.
 const CHECKBOX: f32 = 16.0;
 /// The list slides down this far as it fades in.
 const LIST_DROP: f32 = 6.0;
-const LIST_MOVE: rune::Spring = rune::Spring::new(0.32, 0.0);
 
 // ─── Live values ─────────────────────────────────────────────────────────────
 
@@ -248,6 +259,8 @@ pub(crate) struct Animated {
     clock: LiveText,
     /// `surface.morphs` as last passed to the meter's edge glow.
     morphs: u32,
+    /// The shown capture's first frame, decoded, for [`Lead::Thumbnail`].
+    thumb: Option<rune::Image>,
 }
 
 impl Animated {
@@ -260,6 +273,7 @@ impl Animated {
             meter,
             clock: LiveText::new(surface.clock.clone()),
             morphs: surface.morphs,
+            thumb: None,
         }
     }
 
@@ -374,10 +388,12 @@ impl CapsuleState {
         not(test),
         expect(dead_code, reason = "headless stills and motion runs")
     )]
-    pub(crate) fn still(pres: Pres, clock: &str) -> Self {
+    pub(crate) fn still(pres: Pres, clock: &str, thumb: Option<rune::Image>) -> Self {
         let mut state = Self::new(false);
         state.surface.clock = clock.to_owned();
         state.live.clock.set(clock.to_owned());
+        state.live.thumb = thumb;
+        let pres = state.with_thumb(pres);
         state.surface = std::mem::take(&mut state.surface).settled(pres);
         state.live.meter.publish(0.4);
         // The shimmer's band would leave most of a still's label dim.
@@ -414,6 +430,7 @@ impl CapsuleState {
         ) {
             self.recording_since = Some(now);
             self.replace = true;
+            self.live.thumb = None;
         }
         // The list shortcut bringing a closed capsule back: under the pointer.
         if input == Input::OpenList && !self.shown {
@@ -444,7 +461,7 @@ impl CapsuleState {
 
     /// Moves the surface to what the flow shows. True when it changed.
     fn present(&mut self, now: f64) -> bool {
-        let pres = self.flow.pres(now);
+        let pres = self.with_thumb(self.flow.pres(now));
         if !matches!(pres, Pres::Recording { .. } | Pres::Selecting { .. }) {
             self.recording_since = None;
         }
@@ -453,6 +470,22 @@ impl CapsuleState {
         }
         self.surface.set(pres, now);
         true
+    }
+
+    /// The capture's first frame takes the check's place once decoded; a
+    /// warning keeps its glyph.
+    fn with_thumb(&self, mut pres: Pres) -> Pres {
+        if let Pres::Done(done) = &mut pres
+            && done.lead == Lead::Check
+            && self
+                .live
+                .thumb
+                .as_ref()
+                .is_some_and(|image| image.is_ready() && image.error().is_none())
+        {
+            done.lead = Lead::Thumbnail;
+        }
+        pres
     }
 }
 
@@ -669,6 +702,15 @@ impl CaptureCapsule {
         self.overlay.set_exclude_from_capture(!shown);
     }
 
+    /// Shows `image`, decoded, as the finished capsule's lead until the
+    /// next capture starts; safe from any thread.
+    pub(crate) fn thumbnail(&self, image: rune::Image) {
+        self.overlay.update(move |s, tx| {
+            s.live.thumb = Some(image);
+            tx.wake_after(Duration::ZERO);
+        });
+    }
+
     /// Moves the capsule; safe from any thread.
     pub(crate) fn input(&self, input: Input) {
         self.overlay.update(move |s, tx| {
@@ -708,15 +750,24 @@ fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
     capsule
 }
 
-/// How content enters and leaves in place: a slight scale and blur.
-fn presence(surface: &Surface, reduced: bool) -> Transition {
-    let blur = if reduced { 0.0 } else { PRESENCE_BLUR };
-    Transition::blur(blur)
-        .combined(Transition::scale(0.96))
-        .springs(SpringPair::new(
-            surface.presence(),
-            tuning::get().presence_exit,
-        ))
+/// How content comes and goes, all of it together over the walls' move:
+/// a blur, a scale toward the capsule's middle, so the pieces shrink and
+/// grow as one, and a fade. Reduce Motion keeps the fade alone.
+fn presence(surface: &Surface, rect: [f32; 4], reduced: bool) -> Transition {
+    let t = tuning::get();
+    let springs = SpringPair::new(t.content_in, t.content_out);
+    if reduced {
+        return Transition::opacity().springs(springs);
+    }
+    let [sx, sy, sw, sh] = surface.shell;
+    let [x, y, w, h] = rect;
+    let middle = rune::Vec2::new(
+        (sx + sw * 0.5 - x) / w.max(1.0),
+        (sy + sh * 0.5 - y) / h.max(1.0),
+    );
+    Transition::scale_anchor(t.content_scale, middle)
+        .combined(Transition::blur(t.content_blur))
+        .springs(springs)
 }
 
 /// The capsule in its `PANEL_W` × `PANEL_H` panel. Its live chips and
@@ -727,7 +778,6 @@ fn capsule(p: Paint, surface: &Surface, live: &Animated, cx: &mut Cx<CapsuleStat
     if surface.reduced {
         cx.reduced_motion(true);
     }
-    let presence = presence(surface, reduced);
     let mut root = el()
         .key("panel")
         .size(PANEL_W, PANEL_H)
@@ -753,7 +803,7 @@ fn capsule(p: Paint, surface: &Surface, live: &Animated, cx: &mut Cx<CapsuleStat
                     color: p.k.c.border_base,
                     ..Default::default()
                 })
-                .transition(presence),
+                .transition(presence(surface, highlight.rect, reduced)),
         );
     }
     // Content entering over content that leaves crossfades additively,
@@ -765,7 +815,8 @@ fn capsule(p: Paint, surface: &Surface, live: &Animated, cx: &mut Cx<CapsuleStat
         .size(PANEL_W, PANEL_H)
         .dissolve();
     for shown in &surface.items {
-        content = content.child(item(p, surface, live, shown).transition(presence));
+        let transition = presence(surface, shown.rect, reduced);
+        content = content.child(item(p, surface, live, shown).transition(transition));
     }
     let clip = el()
         .key("clip")
@@ -934,41 +985,36 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 Pres::Done(done) => done.lead,
                 _ => Lead::Check,
             };
-            placed(el(), shown)
-                .trace_name("done")
-                .child(glyph(p, lead))
-                .child(
+            let ink = match tuning::get().top_line {
+                tuning::TopLine::Quiet => p.muted(),
+                tuning::TopLine::Icons => p.text(),
+            };
+            let mut done = placed(el(), shown).trace_name("done").child(glyph(
+                p,
+                lead,
+                live.thumb.as_ref().map(rune::Image::pixels),
+            ));
+            if !shown.ident.is_empty() {
+                done = done.child(
                     row()
                         .center_y()
-                        .absolute(DONE_TEXT_X, 0.0)
+                        .absolute(done_text_x(lead), 0.0)
                         .h(CHIP_H)
-                        .child(label(&shown.ident, STRONG, p.text())),
-                )
+                        .child(label(&shown.ident, done_style(), ink)),
+                );
+            }
+            done.role("text").label(if shown.ident.is_empty() {
+                "Copied".to_owned()
+            } else {
+                shown.ident.clone()
+            })
         }
         Id::Why => placed(row().center_y(), shown)
             .trace_name("why")
-            .child(label(shown.text(), SMALL, p.faint())),
+            .child(quiet(p, shown.text(), done_style())),
         // The quiet way out of a send that just went.
+        // Click only: Escape meant for another app was taking sends back.
         Id::Undo => keyed(p, base, &[], UNDO_LABEL, MEDIUM).on_press_tx(press(id)),
-        // The first says what it does and carries a faint fill, as
-        // Scrawl's does; the rest are names beside it.
-        Id::Route(index) => {
-            let first = index == 0;
-            let chip = base
-                .radius(CHIP_H * 0.5)
-                .child(label(
-                    &shown.ident,
-                    MEDIUM,
-                    if first { p.text() } else { p.muted() },
-                ))
-                .hover(c.hover)
-                .press(c.pressed);
-            if first { chip.fill(c.layer_02) } else { chip }
-                .role("button")
-                .label(shown.ident.clone())
-                .hit()
-                .on_press_tx(press(id))
-        }
         Id::Ask => {
             let keys = match &surface.pres {
                 Pres::Done(done) => done.ask_keys.as_slice(),
@@ -977,25 +1023,27 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
             keyed(p, base, &keys, &shown.ident, MEDIUM).on_press_tx(press(id))
         }
-        Id::Paste => base
-            .radius(CHIP_H * 0.5)
-            .fill(c.bg_contrast)
-            .hover(c.contrast_hover)
-            .press(c.contrast_pressed)
-            .child(label("Paste", STRONG, c.text_contrast))
-            .role("button")
-            .label("Paste")
-            .hit()
-            .on_press_tx(press(id)),
-        Id::Inspect => base
-            .radius(CHIP_H * 0.5)
-            .hover(c.hover)
-            .press(c.pressed)
-            .child(label("Inspect", MEDIUM, p.muted()))
-            .role("button")
-            .label("Inspect")
-            .hit()
-            .on_press_tx(press(id)),
+        Id::Paste | Id::Inspect => {
+            let (name, help) = if id == Id::Paste {
+                ("Paste", "Paste the capture")
+            } else {
+                ("Inspect", "Open the capture")
+            };
+            base.child(
+                row()
+                    .center()
+                    .size(28.0, 28.0)
+                    .radius(14.0)
+                    .hover(c.hover)
+                    .press(c.pressed)
+                    .child(canvas(icon(id, 16.0 * 2.0 / 24.0, p.muted())).size(16.0, 16.0))
+                    .role("button")
+                    .label(name)
+                    .help(help)
+                    .hit()
+                    .on_press_tx(press(id)),
+            )
+        }
         Id::Field => {
             let typed = match &surface.pres {
                 Pres::Done(Done {
@@ -1011,23 +1059,51 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
     }
 }
 
-/// A chip with keycaps before its label.
+/// A chip's label, then its shortcut as one quiet word ("Send to… ⌥⇧V").
 fn keyed(p: Paint, base: El, keys: &[&str], name: &str, style: rune::TextStyle) -> El {
-    let parts: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
-    let base = base
+    let mut chip = base
         .radius(CHIP_H * 0.5)
-        .gap(KEYCAP_GAP)
+        .gap(HINT_GAP)
         .hover(p.k.c.hover)
-        .press(p.k.c.pressed);
-    if keys.is_empty() {
-        base
-    } else {
-        base.child(keycaps(p, "keys", &parts).w(keycaps_width(keys)))
+        .press(p.k.c.pressed)
+        .child(label(name, style, p.muted()));
+    if !keys.is_empty() {
+        chip = chip.child(quiet(p, &chord(keys), style));
     }
-    .child(label(name, style, p.muted()))
-    .role("button")
-    .label(name.to_owned())
-    .hit()
+    chip.role("button").label(name.to_owned()).hit()
+}
+
+/// Small faint text (a shortcut, a note) beside words in `beside`, on
+/// their baseline: centring a smaller line in the same row would lift it.
+fn quiet(p: Paint, content: &str, beside: rune::TextStyle) -> El {
+    label(content, SMALL, p.faint()).offset(0.0, (beside.size - SMALL.size) * BASELINE_DROP)
+}
+
+/// A centred line's baseline sits this many ems below its middle: half
+/// the theme face's ascender less its descender (Inter: 0.969, 0.242).
+const BASELINE_DROP: f32 = 0.364;
+
+/// What a hint does, then its key, both quiet ("Send ⏎"): the words in
+/// the muted ink, the key fainter, as the capsule's chips read.
+fn hint(p: Paint, copy: &str, keys: &str) -> El {
+    let mut hint = row().center_y().gap(HINT_GAP);
+    if !copy.is_empty() {
+        hint = hint.child(label(copy, SMALL, p.muted()));
+    }
+    if !keys.is_empty() {
+        hint = hint.child(label(keys, SMALL, p.faint()));
+    }
+    hint
+}
+
+/// A [`hint`]'s width.
+fn hint_width(copy: &str, keys: &str) -> f32 {
+    let gap = if copy.is_empty() || keys.is_empty() {
+        0.0
+    } else {
+        HINT_GAP
+    };
+    measure(copy, SMALL) + gap + measure(keys, SMALL)
 }
 
 /// The open capsule's field: what's typed and the caret, or the
@@ -1062,10 +1138,11 @@ fn field(p: Paint, base: El, typed: &str) -> El {
 
 /// The finished capsule's check, or its warning: its ink spans 12…20,
 /// where the recording dot's does.
-fn glyph(p: Paint, lead: Lead) -> El {
-    let (color, id) = match lead {
-        Lead::Check => (p.success(), Id::Done),
-        Lead::Warning => (p.k.c.warning.fg, Id::Why),
+fn glyph(p: Paint, lead: Lead, thumb: Option<&rune::Pixels>) -> El {
+    let (color, id) = match (lead, thumb) {
+        (Lead::Thumbnail, Some(pixels)) => return thumbnail(p, pixels),
+        (Lead::Check | Lead::Thumbnail, _) => (p.success(), Id::Done),
+        (Lead::Warning, _) => (p.k.c.warning.fg, Id::Why),
     };
     canvas(icon(id, CHECK * 2.7 / 24.0, color))
         .absolute(8.0, (CHIP_H - CHECK) * 0.5)
@@ -1073,6 +1150,23 @@ fn glyph(p: Paint, lead: Lead) -> El {
 }
 
 const CHECK: f32 = 16.0;
+const THUMB_RADIUS: f32 = 4.0;
+
+/// The capture's first frame, cropped to fill a small rounded card, with a
+/// hairline over its edge so a white page still reads on the capsule.
+fn thumbnail(p: Paint, pixels: &rune::Pixels) -> El {
+    el().absolute(THUMB_X, (CHIP_H - THUMB_H) * 0.5)
+        .size(THUMB_W, THUMB_H)
+        .radius(THUMB_RADIUS)
+        .fill(p.k.c.layer_02)
+        .pixels_fit(pixels, rune::SurfaceFit::Fill)
+        .child(
+            el().absolute(0.0, 0.0)
+                .size(THUMB_W, THUMB_H)
+                .radius(THUMB_RADIUS)
+                .border(p.hair, p.k.alpha(p.k.c.text_base, 0.14)),
+        )
+}
 
 /// The timer in tabular digits, bound to its `LiveText` in a box as wide
 /// as the clock.
@@ -1162,10 +1256,12 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
     // stay slide to their new slot sharp, the rest soften out in place.
     let blur = if reduced { 0.0 } else { PRESENCE_BLUR };
     let scale = if reduced { 1.0 } else { 0.96 };
+    let t = tuning::get();
+    let springs = SpringPair::new(t.content_in, t.content_out);
     let in_place = Transition::blur(blur)
         .combined(Transition::scale(scale))
-        .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit));
-    let mut body = col().absolute(0.0, 0.0).w(w).padding(LIST_PAD);
+        .springs(springs);
+    let mut body = col().absolute(0.0, 0.0).w(w).px(LIST_PAD).pt(LIST_PAD);
     let mut n = 0;
     let suggesting = list.suggesting();
     let first = if suggesting { "Send to" } else { "Suggested" };
@@ -1174,12 +1270,15 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
         if rows.is_empty() {
             continue;
         }
+        // A header sits nearer the rows it heads than the ones above it.
         body = body.child(
             row()
                 .key(format!("section-{title}"))
-                .center_y()
+                .items_end()
                 .h(HEADER_H)
+                .mt(if n == 0 { 0.0 } else { SECTION_GAP })
                 .px(ROW_PX)
+                .pb(HEADER_PB)
                 .child(label(title, k.ty.small_medium, p.faint()))
                 .transition(in_place),
         );
@@ -1201,26 +1300,27 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                 .hover(k.c.hover)
                 .press(k.c.pressed)
                 .child(
-                    label(&(n + 1).to_string(), TIMER, p.faint())
+                    label(&(n + 1).to_string(), NUMBER, p.faint())
                         .key(format!("number-{n}"))
                         .w(NUMBER_W)
-                        .transition(
-                            Transition::opacity()
-                                .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit)),
-                        ),
+                        .transition(Transition::opacity().springs(springs)),
                 )
                 .child(label(&ellipsize(&dest.name, MEDIUM, max), MEDIUM, p.text()))
                 .child(el().grow(1.0))
-                // The best suggestion is marked by its reason.
-                .child(label(
-                    &why,
-                    SMALL,
-                    if suggesting && n == 0 {
-                        p.accent()
-                    } else {
-                        p.muted()
-                    },
-                ))
+                // The best suggestion is marked by its reason, on the
+                // name's baseline.
+                .child(
+                    label(
+                        &why,
+                        SMALL,
+                        if suggesting && n == 0 {
+                            p.accent()
+                        } else {
+                            p.muted()
+                        },
+                    )
+                    .offset(0.0, (MEDIUM.size - SMALL.size) * BASELINE_DROP),
+                )
                 .role("button")
                 .label(dest.name.clone())
                 .hit()
@@ -1261,9 +1361,17 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                 .transition(in_place),
         );
     }
-    if suggesting {
-        return list_panel(p, body.child(suggest_footer(p, list, w)), x, w, h, blur);
-    }
+    let footer = if suggesting {
+        suggest_hints(p, list, w)
+    } else {
+        send_hints(p, list, w)
+    };
+    list_panel(p, body, footer, x, w, h, blur)
+}
+
+/// The list's own hints, as one quiet line: what each key does, then the
+/// key ("Send to SEER ⏎"), as the capsule's chips read.
+fn send_hints(p: Paint, list: &List, w: f32) -> El {
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
     let send = list
         .selected_dest()
@@ -1275,97 +1383,84 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
         Footer::Always(site) => (&["⇧", "⏎"], format!("Always for {site}")),
         Footer::Suggesting => (&["esc"], "Keep copied".to_owned()),
     };
-    let used = keycaps_width(&["⏎"]) + 5.0 + measure(&send, SMALL) + FOOTER_GAP;
-    let second = ellipsize(&second, SMALL, room - used - keycaps_width(keys) - 5.0);
-    let hint = |keys: &[&str], copy: &str| {
-        let parts: Vec<String> = keys.iter().map(|k| (*k).to_owned()).collect();
-        row()
-            .center_y()
-            .gap(5.0)
-            .child(keycaps(p, "keys", &parts))
-            .child(label(copy, SMALL, p.faint()))
-    };
-    body = body
-        .child(
-            el().key("rule")
-                .h(p.hair)
-                .w_full()
-                .mt(LIST_PAD)
-                .fill(k.c.border_base),
-        )
-        .child(
-            row()
-                .key("footer")
-                .center_y()
-                .h(FOOTER_H)
-                .px(ROW_PX)
-                .gap(FOOTER_GAP)
-                .child(hint(&["⏎"], &send).key("send"))
-                .child(hint(keys, &second).key("second")),
-        );
-    list_panel(p, body, x, w, h, blur)
+    let keys = chord(keys);
+    let used = hint_width(&send, "⏎") + HINTS_GAP;
+    let second = ellipsize(
+        &second,
+        SMALL,
+        room - used - measure(&keys, SMALL) - HINT_GAP,
+    );
+    row()
+        .center_y()
+        .gap(HINTS_GAP)
+        .child(hint(p, &send, "⏎").key("send"))
+        .child(hint(p, &second, &keys).key("second"))
 }
 
-/// The suggestions' footer: the digits that send, and a hint that the list
-/// shortcut searches every session.
-fn suggest_footer(p: Paint, list: &List, w: f32) -> El {
+/// The suggestions' hints: the digits that send.
+fn suggest_hints(p: Paint, list: &List, w: f32) -> El {
     let rows = list.rows().count();
     let digits = if rows > 1 {
         format!("1–{rows}")
     } else {
         "1".to_owned()
     };
-    let list_keys = surface::ask_keys();
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
-    let search_w = if list_keys.is_empty() {
-        0.0
-    } else {
-        keycaps_width(&list_keys.iter().map(String::as_str).collect::<Vec<_>>())
-            + 5.0
-            + measure("Search", SMALL)
-    };
-    // "Send" goes before anything is cut.
-    let say_send =
-        keycaps_width(&[digits.as_str()]) + 5.0 + measure("Send", SMALL) + FOOTER_GAP + search_w
-            <= room;
-    let mut send = row()
-        .key("send")
-        .center_y()
-        .gap(5.0)
-        .child(keycaps(p, "keys", &[digits]));
-    if say_send {
-        send = send.child(label("Send", SMALL, p.faint()));
-    }
-    let mut footer = row()
-        .key("footer")
-        .center_y()
-        .h(FOOTER_H)
-        .px(ROW_PX)
-        .child(send)
-        .child(el().grow(1.0));
-    if !list_keys.is_empty() {
-        footer = footer.child(
-            row()
-                .key("search")
-                .center_y()
-                .gap(5.0)
-                .child(keycaps(p, "keys", &list_keys))
-                .child(label("Search", SMALL, p.faint())),
-        );
-    }
-    col()
-        .w(w - 2.0 * LIST_PAD)
-        .child(
-            el().key("rule")
-                .h(p.hair)
-                .w_full()
-                .mt(LIST_PAD)
-                .fill(p.k.c.border_base),
-        )
-        .child(footer)
+    let say_send = hint_width("Send", &digits) <= room;
+    let send = hint(p, if say_send { "Send" } else { "" }, &digits).key("send");
+    row().center_y().child(send).child(el().grow(1.0))
 }
 
-fn list_panel(p: Paint, body: El, x: f32, w: f32, h: f32, blur: f32) -> El {
+/// The footer's height, and the list's below its last row.
+fn footer_height() -> f32 {
+    match tuning::get().list_footer {
+        ListFooter::Band => LIST_PAD + BAND_H,
+        ListFooter::Well => LIST_PAD + WELL_H + LIST_PAD,
+    }
+}
+
+/// The hints set apart from the rows: (A) a full-width band on a quiet
+/// fill under a rule, or (B) a rounded well inset like the rows.
+fn footer_box(p: Paint, hints: El, w: f32, h: f32) -> El {
+    let k = p.k;
+    match tuning::get().list_footer {
+        ListFooter::Band => el()
+            .key("footer")
+            .absolute(0.0, h - BAND_H)
+            .size(w, BAND_H)
+            .fill(k.c.layer_01)
+            .child(
+                el().key("rule")
+                    .absolute(0.0, 0.0)
+                    .size(w, p.hair)
+                    .fill(k.c.border_weak),
+            )
+            .child(
+                row()
+                    .absolute(0.0, 0.0)
+                    .size(w, BAND_H)
+                    .center_y()
+                    .px(LIST_PAD + ROW_PX)
+                    .child(hints.grow(1.0)),
+            ),
+        ListFooter::Well => el()
+            .key("footer")
+            .absolute(LIST_PAD, h - LIST_PAD - WELL_H)
+            .size(w - 2.0 * LIST_PAD, WELL_H)
+            .radius(ROW_RADIUS)
+            .fill(k.c.layer_01)
+            .child(
+                row()
+                    .absolute(0.0, 0.0)
+                    .size(w - 2.0 * LIST_PAD, WELL_H)
+                    .center_y()
+                    .px(ROW_PX)
+                    .child(hints.grow(1.0)),
+            ),
+    }
+}
+
+fn list_panel(p: Paint, body: El, hints: El, x: f32, w: f32, h: f32, blur: f32) -> El {
     let k = p.k;
     let mut panel = el()
         .key("list")
@@ -1380,7 +1475,8 @@ fn list_panel(p: Paint, body: El, x: f32, w: f32, h: f32, blur: f32) -> El {
     panel
         .clip_rounded(LIST_RADIUS)
         .child(body)
-        .motion(LIST_MOVE)
+        .child(footer_box(p, hints, w, h))
+        .motion(tuning::get().island)
         .role("list")
         .label("Send to")
         .hit()
@@ -1388,11 +1484,14 @@ fn list_panel(p: Paint, body: El, x: f32, w: f32, h: f32, blur: f32) -> El {
             Transition::offset(0.0, -LIST_DROP)
                 .combined(Transition::opacity())
                 .combined(Transition::blur(blur))
-                .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit)),
+                .springs(SpringPair::new(
+                    tuning::get().content_in,
+                    tuning::get().content_out,
+                )),
         )
 }
 
-/// The list's height: its sections, rows, rule, and footer.
+/// The list's height: its sections, rows, and footer.
 pub(crate) fn list_height(list: &List) -> f32 {
     let sections = [&list.suggested, &list.recent]
         .iter()
@@ -1400,7 +1499,11 @@ pub(crate) fn list_height(list: &List) -> f32 {
         .count() as f32;
     let rows =
         (list.suggested.len() + list.recent.len() + usize::from(list.always.is_some())) as f32;
-    2.0 * LIST_PAD + sections * HEADER_H + rows * ROW_H + LIST_PAD + 1.0 + FOOTER_H
+    LIST_PAD
+        + sections * HEADER_H
+        + (sections - 1.0).max(0.0) * SECTION_GAP
+        + rows * ROW_H
+        + footer_height()
 }
 
 /// A rounded rectangle on the icon grid.
@@ -1461,6 +1564,26 @@ fn icon(id: Id, width: f32, color: Color) -> Shape {
         Id::Why => {
             paths.push(line([12.0, 4.0], [12.0, 14.0]));
             paths.push(line([12.0, 19.5], [12.0, 19.6]));
+        }
+        // A clipboard, its clip, and two lines of what's on it.
+        Id::Paste => {
+            paths.push(rounded(5.0, 4.5, 14.0, 16.5, 2.5));
+            paths.push(rounded(9.0, 2.5, 6.0, 4.0, 1.5));
+            paths.push(line([9.0, 11.5], [15.0, 11.5]));
+            paths.push(line([9.0, 15.5], [13.0, 15.5]));
+        }
+        // An eye: look at the capture.
+        Id::Inspect => {
+            paths.push(
+                Path::new()
+                    .move_to([2.5, 12.0])
+                    .cubic_to([5.0, 7.5], [8.5, 5.5], [12.0, 5.5])
+                    .cubic_to([15.5, 5.5], [19.0, 7.5], [21.5, 12.0])
+                    .cubic_to([19.0, 16.5], [15.5, 18.5], [12.0, 18.5])
+                    .cubic_to([8.5, 18.5], [5.0, 16.5], [2.5, 12.0])
+                    .close(),
+            );
+            paths.push(rounded(9.0, 9.0, 6.0, 6.0, 3.0));
         }
         _ => {}
     }
