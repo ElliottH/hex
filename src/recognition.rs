@@ -36,6 +36,8 @@ const UPDATE_INTERVAL: Duration = Duration::from_millis(200);
 const ACTIVATION_STABILITY_WINDOW: Duration = Duration::from_millis(750);
 const PROGRAMMATIC_LEASE: Duration = Duration::from_secs(10);
 const PROGRAMMATIC_COMPLETION_LIMIT: usize = 16;
+/// `/finish` on a programmatic capture the microphone ended before any audio.
+const MICROPHONE_LOST: &str = "microphone-lost";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandModelStatus {
@@ -192,6 +194,23 @@ struct ProgrammaticDictation {
 }
 
 impl ProgrammaticDictation {
+    fn matches_owner(&self, id: u64, owner_token: &str) -> bool {
+        self.id == id && self.owner_token == owner_token
+    }
+}
+
+/// A programmatic capture the microphone cut short: the audio delivered
+/// before the loss, waiting for its owner's `/finish` or `/cancel` while
+/// heartbeats renew its lease.
+struct LostProgrammaticDictation {
+    id: u64,
+    owner_token: String,
+    source: String,
+    lease_deadline: Instant,
+    clip: DictationClip,
+}
+
+impl LostProgrammaticDictation {
     fn matches_owner(&self, id: u64, owner_token: &str) -> bool {
         self.id == id && self.owner_token == owner_token
     }
@@ -420,6 +439,7 @@ pub fn listen(
         .flatten();
     let mut next_programmatic_id = 1_u64;
     let mut programmatic = None::<ProgrammaticDictation>;
+    let mut programmatic_lost = None::<LostProgrammaticDictation>;
     let mut programmatic_results =
         BTreeMap::<crate::parakeet::DictationJobId, FinishingProgrammaticDictation>::new();
     let mut programmatic_completions = VecDeque::<ProgrammaticCompletion>::new();
@@ -696,17 +716,23 @@ pub fn listen(
                             let _ = reply.send(result);
                             continue;
                         }
-                        if programmatic
-                            .as_ref()
-                            .is_none_or(|active| !active.matches_owner(id, &owner_token))
+                        let (source, finish) = if let Some(lost) =
+                            programmatic_lost.take_if(|lost| lost.matches_owner(id, &owner_token))
                         {
+                            (lost.source, Finish::Transcribe(lost.clip))
+                        } else if programmatic
+                            .as_ref()
+                            .is_some_and(|active| active.matches_owner(id, &owner_token))
+                        {
+                            let active = programmatic.take().expect("active dictation was checked");
+                            let boundary =
+                                capture_boundary(&input, microphone_policy.release_while_idle);
+                            (active.source, input.finish(boundary)?)
+                        } else {
                             let _ = reply.send(Err("dictation-not-active".into()));
                             continue;
-                        }
-                        let active = programmatic.take().expect("active dictation was checked");
-                        let boundary =
-                            capture_boundary(&input, microphone_policy.release_while_idle);
-                        match input.finish(boundary)? {
+                        };
+                        match finish {
                             Finish::Transcribe(clip) => {
                                 let duration_ms = clip.duration_ms();
                                 match dictation_worker.transcribe(
@@ -720,7 +746,7 @@ pub fn listen(
                                             job_id,
                                             FinishingProgrammaticDictation {
                                                 id,
-                                                source: active.source.clone(),
+                                                source: source.clone(),
                                                 owner_token,
                                                 duration_ms,
                                                 replies: vec![reply],
@@ -728,14 +754,14 @@ pub fn listen(
                                         );
                                         tracing::info!(
                                             dictation_id = id,
-                                            source = active.source,
+                                            source,
                                             "programmatic dictation submitted"
                                         );
                                     }
                                     Err(error) => {
                                         tracing::warn!(
                                             dictation_id = id,
-                                            source = active.source,
+                                            source,
                                             outcome = "worker-error",
                                             error = %error,
                                             "programmatic dictation ended"
@@ -753,7 +779,7 @@ pub fn listen(
                             Finish::Discard => {
                                 tracing::warn!(
                                     dictation_id = id,
-                                    source = active.source,
+                                    source,
                                     outcome = "discarded",
                                     "programmatic dictation ended"
                                 );
@@ -789,6 +815,25 @@ pub fn listen(
                             let _ = reply.send(Err("dictation-finishing".into()));
                             continue;
                         }
+                        if let Some(lost) =
+                            programmatic_lost.take_if(|lost| lost.matches_owner(id, &owner_token))
+                        {
+                            tracing::info!(
+                                dictation_id = id,
+                                source = lost.source,
+                                "programmatic dictation cancelled"
+                            );
+                            remember_programmatic_completion(
+                                &mut programmatic_completions,
+                                ProgrammaticCompletion {
+                                    id,
+                                    owner_token,
+                                    outcome: ProgrammaticTerminalOutcome::Cancelled,
+                                },
+                            );
+                            let _ = reply.send(Ok(()));
+                            continue;
+                        }
                         if programmatic
                             .as_ref()
                             .is_none_or(|active| !active.matches_owner(id, &owner_token))
@@ -815,14 +860,21 @@ pub fn listen(
                         owner_token,
                         reply,
                     } => {
-                        let Some(active) = programmatic
+                        let lease_deadline = if let Some(active) = programmatic
                             .as_mut()
                             .filter(|active| active.matches_owner(id, &owner_token))
-                        else {
+                        {
+                            &mut active.lease_deadline
+                        } else if let Some(lost) = programmatic_lost
+                            .as_mut()
+                            .filter(|lost| lost.matches_owner(id, &owner_token))
+                        {
+                            &mut lost.lease_deadline
+                        } else {
                             let _ = reply.send(Err("dictation-not-active".into()));
                             continue;
                         };
-                        active.lease_deadline = Instant::now() + PROGRAMMATIC_LEASE;
+                        *lease_deadline = Instant::now() + PROGRAMMATIC_LEASE;
                         let _ = reply.send(Ok(()));
                     }
                 }
@@ -844,6 +896,23 @@ pub fn listen(
                 &mut recognizer,
                 &mut programmatic_completions,
             )?;
+        }
+        if let Some(expired) = programmatic_lost
+            .take_if(|lost| programmatic_lease_expired(lost.lease_deadline, Instant::now()))
+        {
+            tracing::warn!(
+                dictation_id = expired.id,
+                source = expired.source,
+                "programmatic dictation lease expired"
+            );
+            remember_programmatic_completion(
+                &mut programmatic_completions,
+                ProgrammaticCompletion {
+                    id: expired.id,
+                    owner_token: expired.owner_token,
+                    outcome: ProgrammaticTerminalOutcome::Cancelled,
+                },
+            );
         }
         while let Ok(next_context) = context_monitor.updates.try_recv() {
             if context != next_context {
@@ -1358,7 +1427,13 @@ pub fn listen(
                     }
                 }
                 DictationAudioEvent::OpenFailed { error, .. } => {
-                    log_programmatic_ended(programmatic.take(), "mic-open-failed");
+                    programmatic_microphone_lost(
+                        programmatic.take(),
+                        None,
+                        "mic-open-failed",
+                        &mut programmatic_lost,
+                        &mut programmatic_completions,
+                    );
                     abandon_capture(
                         &mut hotkeys,
                         &mut voice,
@@ -1386,11 +1461,18 @@ pub fn listen(
                 DictationAudioEvent::CaptureDiscontinuity {
                     was_recording,
                     gap_ms,
+                    kept,
                     ..
                 } => {
                     resync_recognizer(&input, recognizer.as_mut())?;
                     if was_recording {
-                        log_programmatic_ended(programmatic.take(), "mic-gap");
+                        programmatic_microphone_lost(
+                            programmatic.take(),
+                            kept,
+                            "mic-gap",
+                            &mut programmatic_lost,
+                            &mut programmatic_completions,
+                        );
                         abandon_capture(
                             &mut hotkeys,
                             &mut voice,
@@ -1413,9 +1495,19 @@ pub fn listen(
                         emit_state(&mut events, false, mode, &input.device_name())?;
                     }
                 }
-                DictationAudioEvent::Interrupted { was_recording, .. } => {
+                DictationAudioEvent::Interrupted {
+                    was_recording,
+                    kept,
+                    ..
+                } => {
                     if was_recording {
-                        log_programmatic_ended(programmatic.take(), "mic-interrupted");
+                        programmatic_microphone_lost(
+                            programmatic.take(),
+                            kept,
+                            "mic-interrupted",
+                            &mut programmatic_lost,
+                            &mut programmatic_completions,
+                        );
                     }
                     abandon_capture(
                         &mut hotkeys,
@@ -1766,6 +1858,65 @@ fn log_programmatic_ended(active: Option<ProgrammaticDictation>, outcome: &str) 
             source = active.source,
             outcome,
             "programmatic dictation ended"
+        );
+    }
+}
+
+/// Ends a programmatic capture the microphone cut short. The audio delivered
+/// before the loss waits for the owner's `/finish`; without any, `/finish`
+/// answers `microphone-lost`.
+fn programmatic_microphone_lost(
+    active: Option<ProgrammaticDictation>,
+    kept: Option<DictationClip>,
+    outcome: &str,
+    lost: &mut Option<LostProgrammaticDictation>,
+    completions: &mut VecDeque<ProgrammaticCompletion>,
+) {
+    let Some(active) = active else {
+        return;
+    };
+    let Some(mut clip) = kept else {
+        remember_programmatic_completion(
+            completions,
+            ProgrammaticCompletion {
+                id: active.id,
+                owner_token: active.owner_token.clone(),
+                outcome: ProgrammaticTerminalOutcome::Finished(Err(MICROPHONE_LOST.into())),
+            },
+        );
+        log_programmatic_ended(Some(active), outcome);
+        return;
+    };
+    // A held clip must not defer background work until the owner finishes.
+    drop(clip.take_capture_marker());
+    tracing::warn!(
+        dictation_id = active.id,
+        source = active.source,
+        outcome,
+        duration_ms = clip.duration_ms(),
+        "programmatic dictation kept its audio after a microphone loss"
+    );
+    let previous = lost.replace(LostProgrammaticDictation {
+        id: active.id,
+        owner_token: active.owner_token,
+        source: active.source,
+        lease_deadline: active.lease_deadline,
+        clip,
+    });
+    if let Some(previous) = previous {
+        tracing::warn!(
+            dictation_id = previous.id,
+            source = previous.source,
+            outcome = "superseded",
+            "programmatic dictation ended"
+        );
+        remember_programmatic_completion(
+            completions,
+            ProgrammaticCompletion {
+                id: previous.id,
+                owner_token: previous.owner_token,
+                outcome: ProgrammaticTerminalOutcome::Finished(Err(MICROPHONE_LOST.into())),
+            },
         );
     }
 }
@@ -3234,6 +3385,76 @@ mod tests {
         }
         assert_eq!(completions.len(), PROGRAMMATIC_COMPLETION_LIMIT);
         assert_eq!(completions.front().map(|completion| completion.id), Some(2));
+    }
+
+    #[test]
+    fn microphone_loss_keeps_a_programmatic_clip_for_finish() {
+        let (levels, _levels) = std::sync::mpsc::sync_channel(1);
+        let active = |id: u64| ProgrammaticDictation {
+            id,
+            owner_token: format!("owner-{id}"),
+            source: "seer".into(),
+            levels: levels.clone(),
+            audio: None,
+            last_level: Instant::now(),
+            lease_deadline: Instant::now() + PROGRAMMATIC_LEASE,
+        };
+        let finished_error = |completions: &VecDeque<ProgrammaticCompletion>, id: u64| {
+            completions
+                .iter()
+                .find(|completion| completion.matches_owner(id, &format!("owner-{id}")))
+                .and_then(|completion| match &completion.outcome {
+                    ProgrammaticTerminalOutcome::Finished(Err(code)) => Some(code.clone()),
+                    _ => None,
+                })
+        };
+        let mut lost = None;
+        let mut completions = VecDeque::new();
+
+        // Audio delivered before the loss waits for the owner's finish.
+        programmatic_microphone_lost(
+            Some(active(1)),
+            Some(DictationClip::for_test(vec![0.25; 16_000])),
+            "mic-interrupted",
+            &mut lost,
+            &mut completions,
+        );
+        let kept = lost.as_ref().expect("the clip is kept");
+        assert!(kept.matches_owner(1, "owner-1"));
+        assert_eq!(kept.clip.duration_ms(), 1_000);
+        assert!(completions.is_empty());
+
+        // No audio: finish answers microphone-lost, and the kept clip stays.
+        programmatic_microphone_lost(
+            Some(active(2)),
+            None,
+            "mic-open-failed",
+            &mut lost,
+            &mut completions,
+        );
+        assert_eq!(
+            finished_error(&completions, 2).as_deref(),
+            Some(MICROPHONE_LOST)
+        );
+        assert!(lost.as_ref().is_some_and(|lost| lost.id == 1));
+
+        // A later loss supersedes an unfinished kept clip.
+        programmatic_microphone_lost(
+            Some(active(3)),
+            Some(DictationClip::for_test(vec![0.25; 1_600])),
+            "mic-gap",
+            &mut lost,
+            &mut completions,
+        );
+        assert!(lost.as_ref().is_some_and(|lost| lost.id == 3));
+        assert_eq!(
+            finished_error(&completions, 1).as_deref(),
+            Some(MICROPHONE_LOST)
+        );
+
+        // Nothing was recording programmatically: nothing changes.
+        programmatic_microphone_lost(None, None, "mic-gap", &mut lost, &mut completions);
+        assert_eq!(completions.len(), 2);
     }
 
     #[test]

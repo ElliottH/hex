@@ -500,7 +500,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   device is unavailable at startup, log the failure and fall back through the
   compiled preferred-device order to the macOS default. An explicit CLI
   `--device` remains authoritative for that listener process. A runtime stream
-  failure cancels an incomplete capture, discards stale chunks, and retries the
+  failure cancels an incomplete capture (a programmatic one keeps the audio
+  delivered before the failure for its owner's `/finish`, which answers
+  `microphone-lost` when there is none), discards stale chunks, and retries the
   same selection with bounded backoff; it must not require a settings change or
   process restart. An initial open failure uses the same bounded recovery without
   stopping the listener. Cancellation does not stop warm-microphone retries;
