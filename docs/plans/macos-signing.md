@@ -48,7 +48,7 @@ can notarize Mac apps, so Hex can use the same key as OpenCode desktop.
 ```ts
 scripts/build-app.sh       // cargo build → Hex.app; signs Moonshine and ONNX dylibs,
                            // HexMicrophone.driver, then the app with --options runtime
-                           // and app/VoiceControl.entitlements (audio-input,
+                           // and .github/release/hex.entitlements (audio-input,
                            // apple-events; not sandboxed)
                            // HEX_TEST_BUILD=1: ad-hoc "Hex Test.app" (anomaly.hex.test)
 scripts/macos-signing.sh   // identity must be "Developer ID Application: … (TEAM)"
