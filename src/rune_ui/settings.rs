@@ -15,10 +15,10 @@ use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use super::{explainer, host};
 use crate::app_settings::{
     AppSettings, HotkeyBinding, HotkeyKey, HotkeyModifiers, IndicatorPosition, ModifierSide,
-    RecordingAudioBehavior,
+    RecordingAudioBehavior, UpdateChannel,
 };
 use crate::desktop_host::{
-    DesktopAction, DesktopGrantedShortcut, DesktopShortcut, DesktopShortcuts,
+    DesktopAction, DesktopGrantedShortcut, DesktopShortcut, DesktopShortcuts, DesktopUpdateStatus,
 };
 use crate::desktop_i18n::{tr, tr_fill};
 use crate::dictation::ShortcutMode;
@@ -1464,5 +1464,57 @@ fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             layer,
         ),
     ));
+    rows.extend(update_channel_row(ui, p));
     section(p, "application", tr("Application"), rows)
+}
+
+/// Stable or Dev, only while this install updates itself: test, source,
+/// managed, and package-manager installs never check a channel.
+fn update_channel_row(ui: &Ui, p: Paint) -> Option<El> {
+    let updates = matches!(
+        ui.view.as_ref()?.update_status,
+        DesktopUpdateStatus::Checking
+            | DesktopUpdateStatus::Current
+            | DesktopUpdateStatus::Failed
+            | DesktopUpdateStatus::Downloading
+            | DesktopUpdateStatus::Available
+            | DesktopUpdateStatus::ReadyToRestart
+    );
+    if !updates {
+        return None;
+    }
+    let channel = ui.settings.updates.channel.unwrap_or(
+        if crate::updater::is_dev_build(env!("CARGO_PKG_VERSION")) {
+            UpdateChannel::Dev
+        } else {
+            UpdateChannel::Stable
+        },
+    );
+    let labels: Vec<&str> = UpdateChannel::ALL
+        .iter()
+        .map(|channel| tr(channel.label()))
+        .collect();
+    Some(setting_row(
+        p,
+        "update-channel",
+        tr("Update channel"),
+        None,
+        segmented(
+            p,
+            "update-channel-control",
+            &labels,
+            UpdateChannel::ALL
+                .iter()
+                .position(|item| *item == channel)
+                .unwrap_or(0),
+            |ui, index| {
+                let channel = UpdateChannel::ALL[index];
+                if ui.settings.updates.channel != Some(channel)
+                    && ui.update(|settings| settings.updates.channel = Some(channel))
+                {
+                    ui.send(Request::Desktop(DesktopAction::CheckForUpdates));
+                }
+            },
+        ),
+    ))
 }

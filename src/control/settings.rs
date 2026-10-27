@@ -320,6 +320,11 @@ const KEYS: &[Key] = &[
         Kind::Choice(&["top", "bottom", "hidden"]),
         "Where the dictation HUD appears",
     ),
+    optional(
+        "updates.channel",
+        Kind::Choice(&["stable", "dev"]),
+        "Update channel; none follows the build (dev builds use dev, others stable)",
+    ),
 ];
 
 /// Captures exist only in builds with the `capture` build option.
@@ -397,6 +402,8 @@ pub struct ShortcutRules {
 pub enum Effect {
     HistoryRetention(crate::history::HistoryRetention),
     DockIcon,
+    /// Check the newly chosen channel now rather than within the hour.
+    CheckForUpdates,
 }
 
 /// A validated change, ready to save.
@@ -645,6 +652,7 @@ pub fn apply(
         }
         "history_retention" => effects.push(Effect::HistoryRetention(candidate.history_retention)),
         "show_dock_icon" => effects.push(Effect::DockIcon),
+        "updates.channel" => effects.push(Effect::CheckForUpdates),
         _ => {}
     }
     Ok(Change {

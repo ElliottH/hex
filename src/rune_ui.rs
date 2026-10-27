@@ -1641,6 +1641,10 @@ const SCENES: &[Scene] = &[
         *ui = mac_fixture();
         ui.advanced = true;
     }),
+    ("mac-settings-dev-channel", |ui| {
+        *ui = mac_fixture();
+        ui.settings.updates.channel = Some(crate::app_settings::UpdateChannel::Dev);
+    }),
     ("mac-update-ready", |ui| {
         *ui = mac_fixture();
         if let Some(view) = &mut ui.view {

@@ -452,6 +452,9 @@ impl Pump {
                     );
                 }
                 settings::Effect::DockIcon => {}
+                settings::Effect::CheckForUpdates => {
+                    let _ = crate::macos_rune::update_action(&DesktopAction::CheckForUpdates);
+                }
             }
         }
         Ok(ControlReply::done(change.message))

@@ -308,6 +308,10 @@ an unsaved edit.
 - `commands_enabled on` while `release_microphone_while_idle` is on, and the
   reverse, need `--yes`, because each turns the other off.
 - `voice_action.enabled on` needs a free Voice Action shortcut.
+- `updates.channel` takes `stable`, `dev`, or `none` (follow the build:
+  `dev` for an `X.Y.Z-dev.N` build, otherwise the install's channel), and
+  checks for updates at once. Switching to `stable` never downgrades: Hex
+  waits for a stable release newer than the one it runs.
 - With the `capture` build option and experiment, `capture.*` keys appear:
   `capture.enabled`, `capture.hotkey` (default `option+shift+s`),
   `capture.list_hotkey` (the capsule's send-to list, default
@@ -334,7 +338,7 @@ Writable keys: `commands_enabled`, `release_microphone_while_idle`,
 `experimental.hex_microphone`, `experimental.hex_microphone_mode`,
 `experimental.hex_microphone_comfort_noise`,
 `experimental.hex_microphone_strength`, `enable_on_launch`,
-`paste_with_shift`, `ui_language`, `indicator_position`.
+`paste_with_shift`, `ui_language`, `indicator_position`, `updates.channel`.
 
 A test (`control::settings::tests::every_persisted_setting_has_a_cli_key`)
 fails when a new persisted setting has no key here.

@@ -964,6 +964,42 @@ pub enum IndicatorPosition {
     Hidden = 2,
 }
 
+/// Which release-service channel a direct install updates from
+/// (`crate::updater`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    Stable,
+    Dev,
+}
+
+impl UpdateChannel {
+    pub const ALL: [Self; 2] = [Self::Stable, Self::Dev];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Dev => "dev",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Stable => "Stable",
+            Self::Dev => "Dev",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct UpdateSettings {
+    /// `None` follows the build: dev builds (`X.Y.Z-dev.N`) update from
+    /// `dev`, every other build from its install's channel (`stable`
+    /// unless an installer receipt names another).
+    pub channel: Option<UpdateChannel>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingAudioBehavior {
@@ -1239,6 +1275,7 @@ pub struct AppSettings {
     /// The interface language code; `None` follows the system language.
     pub ui_language: Option<String>,
     pub indicator_position: IndicatorPosition,
+    pub updates: UpdateSettings,
     /// The shared vocabulary (`crate::vocabulary`). Left out of the file
     /// while empty, so settings without one stay as they were.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1310,6 +1347,7 @@ impl Default for AppSettings {
             paste_with_shift: false,
             ui_language: None,
             indicator_position: IndicatorPosition::default(),
+            updates: UpdateSettings::default(),
             vocabulary: Vec::new(),
             migrations: MIGRATIONS.iter().map(|id| id.to_string()).collect(),
             text_replacements: Vec::new(),
@@ -1559,6 +1597,18 @@ impl AppSettings {
                 "Scrawl routing settings were left out"
             );
         }
+    }
+
+    /// The saved `updates.channel`, read without loading, normalizing, or
+    /// writing anything else, so the updater thread never races a save.
+    pub fn saved_update_channel() -> Option<UpdateChannel> {
+        #[derive(Deserialize)]
+        struct File {
+            #[serde(default)]
+            updates: UpdateSettings,
+        }
+        let data = fs::read(path().ok()?).ok()?;
+        serde_json::from_slice::<File>(&data).ok()?.updates.channel
     }
 
     pub(crate) fn load_from(path: &std::path::Path) -> Result<Self> {

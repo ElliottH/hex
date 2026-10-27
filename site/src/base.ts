@@ -3,6 +3,8 @@
 // these helpers add and remove the prefix at the edges.
 export const BASE_PATH = "/hex"
 export const FILES_PATH = `${BASE_PATH}/files`
+// Redirects to the latest dev channel Mac download (worker.ts).
+export const DEV_DOWNLOAD_PATH = `${BASE_PATH}/download/dev`
 
 // The build mode (`--mode dev`) picks the environment; every other mode builds production.
 export function hostForMode(mode: string | undefined): string {

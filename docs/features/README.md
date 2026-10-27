@@ -718,6 +718,11 @@ failed; no visual or installed-app startup verification is claimed.
 ```ts
 Hex checks the release service            // maintain.updates
 ├── 10 s after launch, hourly, and sidebar Check for updates -> anoma.ly/release/hex/desktop/<channel>.json
+│   └── <channel> -> updates.channel (General › Application › Update channel: Stable | Dev,
+│       or `hex settings set updates.channel`), else dev for an X.Y.Z-dev.N build,
+│       else the installer receipt's channel, else stable; package managers always stable
+│       └── Choosing a channel -> checks now; a staged update stays staged
+├── Dev -> stable -> nothing until stable is strictly newer (never a downgrade)
 ├── Protocol client rules (shared vectors) -> newer, required (minimum), revoked, or none
 │   └── Rollout -> device-local bucket in <support>/update-bucket, never sent
 ├── Direct install -> download (resumable) -> size + SHA-256 -> code signature -> stage
@@ -751,8 +756,13 @@ window, menu bar, and tray show; `updater/protocol.rs` passes the release
 service's shared test vectors (`tests/fixtures/release-protocol`), and the
 per-OS modules have tests for activation, the macOS bundle swap and
 signature checks (ad-hoc fixtures against the real requirement), the rollout
-bucket, receipts, and Windows Authenticode (a Microsoft-signed system file).
-Not yet observed: a real update on any OS from the release service, the macOS
+bucket, receipts, the channel choice, a dev-to-stable switch that does not
+downgrade, and Windows Authenticode (a Microsoft-signed system file). The
+Update channel row shows only while this install updates itself (not test,
+source, managed, or package-manager installs); the `mac-settings-dev-channel`
+scene renders it, and `rune_ui` tests cover saving and hiding it.
+Not yet observed: a published dev channel release, a switch between channels on
+a real install, a real update on any OS from the release service, the macOS
 swap and relaunch of a Developer ID build, a Windows update of a signed build.
 Manifests are unsigned; on Linux a compromised HTTPS origin could serve any
 executable with a matching manifest, which Linux code signing cannot catch.

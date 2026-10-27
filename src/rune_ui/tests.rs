@@ -188,6 +188,40 @@ fn toggles_save_through_the_host() {
 }
 
 #[test]
+fn choosing_an_update_channel_saves_it_and_checks_now() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    assert_eq!(rt.state.settings.updates.channel, None);
+    tap(&mut rt, "update-channel-control/segment1");
+    assert_eq!(
+        rt.state.settings.updates.channel,
+        Some(crate::app_settings::UpdateChannel::Dev)
+    );
+    assert_eq!(saved(&rt), 1);
+    assert!(matches!(
+        sent(&rt),
+        [Request::Desktop(DesktopAction::CheckForUpdates)]
+    ));
+    tap(&mut rt, "update-channel-control/segment1");
+    assert_eq!(
+        saved(&rt),
+        1,
+        "choosing the same channel again saves nothing"
+    );
+}
+
+#[test]
+fn installs_that_never_update_hide_the_update_channel() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    assert!(rt.find("update-channel").is_some());
+    if let Some(view) = &mut rt.state.view {
+        view.update_status = DesktopUpdateStatus::PackageManager;
+    }
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("update-channel").is_none());
+}
+
+#[test]
 fn quit_hex_in_the_sidebar_asks_the_host_to_quit() {
     let mut rt = runtime("portal", true, PANE_SIZE);
     tap(&mut rt, "quit");

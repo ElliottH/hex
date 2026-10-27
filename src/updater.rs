@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use color_eyre::eyre::{Result, WrapErr, eyre};
 
+use crate::app_settings::{AppSettings, UpdateChannel};
 use crate::desktop_host::{DesktopAction, DesktopUpdateStatus};
 use protocol::{Decision, Install};
 
@@ -71,6 +72,26 @@ impl Method {
             _ => "stable",
         }
     }
+}
+
+/// The channel to check: package managers follow `stable`; everything else
+/// the `updates.channel` setting, else `dev` for a dev build
+/// (`X.Y.Z-dev.N`), else the install's own channel. Switching never
+/// downgrades: the protocol only installs a strictly newer version.
+fn channel(method: &Method, setting: Option<UpdateChannel>, version: &str) -> String {
+    if matches!(method, Method::Package(_)) {
+        return method.channel().into();
+    }
+    match setting {
+        Some(channel) => channel.name().into(),
+        None if is_dev_build(version) => UpdateChannel::Dev.name().into(),
+        None => method.channel().into(),
+    }
+}
+
+/// Builds the Release workflow's dev channel stamps `X.Y.Z-dev.N`.
+pub fn is_dev_build(version: &str) -> bool {
+    version.contains("-dev.")
 }
 
 #[derive(Clone, Debug)]
@@ -325,7 +346,11 @@ fn run(shared: &Shared, method: &Method) {
 
 fn check(shared: &Shared, method: &Method, cache: &mut transport::ManifestCache) -> Result<State> {
     let updates = updates_dir()?;
-    let manifest_url = manifest_url(method.channel());
+    // Read each check, so a change from the window or `hex settings` applies
+    // at the next one.
+    let setting = AppSettings::saved_update_channel();
+    let channel = channel(method, setting, env!("CARGO_PKG_VERSION"));
+    let manifest_url = manifest_url(&channel);
     let manifest = cache.fetch(&manifest_url, &updates)?;
     let install = Install {
         version: env!("CARGO_PKG_VERSION").into(),
@@ -333,7 +358,7 @@ fn check(shared: &Shared, method: &Method, cache: &mut transport::ManifestCache)
         distribution: method.distribution().into(),
         rollout_bucket: rollout_bucket(&crate::app_paths::support_dir()?)?,
     };
-    let decision = protocol::decide(APP, ARTIFACT, method.channel(), &manifest, &install);
+    let decision = protocol::decide(APP, ARTIFACT, &channel, &manifest, &install);
     tracing::info!(?decision, "update decision");
     match decision {
         Decision::Reject { reason } => Err(eyre!("the update manifest was rejected: {reason}")),
@@ -509,6 +534,98 @@ mod tests {
         assert_eq!(Method::Package("aur").distribution(), "aur");
         assert_eq!(Method::Unknown.distribution(), "unknown");
         assert_eq!(Method::Package("aur").channel(), "stable");
+    }
+
+    #[test]
+    fn the_setting_picks_the_channel_unless_a_package_manager_updates_hex() {
+        let direct = Method::Direct {
+            channel: "beta".into(),
+        };
+        assert_eq!(channel(&direct, None, "2.4.0"), "beta");
+        assert_eq!(channel(&direct, None, "2.4.0-dev.12"), "dev");
+        assert_eq!(
+            channel(&direct, Some(UpdateChannel::Stable), "2.4.0-dev.12"),
+            "stable"
+        );
+        assert_eq!(channel(&direct, Some(UpdateChannel::Dev), "2.4.0"), "dev");
+        assert_eq!(channel(&Method::DownloadOnly, None, "2.4.0"), "stable");
+        assert_eq!(
+            channel(&Method::DownloadOnly, Some(UpdateChannel::Dev), "2.4.0"),
+            "dev"
+        );
+        assert_eq!(
+            channel(
+                &Method::Package("aur"),
+                Some(UpdateChannel::Dev),
+                "2.4.0-dev.1"
+            ),
+            "stable"
+        );
+    }
+
+    #[test]
+    fn switching_from_dev_to_stable_never_downgrades() {
+        let manifest = |channel: &str, version: &str| {
+            serde_json::json!({
+                "schema": 1,
+                "app": "hex",
+                "artifact": "desktop",
+                "channel": channel,
+                "sequence": 1,
+                "published_at": "2026-10-27T00:00:00Z",
+                "release": {
+                    "version": version,
+                    "rollout_percent": 100,
+                    "revoked_versions": [],
+                    "distributions": [{ "kind": "direct" }],
+                    "targets": {
+                        "macos-arm64": {
+                            "url": "/release/hex/files/aa/Hex.zip",
+                            "sha256": "a".repeat(64),
+                            "size": 1
+                        }
+                    }
+                }
+            })
+            .to_string()
+        };
+        let install = |version: &str| Install {
+            version: version.into(),
+            target: "macos-arm64".into(),
+            distribution: "direct".into(),
+            rollout_bucket: 0,
+        };
+        let running = install("2.4.0-dev.12");
+        assert!(matches!(
+            protocol::decide(
+                APP,
+                ARTIFACT,
+                "stable",
+                &manifest("stable", "2.3.1"),
+                &running
+            ),
+            Decision::None { .. }
+        ));
+        assert!(matches!(
+            protocol::decide(
+                APP,
+                ARTIFACT,
+                "stable",
+                &manifest("stable", "2.4.0"),
+                &running
+            ),
+            Decision::Install { .. }
+        ));
+        assert!(matches!(
+            protocol::decide(
+                APP,
+                ARTIFACT,
+                "dev",
+                &manifest("dev", "2.4.0-dev.13"),
+                &running
+            ),
+            Decision::Install { .. }
+        ));
     }
 
     #[test]
