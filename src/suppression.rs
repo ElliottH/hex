@@ -786,6 +786,24 @@ fn list_takes_keys(capture_on: bool, open: bool, recording_shortcut: bool) -> bo
 fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
     use crate::capture_host::{CapsuleKey, ListTap, capsule_key, list_key, list_open, suggesting};
     static TAKEN: Mutex<u128> = Mutex::new(0);
+    // Shift is followed always, so a release while nothing showed never
+    // leaves it stuck down; the list or suggestions hear each change.
+    static SHIFT: AtomicBool = AtomicBool::new(false);
+    if event_type == EVENT_FLAGS_CHANGED {
+        const SHIFT_MASK: u64 = 1 << 17;
+        // SAFETY: CoreGraphics supplied a valid event.
+        let down = unsafe { CGEventGetFlags(event) } & SHIFT_MASK != 0;
+        if SHIFT.swap(down, Ordering::Relaxed) != down
+            && list_takes_keys(
+                crate::app_settings::capture_on(),
+                list_open() || suggesting(),
+                crate::app_settings::hotkey_capture_active(),
+            )
+        {
+            capsule_key(CapsuleKey::Shift(down));
+        }
+        return ListSwallow::No;
+    }
     if !matches!(event_type, EVENT_KEY_DOWN | EVENT_KEY_UP) {
         return ListSwallow::No;
     }

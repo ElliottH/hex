@@ -42,7 +42,7 @@ use self::surface::{
     Surface, THUMB_H, THUMB_W, THUMB_X, TIMER, UNDO_LABEL, chord, clock_width, corner, done_style,
     done_text_x, ellipsize, measure,
 };
-use self::tuning::{KeyBox, ListFooter};
+use self::tuning::ListFooter;
 use super::controls::Paint;
 
 /// Peak blur (pt) of the picker's badge and the list's rows softening in
@@ -67,8 +67,6 @@ const HINTS_GAP: f32 = 16.0;
 /// The list footer's band (A) and well (B).
 const BAND_H: f32 = 32.0;
 const WELL_H: f32 = 28.0;
-/// rune-kit's checkbox.
-const CHECKBOX: f32 = 16.0;
 /// The list slides down this far as it fades in.
 const LIST_DROP: f32 = 6.0;
 
@@ -681,6 +679,7 @@ fn key_input(key: crate::capture_host::CapsuleKey) -> Input {
         CapsuleKey::Tab { shift } => Input::Cycle(if shift { -1 } else { 1 }),
         CapsuleKey::Digit(digit) => Input::SendRow(usize::from(digit.saturating_sub(1))),
         CapsuleKey::Press => Input::ClickAway,
+        CapsuleKey::Shift(down) => Input::Shift(down),
     }
 }
 
@@ -1181,7 +1180,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             field(p, base, typed)
         }
         // Rows live in the list, never in the capsule.
-        Id::Row(_) | Id::Always => base,
+        Id::Row(_) => base,
     }
 }
 
@@ -1244,16 +1243,15 @@ fn hint(p: Paint, copy: &str, keys: &str) -> El {
     }
     if !keys.is_empty() {
         let k = p.k;
-        let rect = row()
-            .center()
-            .h(KEY_BOX_H)
-            .px(KEY_BOX_PX)
-            .radius(KEY_BOX_RADIUS)
-            .child(label(keys, SMALL, p.muted()));
-        hint = hint.child(match tuning::get().key_box {
-            KeyBox::Filled => rect.fill(k.alpha(k.c.text_base, 0.07)),
-            KeyBox::Outlined => rect.border(p.hair, k.c.border_base),
-        });
+        hint = hint.child(
+            row()
+                .center()
+                .h(KEY_BOX_H)
+                .px(KEY_BOX_PX)
+                .radius(KEY_BOX_RADIUS)
+                .fill(k.alpha(k.c.text_base, 0.07))
+                .child(label(keys, SMALL, p.muted())),
+        );
     }
     hint
 }
@@ -1436,6 +1434,7 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
     let mut body = col().absolute(0.0, 0.0).w(w).px(LIST_PAD).pt(LIST_PAD);
     let mut n = 0;
     let suggesting = list.suggesting();
+    let saving = list.always.as_ref().is_some_and(|(_, shift)| *shift);
     let first = if suggesting { "Send to" } else { "Suggested" };
     let sections = [(first, &list.suggested), ("Recent", &list.recent)];
     for (title, rows) in sections {
@@ -1480,12 +1479,12 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                 .child(label(&ellipsize(&dest.name, MEDIUM, max), MEDIUM, p.text()))
                 .child(el().grow(1.0))
                 // The best suggestion is marked by its reason, on the
-                // name's baseline.
+                // name's baseline; Shift down, so is where a rule would send.
                 .child(
                     label(
                         &why,
                         SMALL,
-                        if suggesting && n == 0 {
+                        if (suggesting && n == 0) || saving && n == list.selected {
                             p.accent()
                         } else {
                             p.muted()
@@ -1505,38 +1504,10 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
             n += 1;
         }
     }
-    if let Some((site, on)) = &list.always {
-        // The box sits centred over the numbers, its words in line with
-        // the names.
-        let inset = ROW_PX + 0.5 * (NUMBER_W - CHECKBOX);
-        let gap = ROW_PX + NUMBER_W + ROW_PX - inset - CHECKBOX;
-        let room = w - 2.0 * LIST_PAD - inset - CHECKBOX - gap - ROW_PX;
-        let copy = format!("Always send {site} here");
-        body = body.child(
-            row()
-                .key("always")
-                .trace_name("always")
-                .center_y()
-                .h(ROW_H)
-                .pl(inset)
-                .pr(ROW_PX)
-                .gap(gap)
-                .radius(ROW_RADIUS)
-                .hover(k.c.hover)
-                .press(k.c.pressed)
-                .child(rune_kit::Checkbox::new(*on).build(k))
-                .child(label(&ellipsize(&copy, SMALL, room), SMALL, p.muted()))
-                .role("checkbox")
-                .label(copy)
-                .hit()
-                .on_press_tx(press(Id::Always))
-                .transition(in_place),
-        );
-    }
-    let footer = if suggesting {
-        suggest_hints(p, list, w)
-    } else {
-        send_hints(p, list, w)
+    let footer = match &list.always {
+        Some((site, true)) => saving_hint(p, site, w),
+        _ if suggesting => suggest_hints(p, list, w),
+        _ => send_hints(p, list, w),
     };
     list_panel(p, body, footer, x, w, h, blur)
 }
@@ -1566,7 +1537,8 @@ fn send_hints(p: Paint, list: &List, w: f32) -> El {
         .child(hint(p, &second, &keys).key("second"))
 }
 
-/// The suggestions' hints: the digits that send.
+/// The suggestions' hints: the digits that send, then Shift for a rule
+/// when one can be made.
 fn suggest_hints(p: Paint, list: &List, w: f32) -> El {
     let rows = list.rows().count();
     let digits = if rows > 1 {
@@ -1575,9 +1547,26 @@ fn suggest_hints(p: Paint, list: &List, w: f32) -> El {
         "1".to_owned()
     };
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
+    let always = list.always.is_some()
+        && hint_width("Send", &digits) + HINTS_GAP + hint_width("Always", "⇧") <= room;
     let say_send = hint_width("Send", &digits) <= room;
     let send = hint(p, if say_send { "Send" } else { "" }, &digits).key("send");
-    row().center_y().child(send).child(el().grow(1.0))
+    row()
+        .center_y()
+        .gap(HINTS_GAP)
+        .child(send)
+        .children(always.then(|| hint(p, "Always", "⇧").key("second")))
+        .child(el().grow(1.0))
+}
+
+/// Shift down: the footer says where the rule will send `site`.
+fn saving_hint(p: Paint, site: &str, w: f32) -> El {
+    let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
+    let copy = format!("Always send {site} to…");
+    row()
+        .center_y()
+        .child(label(&ellipsize(&copy, SMALL, room), SMALL, p.text()).key("saving"))
+        .child(el().grow(1.0))
 }
 
 /// The footer's height, and the list's below its last row.
@@ -1666,8 +1655,7 @@ pub(crate) fn list_height(list: &List) -> f32 {
         .iter()
         .filter(|rows| !rows.is_empty())
         .count() as f32;
-    let rows =
-        (list.suggested.len() + list.recent.len() + usize::from(list.always.is_some())) as f32;
+    let rows = (list.suggested.len() + list.recent.len()) as f32;
     LIST_PAD
         + sections * HEADER_H
         + (sections - 1.0).max(0.0) * SECTION_GAP

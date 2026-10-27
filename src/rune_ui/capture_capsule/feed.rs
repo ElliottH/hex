@@ -769,7 +769,7 @@ mod tests {
         let mut follow = Follow::default();
         follow.next(&recording("a"));
         let guess = || RouteAnswer::Guess {
-            suggested: vec![dest("HEX", "guess")],
+            suggested: vec![dest("HEX", "same page")],
             recent: Vec::new(),
             site: None,
         };

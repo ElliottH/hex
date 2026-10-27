@@ -2270,8 +2270,11 @@ pub enum CapsuleKey {
     Tab {
         shift: bool,
     },
-    /// 1 to 9 typed in the list (otherwise text).
+    /// 1 to 9 typed in the list (otherwise text), with Shift too: a
+    /// Shift pick also saves a rule.
     Digit(u8),
+    /// Shift went down (true) or up while the list or suggestions show.
+    Shift(bool),
     /// A mouse button went down anywhere, while the list is open. The click
     /// still reaches the app under it.
     Press,
@@ -2396,7 +2399,7 @@ fn takes(keys: CapsuleKeys, key: &CapsuleKey) -> bool {
             CapsuleKey::OpenList,
         ) => true,
         (CapsuleKeys::Suggest { rows, .. }, CapsuleKey::Digit(digit)) => (1..=rows).contains(digit),
-        (CapsuleKeys::Suggest { .. }, CapsuleKey::Press) => true,
+        (CapsuleKeys::Suggest { .. }, CapsuleKey::Press | CapsuleKey::Shift(_)) => true,
         (
             CapsuleKeys::Suggest { cycle: true, .. },
             CapsuleKey::Return { shift: false } | CapsuleKey::Tab { .. },
@@ -2437,6 +2440,10 @@ pub fn list_key(code: u16, flags: u64, typed: &str) -> ListTap {
         126 => CapsuleKey::Up,
         125 => CapsuleKey::Down,
         51 => CapsuleKey::Backspace,
+        // Shift's digits type symbols, so the digit row reads by position.
+        _ if flags & (SHIFT | OPTION) == SHIFT && shifted_digit(code).is_some() => {
+            CapsuleKey::Digit(shifted_digit(code).unwrap_or(1))
+        }
         _ => match typed.chars().next() {
             Some(digit @ '1'..='9') if typed.len() == 1 && flags & OPTION == 0 => {
                 CapsuleKey::Digit(digit as u8 - b'0')
@@ -2446,6 +2453,14 @@ pub fn list_key(code: u16, flags: u64, typed: &str) -> ListTap {
         },
     };
     ListTap::Key(key)
+}
+
+/// 1 to 9 for the ANSI digit row's key codes.
+fn shifted_digit(code: u16) -> Option<u8> {
+    [18, 19, 20, 21, 23, 22, 26, 28, 25]
+        .iter()
+        .position(|row| *row == code)
+        .map(|i| i as u8 + 1)
 }
 
 /// The ANSI Z key, when the layout has none.
@@ -4336,6 +4351,7 @@ mod tests {
         assert!(suggesting() && !wants_escape() && list_key_wanted() && !list_open());
         assert!(!capsule_key(CapsuleKey::Escape));
         assert!(capsule_key(CapsuleKey::Press), "a press may fold them");
+        assert!(capsule_key(CapsuleKey::Shift(true)), "Shift shows the rule");
         assert!(capsule_key(CapsuleKey::Digit(2)));
         assert!(!capsule_key(CapsuleKey::Digit(3)), "no third row");
         assert!(!capsule_key(CapsuleKey::Text("h".into())));
@@ -4365,6 +4381,7 @@ mod tests {
                 (2, CapsuleKey::Escape),
                 (2, CapsuleKey::OpenList),
                 (2, CapsuleKey::Press),
+                (2, CapsuleKey::Shift(true)),
                 (2, CapsuleKey::Digit(2)),
                 (2, CapsuleKey::Tab { shift: false }),
                 (2, CapsuleKey::Return { shift: false }),
@@ -4392,6 +4409,9 @@ mod tests {
         assert_eq!(list_key(125, 0, ""), key(CapsuleKey::Down));
         assert_eq!(list_key(51, 0, "\u{7f}"), key(CapsuleKey::Backspace));
         assert_eq!(list_key(18, 0, "1"), key(CapsuleKey::Digit(1)));
+        // Shift's digits type symbols; the row reads by position.
+        assert_eq!(list_key(19, shift, "@"), key(CapsuleKey::Digit(2)));
+        assert_eq!(list_key(25, shift, "("), key(CapsuleKey::Digit(9)));
         assert_eq!(list_key(29, 0, "0"), key(CapsuleKey::Text("0".into())));
         assert_eq!(list_key(18, option, "¡"), key(CapsuleKey::Text("¡".into())));
         assert_eq!(list_key(4, shift, "H"), key(CapsuleKey::Text("H".into())));

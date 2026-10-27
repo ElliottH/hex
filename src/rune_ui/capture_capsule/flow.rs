@@ -199,8 +199,9 @@ pub(crate) enum Input {
     /// Tab in the toast (⇧ back): its next guess, round again after the
     /// last.
     Cycle(i32),
-    /// "Always send <site> here" in the suggestions, ticked or not.
-    ToggleAlways,
+    /// Shift went down (true) or up while the list or suggestions show: a
+    /// pick while it's down also saves a rule for the site or app.
+    Shift(bool),
     Escape,
     /// The Undo button: the only way to take a send back.
     Undo,
@@ -296,7 +297,9 @@ pub(crate) struct List {
     /// Across both sections, suggested first.
     pub(crate) selected: usize,
     pub(crate) footer: Footer,
-    /// The suggestions' "Always send <site> here", and whether it's ticked.
+    /// The site or app a Shift pick saves a rule for, and whether Shift is
+    /// down: then the footer says so and the highlighted row reads
+    /// "always".
     pub(crate) always: Option<(String, bool)>,
 }
 
@@ -465,8 +468,8 @@ struct Open {
     /// Searching every session (the list shortcut): the field
     /// takes typing. Otherwise it's the suggestions a capture opens with.
     typing: bool,
-    /// "Always send <site> here" is ticked: the pick saves a rule.
-    always: bool,
+    /// Shift is down: a pick also saves a rule.
+    shift: bool,
 }
 
 impl Open {
@@ -475,7 +478,7 @@ impl Open {
             query: String::new(),
             selected: 0,
             typing: false,
-            always: false,
+            shift: false,
         }
     }
 }
@@ -933,9 +936,9 @@ impl Flow {
                 }
                 Phase::Routed(routed)
             }
-            (Phase::Routed(mut routed), Input::ToggleAlways) => {
+            (Phase::Routed(mut routed), Input::Shift(down)) => {
                 if let Some(open) = &mut routed.open {
-                    open.always = !open.always;
+                    open.shift = down;
                 }
                 Phase::Routed(routed)
             }
@@ -1179,7 +1182,6 @@ impl Flow {
             ) if !open.typing && tuning::get().flow == CapsuleFlow::Toast => {
                 self.input(Input::Send { always: false }, now)
             }
-            (_, Id::Always) => self.input(Input::ToggleAlways, now),
             // ✕ beside "Sent to X" just closes, a rule's as a pick's.
             (_, Id::Close) => self.input(Input::Dismiss, now),
             _ => Vec::new(),
@@ -1374,7 +1376,7 @@ impl Flow {
             // A pick went at once: the check, and a plain Undo (no ring,
             // no drain) while it can still be taken back.
             Phase::Sent(sent) => Pres::Done(Done {
-                why: sent.rule_saved.then(|| "rule saved".into()),
+                why: sent.rule_saved.then(|| "saved rule".into()),
                 undo: sent.undoable && undo_left(sent.at),
                 hand_off: true,
                 ..Done::plain(Lead::Check, sent_to(&sent.to))
@@ -1474,12 +1476,26 @@ fn list(route: &Route, open: &Open) -> List {
             .collect()
     };
     let (suggested, recent) = sections(route);
-    if !open.typing {
-        let site = match route {
-            Route::Guess { site, .. } => site.clone(),
-            _ => None,
+    let site = match route {
+        Route::Guess { site, .. } | Route::Rule { site, .. } => site.clone(),
+        _ => None,
+    };
+    let always = site.map(|site| (site, open.shift));
+    let mut list = if open.typing {
+        let footer = match (route, &always) {
+            (Route::Rule { to, .. }, _) => Footer::Keep(to.name.clone()),
+            (Route::Guess { .. }, Some((site, _))) => Footer::Always(site.clone()),
+            _ => Footer::KeepCopied,
         };
-        return List {
+        List {
+            suggested: keep(suggested, MAX_SUGGESTED),
+            recent: keep(recent, MAX_RECENT),
+            selected: open.selected,
+            footer,
+            always,
+        }
+    } else {
+        List {
             suggested: suggested
                 .iter()
                 .chain(recent)
@@ -1489,23 +1505,23 @@ fn list(route: &Route, open: &Open) -> List {
             recent: Vec::new(),
             selected: open.selected,
             footer: Footer::Suggesting,
-            always: site.map(|site| (site, open.always)),
-        };
-    }
-    let footer = match route {
-        Route::Rule { to, .. } => Footer::Keep(to.name.clone()),
-        Route::Guess {
-            site: Some(site), ..
-        } => Footer::Always(site.clone()),
-        _ => Footer::KeepCopied,
+            always,
+        }
     };
-    List {
-        suggested: keep(suggested, MAX_SUGGESTED),
-        recent: keep(recent, MAX_RECENT),
-        selected: open.selected,
-        footer,
-        always: None,
+    // Shift down, the highlighted row is where the rule would send it.
+    if list.always.as_ref().is_some_and(|(_, shift)| *shift) {
+        let selected = list.selected;
+        let split = list.suggested.len();
+        let row = if selected < split {
+            list.suggested.get_mut(selected)
+        } else {
+            list.recent.get_mut(selected - split)
+        };
+        if let Some(row) = row {
+            row.why = "always".into();
+        }
     }
+    list
 }
 
 fn clamp(routed: &mut Routed) {
@@ -1531,7 +1547,7 @@ fn send(
         return Phase::Routed(routed);
     };
     // The rule's own session already has it: the list just closes.
-    if !(always || open.always)
+    if !(always || open.shift)
         && rule_to(&routed.route).is_some_and(|to| to.session == dest.session)
     {
         return Phase::Routed(Routed {
@@ -1539,7 +1555,7 @@ fn send(
             ..routed
         });
     }
-    let site = match (&routed.route, always || open.always) {
+    let site = match (&routed.route, always || open.shift) {
         (Route::Guess { site, .. } | Route::Rule { site, .. }, true) => site.clone(),
         _ => None,
     };
@@ -1778,7 +1794,7 @@ mod tests {
     fn guess() -> Route {
         Route::Guess {
             suggested: vec![
-                Dest::new("SEER", "guess · problems.kitlangton.com"),
+                Dest::new("SEER", "same page"),
                 Dest::new("HEX", "last sent"),
             ],
             recent: vec![Dest::new("HOME", "yesterday")],
@@ -2759,7 +2775,7 @@ mod tests {
         use super::super::surface::Id;
         let twins = || Route::Guess {
             suggested: vec![
-                Dest::new("HEX", "guess").session("ses_a"),
+                Dest::new("HEX", "same page").session("ses_a"),
                 Dest::new("HEX", "last sent").session("ses_b"),
             ],
             recent: Vec::new(),
@@ -2911,7 +2927,6 @@ mod tests {
 
     #[test]
     fn a_guess_suggests_three_and_a_digit_sends_nothing_before_it() {
-        use super::super::surface::Id;
         use crate::capture_host::CapsuleKeys;
         let mut flow = Flow::new();
         flow.input(Input::Routed(guess()), 0.0);
@@ -2931,17 +2946,64 @@ mod tests {
         assert!(flow.take_cues().is_empty(), "nothing sent, nothing heard");
         flow.tick(4.0);
         assert!(matches!(flow.pres(4.0), Pres::Done(_)), "no countdown runs");
-        flow.click(Id::Always, 4.5);
-        assert!(done(&flow, 4.5).open.unwrap().1.always.unwrap().1);
         assert_eq!(
             flow.input(Input::SendRow(1), 5.0),
+            [Action::Send {
+                to: "HEX".into(),
+                always: None
+            }],
+            "without Shift, a pick saves no rule"
+        );
+        assert_eq!(flow.take_cues(), [Cue::Sent], "a pick sounds as it goes");
+        assert_eq!(done(&flow, 5.0).why, None);
+    }
+
+    #[test]
+    fn shift_shows_the_rule_and_a_shift_pick_saves_it() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.input(Input::Shift(true), 0.5);
+        let (_, list) = done(&flow, 0.5).open.unwrap();
+        assert_eq!(list.always, Some(("problems.kitlangton.com".into(), true)));
+        let notes: Vec<_> = list.rows().map(|dest| dest.why.as_str()).collect();
+        assert_eq!(notes[0], "always", "the highlighted row is where it goes");
+        assert_ne!(notes[1], "always");
+        flow.input(Input::Shift(false), 1.0);
+        let (_, list) = done(&flow, 1.0).open.unwrap();
+        assert_eq!(list.always, Some(("problems.kitlangton.com".into(), false)));
+        assert!(
+            list.rows().all(|dest| dest.why != "always"),
+            "released, as before"
+        );
+        flow.input(Input::Shift(true), 1.5);
+        assert_eq!(
+            flow.input(Input::SendRow(1), 2.0),
             [Action::Send {
                 to: "HEX".into(),
                 always: Some("problems.kitlangton.com".into())
             }]
         );
-        assert_eq!(flow.take_cues(), [Cue::Sent], "a pick sounds as it goes");
-        assert_eq!(done(&flow, 5.0).why.as_deref(), Some("rule saved"));
+        let sent = done(&flow, 2.0);
+        assert_eq!(sent.text, "Sent to HEX");
+        assert_eq!(sent.why.as_deref(), Some("saved rule"));
+        assert!(sent.undo);
+        assert_eq!(
+            flow.click(Id::Undo, 2.5),
+            [Action::Undo { to: "HEX".into() }],
+            "Undo takes back the send, and the router the rule with it"
+        );
+        // A Shift click saves it too.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.input(Input::Shift(true), 0.5);
+        assert_eq!(
+            flow.click(Id::Row(0), 1.0),
+            [Action::Send {
+                to: "SEER".into(),
+                always: Some("problems.kitlangton.com".into())
+            }]
+        );
     }
 
     #[test]
@@ -2977,7 +3039,7 @@ mod tests {
             }]
         );
         let shown = done(&flow, 1.0);
-        assert_eq!(shown.why.as_deref(), Some("rule saved"));
+        assert_eq!(shown.why.as_deref(), Some("saved rule"));
     }
 
     #[test]
@@ -3104,7 +3166,7 @@ mod tests {
                 always: Some("problems.kitlangton.com".into())
             }]
         );
-        assert_eq!(done(&flow, 1.0).why.as_deref(), Some("rule saved"));
+        assert_eq!(done(&flow, 1.0).why.as_deref(), Some("saved rule"));
 
         // And in the list an Undo of the rule's send reopens.
         let mut flow = Flow::new();

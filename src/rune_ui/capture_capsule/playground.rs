@@ -18,7 +18,7 @@ use rune_kit::{Button, ButtonVariant, ControlSize, SegmentedControl, Switch};
 
 use super::flow::{Action, Cue, Delivered, Dest, Failure, Input, Route, Undone};
 use super::surface::{Id, PANEL_H, PANEL_W};
-use super::tuning::{self, CapsuleFlow, KeyBox, ListFooter, TopLine, Tuning, flow_label};
+use super::tuning::{self, CapsuleFlow, ListFooter, TopLine, Tuning, flow_label};
 use super::{CapsuleState, Mode, capsule, tone};
 use crate::rune_ui::controls::{DESCRIPTION, Paint};
 use crate::rune_ui::lists::slider_in;
@@ -80,7 +80,7 @@ pub(crate) fn run(rune_args: Vec<String>) {
         on_key: Some(on_key),
         ..rune::AppSpec::new("Hex capsule playground", WINDOW, init, super::view)
     };
-    rune::App::new(spec).args(rune_args).run();
+    rune::App::new(spec).modifier_keys().args(rune_args).run();
 }
 
 fn init() -> CapsuleState {
@@ -127,11 +127,8 @@ const SCENES: &[Scene] = &[
     ("suggestions", |s| {
         scene(s, &[record(), Step::Input(stop()), done(), routed(guess())])
     }),
-    ("always", |s| {
-        let mut steps = vec![record(), Step::Input(stop()), done(), routed(guess())];
-        steps.push(Step::Click(Id::Always));
-        scene(s, &steps)
-    }),
+    ("shift", |s| scene(s, &shift_held())),
+    ("sent-rule", |s| scene(s, &sent_with_rule())),
     ("search", |s| {
         scene(
             s,
@@ -174,6 +171,25 @@ fn rule_sent() -> Vec<Step> {
         routed(rule()),
         Step::Input(Input::Settled),
     ]
+}
+
+/// The suggestions with Shift down: a pick would save a rule too.
+fn shift_held() -> Vec<Step> {
+    vec![
+        record(),
+        Step::Input(stop()),
+        done(),
+        routed(guess()),
+        Step::Input(Input::Shift(true)),
+    ]
+}
+
+/// Shift+1: sent, and the site's rule saved.
+fn sent_with_rule() -> Vec<Step> {
+    let mut steps = shift_held();
+    steps.push(Step::Input(Input::SendRow(0)));
+    steps.push(Step::Input(Input::Shift(false)));
+    steps
 }
 
 /// A saved rule's send, taken back at once (Undo, after the inputs before
@@ -357,6 +373,18 @@ fn poll(s: &mut CapsuleState, wall: f64, tx: &mut Tx) -> bool {
     changed
 }
 
+/// 1 to 9 from what a key typed, Shift's US symbols ("!" for 1) too.
+fn digit_of(typed: &str) -> Option<u8> {
+    let mut chars = typed.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return None;
+    };
+    match c {
+        '1'..='9' => Some(c as u8 - b'0'),
+        _ => "!@#$%^&*(".find(c).map(|i| i as u8 + 1),
+    }
+}
+
 /// The keys Hex's tap would hand the capsule, from the window instead.
 fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
     use rune::Key;
@@ -378,12 +406,16 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
         crate::capture_host::CapsuleKeys::List | crate::capture_host::CapsuleKeys::Picker
     );
     let digit = match &key.key {
-        Key::Text(t) if !key.mods.alt => {
-            t.parse::<usize>().ok().filter(|d| (1..=digits).contains(d))
-        }
+        Key::Text(t) if !key.mods.alt => digit_of(t)
+            .map(usize::from)
+            .filter(|d| (1..=digits).contains(d)),
         _ => None,
     };
     let input = match &key.key {
+        Key::Modifier {
+            modifier: rune::Modifier::ShiftLeft | rune::Modifier::ShiftRight,
+            ..
+        } if digits > 0 => Input::Shift(key.mods.shift),
         _ if digit.is_some() => Input::SendRow(digit.unwrap_or(1) - 1),
         Key::Escape if escape => Input::Escape,
         Key::Text(t) if key.mods.alt && key.mods.shift && t.eq_ignore_ascii_case("v") => {
@@ -582,6 +614,8 @@ fn states(p: Paint) -> El {
                 .child(state_button(p, "Pick 1", || {
                     vec![Step::Input(Input::SendRow(0))]
                 }))
+                .child(state_button(p, "Shift held", shift_held))
+                .child(state_button(p, "Sent + rule", sent_with_rule))
                 .child(state_button(p, "Search all", || {
                     vec![Step::Input(Input::OpenList)]
                 }))
@@ -812,21 +846,6 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
             .build(p.k)
             .key("list-footer"),
     );
-    let boxes: Vec<&str> = KeyBox::ALL.iter().map(|m| m.label()).collect();
-    let picked = KeyBox::ALL.iter().position(|m| *m == t.key_box);
-    let key_box = card("key-box-card").child(
-        SegmentedControl::new(&boxes, picked)
-            .width(Some(SLIDER_W))
-            .on_pick(|s: &mut CapsuleState, i: usize, _: &mut Tx| {
-                if let Some(pg) = s.playground.as_mut() {
-                    let mut tuning = pg.tuning;
-                    tuning.key_box = KeyBox::ALL[i];
-                    pg.set_tuning(tuning);
-                }
-            })
-            .build(p.k)
-            .key("key-box"),
-    );
     // Everything changes together: the walls move while the content blurs,
     // scales and fades over them.
     let transition = card("transition-card")
@@ -978,7 +997,6 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
         .child(section(p, "flow", "Flow after a capture", flow))
         .child(section(p, "top-line", "Top line", top_line))
         .child(section(p, "list-footer", "List footer", list_footer))
-        .child(section(p, "key-box", "Key hints", key_box))
         .child(section(p, "transition", "Transition", transition))
         .child(section(p, "timing", "Timing", timing))
         .child(section(p, "sound", "Sound", sound))

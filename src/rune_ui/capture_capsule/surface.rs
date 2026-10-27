@@ -207,8 +207,6 @@ pub(crate) enum Id {
     /// The open capsule's field.
     Field,
     Row(usize),
-    /// The suggestions' "Always send <site> here".
-    Always,
     /// A guess in the capsule itself: a chip in the menu-bar flow, a row
     /// in the cursor's and the notch's card.
     Pick(usize),
@@ -242,7 +240,6 @@ impl Id {
             Id::Inspect => "inspect",
             Id::Field => "field",
             Id::Row(_) => "row",
-            Id::Always => "always",
             Id::Pick(_) => "pick",
             Id::CardHints => "card-hints",
             Id::Next => "next",
@@ -302,7 +299,7 @@ impl Id {
             Id::Pick(row) => 16 + row.min(1) as u8,
             Id::Ask => 18,
             Id::Close => 20,
-            Id::Row(_) | Id::Always | Id::CardHints => 21,
+            Id::Row(_) | Id::CardHints => 21,
         }
     }
 }
@@ -1008,7 +1005,7 @@ mod tests {
             open: Some((
                 String::new(),
                 List {
-                    suggested: vec![Dest::new("SEER", "guess")],
+                    suggested: vec![Dest::new("SEER", "same page")],
                     recent: vec![Dest::new("HOME", "yesterday")],
                     selected: 0,
                     footer: Footer::KeepCopied,
@@ -1023,7 +1020,7 @@ mod tests {
         Pres::Done(Done {
             text: "Send to".into(),
             picks: vec![
-                ("SEER".into(), "guess · problems.kitlangton.com".into()),
+                ("SEER".into(), "same page".into()),
                 ("HEX".into(), "last sent".into()),
                 ("HOME".into(), "yesterday".into()),
             ],

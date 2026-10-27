@@ -189,9 +189,15 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   answer) -> the lead alone with the suggestions open under it and Paste
 │   │   beside it; nothing sends until Kit picks
 │   │   ├── Up to five rows, suggested then recent, numbered 1-5; the first
-│   │   │   carries its reason in the accent
-│   │   ├── "Always send <site> here" (a guess with a site) -> ticked, the pick
-│   │   │   also saves that rule
+│   │   │   carries its reason in the accent. A reason is a real one in plain
+│   │   │   words ("you were just in it", "same page", "mentioned", "recent")
+│   │   │   or nothing; never "guess"
+│   │   ├── Shift down (a guess or rule with a site or app) -> the footer reads
+│   │   │   "Always send <site> to…" and the highlighted row "always"; up, the
+│   │   │   footer is "Send 1–5  Always ⇧" again. Shift+1-5 or Shift+click
+│   │   │   sends and saves the rule: "Sent to X · saved rule", and its Undo
+│   │   │   takes back the send and the rule (what the key held before, or
+│   │   │   nothing, comes back)
 │   │   ├── 1-5 or a click -> sends at once: "Sent to X", the Sent tone, and a
 │   │   │   quiet Undo for the same 5 s, with no ring or drain; ✕ closes;
 │   │   │   the capsule then leaves by itself with its exit
@@ -232,10 +238,12 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   ├── A send from the list still undoable -> no keys; Esc and ⌥⇧V go to the
 │   │   │   app, and the Undo button is the only way back
 │   │   ├── Suggestions -> the list shortcut through the listener,
-│   │   │   and at the session tap only 1 to the number of rows with no
-│   │   │   modifier (`capture_host::suggesting`) and a mouse press, which folds
-│   │   │   them (the click still reaches the app); every other key, Esc
-│   │   │   included, goes on to the app
+│   │   │   and at the session tap only 1 to the number of rows, with no
+│   │   │   modifier or Shift (`capture_host::suggesting`; Shift's digits read
+│   │   │   by key position), and a mouse press, which folds them (the click
+│   │   │   still reaches the app); every other key, Esc included, goes on to
+│   │   │   the app. Shift's presses and releases (flagsChanged) reach the
+│   │   │   capsule too (`CapsuleKey::Shift`) and still go on to the app
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a
@@ -265,9 +273,8 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   was taking sends back
 │   ├── Shortcuts read as quiet text after what they do, never a keycap per
 │   │   key (those are Settings'): a hint's keys sit in one small rounded rect,
-│   │   in one of two looks while Kit picks (tuning `key_box`): KeyBox::Filled
-│   │   (default), a quiet fill, or KeyBox::Outlined, a hairline. The list's
-│   │   footer reads "Send 1–5", "Send ⏎", "Keep esc", "Always ⇧⏎"; the
+│   │   on a quiet fill. The list's
+│   │   footer reads "Send 1–5  Always ⇧", "Send ⏎", "Keep esc", "Always ⇧⏎"; the
 │   │   cursor's and the notch's cards end in "Send 1–5" under their guesses.
 │   │   The footer sits apart from the rows in one of
 │   │   two looks while Kit picks (tuning `list_footer`): ListFooter::Band
@@ -417,7 +424,7 @@ Where it goes                            // capture.route; capture.routing's aut
 │   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer |
 │   Unreachable
 │   ├── Rule -> only a rule the person saved (`routing.sites`, `routing.apps`,
-│   │   an "Always send … here"): sent at once, Sending -> Sent, or Queued
+│   │   a Shift pick's): sent at once, Sending -> Sent, or Queued
 │   │   when OpenCode didn't take it; Undo takes it back as it does a pick. Whatever
 │   │   autoSend, smartRouting, or jevRouting say, a saved rule sends and
 │   │   nothing else sends on its own. smartRouting off decides with the port
@@ -427,10 +434,11 @@ Where it goes                            // capture.route; capture.routing's aut
 │   │   publisher, a name that was said, the captured app's checkout (the one
 │   │   open session folder named like the app, such as `…/hex` for Hex's own
 │   │   Settings; smartRouting only), the port ladder) is suggestion #1, its
-│   │   reason as the row's word ("Jev's pick", "dev server", "this page"), then
+│   │   reason as the row's word ("dev server", "same page", "mentioned"; none
+│   │   for Jev's pick or fallback), then
 │   │   the runners-up and recent sessions; nothing sent until one is picked.
-│   │   `site` names what "Always send <site> here" (⇧⏎ in the list, or
-│   │   `send --always`) would save, after which that site's captures are Rules;
+│   │   `site` names what a Shift pick (Shift+digit or click, ⇧⏎ in the list,
+│   │   or `send --always`) would save, after which that site's captures are Rules;
 │   │   ⇧⏎ in a Rule's list saves the rule for the session picked instead
 │   ├── Each Rule or Guess -> routing.json's `shown`: `as` rule or guess, and
 │   │   `why`, the router's leading reason; `hex capture route` prints it
@@ -603,6 +611,7 @@ Checks:
   `picking_the_rules_own_session_just_closes_the_list`,
   `too_late_to_take_back_offers_the_list_for_a_copy`,
   `shift_return_in_a_rules_list_saves_a_rule_elsewhere`,
+  `shift_shows_the_rule_and_a_shift_pick_saves_it`,
   `an_answer_after_the_capsule_closed_leaves_it_closed`,
   `the_capsule_takes_only_the_keys_its_state_needs`,
   `shortcuts_read_as_one_quiet_word`, `the_capsule_draws_no_keycaps`,
@@ -630,7 +639,7 @@ Checks:
   "Copy values" copies its `DEFAULT`). It reads and writes no Hex data and
   records or sends nothing. The whole flow picks the first suggestion;
   its "Saved rule" toggle plays a rule's send, sent at once, instead.
-  `--snap --scene suggestions|always|search|picked|rule|recording`
+  `--snap --scene suggestions|shift|sent-rule|search|picked|rule|recording`
   renders it. The tones were checked by waveform and level only, never on
   speakers.
 - Picker, in capture_capsule/picker.rs and tests.rs: geometry, label, and

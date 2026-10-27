@@ -17,7 +17,7 @@ use super::{CapsuleState, poll, trace_channels, view};
 fn guess() -> Route {
     Route::Guess {
         suggested: vec![
-            Dest::new("SEER", "guess · problems.kitlangton.com"),
+            Dest::new("SEER", "same page"),
             Dest::new("HEX", "last sent"),
         ],
         recent: vec![
@@ -46,9 +46,15 @@ fn rule() -> Route {
 /// An ask with more sessions than it has chips for.
 fn guess_five() -> Route {
     Route::Guess {
-        suggested: ["SEER", "HEX", "HOME", "OPENCODE IOS", "RUNE"]
-            .map(|name| Dest::new(name, "guess"))
-            .to_vec(),
+        suggested: [
+            ("SEER", "you were just in it"),
+            ("HEX", "same page"),
+            ("HOME", "mentioned"),
+            ("OPENCODE IOS", "2 min ago"),
+            ("RUNE", "an hour ago"),
+        ]
+        .map(|(name, why)| Dest::new(name, why))
+        .to_vec(),
         recent: Vec::new(),
         site: None,
     }
@@ -164,9 +170,16 @@ fn stills() -> Vec<(&'static str, Pres)> {
             flow.pres(undo_s() + 1.0)
         }),
         ("guess", after(&routed(guess()))),
-        ("guess-always", {
+        ("shift", {
             let mut beats = routed(guess());
-            beats.push(Click(Id::Always));
+            beats.push(In(Input::Shift(true)));
+            after(&beats)
+        }),
+        ("sent-rule", {
+            let mut beats = routed(guess());
+            beats.push(In(Input::Shift(true)));
+            beats.push(In(Input::SendRow(0)));
+            beats.push(In(Input::Shift(false)));
             after(&beats)
         }),
         ("guess-five", after(&routed(guess_five()))),
@@ -179,7 +192,7 @@ fn stills() -> Vec<(&'static str, Pres)> {
                     "CAPTURE CAPSULE",
                     "HOME",
                 ]
-                .map(|name| Dest::new(name, "guess"))
+                .map(|name| Dest::new(name, ""))
                 .to_vec(),
                 recent: Vec::new(),
                 site: None,
@@ -312,10 +325,7 @@ fn every_state_draws_its_pieces() {
         ("failed", &["done", "close"]),
         ("rule-sent", &["done", "why", "undo", "close"]),
         ("rule-final", &["done", "why", "paste", "inspect", "close"]),
-        (
-            "guess",
-            &["done", "paste", "inspect", "list", "row-SEER", "always"],
-        ),
+        ("guess", &["done", "paste", "inspect", "list", "row-SEER"]),
         ("guess-five", &["done", "paste", "list", "row-SEER"]),
         ("no-answer", &["done", "why", "paste", "list"]),
         (
@@ -500,7 +510,8 @@ const GOLDENS: &[&str] = &[
     "rule-sent",
     "rule-final",
     "guess",
-    "guess-always",
+    "shift",
+    "sent-rule",
     "guess-five",
     "no-answer",
     "list-guess",
@@ -556,8 +567,8 @@ fn capture_capsule_goldens() {
 }
 
 /// `HEX_CAPSULE_TOP_LINE=quiet|icons` draws the finished capsule's top
-/// line that way, `HEX_CAPSULE_FOOTER=band|well` the list's footer, and
-/// `HEX_CAPSULE_KEY_BOX=filled|outlined` its hints' keys, to compare them.
+/// line that way and `HEX_CAPSULE_FOOTER=band|well` the list's footer, to
+/// compare them.
 fn top_line_from_env() {
     let mut tuning = super::tuning::DEFAULT;
     if let Ok(name) = std::env::var("HEX_CAPSULE_TOP_LINE") {
@@ -571,12 +582,6 @@ fn top_line_from_env() {
             .into_iter()
             .find(|m| format!("{m:?}").eq_ignore_ascii_case(&name))
             .expect("HEX_CAPSULE_FOOTER is band or well");
-    }
-    if let Ok(name) = std::env::var("HEX_CAPSULE_KEY_BOX") {
-        tuning.key_box = super::tuning::KeyBox::ALL
-            .into_iter()
-            .find(|m| format!("{m:?}").eq_ignore_ascii_case(&name))
-            .expect("HEX_CAPSULE_KEY_BOX is filled or outlined");
     }
     // `HEX_CAPSULE_FLOW=list|toast|menu_bar|cursor|notch` plays that flow,
     // and `HEX_CAPSULE_UNDO_S` shortens Undo's window for a short clip.
@@ -723,14 +728,15 @@ fn scripts() -> Vec<Script> {
             ],
             end: 5.0,
         },
-        // The main path: the suggestions, "Always" ticked, then a digit.
+        // The main path: the suggestions, Shift down, then a digit.
         Script {
             name: "suggest-pick",
             beats: vec![
                 (0.2, stage(Stage::Transcribing)),
                 (1.2, In(Input::Routed(guess()))),
-                (2.2, Click(Id::Always)),
+                (2.2, In(Input::Shift(true))),
                 (2.8, In(Input::SendRow(1))),
+                (3.0, In(Input::Shift(false))),
             ],
             end: 6.4,
         },
