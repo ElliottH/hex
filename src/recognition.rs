@@ -15,7 +15,7 @@ use crate::dictation::{
     ControlStability, DictationClip, DictationControl, DictationProtocol, Finish,
     MINIMUM_HOLD_DURATION, POST_RELEASE_TAIL,
 };
-use crate::dictation_audio::{DictationAudio, DictationAudioEvent};
+use crate::dictation_audio::{DictationAudio, DictationAudioEvent, LostCapture};
 use crate::dictation_indicator::{DictationIndicatorEvent, DictationIndicatorSender};
 use crate::events::{
     CommandOutcome, DictationPhase, EventLog, TranscriptPhase, VoiceEvent, VoiceState, now_ms,
@@ -716,10 +716,12 @@ pub fn listen(
                             let _ = reply.send(result);
                             continue;
                         }
-                        let (source, finish) = if let Some(lost) =
+                        let (source, finish, reset_recognizer) = if let Some(lost) =
                             programmatic_lost.take_if(|lost| lost.matches_owner(id, &owner_token))
                         {
-                            (lost.source, Finish::Transcribe(lost.clip))
+                            // No recognizer reset: a capture started since
+                            // the microphone recovered may be using it.
+                            (lost.source, Finish::Transcribe(lost.clip), false)
                         } else if programmatic
                             .as_ref()
                             .is_some_and(|active| active.matches_owner(id, &owner_token))
@@ -727,7 +729,29 @@ pub fn listen(
                             let active = programmatic.take().expect("active dictation was checked");
                             let boundary =
                                 capture_boundary(&input, microphone_policy.release_while_idle);
-                            (active.source, input.finish(boundary)?)
+                            // The microphone may have failed before this
+                            // finish reached the audio owner, with its loss
+                            // still queued.
+                            let finish = match input.finish(boundary)? {
+                                Finish::Discard => match input.take_loss() {
+                                    Some(LostCapture::Kept(clip)) => Finish::Transcribe(clip),
+                                    Some(LostCapture::Empty) => {
+                                        log_programmatic_ended(Some(active), "mic-lost");
+                                        finish_programmatic_with_result(
+                                            id,
+                                            owner_token,
+                                            vec![reply],
+                                            Err(MICROPHONE_LOST.into()),
+                                            &mut programmatic_completions,
+                                        );
+                                        reset_command_recognizer(&input, &mut recognizer)?;
+                                        continue;
+                                    }
+                                    None => Finish::Discard,
+                                },
+                                finish => finish,
+                            };
+                            (active.source, finish, true)
                         } else {
                             let _ = reply.send(Err("dictation-not-active".into()));
                             continue;
@@ -792,7 +816,9 @@ pub fn listen(
                                 );
                             }
                         }
-                        reset_command_recognizer(&input, &mut recognizer)?;
+                        if reset_recognizer {
+                            reset_command_recognizer(&input, &mut recognizer)?;
+                        }
                     }
                     RecognitionControl::CancelDictation {
                         id,
@@ -1403,12 +1429,12 @@ pub fn listen(
         let capture_escape = capture_host.is_some() && capture_shortcut.takes_escape();
         #[cfg(not(hex_capture))]
         let capture_escape = false;
-        input_monitor.set_escape_cancels(
-            hotkeys.any_recording()
-                || voice.is_some()
-                || capture_escape
-                || dictation_worker.has_escape_cancellable_job(),
-        );
+        input_monitor.set_escape_cancels(claims_escape(
+            programmatic.is_some(),
+            hotkeys.any_recording() || voice.is_some(),
+            capture_escape,
+            || dictation_worker.has_escape_cancellable_job(),
+        ));
         if received_worker_event {
             emit_engine_state(
                 &mut events,
@@ -2146,6 +2172,18 @@ fn finish_hotkey_dictation(
     reset_command_recognizer(dictation, recognizer)?;
     emit_engine_state(events, false, worker, mode, device)?;
     Ok(finished)
+}
+
+/// Whether Hex takes Escape from the app in front. Never while a programmatic
+/// dictation records: the listener ignores every key then, so Escape stays
+/// with its owner app rather than being swallowed.
+fn claims_escape(
+    programmatic: bool,
+    recording: bool,
+    capture_escape: bool,
+    cancellable_job: impl FnOnce() -> bool,
+) -> bool {
+    !programmatic && (recording || capture_escape || cancellable_job())
 }
 
 /// Cancels the newest unfinished dictation, as Escape does while idle.
@@ -3385,6 +3423,17 @@ mod tests {
         }
         assert_eq!(completions.len(), PROGRAMMATIC_COMPLETION_LIMIT);
         assert_eq!(completions.front().map(|completion| completion.id), Some(2));
+    }
+
+    #[test]
+    fn a_programmatic_dictation_leaves_escape_with_its_owner() {
+        // A queued hotkey job or the capture picker would otherwise claim
+        // Escape that the listener then ignores.
+        assert!(!claims_escape(true, false, true, || true));
+        assert!(claims_escape(false, false, false, || true));
+        assert!(claims_escape(false, false, true, || false));
+        assert!(claims_escape(false, true, false, || false));
+        assert!(!claims_escape(false, false, false, || false));
     }
 
     #[test]

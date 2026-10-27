@@ -483,7 +483,8 @@ CoreAudio formats, AppleScript details, or event serialization.
 - Escape cancels the active capture first, then the newest unfinished dictation.
   Cancelled jobs never paste, update the last result, or block later output.
 - Escape never cancels a programmatic dictation; its owner cancels through the
-  API, and the lease ends an abandoned one.
+  API, and the lease ends an abandoned one. While one records, Hex claims no
+  Escape at all, even with other jobs queued.
 - Model switches activate only after the pinned artifact is checksum-verified,
   loaded on strict Metal, and prewarmed. A failed switch preserves the active
   model and persisted selection.

@@ -190,6 +190,15 @@ impl JobControl {
         !self.cancelled.swap(true, Ordering::AcqRel)
     }
 
+    /// Whether [`JobControl::cancel`] would cancel it now.
+    fn cancellable(&self) -> bool {
+        let output_started = self
+            .output_started
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        !*output_started && !self.is_cancelled()
+    }
+
     fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
@@ -264,7 +273,9 @@ impl WorkerState {
     }
 
     fn has_escape_cancellable_job(&self) -> bool {
-        self.jobs.values().any(|control| !control.owner_cancels)
+        self.jobs
+            .values()
+            .any(|control| !control.owner_cancels && control.cancellable())
     }
 }
 
@@ -2176,7 +2187,18 @@ mod tests {
         assert!(state.has_escape_cancellable_job());
         assert_eq!(state.cancel_latest(), Some(DictationJobId(0)));
         assert_eq!(state.cancel_latest(), None);
+        assert!(!state.has_escape_cancellable_job());
         assert!(!state.jobs[&DictationJobId(1)].is_cancelled());
+
+        // A job whose output has started can no longer be cancelled.
+        let pasting = WorkerState {
+            next_sequence: 1,
+            jobs: BTreeMap::from([(DictationJobId(0), Arc::new(JobControl::default()))]),
+            pending_pastes: 0,
+        };
+        assert!(pasting.jobs[&DictationJobId(0)].begin_output());
+        assert!(!pasting.has_escape_cancellable_job());
+        assert_eq!(pasting.cancel_latest(), None);
 
         let only_owned = WorkerState {
             next_sequence: 1,

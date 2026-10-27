@@ -707,7 +707,8 @@ Escape                                               // dictate.cancel
   └── No active capture -> Cancel newest cancellable accepted job
      -> Repeat Escape -> Walk back through unfinished jobs
   └── Programmatic dictation (local API) -> Not claimed; the key reaches the app
-     -> Its owner cancels through /cancel; the lease ends an abandoned one
+     -> Even with other jobs queued; its owner cancels through /cancel
+     -> The lease ends an abandoned one
 
 Cancelled before output commit -> No insertion
 Already committed clipboard insertion -> Not undone   // not target-app undo
@@ -716,7 +717,8 @@ Already committed clipboard insertion -> Not undone   // not target-app undo
 Checks in [parakeet.rs](../../src/parakeet.rs):
 `output_stays_cancellable_through_preparation_but_not_after_mutation`,
 `repeated_cancellation_walks_back_through_pending_jobs`,
-`escape_skips_programmatic_dictation_jobs`.
+`escape_skips_programmatic_dictation_jobs`; [recognition.rs](../../src/recognition.rs):
+`a_programmatic_dictation_leaves_escape_with_its_owner`.
 These use a controlled paste boundary and temporary history store;
 no foreground application consumes the clipboard.
 
