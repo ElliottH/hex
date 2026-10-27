@@ -16,9 +16,6 @@ name: Release
 # built and installed but not pushed. channel=stable (or an
 # app-v<version> tag) publishes to https://anoma.ly/release, the GitHub
 # release, the AUR, and the production site.
-#
-# brew-version records that the Homebrew cask (anomalyco/tap/hex, bumped by
-# hand) now serves that version, and does nothing else.
 on:
   workflow_dispatch:
     inputs:
@@ -31,9 +28,6 @@ on:
         type: choice
         options: [staging, stable]
         default: staging
-      brew-version:
-        description: Only record that the Homebrew cask serves this version (leave empty to release)
-        default: ""
   push:
     tags: ["app-v*"]
 
@@ -54,7 +48,6 @@ jobs:
       service: ${{ steps.resolve.outputs.service }}
       tag: ${{ steps.resolve.outputs.tag }}
       notes-url: ${{ steps.resolve.outputs.notes-url }}
-      release: ${{ steps.resolve.outputs.release }}
       release-channel: ${{ steps.resolve.outputs.release-channel }}
       release-version: ${{ steps.resolve.outputs.release-version }}
     steps:
@@ -68,7 +61,6 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
           CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'stable' }}
-          BREW_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.brew-version || '' }}
         run: |
           sha=$(git rev-parse HEAD)
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
@@ -106,17 +98,11 @@ jobs:
             echo "notes-url=$notes"
             echo "release-channel=$release_channel"
             echo "release-version=$release_version"
-            echo "release=$([ -z "$BREW_VERSION" ] && echo true || echo false)"
           } >> "$GITHUB_OUTPUT"
-          if [ -n "$BREW_VERSION" ]; then
-            echo "Recording that Homebrew serves $BREW_VERSION on $service." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Releasing $version ($CHANNEL) from $sha to $service as $release_channel $release_version." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "Releasing $version ($CHANNEL) from $sha to $service as $release_channel $release_version." >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: resolve
-    if: needs.resolve.outputs.release == 'true'
     permissions:
       contents: read
       id-token: write
@@ -136,7 +122,6 @@ jobs:
 
   macos:
     needs: resolve
-    if: needs.resolve.outputs.release == 'true'
     uses: ./.github/workflows/build-macos.yml
     with:
       sha: ${{ needs.resolve.outputs.sha }}
@@ -149,7 +134,7 @@ jobs:
   collect:
     needs: [resolve, build, macos]
     if: >-
-      !cancelled() && needs.resolve.outputs.release == 'true' && needs.build.result == 'success' &&
+      !cancelled() && needs.build.result == 'success' &&
       (needs.macos.result == 'success' || needs.resolve.outputs.channel == 'staging')
     runs-on: ubuntu-24.04
     env:
@@ -327,9 +312,65 @@ jobs:
           persist-credentials: false
       - run: scripts/release-service.sh distribution aur "$HEX_VERSION"
 
+  # Renders the cask from the published DMG and checks it with brew; stable
+  # pushes it to anomalyco/homebrew-tap with the tap's deploy key. A staging
+  # run without a macOS build checks the cask around the frozen 2.3.1 DMG.
+  homebrew:
+    name: Homebrew
+    needs: [resolve, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RELEASE: ${{ needs.resolve.outputs.service }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
+      RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
+      CHANNEL: ${{ needs.resolve.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Render the cask from the published DMG
+        run: |
+          curl -fsS "$RELEASE/hex/desktop/$RELEASE_CHANNEL.json" -o manifest.json
+          version=$(jq -er .release.version manifest.json)
+          test "$version" = "$HEX_VERSION"
+          if dmg=$(jq -ec '.release.targets["macos-arm64-dmg"]' manifest.json); then
+            url="${RELEASE%/release}$(printf '%s' "$dmg" | jq -r .url)"
+            sha256=$(printf '%s' "$dmg" | jq -r .sha256)
+          elif [ "$CHANNEL" = staging ]; then
+            echo "::warning::No macOS build in this release; checking the cask around the frozen 2.3.1 DMG."
+            version=2.3.1
+            url=https://anoma.ly/hex/files/releases/HEX-2.3.1-arm64.dmg
+            sha256=56de94665da8fefbe0fe6310368fd7b62497dff593b6818475f9c5fa751def7a
+          else
+            echo "::error::Hex $version has no macos-arm64-dmg build."
+            exit 1
+          fi
+          scripts/release-homebrew.sh render "$version" "$url" "$sha256" hex.rb
+          { echo '### Casks/hex.rb'; echo '```ruby'; cat hex.rb; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Check it with brew
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_FROM_API: "1"
+        run: |
+          brew tap anomalyco/tap
+          cp hex.rb "$(brew --repo anomalyco/tap)/Casks/hex.rb"
+          brew style --cask anomalyco/tap/hex
+          brew audit --cask --strict --online anomalyco/tap/hex
+      - name: Push to anomalyco/homebrew-tap
+        if: needs.resolve.outputs.channel == 'stable'
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: scripts/release-homebrew.sh publish hex.rb "$HEX_VERSION"
+
+  # Tells Homebrew installs about the version only once the tap serves it. A
+  # staging run records it on the dev service to rehearse the call.
   record-brew:
-    needs: resolve
-    if: needs.resolve.outputs.release == 'false'
+    needs: [resolve, homebrew]
+    if: ${{ !cancelled() && needs.homebrew.result == 'success' }}
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -337,7 +378,8 @@ jobs:
       id-token: write
     env:
       RELEASE: ${{ needs.resolve.outputs.service }}
-      HEX_VERSION: ${{ inputs.brew-version }}
+      HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
+      HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

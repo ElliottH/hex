@@ -7,7 +7,7 @@ dev `https://dev.anoma.ly/release`). Hex's names on the service are in
 [`plans/release-service.md`](plans/release-service.md).
 
 ```ts
-Release (workflow_dispatch: ref, channel, brew-version; or push tag app-v<version>)
+Release (workflow_dispatch: ref, channel; or push tag app-v<version>)
 ├─ resolve        version from Cargo.toml, channel, service origin, tag
 ├─ build          build-desktop.yml: Linux x86_64 (Arch container), Windows x64 + ARM64,
 │                 Authenticode via Azure Artifact Signing (docs/windows-signing.md)
@@ -18,6 +18,9 @@ Release (workflow_dispatch: ref, channel, brew-version; or push tag app-v<versio
 ├─ github         mirrors the files to the GitHub release (scripts/publish-github-release.sh)
 ├─ aur            builds and installs hex-bin from the published file; stable pushes it
 ├─ record-aur     records that the AUR serves the version
+├─ homebrew       renders Casks/hex.rb from the published DMG, brew style + audit; stable pushes it
+│                 to anomalyco/homebrew-tap (scripts/release-homebrew.sh)
+├─ record-brew    records that the cask serves the version
 └─ site           stable: deploys the production site, whose links read the new manifest
 ```
 
@@ -40,10 +43,21 @@ and hash, with distributions `direct`, `aur` (`hex-bin`), `brew`
 (`anomalyco/tap/hex`), and `nix`. It then downloads every published URL and
 compares it with the local bytes. Package-manager entries gain a version only
 once that package manager serves it: `nix` at publish (the flake builds the
-release commit), `aur` after the push, and `brew` by dispatching Release with
-`brew-version` after bumping the cask by hand. Manifests are not signed;
+release commit), `aur` after the push, and `brew` after the cask push. Manifests are not signed;
 clients check HTTPS, each file's size and SHA-256, and the OS code signature
 (Developer ID on macOS, Authenticode on Windows). Linux has only the hash.
+
+## Homebrew
+
+`packaging/homebrew/hex.rb` is the cask `anomalyco/tap/hex`: the `anomaly.hex`
+app from the release's `macos-arm64-dmg` file URL and SHA-256, `auto_updates
+true` (Hex updates any writable `Hex.app` itself), a livecheck on the stable
+manifest, and zap paths for the new identity and the shared `hex` data folder.
+The `homebrew` job renders it on a macOS runner, runs `brew style` and `brew
+audit --cask --strict --online` in a local copy of the tap, and on stable pushes
+it with the tap deploy key under its own SSH alias; only that step sees the
+key. A staging run without a macOS build checks the cask around the frozen
+2.3.1 DMG and pushes nothing.
 
 ## Channels
 
@@ -85,13 +99,9 @@ refuses force pushes and deletion.
    <commit>:production`, which refuses anything but a fast-forward), then run
    Release from `production` with `channel: stable` (its default `ref`).
    Stable runs refuse any other branch.
-4. Bump the Homebrew cask (`anomalyco/homebrew-tap`, `Casks/hex.rb`: version,
-   URL of the `macos-arm64-dmg` file, sha256; keep `auto_updates true`, since
-   Hex updates any writable `Hex.app` itself), then run Release with
-   `brew-version: <version>` and `channel: stable`.
-5. Bump the README version link. The site reads the release from the service
+4. Bump the README version link. The site reads the release from the service
    when it deploys.
-6. First release on the service only: set the informational item's version in
+5. First release on the service only: set the informational item's version in
    `packaging/macos/legacy-appcast.xml` (a 2.4.0 / build 20400 placeholder) to
    the release, push it, and publish it for 2.3.1 Macs (below).
 
@@ -205,6 +215,7 @@ the release service compile `https://anoma.ly/release`.
 | `CLOUDFLARE_API_TOKEN`, var `CLOUDFLARE_ACCOUNT_ID` | site deploys (`github-actions-hex`) |
 | `R2_SECRET_ACCESS_KEY`, var `R2_ACCESS_KEY_ID` | the one-time legacy appcast upload (same token) |
 | `AUR_SSH_PRIVATE_KEY` | pushes `hex-bin` (key `github-actions-hex-aur`) |
+| `HOMEBREW_TAP_DEPLOY_KEY` | pushes `Casks/hex.rb` (deploy key `github-actions-hex-homebrew`, write access on `anomalyco/homebrew-tap` only) |
 | `AZURE_*` | Authenticode (docs/windows-signing.md) |
 | `APPLE_*` | macOS signing and notarization (docs/plans/macos-signing.md) |
 | `HEX_RELEASE_SIGNING_KEY`, `SPARKLE_ED_PRIVATE_KEY` | old 2.3.1 feed keys; unused, kept for old clients |

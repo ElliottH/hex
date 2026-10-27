@@ -35,7 +35,8 @@ download.
 
 The site reads the stable manifest when it builds, so the production deploy
 that follows a stable release updates every link. Bump the README's explicit
-app mirror link and `anomalyco/homebrew-tap/Casks/hex.rb` by hand.
+app mirror link by hand; the Release workflow pushes
+`anomalyco/homebrew-tap/Casks/hex.rb`.
 `bun run --cwd site check:downloads` must pass; then verify the live links.
 
 ## Network Recovery

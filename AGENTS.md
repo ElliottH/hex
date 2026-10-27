@@ -956,8 +956,8 @@ bucket `hex-dev-files`); `cf deploy --prebuilt --mode <mode>` picks one, and
 only CI deploys: a push to `dev` touching `site/` deploys dev, a stable
 Release deploys production. No subdomains. The site's download links come
 from the service's stable manifest when it builds. After publishing a version,
-bump the explicit GitHub mirror/version link in `README.md` and the Homebrew
-cask. `bun run --cwd site check:downloads` fails until every download link
+bump the explicit GitHub mirror/version link in `README.md`; the Release
+workflow updates the Homebrew cask. `bun run --cwd site check:downloads` fails until every download link
 serves a file; every deploy runs it. Verify the live links afterwards.
 The Rust app is named `Hex`, packaged as `Hex.app`,
 with bundle identifier `anomaly.hex` (deliberately not reverse-DNS) and executable
@@ -1022,7 +1022,8 @@ runtime imports, and (stable) Authenticode signatures; `publish` uploads each
 target and then the release with `scripts/release-service.sh`, the only job
 holding `id-token: write` for the service, with no other secrets and actions
 pinned by SHA. The GitHub release mirror, the AUR package (built from the
-published Linux file), and the AUR/brew/nix distribution records follow.
+published Linux file), the Homebrew cask (pushed to `anomalyco/homebrew-tap`
+with its own deploy key), and the AUR/brew/nix distribution records follow.
 The `release` environment is limited to `dev` (dev site and staging),
 `production`, and `app-v*` tags; stable runs only from `production` or a tag. Rerunning
 after an interruption is safe: the service stores files by hash and accepts
