@@ -1198,20 +1198,32 @@ impl Parakeet {
     }
 
     pub fn load_selection(selection: &TranscriptionSelection) -> Result<Self> {
+        Self::load_selection_timed(selection).map(|(parakeet, _, _, _)| parakeet)
+    }
+
+    pub(crate) fn load_selection_timed(
+        selection: &TranscriptionSelection,
+    ) -> Result<(Self, u128, u128, u128)> {
         let definition = validate(selection)?;
         if !crate::transcription_models::is_installed(definition, &selection.language) {
             return Err(eyre!("{} is not installed", definition.name));
         }
         let path = model_path(definition)?;
+        let t0 = Instant::now();
         let mut parakeet = Self::load_from(&path, true, Some(selection))?;
+        let load_ms = t0.elapsed().as_millis();
+        let t1 = Instant::now();
         parakeet.prewarm()?;
+        let prewarm_ms = t1.elapsed().as_millis();
         let stream_run = parakeet.stream_run_options();
         let architecture = match definition.runtime {
             crate::transcription_models::ModelRuntime::Gguf(artifact) => artifact.architecture,
             crate::transcription_models::ModelRuntime::AppleSpeech => "",
         };
+        let t2 = Instant::now();
         parakeet.stream = parakeet.session.probe_stream(&stream_run, architecture);
-        Ok(parakeet)
+        let probe_stream_ms = t2.elapsed().as_millis();
+        Ok((parakeet, load_ms, prewarm_ms, probe_stream_ms))
     }
 
     /// Streams decode like offline runs, without Whisper's prompt extension

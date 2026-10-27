@@ -47,6 +47,8 @@ mod dictation_indicator;
 mod dictation_modes;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod dictation_processor;
+#[cfg(target_os = "macos")]
+mod engine_spike;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
 mod events;
 mod experiments;
@@ -198,7 +200,7 @@ use std::sync::atomic::Ordering;
 #[cfg(target_os = "macos")]
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::Result;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", any(debug_assertions, hex_capture)))]
 use color_eyre::eyre::eyre;
 
 #[cfg(target_os = "macos")]
@@ -277,6 +279,9 @@ enum Command {
         #[arg(long)]
         embedded: bool,
     },
+    /// Run the shared transcription engine service or its spike benchmark.
+    #[command(hide = true)]
+    Engine(engine_spike::EngineArgs),
     /// Inspect and control the running desktop app or offline audio tools.
     Dev {
         #[command(subcommand)]
@@ -577,6 +582,11 @@ fn main() -> Result<()> {
     if let Some(Command::Mcp { meetings_dir }) = &cli.command {
         return run_mcp(meetings_dir.clone());
     }
+    if let Some(Command::Engine(_)) = &cli.command
+        && let Some(Command::Engine(args)) = cli.command
+    {
+        return engine_spike::run(args, &SHUTDOWN);
+    }
     // A window of its own: no data folder, log, lock, or settings, so it
     // runs beside the installed Hex.
     #[cfg(hex_capture)]
@@ -831,6 +841,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Mcp { .. }
+        | Command::Engine(_)
         | Command::History(_)
         | Command::Meetings { .. }
         | Command::Experiments { .. }

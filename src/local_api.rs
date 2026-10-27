@@ -390,6 +390,19 @@ fn serve(listener: TcpListener, context: HttpContext, ready: mpsc::SyncSender<bo
                 Err(TrySendError::Disconnected(_)) => break,
             },
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                #[cfg(unix)]
+                {
+                    use std::os::fd::AsRawFd;
+                    let mut pfd = libc::pollfd {
+                        fd: listener.as_raw_fd(),
+                        events: libc::POLLIN,
+                        revents: 0,
+                    };
+                    unsafe {
+                        libc::poll(&raw mut pfd, 1, ACCEPT_INTERVAL.as_millis() as libc::c_int);
+                    }
+                }
+                #[cfg(not(unix))]
                 thread::sleep(ACCEPT_INTERVAL);
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -416,6 +429,7 @@ fn http_worker(pending: Arc<Mutex<Receiver<TcpStream>>>, context: Arc<HttpContex
         let Ok(mut stream) = stream else {
             return;
         };
+        let _ = stream.set_nodelay(true);
         if let Err(error) = stream.set_read_timeout(Some(CONNECTION_TIMEOUT)) {
             tracing::debug!(%error, "could not set local API read timeout");
             continue;
