@@ -547,6 +547,15 @@ fn main() -> Result<()> {
     moonshine::run_sessions_single_threaded();
     color_eyre::install()?;
     let cli = Cli::parse_from(mcp_alias_arguments(std::env::args_os().collect()));
+    let executable_name = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_stem().map(ToOwned::to_owned));
+    let bundled_watcher = is_bundled_app_executable(executable_name.as_deref());
+    // The app's GPU device and render pipeline start on a thread now, while
+    // the rest of launch runs; its first window takes them.
+    if opens_app(cli.command.as_ref(), bundled_watcher) {
+        rune::prewarm_gpu();
+    }
     // Before process logging, the instance lock, or any GUI or permission
     // setup: an agent may start this over SSH while the app is running.
     if let Some(Command::Mcp { meetings_dir }) = &cli.command {
@@ -691,10 +700,6 @@ fn main() -> Result<()> {
     }
 
     let event_path = log_dir.join("live.ndjson");
-    let executable_name = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.file_stem().map(ToOwned::to_owned));
-    let bundled_watcher = is_bundled_app_executable(executable_name.as_deref());
     let bundled_service = executable_name.as_deref() == Some(std::ffi::OsStr::new("hex-service"));
     let command = cli.command.unwrap_or({
         if bundled_watcher {
@@ -1055,9 +1060,20 @@ fn is_bundled_app_executable(name: Option<&std::ffi::OsStr>) -> bool {
     name.is_some_and(|name| name == "voice-control-watch" || name == "hex")
 }
 
+/// Whether this launch runs the app with its window: `hex app` without
+/// Rune's own (headless) flags, or the bundled executable with no command.
+#[cfg(target_os = "macos")]
+fn opens_app(command: Option<&Command>, bundled_watcher: bool) -> bool {
+    match command {
+        Some(Command::App { rune_args, .. }) => rune_args.is_empty(),
+        None => bundled_watcher,
+        Some(_) => false,
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::{Cli, Command, is_bundled_app_executable, mcp_alias_arguments};
+    use super::{Cli, Command, is_bundled_app_executable, mcp_alias_arguments, opens_app};
     use clap::Parser;
 
     #[test]
@@ -1224,6 +1240,20 @@ mod tests {
         assert!(is_bundled_app_executable(Some("hex".as_ref())));
         assert!(!is_bundled_app_executable(Some("voice-control".as_ref())));
         assert!(!is_bundled_app_executable(Some("hex-service".as_ref())));
+    }
+
+    #[test]
+    fn only_window_launches_prewarm_the_gpu() {
+        let opens = |arguments: &[&str], bundled| {
+            opens_app(Cli::parse_from(arguments).command.as_ref(), bundled)
+        };
+        assert!(opens(&["hex"], true));
+        assert!(opens(&["hex", "app"], false));
+        assert!(!opens(&["hex", "app", "--", "--snap", "/tmp/a.png"], false));
+        assert!(!opens(&["voice-control"], false));
+        for command in ["status", "mcp", "history", "quit"] {
+            assert!(!opens(&["hex", command], true), "{command}");
+        }
     }
 }
 

@@ -61,6 +61,9 @@ mod control;
 const RUNTIME_TICK: Duration = Duration::from_millis(250);
 /// The main-loop timer: the HUD follows the pointer and channels drain.
 const PUMP_INTERVAL: f64 = 0.016;
+/// Seconds a window opened at launch has to draw its first frame before the
+/// status item, HUD, and menu are set up anyway.
+const LAUNCH_SETUP_DEADLINE: f64 = 1.0;
 const MODEL_MENU_REFRESH: Duration = Duration::from_secs(1);
 const MEETING_MENU_REFRESH: Duration = Duration::from_millis(500);
 /// 'aevt' / 'rapp': the Apple event LaunchServices sends when the app is
@@ -449,8 +452,29 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
             tracing::warn!(%error, "could not flush the event log before quitting");
         }
     });
-    // Runs first on the main thread once the loop (and NSApp) is live.
-    window.update(move |_, _| start_main_thread(pump));
+    // The status item, HUD, and main menu wait for the window's first frame
+    // so it reaches the screen without them; a launch without a window sets
+    // them up in the loop's first turn. None of these updates change what the
+    // window shows, so none asks for a frame.
+    LAUNCH_PUMP.with(|slot| *slot.borrow_mut() = Some(pump));
+    if open_at_launch {
+        let ready = window.clone();
+        app = app.on_ready(move |_| {
+            ready.update_if(|_, _| {
+                start_main_thread();
+                false
+            });
+        });
+        window.update_if(|_, _| {
+            start_main_thread_after(LAUNCH_SETUP_DEADLINE);
+            false
+        });
+    } else {
+        window.update_if(|_, _| {
+            start_main_thread();
+            false
+        });
+    }
     app.run();
 
     PUMP.with(|slot| {
@@ -646,11 +670,28 @@ struct PumpState {
 
 thread_local! {
     static PUMP: RefCell<Option<PumpState>> = const { RefCell::new(None) };
+    /// The pump until [`start_main_thread`] takes it, once.
+    static LAUNCH_PUMP: RefCell<Option<Pump>> = const { RefCell::new(None) };
 }
 
-fn start_main_thread(mut pump: Pump) {
+/// Starts the main-thread setup after `seconds` if the window's first frame
+/// hasn't by then, so a window that never draws (no GPU, displays asleep)
+/// still leaves a status item.
+fn start_main_thread_after(seconds: f64) {
+    let block = RcBlock::new(|_: std::ptr::NonNull<NSTimer>| start_main_thread());
+    // SAFETY: the timer runs its block on this (main) thread's run loop.
+    let _ =
+        unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(seconds, false, &block) };
+}
+
+/// Sets up the status item, Dock policy, HUD, main menu, reopen handler, and
+/// the pump's timer; the first call does, later ones do nothing.
+fn start_main_thread() {
     let Some(mtm) = MainThreadMarker::new() else {
         tracing::error!("Hex's main-thread setup ran off the main thread");
+        return;
+    };
+    let Some(mut pump) = LAUNCH_PUMP.with(|slot| slot.borrow_mut().take()) else {
         return;
     };
     pump.status_actions = match crate::status_item::install() {

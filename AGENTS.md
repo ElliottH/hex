@@ -383,6 +383,15 @@ CoreAudio formats, AppleScript details, or event serialization.
   snapshot is fixed until restart; cached misses must not re-enter TIS/TSM.
   Uncached headless lookups retain live-layout resolution, with all native
   lookup and snapshot construction serialized by the same lock.
+- macOS launch order: `main` calls `rune::prewarm_gpu()` right after parsing
+  the command line, only when it will run the app with its window (`hex app`
+  without Rune's headless flags, or the bundled executable with no command),
+  never for a CLI command. `macos_rune` sets up the status item, Dock policy,
+  HUD, main menu, reopen handler, and pump timer once, after the window's
+  first frame (`App::on_ready` queues it as a frameless `update_if`), or at
+  most 1 s after the loop starts if no frame comes; a launch without a window
+  sets them up in the loop's first turn. Nothing the window's first frame
+  needs may wait on them.
 - Another app's global shortcut (Carbon hotkeys, such as Spaceman's Option-1)
   consumes its key before the session taps. A listen-only HID tap reports key
   presses as chord evidence only: it discards an early hold or pending gesture
@@ -719,8 +728,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   parallel helper, and verify visual changes with `--snap` scenes in light and
   dark.
 - Neither Hex nor Rune (`anomalyco/rune`, public MIT) is published to
-  crates.io; never run `cargo publish`. Hex depends on `rune`, `rune-kit`, and
-  `rune-theme-opencode` at one pinned Git rev in `Cargo.toml`; every pin bump
+  crates.io; never run `cargo publish`. Hex depends on `rune`, `rune-kit`,
+  `rune-theme-opencode`, and (with `capture`) `rune-motion` at one pinned Git
+  rev in `Cargo.toml` and `Cargo.lock`; every pin bump
   must also update `cargoLock.outputHashes."rune-0.0.1"` in `nix/package.nix`
   and keep `windows` 0.62.2 for `gpu-allocator` in `Cargo.lock`.
 - At the start of each work round, bump Hex's Rune pin to Rune's `dev` head:
