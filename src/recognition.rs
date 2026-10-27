@@ -642,7 +642,6 @@ pub fn listen(
                                     last_level: Instant::now() - Duration::from_millis(30),
                                     lease_deadline: Instant::now() + PROGRAMMATIC_LEASE,
                                 });
-                                input_monitor.set_escape_cancels(true);
                                 let _ = reply.send(Ok(ProgrammaticDictationStart {
                                     id,
                                     sample_rate: input.sample_rate(),
@@ -1021,28 +1020,10 @@ pub fn listen(
             let _acknowledge = input_monitor.acknowledge_after(observed);
             let input_event = observed.event;
             let capture_at = observed.capture_at;
+            // Escape included: it belongs to the owner app (closing a
+            // picker while a note records), which cancels through the API.
             if programmatic.is_some() {
                 hotkeys.track_key_state(input_event, capture_at);
-            }
-            if programmatic.is_some() && input_event.is_escape_down() {
-                let cancelled = programmatic
-                    .take()
-                    .expect("programmatic dictation is active");
-                tracing::info!(
-                    dictation_id = cancelled.id,
-                    source = cancelled.source,
-                    outcome = "escape",
-                    "programmatic dictation ended"
-                );
-                cancel_programmatic_capture(
-                    cancelled,
-                    &input,
-                    &mut recognizer,
-                    &mut programmatic_completions,
-                )?;
-                feedback::play(Tone::Cancel);
-                continue;
-            } else if programmatic.is_some() {
                 continue;
             }
             if hotkey_capture_suspended {
@@ -1356,9 +1337,8 @@ pub fn listen(
         input_monitor.set_escape_cancels(
             hotkeys.any_recording()
                 || voice.is_some()
-                || programmatic.is_some()
                 || capture_escape
-                || dictation_worker.pending_count() > 0,
+                || dictation_worker.has_escape_cancellable_job(),
         );
         if received_worker_event {
             emit_engine_state(

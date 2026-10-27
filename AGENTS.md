@@ -482,6 +482,8 @@ CoreAudio formats, AppleScript details, or event serialization.
   fabricate a release timestamp from later physical state.
 - Escape cancels the active capture first, then the newest unfinished dictation.
   Cancelled jobs never paste, update the last result, or block later output.
+- Escape never cancels a programmatic dictation; its owner cancels through the
+  API, and the lease ends an abandoned one.
 - Model switches activate only after the pinned artifact is checksum-verified,
   loaded on strict Metal, and prewarmed. A failed switch preserves the active
   model and persisted selection.

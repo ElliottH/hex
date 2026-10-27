@@ -158,7 +158,8 @@ void (async () => {
 const { transcript, durationMs } = await recording.finish()
 ```
 
-Call `recording.cancel()` to discard. Subscribing to `recording.audio` enables a
+Call `recording.cancel()` to discard; Escape doesn't cancel a recording, so the
+key stays with your app. Subscribing to `recording.audio` enables a
 bounded best-effort mono Float32 PCM tap at `recording.sampleRate`. Desktop capture
 returns raw text and never pastes. `capabilities().serviceCapture` distinguishes
 desktop capture from the transcription-only helper. The recording handle renews
