@@ -1,15 +1,13 @@
 #!/bin/sh
-# Mirrors a release's downloads to its GitHub release, byte for byte. Stable
-# pushes tag app-v<version> at the release commit with git (the Releases API
-# cannot create it with GITHUB_TOKEN when dev's workflows have moved on) and
-# publishes the release off "Latest", which the TypeScript SDK uses; staging
-# keeps a draft prerelease.
+# Mirrors a stable release's downloads to its GitHub release, byte for byte,
+# off "Latest" (which the TypeScript SDK uses). Release runs it last, after
+# tag-release.sh tagged v<version> at the release commit; it never creates the
+# tag itself.
 #
 #   publish-github-release.sh <dist>
 #
 # Environment: HEX_VERSION, HEX_RELEASE_COMMIT, HEX_RELEASE_TAG,
-# HEX_RELEASE_SOURCE (a checkout of the commit with push credentials),
-# GH_TOKEN.
+# HEX_RELEASE_SOURCE (a checkout of the commit with docs/releases/), GH_TOKEN.
 set -eu
 
 repo=${HEX_RELEASE_REPO:-anomalyco/hex}
@@ -37,13 +35,9 @@ test -f "$notes" || {
   echo "Add release notes at docs/releases/$version.md." >&2
   exit 1
 }
-# An annotated tag's peeled commit is listed last.
-tagged=$(git -C "$source" ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}" | awk 'END { print $1 }')
-if [ -z "$tagged" ]; then
-  git -C "$source" tag "$tag" "$commit"
-  git -C "$source" push origin "refs/tags/$tag"
-elif [ "$tagged" != "$commit" ]; then
-  echo "Tag $tag already names $tagged, not $commit." >&2
+tagged=$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.sha)
+if [ "$tagged" != "$commit" ]; then
+  echo "Tag $tag names $tagged, not $commit." >&2
   exit 1
 fi
 if ! gh release view "$tag" -R "$repo" --json name >/dev/null 2>&1; then

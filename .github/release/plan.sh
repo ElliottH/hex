@@ -6,10 +6,12 @@
 #          the release service's dev channel, as OpenCode numbers dev builds.
 #   check  a dispatch from dev: the same build, signed and verified, published
 #          nowhere.
-#   stable a dispatch from production or a pushed app-v<version> tag: the
-#          crate version from Cargo.toml on the stable channel.
+#   stable a dispatch from production: the crate version from Cargo.toml on
+#          the stable channel. Tags never start a release; tag-release.sh tags
+#          v<version> only after everything published, so the version must
+#          not be tagged yet.
 #
-# Environment: EVENT, REF_NAME, REF_TYPE, INPUT_REF, CHANNEL, SHA, and
+# Environment: EVENT, REF_NAME, INPUT_REF, CHANNEL, SHA, GH_TOKEN, and
 # Cargo.toml of the commit in the working directory.
 . "$(dirname "$0")/lib.sh"
 
@@ -17,19 +19,27 @@ version=$(awk '/^\[package\]/ { package = 1; next } /^\[/ { package = 0 } packag
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Stable releases need an X.Y.Z crate version, not $version."
 case "$CHANNEL" in
   stable)
-    if [ "$REF_TYPE" != tag ] && [ "$REF_NAME" != production ]; then die "Stable releases run from production or an app-v tag, not $REF_NAME."; fi
-    if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_REF" != production ] && [ "$INPUT_REF" != "app-v$version" ]; then
-      die "Stable releases build ref production or app-v$version, not $INPUT_REF."
+    if [ "$EVENT" != workflow_dispatch ] || [ "$REF_NAME" != production ] || [ "$INPUT_REF" != production ]; then
+      die "Stable releases are dispatched from production for ref production."
     fi
-    if [ "$REF_TYPE" = tag ] && [ "$REF_NAME" != "app-v$version" ]; then die "Tag $REF_NAME does not match version $version."; fi
-    release_channel=stable release_version=$version tag="app-v$version"
+    tag="v$version"
+    for existing in "$tag" "app-v$version"; do
+      if gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$existing" --jq '.[].ref' | grep -qx "refs/tags/$existing"; then
+        die "Hex $version is already tagged $existing; raise the version in Cargo.toml on production first."
+      fi
+    done
+    [ -f "docs/releases/$version.md" ] || die "Add release notes at docs/releases/$version.md first."
+    release_channel=stable release_version=$version
     notes="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
     ;;
   dev | check)
+    # A check run proves the tag job can push a v* tag past the ruleset with
+    # a throwaway v0.0.0-test-<run> tag it deletes again.
     [ "$REF_NAME" = dev ] || die "The $CHANNEL channel runs from dev, not $REF_NAME."
     if [ "$EVENT" = workflow_dispatch ] && [ "$INPUT_REF" != dev ]; then die "The $CHANNEL channel builds ref dev, not $INPUT_REF."; fi
     # Display text only: installs follow the channel's current release.
     release_channel=dev release_version="0.0.0-dev-$GITHUB_RUN_NUMBER" tag=""
+    if [ "$CHANNEL" = check ]; then tag="v0.0.0-test-$GITHUB_RUN_NUMBER"; fi
     notes="https://github.com/$GITHUB_REPOSITORY/commit/$SHA"
     ;;
   *) die "Unknown channel $CHANNEL." ;;

@@ -21,10 +21,10 @@ name: Release
 # a ruleset lets only Dax change .github/ (docs/releasing.md).
 #
 # There is one environment, release, like OpenCode's: no approval, deployment
-# policy dev, production, and app-v* tags. The service authorizes the publish
-# jobs by their OIDC token: anomalyco/hex, this file, environment release,
-# the dev channel from dev and stable from production or app-v* (anomalyco/
-# release registry/hex.json). Hex never uses the service's dev stage.
+# policy dev and production. The service authorizes the publish jobs by their
+# OIDC token: anomalyco/hex, this file, environment release, the dev channel
+# from dev and stable from production (anomalyco/release registry/hex.json).
+# Hex never uses the service's dev stage.
 #
 # Channels (.github/release/plan.sh):
 # - dev: every push to dev (except docs/site/Markdown-only) publishes
@@ -33,11 +33,13 @@ name: Release
 #   published. Versions are display text: installs follow the channel's
 #   current release and never compare versions.
 # - check: a dispatch from dev builds, signs, and verifies the same and
-#   publishes nothing.
-# - stable: a dispatch from production or a pushed app-v<version> tag
-#   publishes the crate version with every platform signed, then the GitHub
-#   release, the AUR, and Homebrew. Deploy the production site afterwards
-#   with Site.
+#   publishes nothing; its tag job pushes and deletes a throwaway
+#   v0.0.0-test-<run> tag to prove the tag ruleset admits it.
+# - stable: a dispatch from production publishes the crate version with every
+#   platform signed, the AUR, and Homebrew. Tags never start a release: only
+#   after everything published does the tag job tag v<version> on the
+#   released commit, then the GitHub release follows, so a failed run leaves
+#   no tag. Deploy the production site afterwards with Site.
 on:
   workflow_dispatch:
     inputs:
@@ -52,17 +54,16 @@ on:
         default: check
   push:
     branches: [dev]
-    tags: ["app-v*"]
-    # Docs and the site alone cut no dev build (tag pushes ignore paths).
+    # Docs and the site alone cut no dev build.
     paths-ignore: ["docs/**", "site/**", "**/*.md"]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.channel || github.ref_type == 'tag' && 'stable' || 'dev' }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'dev' }}
   # Only the dev channel: a newer push supersedes a dev build in progress.
-  cancel-in-progress: ${{ (github.event_name == 'workflow_dispatch' && inputs.channel || github.ref_type == 'tag' && 'stable' || 'dev') == 'dev' }}
+  cancel-in-progress: ${{ (github.event_name == 'workflow_dispatch' && inputs.channel || 'dev') == 'dev' }}
 
 defaults:
   run:
@@ -90,6 +91,7 @@ jobs:
           sparse-checkout: |
             /.github/release/
             /Cargo.toml
+            /docs/releases/
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - id: plan
@@ -97,9 +99,9 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}
           INPUT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
-          CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || github.ref_type == 'tag' && 'stable' || 'dev' }}
+          CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || 'dev' }}
+          GH_TOKEN: ${{ github.token }}
 
   # ---- Build: repository code; no environment, secrets, or id-token ----------
 
@@ -463,10 +465,32 @@ jobs:
         if: needs.plan.outputs.channel == 'stable'
         run: bash .github/release/release-service.sh distribution nix "$HEX_VERSION"
 
+  # Tags v<version> on the released commit only now that every platform and
+  # the release service published; a check run proves the ruleset admits the
+  # release deploy key with a throwaway tag it deletes.
+  tag:
+    needs: [plan, publish, sign-macos, verify-macos, sign-windows, installers, sign-windows-installers]
+    if: >-
+      ${{ !cancelled() && (
+        (needs.plan.outputs.channel == 'stable' && needs.publish.result == 'success')
+        || (needs.plan.outputs.channel == 'check' && needs.installers.result == 'success'
+            && (needs.verify-macos.result == 'success' || needs.sign-macos.outputs.signed != 'true')) ) }}
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - *checkout-release
+      - name: Tag
+        env:
+          SHA: ${{ needs.plan.outputs.sha }}
+          HEX_RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          HEX_RELEASE_TAG_TEST: ${{ needs.plan.outputs.channel == 'check' && '1' || '' }}
+          HEX_RELEASE_TAG_KEY: ${{ secrets.HEX_RELEASE_TAG_KEY }}
+        run: bash .github/release/tag-release.sh
+
   github:
     name: GitHub release
-    needs: [plan, build, sign-macos, sign-windows, sign-windows-installers, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.plan.outputs.channel == 'stable' }}
+    needs: [plan, build, sign-macos, sign-windows, sign-windows-installers, tag]
+    if: ${{ !cancelled() && needs.tag.result == 'success' && needs.plan.outputs.channel == 'stable' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -476,8 +500,6 @@ jobs:
       HEX_RELEASE_TAG: ${{ needs.plan.outputs.tag }}
       HEX_RELEASE_SOURCE: ${{ github.workspace }}
     steps:
-      # Credentials stay so the job can push the tag; nothing here runs
-      # repository code beyond .github/release/.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -485,6 +507,7 @@ jobs:
             /.github/release/
             /docs/releases/
           sparse-checkout-cone-mode: false
+          persist-credentials: false
       - *download-release
       - *assemble
       - env:

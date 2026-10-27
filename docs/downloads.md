@@ -17,7 +17,7 @@ dev.anoma.ly/hex                           the dev site (reads anoma.ly/release;
 hex.kitlangton.com, .dev                   Kit's old site; should redirect to anoma.ly/hex
 downloads.hex.kitlangton.dev, .com         Kit's old bucket; releases up to 2.3.1 compiled it;
                                            redirects to anoma.ly/hex/files (keep forever)
-github.com/anomalyco/hex/releases/tag/app-v<version>   identical-byte mirror of every file
+github.com/anomalyco/hex/releases/tag/v<version>       identical-byte mirror of every file (app-v through 2.3.1)
 ```
 
 `docs/releasing.md` describes the Worker config, the workflow that publishes

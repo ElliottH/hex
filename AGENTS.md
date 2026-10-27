@@ -992,8 +992,8 @@ target and file names and the direct-install receipt, and
 [`docs/releasing.md`](docs/releasing.md) owns the workflow, channels, secrets,
 and old clients. The 2.3.1 feeds and appcast at `https://anoma.ly/hex/files`
 (and Kit's `downloads.hex.kitlangton.dev`/`.com`, which must keep redirecting
-there) stay frozen. GitHub app releases use
-`app-v<VERSION>` tags with `--latest=false`, keeping them distinct from SDK
+there) stay frozen. GitHub app releases use `v<VERSION>` tags (`app-v…`
+through 2.3.1) with `--latest=false`, keeping them distinct from SDK
 releases. Never overwrite a published artifact with different bytes.
 `https://anoma.ly/hex` (in-repo `site/`) is the only Hex website. One
 `site/cloudflare.config.ts` defines the production Worker `hex-production-site` (anoma.ly/hex,
@@ -1053,8 +1053,12 @@ Every platform is built, signed, and published by one run of
 `.github/workflows/release-desktop.yml` ("Release"; see `docs/releasing.md`).
 Run it with `workflow_dispatch` (`ref`, `channel`: `check` builds and
 verifies without publishing, `dev` publishes the dev channel, `stable` the
-public release), or push an `app-v<VERSION>` tag, which must match the crate
-version. Like OpenCode's release, build jobs (Linux x86_64 in an Arch
+public release; dispatched from `production` only). Tags never start a
+release: like OpenCode, the stable run tags `v<VERSION>` (the crate version)
+on the released commit only after every platform published, then creates the
+GitHub release, so a failed run leaves no tag. The "release tags" ruleset
+lets only Dax and the release deploy key (`HEX_RELEASE_TAG_KEY`) create,
+move, or delete `v*` tags. Like OpenCode's release, build jobs (Linux x86_64 in an Arch
 container, Windows x64 and ARM64 through `.github/workflows/build-desktop.yml`,
 macOS as an ad-hoc signed `HEX_RELEASE_UNSIGNED=1` app, installers through
 `windows-installers.yml`, AUR and Homebrew staging) run repository code with
@@ -1075,10 +1079,9 @@ it must never read the real `hex` data), as unsigned 14-day artifacts for
 teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` builds never update
 themselves. Every push to `dev` (except docs/site-only changes) publishes a dev-channel
 build (the service lets a run from `dev` publish only the `dev` channel, and
-only signed platforms are published). Stable runs only from `production` or
-an `app-v*` tag. Like OpenCode, every run uses the one `release` environment,
-with no required reviewer; its deployment policy admits `dev`, `production`,
-and `app-v*` tags. Rerunning
+only signed platforms are published). Stable runs only from `production`.
+Like OpenCode, every run uses the one `release` environment, with no
+required reviewer; its deployment policy admits `dev` and `production`. Rerunning
 after an interruption is safe: the service stores files by hash and accepts
 the same version again.
 

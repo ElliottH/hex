@@ -24,7 +24,7 @@ security boundary:
   nothing swapped in between jobs is signed or published.
 
 ```ts
-Release (workflow_dispatch: ref, channel; push to dev: dev channel; push tag app-v<version>: stable)
+Release (push to dev: dev channel; workflow_dispatch: ref + channel check | dev | stable (from production))
 ├─ plan                     .github/release/plan.sh: version, channel, tag, notes
 ├─ build                    build-desktop.yml: Linux x86_64 (Arch), Windows x64 + ARM64, unsigned   [build]
 ├─ build-macos              Hex.app as anomaly.hex, ad-hoc signed (HEX_RELEASE_UNSIGNED)             [build]
@@ -34,7 +34,9 @@ Release (workflow_dispatch: ref, channel; push to dev: dev channel; push tag app
 ├─ installers               windows-installers.yml: Setup.exe around them, tested on x64 + ARM64      [build]
 ├─ sign-windows-installers  Azure Artifact Signing of both Setup.exe                                  [release]
 ├─ publish                  OIDC: every signed target, then the release (release-service.sh); Nix     [release]
-├─ github                   stable: tag + GitHub release mirror (publish-github-release.sh)          [contents: write]
+├─ tag                      stable: v<version> on the released commit, last (tag-release.sh, deploy key) [release]
+│                           check: pushes and deletes a throwaway v0.0.0-test-<run> tag
+├─ github                   stable: GitHub release mirror on that tag (publish-github-release.sh)    [contents: write]
 ├─ aur-stage → aur          stable: makepkg + install from the published file → push-aur.sh           [build → release]
 ├─ homebrew-stage → homebrew stable: render + brew style/audit → push-homebrew.sh                     [build → release]
 └─ record-aur, record-brew  OIDC: the package manager serves the version                              [release]
@@ -58,6 +60,15 @@ by Release: after a stable release, run **Site** with `mode: production` from
   `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE`, with a federated credential for
   `repo:anomalyco/hex:environment:release` (docs/windows-signing.md).
 
+### Release tags
+
+The "release tags" ruleset covers `refs/tags/v*`: only Dax (user 826656) and
+deploy keys may create, move, or delete them. The repository's one write
+deploy key is `github-actions-hex-release-tag`, whose private half is
+`HEX_RELEASE_TAG_KEY` in `release`; the GitHub Actions app cannot be a bypass
+actor of a repository ruleset, so `GITHUB_TOKEN` cannot tag. Branch rulesets
+still keep the key off `dev` and `production`.
+
 ### Who can change the boundary
 
 `.github/CODEOWNERS` names @thdxr for `/.github/`. GitHub has no push rulesets
@@ -75,13 +86,13 @@ from the same ref it was triggered on, for artifact `desktop` on both the dev
 and production services, as two publishers:
 
 ```ts
-release  refs/heads/production, refs/tags/app-v*   channels stable, beta
+release  refs/heads/production                   channels stable, beta
 release  refs/heads/dev                            channel  dev
 ```
 
 Like OpenCode, every run uses one environment, `release`, with no required
-reviewer (every push to `dev` publishes); its deployment policy admits `dev`,
-`production`, and `app-v*` tags. The registry ties channels to refs, so a
+reviewer (every push to `dev` publishes); its deployment policy admits `dev`
+and `production`. The registry ties channels to refs, so a
 build of `dev` can never publish to `stable`. No key or secret publishes:
 only the `publish`, `record-aur`, and `record-brew` jobs present an OIDC
 token, and the Windows signing jobs one for Azure.
@@ -139,15 +150,23 @@ secrets; the `homebrew` job pushes that verified file with the tap deploy key
   the Dev channel check every 10 minutes and when the window opens or gains
   focus (at most once a minute), so a push reaches them within minutes of its
   run finishing.
-- `stable` publishes to `https://anoma.ly/release`, the GitHub release
-  `app-v<version>` (kept off "Latest", which the SDK uses), the AUR, and then
-  the production site. It needs every platform, Authenticode-signed Windows
-  executables, and `docs/releases/<version>.md`. Pushing tag `app-v<version>`
-  runs it too.
+- `stable`, dispatched from `production` (`gh workflow run release-desktop.yml
+  --ref production -f channel=stable -f ref=production`), publishes the crate
+  version from `Cargo.toml` to `https://anoma.ly/release`, the AUR, and
+  Homebrew. It needs every platform signed and `docs/releases/<version>.md`,
+  and refuses a version already tagged `v<version>` or `app-v<version>`.
+  Tags never start a release. As OpenCode does, the tag is pushed by a deploy
+  key that a tag ruleset admits, but only last: once every platform and the
+  release service published, the `tag` job tags `v<version>` on the released
+  commit, then the GitHub release `v<version>` (kept off "Latest", which the
+  SDK uses) mirrors the files. A failed run leaves no tag. Releases through
+  2.3.1 used `app-v<version>` tags, which stay as history. Deploy the
+  production site afterwards with Site.
 
-To ramp, halt, revoke, or force an update, use the service's actions
-(`rollout`, `halt`, `revoke`, `minimum`; `anomalyco/release`
-docs/publishing.md) from a job with the same OIDC identity.
+To ramp, halt, roll back, or force an update, use the service's actions
+(`rollout`, `halt`, `promote` with a history `sequence`, `required`;
+`anomalyco/release` docs/publishing.md) from the admin panel or a job with
+the same OIDC identity.
 
 ## Cutting a release
 
@@ -161,9 +180,11 @@ refuses force pushes and deletion.
    (`https://anoma.ly/release/hex/desktop/dev.json`) and try it on an install
    set to the Dev update channel.
 3. Fast-forward `production` to that commit (`git push origin
-   <commit>:production`, which refuses anything but a fast-forward), then run
-   Release from `production` with `channel: stable` (its default `ref`).
-   Stable runs refuse any other branch.
+   <commit>:production`, which refuses anything but a fast-forward; the
+   "release boundary" ruleset lets only Dax push it directly, others open a
+   pull request), then run Release from `production` with `channel: stable`
+   (its default `ref`). Stable runs refuse any other branch. The run tags
+   `v<version>` itself at the end; never push a release tag by hand.
 4. Bump the README version link. The site reads the release from the service
    when it deploys.
 5. First release on the service only: set the informational item's version in
@@ -179,8 +200,8 @@ point `DisableUpdates` profiles at `anomaly.hex`. Settings, history, and
 models carry over. Decide how 2.3.1 installs reach it first (same doc,
 "Existing installs").
 
-Versions are strictly increasing per channel; the service refuses a lower
-one unless the current is revoked.
+Versions are display text and never compared: each channel has one current
+release, which installs follow.
 
 ## Hosting
 
@@ -287,7 +308,7 @@ the release service compile `https://anoma.ly/release`.
 - Without the redirect, Kit would publish the informational appcast item to
   his own bucket too.
 
-## Secrets (`release` environment, limited to `dev`, `production`, and `app-v*`)
+## Secrets (`release` environment, limited to `dev` and `production`)
 
 `dev` is allowed because dev-channel builds and dev site deploys run from
 it. No reviewer is required.

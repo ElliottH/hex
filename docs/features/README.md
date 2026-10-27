@@ -54,7 +54,7 @@ Download Hex                              // setup.download-recovery
 │   └── Other platforms -> every build, Homebrew, the GitHub release
 ├── Website, README, installers, apps, feeds, appcast -> anoma.ly/hex/files -> R2 bytes (Worker hex-production-site)
 ├── Releases up to 2.3.1, Homebrew -> downloads.hex.kitlangton.dev -> redirect to the same bytes
-├── GitHub app-v<version> -> identical DMG, Setup.exe, and Linux bytes
+├── GitHub v<version> (app-v through 2.3.1) -> identical DMG, Setup.exe, and Linux bytes
 └── Older app cannot reach its update feed -> manually install the DMG
 
 Install on Windows                        // setup.windows-installer
@@ -75,7 +75,7 @@ Prepare local models                      // separate network dependency
 ```
 
 The website shows the pinned macOS version and platform requirements beside its
-download links. App mirrors use explicit `app-v…` release tags rather than GitHub's
+download links. App mirrors use explicit `v…` release tags (`app-v…` through 2.3.1) rather than GitHub's
 repository-wide latest release, which may refer to the SDK. Builds on the release
 service update from `https://anoma.ly/release` (docs/releasing.md); the 2.3.1
 feeds, appcast, and the legacy `r2.dev` endpoint stay frozen for installed

@@ -74,7 +74,7 @@ used the `com.kitlangton.hex2` domain; profiles for those keep applying only to 
 
 **Download blocked?** [Alternative download: GitHub — Hex 2.3.1](https://github.com/anomalyco/hex/releases/download/app-v2.3.1/HEX-2.3.1-arm64.dmg)
 contains the identical signed DMG for Apple silicon and macOS 15+. App releases
-use `app-v…` tags; the repository also publishes separate TypeScript SDK releases.
+use `v…` tags (`app-v…` through 2.3.1); the repository also publishes separate TypeScript SDK releases.
 If an older installation cannot check for updates on your network, install the
 DMG manually over the existing Rust app.
 
