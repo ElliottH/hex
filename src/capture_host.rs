@@ -1206,8 +1206,8 @@ impl CaptureHost {
     }
 
     /// Whether a capture is recording, and since when. A capture whose
-    /// engine failed to start is ended first, so it never holds Escape or
-    /// turns the next shortcut press into a stop.
+    /// engine failed to start is ended first, so it never turns the next
+    /// shortcut press into a stop.
     pub fn recording_since(&mut self, audio: &impl AudioTimeline) -> Option<CaptureInstant> {
         self.reap(CaptureInstant::now(), audio);
         self.active.as_ref().map(|active| active.t0)
@@ -1963,7 +1963,8 @@ pub enum ShortcutAction {
 /// The capture shortcut in the listener's input, as Scrawl has it: a fresh
 /// press while nothing records arms it, and the capture starts once one of
 /// its modifiers comes up, however long it was held, so nothing records
-/// while ⌥⇧ is down (⇧ is ink). Escape before then cancels. A press while
+/// while ⌥⇧ is down (⇧ is ink). Escape before then records nothing, and
+/// never ends a recording. A press while
 /// recording finishes, except within [`SHORTCUT_DEBOUNCE`] of the start;
 /// autorepeats never count.
 #[derive(Default)]
@@ -1980,9 +1981,15 @@ impl CaptureShortcut {
         activity: ShortcutActivity,
     ) -> ShortcutAction {
         use crate::suppression::InputEvent;
+        // Escape before anything records takes the press back; once a
+        // capture records (started some other way), it only disarms: Escape
+        // never ends a recording.
         if self.armed.is_some() && event.is_escape_down() {
             self.armed = None;
-            return ShortcutAction::Cancel;
+            return match activity {
+                ShortcutActivity::Recording { .. } => ShortcutAction::None,
+                _ => ShortcutAction::Cancel,
+            };
         }
         match event {
             InputEvent::Key {
@@ -2060,6 +2067,13 @@ impl CaptureShortcut {
     /// Pressed, waiting for its keys to come up: Escape is the shortcut's.
     pub fn armed(&self) -> bool {
         self.armed.is_some()
+    }
+
+    /// Whether Hex's tap keeps Escape from the app for captures: only for
+    /// this press before it records, and for the capsule's picker, list,
+    /// and Undo. A recording capture never takes it.
+    pub fn takes_escape(&self) -> bool {
+        self.armed() || wants_escape()
     }
 
     /// Forgets a held key whose release the listener will not see, as while
@@ -3610,6 +3624,42 @@ mod tests {
         fs::remove_dir_all(dir).ok();
     }
 
+    /// Kit: Escape may be meant for the app being recorded, so it never
+    /// ends a recording capture, and Hex's tap lets it through.
+    #[test]
+    fn escape_never_ends_a_recording_capture() {
+        let dir = temp_dir("escape");
+        let audio = FakeTimeline::default();
+        let mut host = CaptureHost::with(
+            FakeEngine::new(Arc::new(FakeTranscriber)),
+            Some(dir.clone()),
+        )
+        .unwrap();
+        let mut shortcut = CaptureShortcut::default();
+        report(host.shortcut(ShortcutAction::Record, &audio));
+        let escape = crate::suppression::InputEvent::Key {
+            code: 53,
+            down: true,
+            flags: 0,
+        };
+        let activity = host.shortcut_activity(CaptureInstant::now(), &audio);
+        assert!(matches!(activity, ShortcutActivity::Recording { .. }));
+        let action = shortcut.input(escape, Default::default(), activity);
+        assert_eq!(action, ShortcutAction::None);
+        host.shortcut(action, &audio);
+        // The recording capsule takes no keys, so Escape reaches the app.
+        assert!(!capsule_key(CapsuleKey::Escape));
+        assert!(!shortcut.takes_escape());
+        assert!(host.recording_since(&audio).is_some());
+        // The picker before a recording still takes it.
+        let grab = take_keys(CapsuleKeys::Picker, |_| {});
+        assert!(shortcut.takes_escape());
+        drop(grab);
+        assert!(!shortcut.takes_escape());
+        host.shutdown(&audio);
+        fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn a_mirror_ending_never_stops_a_screen_capture() {
         let dir = temp_dir("phone-ended");
@@ -3923,6 +3973,19 @@ mod tests {
         assert_eq!(shortcut.input(escape, hotkeys, free), Cancel);
         assert_eq!(shortcut.input(key(false, 0), hotkeys, free), None);
         assert_eq!(shortcut.input(InputEvent::Flags(0), hotkeys, free), None);
+
+        // A capture started another way meanwhile (`hex capture start`):
+        // Escape only disarms the press, and ends nothing.
+        assert_eq!(shortcut.input(key(true, chord), hotkeys, free), None);
+        let started = ShortcutActivity::Recording {
+            elapsed: Duration::from_secs(2),
+        };
+        assert_eq!(shortcut.input(escape, hotkeys, started), None);
+        assert!(!shortcut.armed());
+        assert_eq!(shortcut.input(key(false, 0), hotkeys, started), None);
+        assert_eq!(shortcut.input(InputEvent::Flags(0), hotkeys, started), None);
+        // And a recording one never hears it.
+        assert_eq!(shortcut.input(escape, hotkeys, started), None);
 
         // While recording a press finishes, except right after the start.
         let recording = |ms| ShortcutActivity::Recording {

@@ -63,7 +63,8 @@ First launch with the experiment on      // capture.import
 ├── Esc before the modifiers come up -> nothing records
 ├── Press while recording -> stop, as `hex capture stop` // ignored within 400 ms
 ├── Press while the capsule's picker is open -> the picker records what it is on
-├── Esc while a capture records -> cancel it, before any dictation job
+├── Esc while a capture records -> nothing: it reaches the app being recorded,
+│   and Hex's tap lets it through (only a dictation hold under it is cancelled)
 ├── The binding is swallowed, never chord evidence for dictation
 └── Hold the dictation shortcut mid-capture -> dictation pastes as usual
 
@@ -142,7 +143,11 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   └── Window or Area -> Discard; the capsule becomes the picker, and
 │       FindPhone looks for a phone cabled since the recording began
 ├── Picker: ⌥⇧S records what the on-screen picker shows; Esc closes it
-├── ✓ -> `hex capture stop`; ✕ -> `hex capture cancel`
+├── ✓ -> `hex capture stop`
+├── ✕ while recording -> asks first: a destructive "Discard" and "Keep
+│   recording", the recording running on; Discard -> `hex capture cancel`.
+│   Unanswered, it goes back to recording after 4 s (never while hovered, and
+│   1.5 s after the pointer leaves). Esc never discards
 ├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
 │   capsule runs a rule's undo window and a chip's send itself, and follows
 │   only Queued (then Sent), how an Undo ended, and a failed send

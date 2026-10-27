@@ -4126,6 +4126,32 @@ mod tests {
         );
     }
 
+    /// Escape during a dictation hold while a screen capture records cancels
+    /// only the dictation: the capture shortcut lets it pass, and the
+    /// listener never hands it to the recording.
+    #[cfg(hex_capture)]
+    #[test]
+    fn escape_during_a_capture_cancels_only_the_dictation_hold() {
+        use crate::capture_host::{CaptureShortcut, ShortcutAction, ShortcutActivity};
+        let now = capture_time();
+        let mut hotkey = test_hotkey(true, now);
+        let escape = InputEvent::Key {
+            code: ESCAPE_KEY_CODE,
+            down: true,
+            flags: OPTION_KEY_MASK,
+        };
+        let mut capture = CaptureShortcut::default();
+        let recording = ShortcutActivity::Recording {
+            elapsed: std::time::Duration::from_secs(5),
+        };
+        assert_eq!(
+            capture.input(escape, RuntimeHotkeys::default(), recording),
+            ShortcutAction::None
+        );
+        assert!(!capture.takes_escape());
+        assert_eq!(hotkey.process(escape, now), Some(HotkeyAction::Cancel));
+    }
+
     #[test]
     fn escape_is_suppressed_while_it_controls_dictation() {
         let mut suppression = ShortcutSuppression::default();

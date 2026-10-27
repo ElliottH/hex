@@ -648,7 +648,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   (no outcome) rather than retargeting it; while Scrawl.app
   (`dev.kitlangton.scrawl`) runs, Hex registers no capture shortcut and runs
   no retention, and only the pane's "Use Hex for captures" quits Scrawl.
-  Escape cancels a recording capture before any dictation job. Pointer
+  Escape never ends a recording capture, and Hex's tap lets it through to
+  the app being recorded; discarding is the capsule's two-step ✕ (✕, then
+  Discard). Pointer
   events and Shift reach the engine from the one session tap, only while a
   capture records, through a bounded queue that drops rather than block; they
   never reach the listener. Scrawl's settings are imported once, read-only;

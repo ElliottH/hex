@@ -1055,23 +1055,15 @@ pub fn listen(
                 )?;
                 continue;
             }
-            // Escape ends what records in the foreground first: a dictation
-            // or Voice Action hold, then a capture, then queued dictation.
+            // Escape ends a dictation or Voice Action hold first, then
+            // closes the capsule's picker, list, or Undo, then cancels queued
+            // dictation. It never ends a recording capture: it may be meant
+            // for the app being recorded (the capsule's ✕ discards).
             #[cfg(hex_capture)]
             if !hotkeys.any_recording()
                 && input_event.is_escape_down()
                 && crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::Escape)
             {
-                continue;
-            }
-            #[cfg(hex_capture)]
-            if !hotkeys.any_recording()
-                && input_event.is_escape_down()
-                && let Some(host) = capture_host.as_mut()
-                && host.recording_since(&input).is_some()
-            {
-                host.control(crate::control::ScrawlCaptureAction::Cancel, &input);
-                feedback::play(Tone::Cancel);
                 continue;
             }
             if !hotkeys.any_recording()
@@ -1288,19 +1280,18 @@ pub fn listen(
                 event => handle_dictation_event(event, &mut events, indicator.as_ref())?,
             }
         }
+        // A recording capture never takes Escape: only the capture
+        // shortcut's press before it starts, and the capsule's picker, list,
+        // and Undo.
         #[cfg(hex_capture)]
-        let capture_recording = capture_host.as_mut().is_some_and(|host| {
-            host.recording_since(&input).is_some()
-                || capture_shortcut.armed()
-                || crate::capture_host::wants_escape()
-        });
+        let capture_escape = capture_host.is_some() && capture_shortcut.takes_escape();
         #[cfg(not(hex_capture))]
-        let capture_recording = false;
+        let capture_escape = false;
         input_monitor.set_escape_cancels(
             hotkeys.any_recording()
                 || voice.is_some()
                 || programmatic.is_some()
-                || capture_recording
+                || capture_escape
                 || dictation_worker.pending_count() > 0,
         );
         if received_worker_event {
