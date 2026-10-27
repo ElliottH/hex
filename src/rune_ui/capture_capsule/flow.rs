@@ -1910,7 +1910,8 @@ mod tests {
     fn rule_send_then_undo_shows_the_list_and_pick_2_sends_to_2() {
         use super::super::surface::Id;
         use crate::capture_host::CapsuleKeys;
-        let ways: [(&str, fn(&mut Flow, f64) -> Vec<Action>); 3] = [
+        type Undo = fn(&mut Flow, f64) -> Vec<Action>;
+        let ways: [(&str, Undo); 3] = [
             ("esc", |flow, now| flow.input(Input::Escape, now)),
             ("Undo chip", |flow, now| flow.click(Id::Undo, now)),
             ("✕", |flow, now| flow.click(Id::Close, now)),
@@ -1925,7 +1926,7 @@ mod tests {
             );
             // At once, the same suggestions, the wrong one last.
             assert_eq!(rows(&flow, 1.0), ["HEX", "HOME", "SEER"], "{how}");
-            // 1-3 pick, Paste Last searches, Escape dismisses.
+            // 1-3 pick, the list shortcut searches, Escape dismisses.
             assert_eq!(
                 flow.keys(1.0),
                 Some(CapsuleKeys::Suggest { rows: 3 }),
