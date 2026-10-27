@@ -2420,10 +2420,7 @@ mod tests {
             ..RuntimeHotkeys::default()
         };
         assert_eq!(runtime_hotkeys().capture_list, None);
-        let grab = crate::capture_host::take_keys(
-            crate::capture_host::CapsuleKeys::Route { escape: false },
-            |_| {},
-        );
+        let grab = crate::capture_host::take_keys(crate::capture_host::CapsuleKeys::Route, |_| {});
         assert_eq!(runtime_hotkeys().capture_list, Some(list));
         grab.set(crate::capture_host::CapsuleKeys::Picker);
         assert_eq!(runtime_hotkeys().capture_list, None);

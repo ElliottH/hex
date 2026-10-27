@@ -2177,16 +2177,14 @@ pub enum CapsuleKeys {
     Picker,
     /// A routed capsule, or a hidden one whose capture still waits for a
     /// pick: the send-to list shortcut (`capture.list_hotkey`) opens its
-    /// list ([`CapsuleKey::OpenList`]), and Escape too while `escape` (a
-    /// send that can still be undone).
-    Route { escape: bool },
-    /// A send from the list waiting out its Undo: Escape takes it back.
-    Undo,
+    /// list ([`CapsuleKey::OpenList`]). Never Escape: it goes to the app in
+    /// front, and a send is taken back only by clicking Undo.
+    Route,
     /// The open list: every key press without ⌘ or ⌃ that isn't one of
     /// Hex's shortcuts.
     List,
-    /// A capture's suggestions: Escape, the send-to list shortcut (search
-    /// every session), and 1 to `rows` with no modifier
+    /// A capture's suggestions: the send-to list shortcut (search every
+    /// session), and 1 to `rows` with no modifier
     /// ([`CapsuleKey::Digit`]).
     Suggest { rows: u8 },
 }
@@ -2233,10 +2231,8 @@ fn keys_code(keys: Option<CapsuleKeys>) -> u8 {
     match keys {
         None => 0,
         Some(CapsuleKeys::Picker) => 1,
-        Some(CapsuleKeys::Route { escape: false }) => 2,
-        Some(CapsuleKeys::Route { escape: true }) => 3,
+        Some(CapsuleKeys::Route) => 2,
         Some(CapsuleKeys::List) => 4,
-        Some(CapsuleKeys::Undo) => 5,
         Some(CapsuleKeys::Suggest { .. }) => 6,
     }
 }
@@ -2292,9 +2288,10 @@ pub fn picking() -> bool {
     GRAB_KEYS.load(Ordering::Acquire) == keys_code(Some(CapsuleKeys::Picker))
 }
 
-/// Whether the capsule takes Escape from the listener.
+/// Whether the capsule takes Escape from the listener: only the picker
+/// (the open list takes it at the tap).
 pub fn wants_escape() -> bool {
-    matches!(GRAB_KEYS.load(Ordering::Acquire), 1 | 3 | 5 | 6)
+    GRAB_KEYS.load(Ordering::Acquire) == keys_code(Some(CapsuleKeys::Picker))
 }
 
 /// Whether the open list takes every key press at the tap.
@@ -2326,10 +2323,8 @@ pub fn capsule_key(key: CapsuleKey) -> bool {
 fn takes(keys: CapsuleKeys, key: &CapsuleKey) -> bool {
     match (keys, key) {
         (CapsuleKeys::Picker, CapsuleKey::Shortcut | CapsuleKey::Escape) => true,
-        (CapsuleKeys::Route { escape }, CapsuleKey::Escape) => escape,
-        (CapsuleKeys::Undo | CapsuleKeys::Suggest { .. }, CapsuleKey::Escape) => true,
         (
-            CapsuleKeys::Route { .. } | CapsuleKeys::List | CapsuleKeys::Suggest { .. },
+            CapsuleKeys::Route | CapsuleKeys::List | CapsuleKeys::Suggest { .. },
             CapsuleKey::OpenList,
         ) => true,
         (CapsuleKeys::Suggest { rows }, CapsuleKey::Digit(digit)) => (1..=rows).contains(digit),
@@ -4196,7 +4191,7 @@ mod tests {
 
         // A routed capsule: the list shortcut opens the list; Escape only
         // while a send can be undone.
-        second.set(CapsuleKeys::Route { escape: false });
+        second.set(CapsuleKeys::Route);
         assert!(!picking() && !wants_escape() && list_key_wanted());
         assert!(!capsule_key(CapsuleKey::Shortcut));
         assert!(!capsule_key(CapsuleKey::Escape));
@@ -4205,15 +4200,13 @@ mod tests {
             !capsule_key(CapsuleKey::Press),
             "a press matters only to the list"
         );
-        second.set(CapsuleKeys::Route { escape: true });
-        assert!(wants_escape());
-        // A send from the list counting down: Escape, and ⌥⇧V goes to the app.
-        second.set(CapsuleKeys::Undo);
-        assert!(wants_escape() && !list_key_wanted() && !suggesting());
-        assert!(!capsule_key(CapsuleKey::OpenList));
-        // Suggestions: Escape, the list shortcut, and only their own digits.
+        second.set(CapsuleKeys::Route);
+        assert!(!wants_escape() && !capsule_key(CapsuleKey::Escape));
+        // Suggestions: the list shortcut and only their own digits, never
+        // Escape.
         second.set(CapsuleKeys::Suggest { rows: 2 });
-        assert!(suggesting() && wants_escape() && list_key_wanted() && !list_open());
+        assert!(suggesting() && !wants_escape() && list_key_wanted() && !list_open());
+        assert!(!capsule_key(CapsuleKey::Escape));
         assert!(capsule_key(CapsuleKey::Digit(2)));
         assert!(!capsule_key(CapsuleKey::Digit(3)), "no third row");
         assert!(!capsule_key(CapsuleKey::Text("h".into())));

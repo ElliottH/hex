@@ -39,7 +39,7 @@ use self::flow::{Action, Cue, Done, Flow, Footer, Input, Lead, List, Mode, Pres}
 use self::surface::{
     CHIP_H, CHIP_PX, DONE_TEXT_X, HEADER_H, Id, KEYCAP_GAP, LEAD_TEXT_X, LIST_PAD, LIST_Y, MEDIUM,
     PANEL_H, PANEL_W, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON, SEG_ICON_GAP, SMALL, STRONG,
-    Shown, Surface, TIMER, UNDO_KEYS, UNDO_LABEL, clock_width, ellipsize, keycaps_width, measure,
+    Shown, Surface, TIMER, UNDO_LABEL, clock_width, ellipsize, keycaps_width, measure,
 };
 use super::controls::{Paint, keycaps};
 
@@ -533,7 +533,7 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
             overlay.set_follow_pointer(follow);
         }
     }
-    take_keys(s, now);
+    take_keys(s);
     // The on-screen picker shows what the capsule picks.
     let picking = match s.surface.pres {
         Pres::Selecting { mode, .. } => Some(mode),
@@ -558,8 +558,8 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
 }
 
 /// Takes, changes, or lets go of the keys the capsule wants from Hex's tap.
-fn take_keys(s: &mut CapsuleState, now: f64) {
-    let wanted = s.flow.keys(now);
+fn take_keys(s: &mut CapsuleState) {
+    let wanted = s.flow.keys();
     match (wanted, &mut s.keys) {
         (None, held) => *held = None,
         (Some(keys), Some((held, grab))) => {
@@ -946,19 +946,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             .trace_name("why")
             .child(label(shown.text(), SMALL, p.faint())),
         // The quiet way out of a send that just went.
-        Id::Undo => {
-            let keys: Vec<String> = UNDO_KEYS.iter().map(|k| (*k).to_owned()).collect();
-            base.radius(CHIP_H * 0.5)
-                .gap(KEYCAP_GAP)
-                .hover(c.hover)
-                .press(c.pressed)
-                .child(keycaps(p, "keys", &keys).w(keycaps_width(UNDO_KEYS)))
-                .child(label(UNDO_LABEL, MEDIUM, p.muted()))
-                .role("button")
-                .label("Undo")
-                .hit()
-                .on_press_tx(press(id))
-        }
+        Id::Undo => keyed(p, base, &[], UNDO_LABEL, MEDIUM).on_press_tx(press(id)),
         // The first says what it does and carries a faint fill, as
         // Scrawl's does; the rest are names beside it.
         Id::Route(index) => {

@@ -169,7 +169,7 @@ fn rule_sent() -> Vec<Step> {
     ]
 }
 
-/// A saved rule's send, taken back at once (esc, after the inputs before
+/// A saved rule's send, taken back at once (Undo, after the inputs before
 /// it, where a click would jump the queue): the suggestions again.
 fn taken_back() -> Vec<Step> {
     let mut steps = rule_sent();
@@ -353,8 +353,7 @@ fn poll(s: &mut CapsuleState, wall: f64, tx: &mut Tx) -> bool {
 /// The keys Hex's tap would hand the capsule, from the window instead.
 fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
     use rune::Key;
-    let now = s.now;
-    let Some(keys) = s.flow.keys(now) else {
+    let Some(keys) = s.flow.keys() else {
         return false;
     };
     let list = keys == crate::capture_host::CapsuleKeys::List;
@@ -365,11 +364,7 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
     };
     let escape = matches!(
         keys,
-        crate::capture_host::CapsuleKeys::List
-            | crate::capture_host::CapsuleKeys::Picker
-            | crate::capture_host::CapsuleKeys::Route { escape: true }
-            | crate::capture_host::CapsuleKeys::Undo
-            | crate::capture_host::CapsuleKeys::Suggest { .. }
+        crate::capture_host::CapsuleKeys::List | crate::capture_host::CapsuleKeys::Picker
     );
     let digit = match &key.key {
         Key::Text(t) if !key.mods.alt => {
