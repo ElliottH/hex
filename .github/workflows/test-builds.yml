@@ -39,7 +39,7 @@ jobs:
   desktop:
     needs: resolve
     # Build desktop's Windows packaging job can sign for releases; test
-    # builds never set sign-windows, so this token goes unused.
+    # builds never set signing-environment, so this token goes unused.
     permissions:
       contents: read
       id-token: write

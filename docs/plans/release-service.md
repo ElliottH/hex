@@ -70,7 +70,7 @@ https://anoma.ly/hex (see `docs/releasing.md`).
 ## Client
 
 `src/updater.rs` (all three OSes) polls `<origin>/hex/desktop/<channel>.json`
-10 seconds after launch, hourly, and on Check now, with `If-None-Match`, and
+10 seconds after launch, hourly (the Dev channel every 10 minutes and when the window gains focus, at most once a minute), and on Check now, with `If-None-Match`, and
 decides with the protocol's client rules (`updater/protocol.rs`, which passes
 the service's `test-vectors/` copied to `tests/fixtures/release-protocol`).
 

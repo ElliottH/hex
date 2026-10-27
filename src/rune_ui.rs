@@ -1113,6 +1113,9 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
 
 fn window_focused(ui: &mut Ui, focused: bool, tx: &mut Tx) {
     explainer::window_focused(ui, focused, tx);
+    if focused {
+        ui.send(Request::Desktop(DesktopAction::WindowFocused));
+    }
     // Screen Recording is often switched on in System Settings, so the
     // Scrawl pane reads it again as soon as Hex comes back.
     #[cfg(hex_capture)]

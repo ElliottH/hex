@@ -763,7 +763,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   revoked, the minimum version before rollout, and a rollout bucket drawn once
   from the OS's secure random source, kept in `<support>/update-bucket`, and
   never sent. Requests carry nothing about the install. Checks run 10 seconds
-  after launch, hourly, and on the sidebar footer's Check for updates, backing off on errors; manifests are
+  after launch, hourly (every 10 minutes and on window focus, at most once a minute, on the Dev channel), and on the sidebar footer's Check for updates, backing off on errors; manifests are
   not signed, so nothing runs before the download's size and SHA-256 match
   the manifest and, on macOS and Windows, its code signature passes: macOS
   `app/update-requirement.txt` (Developer ID team `5NZ4Q7NXJ4`, `anomaly.hex`,
@@ -1032,8 +1032,11 @@ holding `id-token: write` for the service, with no other secrets and actions
 pinned by SHA. The GitHub release mirror, the AUR package (built from the
 published Linux file), the Homebrew cask (pushed to `anomalyco/homebrew-tap`
 with its own deploy key), and the AUR/brew/nix distribution records follow.
-The `release` environment is limited to `dev` (dev site and staging),
-`production`, and `app-v*` tags; stable runs only from `production` or a tag. Rerunning
+Every push to `dev` (except docs/site-only changes) publishes a dev-channel
+build in the `release-dev` environment (branch `dev`, no approval; the service
+lets it publish only the `dev` channel, and only signed platforms are
+published). Stable runs only from `production` or an `app-v*` tag in the
+`release` environment, which waits for Dax's approval. Rerunning
 after an interruption is safe: the service stores files by hash and accepts
 the same version again.
 

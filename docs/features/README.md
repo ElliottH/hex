@@ -717,7 +717,7 @@ failed; no visual or installed-app startup verification is claimed.
 
 ```ts
 Hex checks the release service            // maintain.updates
-├── 10 s after launch, hourly, and sidebar Check for updates -> anoma.ly/release/hex/desktop/<channel>.json
+├── 10 s after launch, hourly (Dev channel: every 10 min and on window focus), and Check for updates -> anoma.ly/release/hex/desktop/<channel>.json
 │   └── <channel> -> updates.channel (General › Application › Update channel: Stable | Dev,
 │       or `hex settings set updates.channel`), else dev for an X.Y.Z-dev.N build,
 │       else the installer receipt's channel, else stable; package managers always stable

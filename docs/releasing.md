@@ -7,7 +7,7 @@ dev `https://dev.anoma.ly/release`). Hex's names on the service are in
 [`plans/release-service.md`](plans/release-service.md).
 
 ```ts
-Release (workflow_dispatch: ref, channel; push tag app-v<version>; nightly dev, off by default)
+Release (workflow_dispatch: ref, channel; push to dev: dev channel; push tag app-v<version>: stable)
 ├─ resolve        version from Cargo.toml, channel, service origin, tag
 ├─ build          build-desktop.yml: Linux x86_64 (Arch container), Windows x64 + ARM64,
 │                 Authenticode via Azure Artifact Signing (docs/windows-signing.md)
@@ -28,14 +28,24 @@ Release (workflow_dispatch: ref, channel; push tag app-v<version>; nightly dev, 
 
 The service authorizes the publish jobs by their GitHub OIDC token alone:
 `registry/hex.json` in `anomalyco/release` admits repository `anomalyco/hex`
-(by name and id), workflow `.github/workflows/release-desktop.yml` running
-from `refs/heads/dev`, `refs/heads/production`, or `refs/tags/app-v*` with
-that same ref, and only in
-the `release` environment, for artifact `desktop` and channels `stable`,
-`beta`, and `dev`, on both the dev and production services. No key or secret
-publishes. Only the `publish`, `record-aur`, and `record-brew` jobs get
-`id-token: write`, run in `release`, receive no other secrets, and use actions
-pinned by SHA.
+(by name and id) and workflow `.github/workflows/release-desktop.yml` running
+from the same ref it was triggered on, for artifact `desktop` on both the dev
+and production services, as two publishers:
+
+```ts
+release      refs/heads/production, refs/tags/app-v*   channels stable, beta   waits for Dax's approval
+release-dev  refs/heads/dev                            channel  dev            no approval (deployment branch: dev)
+```
+
+Stable runs use `release`; dev and staging runs use `release-dev`, so a dev
+build can never publish to `stable`. No key or secret publishes. Only the
+`publish`, `record-aur`, and `record-brew` jobs get `id-token: write`, run in
+that environment, receive no other secrets, and use actions pinned by SHA.
+Signing values must exist in each environment that signs: `release` for
+stable and `release-dev` for dev builds (the Apple secrets, and the Azure
+values with a federated credential for each environment's subject,
+`repo:anomalyco/hex:environment:release` and
+`repo:anomalyco/hex:environment:release-dev`).
 
 `publish` uploads each file under its own name with its SHA-256 (files over
 95 MiB in 90 MiB parts), then posts the release naming each target by file
@@ -61,7 +71,7 @@ key. A staging run without a macOS build checks the cask around the frozen
 
 ## Channels
 
-- `staging` (the default) is the dry run: every platform is built as
+- `staging` (the default) is the dry run, in `release-dev`: every platform is built as
   `<version>-dev.<run number>` (`scripts/set-crate-version.sh` stamps it into
   the build, so the binaries report it) and published on the dev service's
   `dev` channel (the service refuses publishing a channel's current version
@@ -76,23 +86,24 @@ key. A staging run without a macOS build checks the cask around the frozen
 - `dev` publishes a build of `dev` to the production service's `dev`
   channel (`https://anoma.ly/release/hex/desktop/dev.json`), which installs
   set to the Dev update channel follow and `https://anoma.ly/hex/download/dev`
-  links. Run it from `dev` with `ref: dev` (`gh workflow run
-  release-desktop.yml --ref dev -f channel=dev -f ref=dev`); other branches are
-  refused. The version is `<next>-dev.<run number>`, where `<next>` is the
-  crate version, or its next patch once tag `app-v<version>` exists (so today
+  links. Every push to `dev` runs it, except pushes that change only `docs/`,
+  `site/`, or Markdown; a newer push cancels a dev run still in progress, and
+  `gh workflow run release-desktop.yml --ref dev -f channel=dev -f ref=dev`
+  runs it by hand. It runs in `release-dev`, so it needs no approval. The
+  version is `<next>-dev.<run number>`, where `<next>` is the crate version,
+  or its next patch once tag `app-v<version>` exists (so today
   `2.3.2-dev.N`): every dev build is newer than the stable release before it,
   and switching an install back to Stable waits for the next stable release
-  instead of downgrading. It needs the macOS build (Apple secrets in
-  `release`); Windows may be unsigned, as on staging. It publishes only the
-  release: no GitHub release, AUR, Homebrew, Nix record, or site deploy.
-  Every run waits for a `release` environment reviewer like the others.
-  Publishing a dev build is not a release: it leaves `production`, the stable
-  channel, and the release freeze alone.
-- Nightly dev: the workflow's `schedule` (07:30 UTC) runs the `dev` channel
-  from `dev`, but `resolve` skips it, and with it the whole run, unless the
-  repository variable `HEX_DEV_CHANNEL_NIGHTLY` is `true`. It stays off while
-  each run needs a reviewer; turn it on with `gh variable set
-  HEX_DEV_CHANNEL_NIGHTLY --body true` once that is wanted.
+  instead of downgrading. It publishes only signed builds, because the
+  updater checks signatures: until `release-dev` has the Apple secrets it has
+  no macOS targets, and until Azure Artifact Signing works there it has no
+  Windows targets (the run summary says so); Linux needs no signing. It
+  publishes only the release: no GitHub release, AUR, Homebrew, Nix record,
+  or site deploy. Publishing a dev build is not a release: it leaves
+  `production`, the stable channel, and the release freeze alone. Installs on
+  the Dev channel check every 10 minutes and when the window opens or gains
+  focus (at most once a minute), so a push reaches them within minutes of its
+  run finishing.
 - `stable` publishes to `https://anoma.ly/release`, the GitHub release
   `app-v<version>` (kept off "Latest", which the SDK uses), the AUR, and then
   the production site. It needs every platform, Authenticode-signed Windows
