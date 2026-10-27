@@ -34,7 +34,7 @@ on:
         type: number
         default: 0
       signing-environment:
-        description: The environment to Authenticode-sign in when it has the Azure values (release or release-dev); empty never signs
+        description: The environment to Authenticode-sign in when it has the Azure values (release); empty never signs
         type: string
         default: ""
     secrets:

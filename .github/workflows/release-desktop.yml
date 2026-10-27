@@ -3,9 +3,11 @@ name: Release
 # Builds, signs, and publishes Hex for macOS, Windows, and Linux from one
 # exact commit to the Anomaly release service (docs/releasing.md,
 # docs/plans/release-service.md). The service authorizes this workflow file
-# by its GitHub OIDC token: repository anomalyco/hex, and the release-dev
-# environment from dev (dev channel only) or the release environment from
-# production or app-v* (anomalyco/release registry/hex.json). Hex never
+# by its GitHub OIDC token: repository anomalyco/hex in the release
+# environment, from dev (dev channel only) or from production or app-v*
+# (stable; anomalyco/release registry/hex.json). Like OpenCode, there is one
+# environment, release, with no approval: its deployment policy admits dev,
+# production, and app-v* tags. Hex never
 # publishes to or reads from the service's dev stage, dev.anoma.ly/release,
 # which only tests the service itself.
 #
@@ -22,10 +24,9 @@ name: Release
 # the production service's dev channel (https://anoma.ly/release), where
 # installs set to the Dev update channel and the site's /hex/download/dev
 # link pick it up. Every push to dev that changes more than docs or the site
-# runs it, and a newer push cancels a dev run still in progress. It runs in
-# the release-dev environment, which needs no approval and which the service
-# lets publish only the dev channel. It publishes only signed builds: a
-# platform whose signing isn't configured in release-dev (macOS: the Apple
+# runs it, and a newer push cancels a dev run still in progress. The service
+# lets a run from dev publish only the dev channel. It publishes only signed
+# builds: a platform whose signing isn't configured in release (macOS: the Apple
 # secrets; Windows: Azure Artifact Signing) is left out, with a note in the
 # summary. It touches nothing else: no GitHub release, AUR, Homebrew, Nix
 # record, or site deploy. Versions are display text: installs follow the
@@ -34,8 +35,7 @@ name: Release
 # the channel it is published on (HEX_BUILD_CHANNEL), so it knows when the
 # user chose another channel.
 #
-# check also runs in release-dev (for its signing values); stable runs in
-# release, which waits for a reviewer.
+# Every run uses the release environment for its signing values.
 on:
   workflow_dispatch:
     inputs:
@@ -144,7 +144,7 @@ jobs:
             echo "notes-url=$notes"
             echo "release-channel=$release_channel"
             echo "release-version=$release_version"
-            echo "environment=$([ "$CHANNEL" = stable ] && echo release || echo release-dev)"
+            echo "environment=release"
           } >> "$GITHUB_OUTPUT"
           echo "Releasing $version ($CHANNEL) from $sha to $service as $release_channel $release_version." >> "$GITHUB_STEP_SUMMARY"
 
@@ -236,7 +236,7 @@ jobs:
               # The updater refuses unsigned Windows builds, so dev publishes none.
               rm -f dist/*.exe
               echo "::notice::Windows builds are not Authenticode-signed; this dev release has no Windows targets."
-              echo "No Windows targets: Azure Artifact Signing is not configured in release-dev." >> "$GITHUB_STEP_SUMMARY"
+              echo "No Windows targets: Azure Artifact Signing is not configured in release." >> "$GITHUB_STEP_SUMMARY"
             else
               echo "::warning::Unsigned Windows executables:$unsigned"
             fi
@@ -248,7 +248,7 @@ jobs:
           if-no-files-found: error
 
   # The only job that can publish: its OIDC token carries the environment the
-  # service requires (release for stable, release-dev for dev). No
+  # service requires (release). No
   # other credentials reach it.
   publish:
     needs: [resolve, collect]

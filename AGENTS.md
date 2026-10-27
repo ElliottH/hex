@@ -1059,10 +1059,11 @@ pinned by SHA. The GitHub release mirror, the AUR package (built from the
 published Linux file), the Homebrew cask (pushed to `anomalyco/homebrew-tap`
 with its own deploy key), and the AUR/brew/nix distribution records follow.
 Every push to `dev` (except docs/site-only changes) publishes a dev-channel
-build in the `release-dev` environment (branch `dev`, no approval; the service
-lets it publish only the `dev` channel, and only signed platforms are
-published). Stable runs only from `production` or an `app-v*` tag in the
-`release` environment, which waits for Dax's approval. Rerunning
+build (the service lets a run from `dev` publish only the `dev` channel, and
+only signed platforms are published). Stable runs only from `production` or
+an `app-v*` tag. Like OpenCode, every run uses the one `release` environment,
+with no required reviewer; its deployment policy admits `dev`, `production`,
+and `app-v*` tags. Rerunning
 after an interruption is safe: the service stores files by hash and accepts
 the same version again.
 

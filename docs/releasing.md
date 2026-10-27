@@ -35,19 +35,19 @@ from the same ref it was triggered on, for artifact `desktop` on both the dev
 and production services, as two publishers:
 
 ```ts
-release      refs/heads/production, refs/tags/app-v*   channels stable, beta   waits for Dax's approval
-release-dev  refs/heads/dev                            channel  dev            no approval (deployment branch: dev)
+release  refs/heads/production, refs/tags/app-v*   channels stable, beta
+release  refs/heads/dev                            channel  dev
 ```
 
-Stable runs use `release`; dev and check runs use `release-dev`, so a dev
-build can never publish to `stable`. No key or secret publishes. Only the
+Like OpenCode, every run uses one environment, `release`, with no required
+reviewer (every push to `dev` publishes); its deployment policy admits `dev`,
+`production`, and `app-v*` tags. The registry ties channels to refs, so a
+build of `dev` can never publish to `stable`. No key or secret publishes. Only the
 `publish`, `record-aur`, and `record-brew` jobs get `id-token: write`, run in
 that environment, receive no other secrets, and use actions pinned by SHA.
-Signing values must exist in each environment that signs: `release` for
-stable and `release-dev` for dev builds (the Apple secrets, and the Azure
-values with a federated credential for each environment's subject,
-`repo:anomalyco/hex:environment:release` and
-`repo:anomalyco/hex:environment:release-dev`).
+Signing values live only in `release` (the Apple secrets, and the Azure
+values with a federated credential for
+`repo:anomalyco/hex:environment:release`).
 
 `publish` uploads each file under its own name with its SHA-256 (files over
 95 MiB in 90 MiB parts), then posts the release naming each target by file
@@ -73,7 +73,7 @@ runs only for stable releases.
 ## Channels
 
 - `check` (the dispatch default, run from `dev`) builds, signs, and verifies
-  every platform as `0.0.0-dev-<run number>` in `release-dev` and publishes
+  every platform as `0.0.0-dev-<run number>` in `release` and publishes
   nothing anywhere: a dry run of the build and packaging.
 - `dev` publishes a build of `dev` to the production service's `dev`
   channel (`https://anoma.ly/release/hex/desktop/dev.json`), which installs
@@ -81,7 +81,7 @@ runs only for stable releases.
   links. Every push to `dev` runs it, except pushes that change only `docs/`,
   `site/`, or Markdown; a newer push cancels a dev run still in progress, and
   `gh workflow run release-desktop.yml --ref dev -f channel=dev -f ref=dev`
-  runs it by hand. It runs in `release-dev`, so it needs no approval. The
+  runs it by hand. It runs in `release`, which needs no approval. The
   version is `0.0.0-dev-<run number>`, as OpenCode numbers its dev builds.
   Versions are display text that nothing compares: each channel has one
   current release and installs follow it, so a dev build below 2.3.1 is fine,
@@ -93,7 +93,7 @@ runs only for stable releases.
   confirms. The first build after this change, 2.3.2-dev.<run> on
   2026-10-27, carried the new client to installs whose older client took only
   higher versions; every build since is `0.0.0-dev-<run>`. It publishes only signed builds, because the
-  updater checks signatures: until `release-dev` has the Apple secrets it has
+  updater checks signatures: until `release` has the Apple secrets it has
   no macOS targets, and until Azure Artifact Signing works there it has no
   Windows targets (the run summary says so); Linux needs no signing. It
   publishes only the release: no GitHub release, AUR, Homebrew, Nix record,
@@ -252,9 +252,8 @@ the release service compile `https://anoma.ly/release`.
 
 ## Secrets (`release` environment, limited to `dev`, `production`, and `app-v*`)
 
-`dev` is allowed because dev site deploys run from it. Dev-channel builds
-use the separate `release-dev` environment (branch `dev`, no approval), which
-holds only signing values.
+`dev` is allowed because dev-channel builds and dev site deploys run from
+it. No reviewer is required.
 
 | Name | Use |
 | --- | --- |

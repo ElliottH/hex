@@ -23,7 +23,7 @@ on:
         type: string
         required: true
       environment:
-        description: The GitHub environment holding the Apple secrets (release or release-dev)
+        description: The GitHub environment holding the Apple secrets (release)
         type: string
         required: true
       optional:
