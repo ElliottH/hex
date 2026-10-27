@@ -761,6 +761,14 @@ enum ListSwallow {
     AfterListener,
 }
 
+/// Whether the capsule's list or suggestions may take a key press: only
+/// while captures are on, something is open, and no shortcut is being
+/// recorded. With captures turned off, a capsule left open takes nothing.
+#[cfg(hex_capture)]
+fn list_takes_keys(capture_on: bool, open: bool, recording_shortcut: bool) -> bool {
+    capture_on && open && !recording_shortcut
+}
+
 /// Hands the open list its keys (`capture_host::list_key`) on the tap's
 /// thread; their releases stay with it even after it closes.
 #[cfg(hex_capture)]
@@ -786,7 +794,11 @@ fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
         };
     }
     let suggesting = suggesting();
-    if !(list_open() || suggesting) || crate::app_settings::hotkey_capture_active() {
+    if !list_takes_keys(
+        crate::app_settings::capture_on(),
+        list_open() || suggesting,
+        crate::app_settings::hotkey_capture_active(),
+    ) {
         return ListSwallow::No;
     }
     // SAFETY: CoreGraphics supplied a valid event.
@@ -4137,6 +4149,16 @@ mod tests {
             ),
             Some(HotkeyAction::Cancel)
         );
+    }
+
+    /// A capsule list left open when captures are turned off takes no keys.
+    #[cfg(hex_capture)]
+    #[test]
+    fn the_list_takes_keys_only_while_captures_are_on() {
+        assert!(list_takes_keys(true, true, false));
+        assert!(!list_takes_keys(false, true, false));
+        assert!(!list_takes_keys(true, false, false));
+        assert!(!list_takes_keys(true, true, true));
     }
 
     /// Escape during a dictation hold while a screen capture records cancels

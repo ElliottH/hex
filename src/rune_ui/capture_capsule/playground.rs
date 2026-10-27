@@ -203,13 +203,12 @@ fn recent() -> Vec<Dest> {
     ]
 }
 
+/// A saved rule names no runner-up: its own session is all it suggests.
 fn rule() -> Route {
+    let to = Dest::new("SEER", "rule: problems.kitlangton.com");
     Route::Rule {
-        to: "SEER".into(),
-        suggested: vec![
-            Dest::new("SEER", "rule: problems.kitlangton.com"),
-            Dest::new("HEX", "you were just in it"),
-        ],
+        to: to.clone(),
+        suggested: vec![to],
         recent: recent(),
         site: Some("problems.kitlangton.com".into()),
     }
@@ -252,7 +251,6 @@ impl Playground {
             Action::Undo { .. } => self.at(0.25, Step::Input(Input::Undone(Undone::TakenBack))),
             Action::Cancel
             | Action::Discard
-            | Action::Redirect { .. }
             | Action::Send { .. }
             | Action::Paste
             | Action::Inspect => {}

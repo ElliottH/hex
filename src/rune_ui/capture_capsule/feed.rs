@@ -247,7 +247,7 @@ fn capsule_route(answer: &RouteAnswer) -> Option<Route> {
             recent,
             site,
         } => Route::Rule {
-            to: to.name.clone(),
+            to: dests(std::slice::from_ref(to)).remove(0),
             suggested: dests(std::slice::from_ref(to))
                 .into_iter()
                 .chain(dests(suggested))
@@ -340,7 +340,6 @@ pub(crate) fn act(action: Action) {
             always: always.is_some(),
         })],
         Action::Undo { .. } => vec![command(CaptureCommand::Undo)],
-        Action::Redirect { to, .. } => vec![command(CaptureCommand::Redirect { to })],
         Action::Paste => vec![command(CaptureCommand::Paste)],
         Action::Inspect => vec![command(CaptureCommand::Inspect)],
     };
@@ -676,7 +675,7 @@ mod tests {
         assert_eq!(
             follow.next(&routed("a", rule(), pending.clone())),
             [Input::Routed(Route::Rule {
-                to: "SEER".into(),
+                to: Dest::new("SEER", "rule").session("ses_SEER"),
                 suggested: vec![
                     Dest::new("SEER", "rule").session("ses_SEER"),
                     Dest::new("HEX", "last sent").session("ses_HEX"),

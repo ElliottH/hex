@@ -355,6 +355,39 @@ fn a_draft_saves_over_what_another_writer_changed_meanwhile() {
     );
 }
 
+/// Typing in one editor keeps only that editor's text: the others take
+/// what another writer saved, so the draft's save doesn't undo it.
+#[test]
+fn a_draft_keeps_only_its_own_editor() {
+    let mut ui = portal_fixture();
+    ui.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
+    let service = ui.settings.clone();
+    ui.adopt(service.clone());
+    ui.hints = TextEdit::new("OpenCode, Effect");
+    let start = std::time::Instant::now();
+    assert!(!ui.save_drafts(start), "waits for a pause");
+    let mut elsewhere = service;
+    elsewhere
+        .dictation_processing
+        .default_mode
+        .post_processing
+        .prompt = "Keep it short.".into();
+    ui.adopt(elsewhere);
+    assert!(ui.save_drafts(start + DRAFT_DELAY));
+    assert_eq!(
+        ui.settings.transcription.recognition_hints,
+        "OpenCode, Effect"
+    );
+    assert_eq!(
+        ui.settings
+            .dictation_processing
+            .default_mode
+            .post_processing
+            .prompt,
+        "Keep it short."
+    );
+}
+
 fn settle(rt: &mut Runtime<Ui>) {
     for _ in 0..60 {
         rt.frame(1.0 / 60.0);

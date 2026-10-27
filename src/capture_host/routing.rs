@@ -7,7 +7,7 @@
 //! moment a capture stops, beside its writing. Once it is written, the
 //! finisher hands it to the one `capture-route` thread ([`Routes`]), which
 //! decides, waits out a rule's [`UNDO`] window, sends, and carries out the
-//! capsule's Send, Undo, and Redirect for the newest capture, in the order
+//! capsule's Send and Undo for the newest capture, in the order
 //! they came. Every change lands in the snapshot's `last.route`.
 
 use std::path::{Path, PathBuf};
@@ -237,9 +237,6 @@ pub(super) enum Job {
         always: bool,
     },
     Undo,
-    Redirect {
-        to: String,
-    },
     /// `hex capture send`: any capture, to `to` or where its route or its
     /// last send says.
     SendBundle {
@@ -417,7 +414,6 @@ impl Worker {
             Job::Written { bundle, look } => self.written(bundle, look),
             Job::Send { to, always } => self.chosen(&to, always),
             Job::Undo => self.undo(),
-            Job::Redirect { to } => self.redirect(&to),
             Job::SendBundle {
                 bundle,
                 to,
@@ -670,12 +666,6 @@ impl Worker {
         }
     }
 
-    fn redirect(&mut self, to: &str) {
-        if let Some(dest) = self.resolve(to) {
-            self.redirect_to(dest);
-        }
-    }
-
     fn redirect_to(&mut self, dest: Destination) {
         self.take_back();
         self.correct(jev::Action::Redirect, "reroute", Some(&dest));
@@ -692,7 +682,8 @@ impl Worker {
     }
 
     /// Takes back the current capture's send, whatever state it is in;
-    /// `false` when there was none.
+    /// `false` when there was none. One OpenCode wouldn't give back is too
+    /// late.
     fn take_back(&mut self) -> bool {
         if self.cancel_waiting() {
             self.correct(jev::Action::Cancel, "dismiss", None);
@@ -721,10 +712,15 @@ impl Worker {
                         },
                     }
                 }
+                // Still where it went: the capsule, already showing it
+                // taken back, hears that it's too late.
                 Err(error) => {
                     tracing::warn!(error = %format!("{error:#}"), "could not take a capture's send back");
                     current.sent = Some(sent);
-                    return false;
+                    current.route.delivery = Some(RouteDelivery::TooLate {
+                        to: to.unwrap_or_default(),
+                    });
+                    return true;
                 }
             };
             current.route.offer = None;
@@ -1782,6 +1778,39 @@ mod tests {
                 Err("nobody isn't a session this capture lists".into()),
                 "A is sent as routed, by title or id, not as an older capture"
             );
+        }
+
+        #[test]
+        fn an_undo_opencode_refuses_is_published_too_late() {
+            let context = RouteContext {
+                front_bundle_id: Some("com.brave.Browser".into()),
+                captured_bundle_id: Some("com.brave.Browser".into()),
+                app_pid: None,
+            };
+            let outcomes = SharedOutcomes::default();
+            let mut worker = Worker::new(outcomes.clone());
+            let bundle = written("com.brave.Browser");
+            lock(&outcomes).fail(bundle.clone(), "test".into());
+            let look = look_with(context, router_with(|_| {}), senses(dev_tab)).unwrap();
+            worker.written(bundle, look);
+            let current = worker.current.as_mut().unwrap();
+            // Not a delivery id, so the router's undo fails.
+            current.sent = Some(Sent {
+                delivery_id: "not a delivery".into(),
+                session: "ses_board".into(),
+            });
+            current.route.delivery = Some(RouteDelivery::Sent { to: "BOARD".into() });
+            worker.undo();
+            let published = lock(&outcomes)
+                .last
+                .as_ref()
+                .and_then(|last| last.route.clone())
+                .and_then(|route| route.delivery);
+            assert_eq!(
+                published,
+                Some(RouteDelivery::TooLate { to: "BOARD".into() })
+            );
+            assert!(worker.current.unwrap().sent.is_some(), "it's still sent");
         }
 
         #[test]

@@ -28,14 +28,17 @@ fn guess() -> Route {
     }
 }
 
+/// Shaped like the router's answer: a saved rule names no runner-up, so
+/// its own session is all it suggests, and the recent ones leave it out.
 fn rule() -> Route {
+    let to = Dest::new("SEER", "sent · rule");
     Route::Rule {
-        to: "SEER".into(),
-        suggested: vec![
-            Dest::new("SEER", "sent · rule"),
-            Dest::new("HEX", "last sent"),
+        to: to.clone(),
+        suggested: vec![to],
+        recent: vec![
+            Dest::new("HOME", "yesterday"),
+            Dest::new("RUNE", "2 days ago"),
         ],
-        recent: vec![Dest::new("HOME", "yesterday")],
         site: Some("problems.kitlangton.com".into()),
     }
 }
@@ -154,9 +157,15 @@ fn stills() -> Vec<(&'static str, Pres)> {
             ))]),
         ),
         ("rule-sent", after(&routed(rule()))),
+        ("rule-sending", {
+            let mut flow = Flow::new();
+            flow.input(Input::Routed(rule()), 0.0);
+            flow.pres(undo_s() + 0.2)
+        }),
         ("rule-final", {
             let mut flow = Flow::new();
             flow.input(Input::Routed(rule()), 0.0);
+            flow.input(Input::Settled, undo_s() + 0.2);
             flow.pres(undo_s() + 1.0)
         }),
         ("guess", after(&routed(guess()))),
@@ -290,10 +299,8 @@ fn every_state_draws_its_pieces() {
         ("processing", &["processing"]),
         ("saved", &["done", "paste", "inspect", "close"]),
         ("failed", &["done", "close"]),
-        (
-            "rule-sent",
-            &["done", "why", "undo", "paste", "route0", "inspect"],
-        ),
+        ("rule-sent", &["done", "why", "undo", "paste", "inspect"]),
+        ("rule-sending", &["done", "why", "paste", "ask", "inspect"]),
         ("rule-final", &["done", "why", "paste", "ask", "inspect"]),
         (
             "guess",
@@ -320,7 +327,14 @@ fn every_state_draws_its_pieces() {
         // Taken back, the suggestions again, the wrong one last.
         (
             "taken-back",
-            &["done", "list", "row-HEX", "row-SEER", "elsewhere"],
+            &[
+                "done",
+                "list",
+                "row-HOME",
+                "row-RUNE",
+                "row-SEER",
+                "elsewhere",
+            ],
         ),
         ("queued", &["done", "why", "paste", "inspect"]),
     ];
@@ -374,9 +388,9 @@ fn every_state_draws_its_pieces() {
 fn the_widest_states_fit_the_panel() {
     let long = |n: usize| format!("A VERY LONG SESSION TITLE {n}");
     let rule = Route::Rule {
-        to: long(0),
-        suggested: vec![Dest::new(long(0), ""), Dest::new(long(1), "")],
-        recent: Vec::new(),
+        to: Dest::new(long(0), ""),
+        suggested: vec![Dest::new(long(0), "")],
+        recent: vec![Dest::new(long(1), "")],
         site: None,
     };
     let ask = Route::Guess {
@@ -524,6 +538,7 @@ const GOLDENS: &[&str] = &[
     "processing",
     "saved",
     "rule-sent",
+    "rule-sending",
     "rule-final",
     "guess",
     "guess-always",
@@ -717,18 +732,10 @@ fn scripts() -> Vec<Script> {
             beats: vec![
                 (0.2, stage(Stage::Transcribing)),
                 (1.2, In(Input::Routed(rule()))),
+                (1.2 + undo_s() + 0.3, In(Input::Settled)),
             ],
-            // The whole countdown, then "Sent".
-            end: 1.2 + undo_s() + 1.6,
-        },
-        Script {
-            name: "rule-runner-up",
-            beats: vec![
-                (0.2, stage(Stage::Transcribing)),
-                (1.2, In(Input::Routed(rule()))),
-                (2.2, Click(Id::Route(0))),
-            ],
-            end: 6.0,
+            // The whole countdown, "Sending", then "Sent" once it went.
+            end: 1.2 + undo_s() + 1.9,
         },
         Script {
             name: "guess-list-send",

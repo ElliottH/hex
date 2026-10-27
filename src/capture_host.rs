@@ -204,8 +204,6 @@ pub enum CaptureCommand {
     /// [`routing::UNDO`] never goes; one OpenCode took is withdrawn unless
     /// the session already acted on it.
     Undo,
-    /// Takes back the newest capture's send and sends it to `to`.
-    Redirect { to: String },
     /// Pastes the newest written capture into the app in front, as
     /// Scrawl's Paste chip does: its contact sheet, then its summary.
     Paste,
@@ -1320,7 +1318,6 @@ impl CaptureHost {
                 Ok(self.route(routing::Job::Send { to, always }))
             }
             CaptureCommand::Undo => Ok(self.route(routing::Job::Undo)),
-            CaptureCommand::Redirect { to } => Ok(self.route(routing::Job::Redirect { to })),
             CaptureCommand::Paste => self.hand_off(HandOff::Paste),
             CaptureCommand::Inspect => self.hand_off(HandOff::Inspect),
         };
@@ -3876,7 +3873,6 @@ mod tests {
                 to: "ses_a".into(),
                 always: true,
             },
-            CaptureCommand::Redirect { to: "Alpha".into() },
             CaptureCommand::Undo,
         ];
         for command in commands {

@@ -154,8 +154,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── A rule Kit saved -> the only send that goes by itself: "Auto-sending
 │   │   to X" with the seconds left in a ring, a filled Undo chip (esc, or ✕)
 │   │   that drains over the 5 s window (`routing::UNDO`; static under Reduce
-│   │   Motion), a quiet Paste, and the runner-up as a "Send to Y" chip that
-│   │   redirects at once; then "Sent to X" with an "Elsewhere…" chip for the list
+│   │   Motion), and a quiet Paste; no runner-up chip, since the router names
+│   │   none beside a saved rule. Then "Sending to X…" until the router says it
+│   │   went, and only then "Sent to X" and the Sent tone, with an "Elsewhere…"
+│   │   chip for the list
 │   ├── Anything else with somewhere to go (a guess, nothing fitting, no
 │   │   answer) -> "Copied" with the suggestions open under it, Paste and
 │   │   Inspect still beside it; nothing sends until Kit picks
@@ -170,21 +172,24 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   └── Unpicked -> they leave with the capsule after the done hold
 │   ├── Taken back (a rule's send or a pick) -> never
 │   │   ends the capture: the list opens again with the same sessions, the one
-│   │   it went to last ("taken back"), with 1-9, typing, and ⇧⏎ as before.
-│   │   It stays, sent nowhere, until a pick or a dismissal; a click away folds
-│   │   it to "Taken back" with "Elsewhere…". Esc or ✕ dismisses: "Kept ·
-│   │   hex capture send latest", the bundle untouched
+│   │   it went to (by session id) once, last of all ("taken back"), with 1-9,
+│   │   typing, and ⇧⏎ as before. Open, it stays, sent nowhere; a click away
+│   │   folds it to "Taken back" with "Elsewhere…", gives Esc back to the app,
+│   │   and it leaves after the done hold. Esc or ✕ dismisses: "Kept ·
+│   │   hex capture send latest", the bundle untouched. Either way it then
+│   │   waits for the list shortcut, even after the router said the pick went
 │   ├── Too late to take back -> the same list, the session marked "has it",
 │   │   folded "Sent to X · too late to take back"; a pick sends a copy there,
-│   │   and Esc or ✕ just closes
-│   ├── Sends -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
+│   │   and Esc or ✕ just closes. Closed, it doesn't wait for the list shortcut.
+│   │   An Undo OpenCode refuses (an error) reads as too late
+│   ├── Sends -> CaptureCommand::Send{to} and Undo, naming the
 │   │   session by id (`RouteDest.session`), so sessions sharing a title never
 │   │   collide; the capsule shows titles
 │   ├── Keys (capture_host::take_keys), never taking focus:
 │   │   ├── Picker -> ⌥⇧S and Esc through the listener
 │   │   ├── Routed -> the send-to list shortcut (capture.list_hotkey; the
 │   │   │   "Elsewhere…" chip shows it) opens the list; Esc too while a send
-│   │   │   can be undone or a taken-back capture waits for a pick.
+│   │   │   can be undone or a taken-back list is open.
 │   │   │   Unreachable has no list, so the shortcut reaches the app in front
 │   │   ├── Closed, waiting for a pick (a guess or taken-back capture closed
 │   │   │   by Esc, ✕, or its hold, with nothing sent) -> the list shortcut
@@ -211,9 +216,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   │   into the app in front; a send still in its Undo window is taken back
 │   │   └── Inspect -> CaptureCommand::Inspect: opens the contact sheet (Hex has
 │   │       no review window, and opening the bundle could launch Scrawl.app)
-│   └── Long names give way together so the widest row stays inside the panel;
-│       before a name is cut past reading, the runner-up chip goes (the list
-│       still has it)
+│   └── Long names give way together so the widest row stays inside the panel
 └── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
 
 The on-screen picker                     // capture.picker (capture_capsule/picker.rs)
@@ -338,13 +341,13 @@ Where it goes                            // capture.route; capture.routing's aut
 │   ├── Send{to} -> the Rule's own session while Pending sends now; any other
 │   │   pick sends there (taking back a send already elsewhere first) and logs
 │   │   the correction; `always` also saves a rule for its site or app
-│   ├── Undo -> a Pending send never goes; a sent one is withdrawn unless the
-│   │   session acted on it (TooLate)
-│   └── Redirect{to} -> taken back, then sent to `to`
+│   └── Undo -> a Pending send never goes; a sent one is withdrawn unless the
+│       session acted on it (TooLate); an undo the router fails is TooLate too
 ├── Two sends to one place agree -> `offer` names the site or app a rule could
 │   send straight there
 ├── Queued sends -> retried every 15 s, unless Scrawl.app runs or something
-│   serves the ingest port (that process retries); a retried send can't be undone
+│   serves the ingest port (that process retries); a retried send can't be
+│   undone, so its "Sent to X" has no Undo
 └── autoSend off -> no look, no route; the capture is only copied
 
 hex capture list|show|send|route         // capture.cli; docs/cli.md

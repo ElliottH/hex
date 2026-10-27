@@ -1900,7 +1900,9 @@ pub enum HotkeySlot {
 
 impl AppSettings {
     /// Whether `binding` overlaps a shortcut `slot` must not share: the other
-    /// active shortcuts and, where meetings exist (macOS), meeting paste.
+    /// active shortcuts and, where meetings exist (macOS), meeting paste. The
+    /// two capture shortcuts never share a key, on or off, since turning
+    /// captures on can't pull them apart.
     pub fn hotkey_in_use(&self, slot: HotkeySlot, binding: &HotkeyBinding) -> bool {
         let mut others = Vec::new();
         if slot != HotkeySlot::Dictation {
@@ -1918,11 +1920,11 @@ impl AppSettings {
             others.push(HotkeyBinding::paste_meeting_default());
         }
         #[cfg(hex_capture)]
-        if slot != HotkeySlot::Capture && self.capture_on() {
+        if slot == HotkeySlot::CaptureList || (slot != HotkeySlot::Capture && self.capture_on()) {
             others.push(self.capture.hotkey.clone());
         }
         #[cfg(hex_capture)]
-        if slot != HotkeySlot::CaptureList && self.capture_on() {
+        if slot == HotkeySlot::Capture || (slot != HotkeySlot::CaptureList && self.capture_on()) {
             others.push(self.capture.list_hotkey.clone());
         }
         hotkey_conflicts(binding, others)
@@ -2395,6 +2397,22 @@ mod tests {
         assert!(!settings.hotkey_in_use(HotkeySlot::CaptureList, &list));
         // Captures off, the list key never takes a shortcut from the others.
         assert!(!settings.hotkey_in_use(HotkeySlot::PasteLast, &list));
+    }
+
+    /// The two capture shortcuts are kept apart even while captures are off:
+    /// otherwise one could be set to the other's key and captures could
+    /// never be turned on.
+    #[cfg(hex_capture)]
+    #[test]
+    fn the_capture_shortcuts_never_share_a_key_while_off() {
+        let settings = AppSettings::default();
+        assert!(!settings.capture.enabled);
+        let capture = settings.capture.hotkey.clone();
+        let list = settings.capture.list_hotkey.clone();
+        assert!(settings.hotkey_in_use(HotkeySlot::CaptureList, &capture));
+        assert!(settings.hotkey_in_use(HotkeySlot::Capture, &list));
+        // The others don't see them while off.
+        assert!(!settings.hotkey_in_use(HotkeySlot::VoiceAction, &capture));
     }
 
     #[test]

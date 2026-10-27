@@ -566,6 +566,14 @@ pub(crate) struct Ui {
     quit_requested: bool,
 }
 
+/// Which of the window's text editors hold unsaved typing.
+#[derive(Clone, Copy, Debug)]
+struct Drafts {
+    hints: bool,
+    modes: bool,
+    vocabulary: bool,
+}
+
 impl Ui {
     fn load() -> Self {
         Self::load_with(host::Connect::default())
@@ -687,9 +695,7 @@ impl Ui {
     /// The settings with every text field's current text applied.
     fn drafted(&self) -> AppSettings {
         let mut candidate = self.settings.clone();
-        if crate::transcription_models::definition(candidate.transcription.model)
-            .supports_recognition_hints
-        {
+        if self.hints_shown(&candidate) {
             candidate.transcription.recognition_hints = self.hints.text.clone();
         }
         self.modes.project(&mut candidate);
@@ -697,6 +703,25 @@ impl Ui {
             candidate.vocabulary = self.vocabulary.project();
         }
         candidate
+    }
+
+    fn hints_shown(&self, settings: &AppSettings) -> bool {
+        crate::transcription_models::definition(settings.transcription.model)
+            .supports_recognition_hints
+    }
+
+    /// Which editors hold typing the saved settings don't have yet.
+    fn drafts(&self) -> Drafts {
+        let settings = &self.settings;
+        let mut modes = settings.clone();
+        self.modes.project(&mut modes);
+        Drafts {
+            hints: self.hints_shown(settings)
+                && self.hints.text != settings.transcription.recognition_hints,
+            modes: modes.dictation_processing != settings.dictation_processing,
+            vocabulary: self.platform.vocabulary
+                && self.vocabulary.project() != settings.vocabulary,
+        }
     }
 
     /// Saves text-field edits once typing pauses for [`DRAFT_DELAY`].
@@ -815,28 +840,28 @@ impl Ui {
     }
 
     /// Adopts settings the host saved, unless they are the stale copy of an
-    /// edit this window just made. While a text field has typing not yet
-    /// saved, its editor keeps it and everything else is adopted beneath,
-    /// so the draft's save never writes back what another writer (`hex
-    /// settings set`, a capture's saved rule) changed meanwhile.
+    /// edit this window just made. An editor with typing not yet saved
+    /// keeps it; every other editor and setting is adopted beneath, so the
+    /// draft's save never writes back what another writer (`hex settings
+    /// set`, a capture's saved rule) changed meanwhile.
     fn adopt(&mut self, service: AppSettings) -> bool {
         if self.service_settings.as_ref() == Some(&service) {
             return false;
         }
         let changed = service != self.settings;
         if changed {
-            if self.draft_since.is_none() {
-                if service.transcription.recognition_hints
+            let drafts = self.drafts();
+            if !drafts.hints
+                && service.transcription.recognition_hints
                     != self.settings.transcription.recognition_hints
-                {
-                    self.hints = TextEdit::new(service.transcription.recognition_hints.clone());
-                }
-                if service.dictation_processing != self.settings.dictation_processing {
-                    self.modes.reload(&service);
-                }
-                if service.vocabulary != self.settings.vocabulary {
-                    self.vocabulary = vocabulary::VocabularyEditor::new(&service.vocabulary);
-                }
+            {
+                self.hints = TextEdit::new(service.transcription.recognition_hints.clone());
+            }
+            if !drafts.modes && service.dictation_processing != self.settings.dictation_processing {
+                self.modes.reload(&service);
+            }
+            if !drafts.vocabulary && service.vocabulary != self.settings.vocabulary {
+                self.vocabulary = vocabulary::VocabularyEditor::new(&service.vocabulary);
             }
             self.settings = service.clone();
             self.settings_changed();
