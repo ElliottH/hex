@@ -199,6 +199,7 @@ impl ProgrammaticDictation {
 
 struct FinishingProgrammaticDictation {
     id: u64,
+    source: String,
     owner_token: String,
     duration_ms: u64,
     replies: Vec<SyncSender<Result<ProgrammaticDictationResult, String>>>,
@@ -720,6 +721,7 @@ pub fn listen(
                                             job_id,
                                             FinishingProgrammaticDictation {
                                                 id,
+                                                source: active.source.clone(),
                                                 owner_token,
                                                 duration_ms,
                                                 replies: vec![reply],
@@ -732,6 +734,13 @@ pub fn listen(
                                         );
                                     }
                                     Err(error) => {
+                                        tracing::warn!(
+                                            dictation_id = id,
+                                            source = active.source,
+                                            outcome = "worker-error",
+                                            error = %error,
+                                            "programmatic dictation ended"
+                                        );
                                         finish_programmatic_with_result(
                                             id,
                                             owner_token,
@@ -743,6 +752,12 @@ pub fn listen(
                                 }
                             }
                             Finish::Discard => {
+                                tracing::warn!(
+                                    dictation_id = id,
+                                    source = active.source,
+                                    outcome = "discarded",
+                                    "programmatic dictation ended"
+                                );
                                 finish_programmatic_with_result(
                                     id,
                                     owner_token,
@@ -1013,6 +1028,12 @@ pub fn listen(
                 let cancelled = programmatic
                     .take()
                     .expect("programmatic dictation is active");
+                tracing::info!(
+                    dictation_id = cancelled.id,
+                    source = cancelled.source,
+                    outcome = "escape",
+                    "programmatic dictation ended"
+                );
                 cancel_programmatic_capture(
                     cancelled,
                     &input,
@@ -1273,6 +1294,24 @@ pub fn listen(
                     ..
                 } => {
                     if let Some(finishing) = programmatic_results.remove(&job_id) {
+                        match &result {
+                            Ok(transcript) => tracing::info!(
+                                dictation_id = finishing.id,
+                                source = finishing.source,
+                                outcome = "transcribed",
+                                transcript_chars = transcript.chars().count(),
+                                duration_ms = finishing.duration_ms,
+                                "programmatic dictation ended"
+                            ),
+                            Err(error) => tracing::warn!(
+                                dictation_id = finishing.id,
+                                source = finishing.source,
+                                outcome = "worker-error",
+                                duration_ms = finishing.duration_ms,
+                                error = %error,
+                                "programmatic dictation ended"
+                            ),
+                        }
                         let result = result.map(|transcript| ProgrammaticDictationResult {
                             transcript,
                             duration_ms: finishing.duration_ms,
@@ -1339,7 +1378,7 @@ pub fn listen(
                     }
                 }
                 DictationAudioEvent::OpenFailed { error, .. } => {
-                    programmatic = None;
+                    log_programmatic_ended(programmatic.take(), "mic-open-failed");
                     abandon_capture(
                         &mut hotkeys,
                         &mut voice,
@@ -1371,7 +1410,7 @@ pub fn listen(
                 } => {
                     resync_recognizer(&input, recognizer.as_mut())?;
                     if was_recording {
-                        programmatic = None;
+                        log_programmatic_ended(programmatic.take(), "mic-gap");
                         abandon_capture(
                             &mut hotkeys,
                             &mut voice,
@@ -1396,7 +1435,7 @@ pub fn listen(
                 }
                 DictationAudioEvent::Interrupted { was_recording, .. } => {
                     if was_recording {
-                        programmatic = None;
+                        log_programmatic_ended(programmatic.take(), "mic-interrupted");
                     }
                     abandon_capture(
                         &mut hotkeys,
@@ -1737,6 +1776,17 @@ fn level_for(samples: &[f32]) -> DictationLevel {
     DictationLevel {
         rms_db: amplitude_db(rms),
         peak_db: amplitude_db(peak),
+    }
+}
+
+fn log_programmatic_ended(active: Option<ProgrammaticDictation>, outcome: &str) {
+    if let Some(active) = active {
+        tracing::warn!(
+            dictation_id = active.id,
+            source = active.source,
+            outcome,
+            "programmatic dictation ended"
+        );
     }
 }
 
