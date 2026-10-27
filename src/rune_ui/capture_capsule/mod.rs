@@ -55,6 +55,10 @@ const ROW_PX: f32 = 10.0;
 const NUMBER_W: f32 = 10.0;
 pub(crate) const FOOTER_H: f32 = surface::FOOTER_H;
 const FOOTER_GAP: f32 = 24.0;
+/// rune-kit's checkbox.
+const CHECKBOX: f32 = 16.0;
+/// "Elsewhere…"'s hover inset.
+const ELSEWHERE_PX: f32 = 6.0;
 /// The list slides down this far as it fades in.
 const LIST_DROP: f32 = 6.0;
 const LIST_MOVE: rune::Spring = rune::Spring::new(0.32, 0.0);
@@ -985,9 +989,15 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         // and the fill drains over the time left to take it.
         Id::Undo => {
             let tuning = tuning::get();
+            // A rule's countdown fills it; a pick's take-back is quiet.
+            let counting = counting(surface);
             let mut chip = base
                 .radius(CHIP_H * 0.5)
-                .fill(c.layer_02)
+                .fill(if counting {
+                    c.layer_02
+                } else {
+                    Color::TRANSPARENT
+                })
                 .clip_rounded(CHIP_H * 0.5)
                 .gap(KEYCAP_GAP)
                 .hover(c.hover)
@@ -1003,7 +1013,11 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             }
             let keys: Vec<String> = UNDO_KEYS.iter().map(|k| (*k).to_owned()).collect();
             chip.child(keycaps(p, "keys", &keys).w(keycaps_width(UNDO_KEYS)))
-                .child(label(UNDO_LABEL, STRONG, p.text()))
+                .child(label(
+                    UNDO_LABEL,
+                    if counting { STRONG } else { MEDIUM },
+                    if counting { p.text() } else { p.muted() },
+                ))
                 .role("button")
                 .label("Undo")
                 .hit()
@@ -1076,7 +1090,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             field(p, base, typed)
         }
         // Rows live in the list, never in the capsule.
-        Id::Row(_) => base,
+        Id::Row(_) | Id::Always | Id::Elsewhere => base,
     }
 }
 
@@ -1169,7 +1183,13 @@ fn countdown_color(p: Paint, tone: tuning::CountdownColor) -> Color {
 
 /// A send is counting down to going.
 fn counting(surface: &Surface) -> bool {
-    matches!(&surface.pres, Pres::Done(Done { undo: Some(_), .. }))
+    matches!(
+        &surface.pres,
+        Pres::Done(Done {
+            undo_ends: Some(_),
+            ..
+        })
+    )
 }
 
 /// The timer in tabular digits, bound to its `LiveText` in a box as wide
@@ -1265,7 +1285,9 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
         .springs(SpringPair::new(LIST_MOVE, tuning::get().presence_exit));
     let mut body = col().absolute(0.0, 0.0).w(w).padding(LIST_PAD);
     let mut n = 0;
-    let sections = [("Suggested", &list.suggested), ("Recent", &list.recent)];
+    let suggesting = list.suggesting();
+    let first = if suggesting { "Send to" } else { "Suggested" };
+    let sections = [(first, &list.suggested), ("Recent", &list.recent)];
     for (title, rows) in sections {
         if rows.is_empty() {
             continue;
@@ -1280,8 +1302,12 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                 .transition(in_place),
         );
         for dest in rows {
-            let why_w = measure(&dest.why, SMALL);
-            let max = w - 2.0 * LIST_PAD - 2.0 * ROW_PX - NUMBER_W - 3.0 * ROW_PX - why_w;
+            // The name keeps its width; a long reason is cut first, to no
+            // less than two fifths of the row.
+            let content = w - 2.0 * LIST_PAD - 2.0 * ROW_PX - NUMBER_W - 3.0 * ROW_PX;
+            let why_room = (content - measure(&dest.name, MEDIUM)).max(content * 0.4);
+            let why = ellipsize(&dest.why, SMALL, why_room);
+            let max = content - measure(&why, SMALL);
             let mut entry = row()
                 .key(format!("row-{}", dest.name))
                 .trace_name("row")
@@ -1303,7 +1329,16 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                 )
                 .child(label(&ellipsize(&dest.name, MEDIUM, max), MEDIUM, p.text()))
                 .child(el().grow(1.0))
-                .child(label(&dest.why, SMALL, p.muted()))
+                // The best suggestion is marked by its reason.
+                .child(label(
+                    &why,
+                    SMALL,
+                    if suggesting && n == 0 {
+                        p.accent()
+                    } else {
+                        p.muted()
+                    },
+                ))
                 .role("button")
                 .label(dest.name.clone())
                 .hit()
@@ -1316,6 +1351,37 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
             n += 1;
         }
     }
+    if let Some((site, on)) = &list.always {
+        // The box sits centred over the numbers, its words in line with
+        // the names.
+        let inset = ROW_PX + 0.5 * (NUMBER_W - CHECKBOX);
+        let gap = ROW_PX + NUMBER_W + ROW_PX - inset - CHECKBOX;
+        let room = w - 2.0 * LIST_PAD - inset - CHECKBOX - gap - ROW_PX;
+        let copy = format!("Always send {site} here");
+        body = body.child(
+            row()
+                .key("always")
+                .trace_name("always")
+                .center_y()
+                .h(ROW_H)
+                .pl(inset)
+                .pr(ROW_PX)
+                .gap(gap)
+                .radius(ROW_RADIUS)
+                .hover(k.c.hover)
+                .press(k.c.pressed)
+                .child(rune_kit::Checkbox::new(*on).build(k))
+                .child(label(&ellipsize(&copy, SMALL, room), SMALL, p.muted()))
+                .role("checkbox")
+                .label(copy)
+                .hit()
+                .on_press_tx(press(Id::Always))
+                .transition(in_place),
+        );
+    }
+    if suggesting {
+        return list_panel(p, body.child(suggest_footer(p, list, w)), x, w, h, blur);
+    }
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
     let send = list
         .selected_dest()
@@ -1325,6 +1391,7 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
         Footer::KeepCopied => (&["esc"], "Keep copied".to_owned()),
         Footer::Keep(to) => (&["esc"], format!("Keep {to}")),
         Footer::Always(site) => (&["⇧", "⏎"], format!("Always for {site}")),
+        Footer::Elsewhere => (&["esc"], "Keep copied".to_owned()),
     };
     let used = keycaps_width(&["⏎"]) + 5.0 + measure(&send, SMALL) + FOOTER_GAP;
     let second = ellipsize(&second, SMALL, room - used - keycaps_width(keys) - 5.0);
@@ -1354,6 +1421,81 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
                 .child(hint(&["⏎"], &send).key("send"))
                 .child(hint(keys, &second).key("second")),
         );
+    list_panel(p, body, x, w, h, blur)
+}
+
+/// The suggestions' footer: the digits that send, and the list shortcut's
+/// search of every session.
+fn suggest_footer(p: Paint, list: &List, w: f32) -> El {
+    let rows = list.rows().count();
+    let digits = if rows > 1 {
+        format!("1–{rows}")
+    } else {
+        "1".to_owned()
+    };
+    let list_keys = surface::ask_keys();
+    let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
+    let elsewhere_w = 2.0 * ELSEWHERE_PX
+        + measure("Elsewhere…", SMALL)
+        + if list_keys.is_empty() {
+            0.0
+        } else {
+            keycaps_width(&list_keys.iter().map(String::as_str).collect::<Vec<_>>()) + 5.0
+        };
+    // "Send" goes before anything is cut.
+    let say_send =
+        keycaps_width(&[digits.as_str()]) + 5.0 + measure("Send", SMALL) + FOOTER_GAP + elsewhere_w
+            <= room;
+    let mut send = row()
+        .key("send")
+        .center_y()
+        .gap(5.0)
+        .child(keycaps(p, "keys", &[digits]));
+    if say_send {
+        send = send.child(label("Send", SMALL, p.faint()));
+    }
+    let mut elsewhere = row()
+        .key("elsewhere")
+        .center_y()
+        .gap(5.0)
+        .h(FOOTER_H - 6.0)
+        .px(ELSEWHERE_PX)
+        .radius(ROW_RADIUS)
+        .hover(p.k.c.hover)
+        .press(p.k.c.pressed);
+    if !list_keys.is_empty() {
+        elsewhere = elsewhere.child(keycaps(p, "keys", &list_keys));
+    }
+    let elsewhere = elsewhere
+        .child(label("Elsewhere…", SMALL, p.muted()))
+        .role("button")
+        .label("Elsewhere…")
+        .hit()
+        .on_press_tx(press(Id::Elsewhere));
+    col()
+        .w(w - 2.0 * LIST_PAD)
+        .child(
+            el().key("rule")
+                .h(p.hair)
+                .w_full()
+                .mt(LIST_PAD)
+                .fill(p.k.c.border_base),
+        )
+        .child(
+            row()
+                .key("footer")
+                .center_y()
+                .h(FOOTER_H)
+                .pl(ROW_PX)
+                .pr(ROW_PX - ELSEWHERE_PX)
+                .child(send)
+                .child(el().grow(1.0))
+                .child(elsewhere),
+        )
+}
+
+fn list_panel(p: Paint, body: El, x: f32, w: f32, h: f32, blur: f32) -> El {
+    let k = p.k;
     let mut panel = el()
         .key("list")
         .trace_name("list")
@@ -1385,7 +1527,8 @@ pub(crate) fn list_height(list: &List) -> f32 {
         .iter()
         .filter(|rows| !rows.is_empty())
         .count() as f32;
-    let rows = (list.suggested.len() + list.recent.len()) as f32;
+    let rows =
+        (list.suggested.len() + list.recent.len() + usize::from(list.always.is_some())) as f32;
     2.0 * LIST_PAD + sections * HEADER_H + rows * ROW_H + LIST_PAD + 1.0 + FOOTER_H
 }
 

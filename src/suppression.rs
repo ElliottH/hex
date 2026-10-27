@@ -765,7 +765,7 @@ enum ListSwallow {
 /// thread; their releases stay with it even after it closes.
 #[cfg(hex_capture)]
 fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
-    use crate::capture_host::{CapsuleKey, ListTap, capsule_key, list_key, list_open};
+    use crate::capture_host::{CapsuleKey, ListTap, capsule_key, list_key, list_open, suggesting};
     static TAKEN: Mutex<u128> = Mutex::new(0);
     if !matches!(event_type, EVENT_KEY_DOWN | EVENT_KEY_UP) {
         return ListSwallow::No;
@@ -785,7 +785,8 @@ fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
             ListSwallow::No
         };
     }
-    if !list_open() || crate::app_settings::hotkey_capture_active() {
+    let suggesting = suggesting();
+    if !(list_open() || suggesting) || crate::app_settings::hotkey_capture_active() {
         return ListSwallow::No;
     }
     // SAFETY: CoreGraphics supplied a valid event.
@@ -805,6 +806,18 @@ fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
     unsafe { CGEventKeyboardGetUnicodeString(event, typed.len(), &mut length, typed.as_mut_ptr()) };
     let typed = String::from_utf16_lossy(&typed[..length.min(typed.len())]);
     match list_key(code, flags, &typed) {
+        // The suggestions take only their digits; the rest goes on.
+        ListTap::Key(key @ CapsuleKey::Digit(_)) if suggesting => {
+            *taken |= bit;
+            drop(taken);
+            if capsule_key(key) {
+                ListSwallow::AfterListener
+            } else {
+                *TAKEN.lock().unwrap_or_else(|error| error.into_inner()) &= !bit;
+                ListSwallow::No
+            }
+        }
+        _ if suggesting => ListSwallow::No,
         ListTap::Pass => ListSwallow::No,
         ListTap::Swallow => {
             *taken |= bit;

@@ -149,14 +149,26 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   Unanswered, it goes back to recording after 4 s (never while hovered, and
 │   1.5 s after the pointer leaves). Esc never discards
 ├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
-│   capsule runs a rule's undo window and a chip's send itself, and follows
+│   capsule runs a rule's undo window and a pick's send itself, and follows
 │   only Queued (then Sent), how an Undo ended, and a failed send
-│   ├── A rule's send -> "Auto-sending to X" (a pick: "Sending to X") with the
-│   │   seconds left in a ring, a filled Undo chip (esc, or ✕) that drains over
-│   │   the 5 s window (`routing::UNDO`; static under Reduce Motion), a quiet
-│   │   Paste, and the runner-up as a "Send to Y" chip that redirects at once;
-│   │   then "Sent to X" with an "Elsewhere…" chip for the list
-│   ├── Taken back (a rule's send, or a pick from the list or a chip) -> never
+│   ├── A rule Kit saved -> the only send that goes by itself: "Auto-sending
+│   │   to X" with the seconds left in a ring, a filled Undo chip (esc, or ✕)
+│   │   that drains over the 5 s window (`routing::UNDO`; static under Reduce
+│   │   Motion), a quiet Paste, and the runner-up as a "Send to Y" chip that
+│   │   redirects at once; then "Sent to X" with an "Elsewhere…" chip for the list
+│   ├── Anything else with somewhere to go (a guess, nothing fitting, no
+│   │   answer) -> "Copied" with the suggestions open under it, Paste and
+│   │   Inspect still beside it; nothing sends until Kit picks
+│   │   ├── Up to three rows, suggested then recent, numbered 1-3; the first
+│   │   │   carries its reason in the accent
+│   │   ├── "Always send <site> here" (a guess with a site) -> ticked, the pick
+│   │   │   also saves that rule
+│   │   ├── 1-3 or a click -> sends at once: "Sent to X", the Sent tone, and a
+│   │   │   quiet Undo (esc) for the same 5 s, with no ring or drain; ✕ closes
+│   │   ├── The list shortcut or "Elsewhere…" -> the full list with its search field
+│   │   ├── Esc -> folds them to a "Send to…" ask
+│   │   └── Unpicked -> they leave with the capsule after the done hold
+│   ├── Taken back (a rule's send or a pick) -> never
 │   │   ends the capture: the list opens again with the same sessions, the one
 │   │   it went to last ("taken back"), with 1-9, typing, and ⇧⏎ as before.
 │   │   It stays, sent nowhere, until a pick or a dismissal; a click away folds
@@ -165,9 +177,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── Too late to take back -> the same list, the session marked "has it",
 │   │   folded "Sent to X · too late to take back"; a pick sends a copy there,
 │   │   and Esc or ✕ just closes
-│   ├── An ask -> "Copied" and up to four chips, best first ("Send to A", B, C, D);
-│   │   a chip sends at once
-│   ├── Chips -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
+│   ├── Sends -> CaptureCommand::Send{to}, Undo, Redirect{to}, naming the
 │   │   session by id (`RouteDest.session`), so sessions sharing a title never
 │   │   collide; the capsule shows titles
 │   ├── Keys (capture_host::take_keys), never taking focus:
@@ -184,6 +194,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   │   only while the capsule takes it (capture_host::list_key_wanted),
 │   │   │   so suppression passes it through
 │   │   ├── A send from the list counting down -> Esc only (CapsuleKeys::Undo)
+│   │   ├── Suggestions -> Esc and the list shortcut through the listener,
+│   │   │   and at the session tap only 1 to the number of rows with no
+│   │   │   modifier (`capture_host::suggesting`); every other key goes on to
+│   │   │   the app
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a
@@ -191,7 +205,6 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │       is open, and still delivers them) closes the list and gives the
 │   │       keys back; hiding drops the grab
 │   ├── `offer` (a rule offer) -> not drawn; Scrawl's capsule doesn't draw it
-│   ├── Nothing fits, or no answer -> "Send to…" opens the list
 │   ├── Every written capture -> Paste (the one accent action) and Inspect, as
 │   │   Scrawl's capsule has
 │   │   ├── Paste -> CaptureCommand::Paste: the contact sheet, then the summary,
@@ -199,7 +212,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   └── Inspect -> CaptureCommand::Inspect: opens the contact sheet (Hex has
 │   │       no review window, and opening the bundle could launch Scrawl.app)
 │   └── Long names give way together so the widest row stays inside the panel;
-│       before a name is cut past reading, the last route chip goes (the list
+│       before a name is cut past reading, the runner-up chip goes (the list
 │       still has it)
 └── Reduce Motion -> travel jumps, nothing blurs; opacity still fades
 
@@ -485,7 +498,9 @@ Checks:
   fake host, with state buttons, the whole flow, slow motion, Reduce Motion,
   the tones, and live tuning ([tuning.rs](../../src/rune_ui/capture_capsule/tuning.rs);
   "Copy values" copies its `DEFAULT`). It reads and writes no Hex data and
-  records or sends nothing. `--snap --scene countdown|guess|recording`
+  records or sends nothing. The whole flow picks the first suggestion;
+  its "Saved rule" toggle plays a rule's countdown instead. `--snap --scene
+  suggestions|always|elsewhere|picked|countdown|recording`
   renders it. The tones were checked by waveform and level only, never on
   speakers.
 - Picker, in capture_capsule/picker.rs and tests.rs: geometry, label, and

@@ -44,6 +44,9 @@ pub(crate) struct Playground {
     slow: bool,
     looping: bool,
     reduced: bool,
+    /// Whether a saved rule routes the capture (the countdown) rather
+    /// than suggestions.
+    rule: bool,
     sound: bool,
     volume: f32,
     tuning: Tuning,
@@ -97,6 +100,7 @@ fn init() -> CapsuleState {
         slow: false,
         looping: false,
         reduced: false,
+        rule: false,
         sound: true,
         volume: 0.5,
         tuning: tuning::get(),
@@ -115,8 +119,37 @@ const SCENES: &[Scene] = &[
     ("countdown", |s| {
         scene(s, &[record(), Step::Input(stop()), done(), routed(rule())])
     }),
-    ("guess", |s| {
+    ("suggestions", |s| {
         scene(s, &[record(), Step::Input(stop()), done(), routed(guess())])
+    }),
+    ("always", |s| {
+        let mut steps = vec![record(), Step::Input(stop()), done(), routed(guess())];
+        steps.push(Step::Click(Id::Always));
+        scene(s, &steps)
+    }),
+    ("elsewhere", |s| {
+        scene(
+            s,
+            &[
+                record(),
+                Step::Input(stop()),
+                done(),
+                routed(guess()),
+                Step::Input(Input::OpenList),
+            ],
+        )
+    }),
+    ("picked", |s| {
+        scene(
+            s,
+            &[
+                record(),
+                Step::Input(stop()),
+                done(),
+                routed(guess()),
+                Step::Input(Input::SendRow(0)),
+            ],
+        )
     }),
     ("recording", |s| {
         scene(s, &[record(), Step::Input(Input::Chips)])
@@ -202,7 +235,7 @@ impl Playground {
             Action::Finish => {
                 self.at(0.0, Step::Input(stop()));
                 self.at(1.4, done());
-                self.at(1.8, routed(rule()));
+                self.at(1.8, routed(if self.rule { rule() } else { guess() }));
             }
             Action::Undo { .. } => self.at(0.25, Step::Input(Input::Undone(Undone::TakenBack))),
             Action::Cancel
@@ -214,18 +247,24 @@ impl Playground {
         }
     }
 
-    /// The whole flow: record, the chips, stop, write, a rule's countdown,
+    /// The whole flow: record, the chips, stop, write, then the
+    /// suggestions and a pick (or, with a saved rule, its countdown),
     /// sent, and the capsule leaving.
     fn play(&mut self) {
         self.queue.clear();
-        let undo = self.tuning.undo_s;
         self.at(0.0, Step::Input(Input::Dismiss));
         self.at(0.6, record());
         self.at(1.4, Step::Input(Input::Chips));
         self.at(3.2, Step::Input(Input::Worked));
         self.at(4.6, Step::Click(Id::Finish));
         let routed_at = 4.6 + 1.8;
-        let gone = routed_at + undo + 2.5;
+        let gone = if self.rule {
+            routed_at + self.tuning.undo_s + 2.5
+        } else {
+            let picked = routed_at + 1.8;
+            self.at(picked, Step::Input(Input::SendRow(0)));
+            picked + 2.5
+        };
         self.at(gone, Step::Input(Input::Dismiss));
         if self.looping {
             self.at(gone + 1.0, Step::Again);
@@ -298,14 +337,27 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     };
     let list = keys == crate::capture_host::CapsuleKeys::List;
+    let digits = match keys {
+        crate::capture_host::CapsuleKeys::List => 9,
+        crate::capture_host::CapsuleKeys::Suggest { rows } => usize::from(rows),
+        _ => 0,
+    };
     let escape = matches!(
         keys,
         crate::capture_host::CapsuleKeys::List
             | crate::capture_host::CapsuleKeys::Picker
             | crate::capture_host::CapsuleKeys::Route { escape: true }
             | crate::capture_host::CapsuleKeys::Undo
+            | crate::capture_host::CapsuleKeys::Suggest { .. }
     );
+    let digit = match &key.key {
+        Key::Text(t) if !key.mods.alt => {
+            t.parse::<usize>().ok().filter(|d| (1..=digits).contains(d))
+        }
+        _ => None,
+    };
     let input = match &key.key {
+        _ if digit.is_some() => Input::SendRow(digit.unwrap_or(1) - 1),
         Key::Escape if escape => Input::Escape,
         Key::Text(t) if key.mods.alt && key.mods.shift && t.eq_ignore_ascii_case("v") => {
             Input::OpenList
@@ -316,10 +368,7 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
             always: key.mods.shift,
         },
         Key::Backspace if list => Input::Backspace,
-        Key::Text(t) if list => match t.parse::<usize>() {
-            Ok(digit @ 1..=9) => Input::SendRow(digit - 1),
-            _ => Input::Type(t.clone()),
-        },
+        Key::Text(t) if list => Input::Type(t.clone()),
         _ => return false,
     };
     s.inbox.push(input);
@@ -442,16 +491,19 @@ fn states(p: Paint) -> El {
                 .key("row-2")
                 .gap(6.0)
                 .flex_wrap()
-                .child(state_button(p, "Auto-send", || {
+                .child(state_button(p, "Suggestions", || {
+                    vec![record(), Step::Input(stop()), done(), routed(guess())]
+                }))
+                .child(state_button(p, "Pick 1", || {
+                    vec![Step::Input(Input::SendRow(0))]
+                }))
+                .child(state_button(p, "Elsewhere…", || {
+                    vec![Step::Input(Input::OpenList)]
+                }))
+                .child(state_button(p, "Saved rule", || {
                     vec![record(), Step::Input(stop()), done(), routed(rule())]
                 }))
                 .child(state_button(p, "Undo", || vec![Step::Click(Id::Undo)]))
-                .child(state_button(p, "Guess", || {
-                    vec![record(), Step::Input(stop()), done(), routed(guess())]
-                }))
-                .child(state_button(p, "List", || {
-                    vec![Step::Input(Input::OpenList)]
-                }))
                 .child(state_button(p, "Queued", || {
                     vec![
                         record(),
@@ -493,6 +545,11 @@ fn flow_controls(p: Paint, pg: &Playground) -> El {
                         pg.play();
                     }
                     tx.wake_after(Duration::ZERO);
+                }))
+                .child(button(p, "rule", "Saved rule", pg.rule, |s, _| {
+                    if let Some(pg) = s.playground.as_mut() {
+                        pg.rule = !pg.rule;
+                    }
                 }))
                 .child(button(p, "loop", "Loop", pg.looping, |s, tx| {
                     if let Some(pg) = s.playground.as_mut() {

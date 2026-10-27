@@ -160,6 +160,11 @@ fn stills() -> Vec<(&'static str, Pres)> {
             flow.pres(undo_s() + 1.0)
         }),
         ("guess", after(&routed(guess()))),
+        ("guess-always", {
+            let mut beats = routed(guess());
+            beats.push(Click(Id::Always));
+            after(&beats)
+        }),
         ("guess-four", after(&routed(guess_four()))),
         (
             "guess-long",
@@ -290,14 +295,23 @@ fn every_state_draws_its_pieces() {
             &["done", "why", "undo", "paste", "route0", "inspect"],
         ),
         ("rule-final", &["done", "why", "paste", "ask", "inspect"]),
-        ("guess", &["done", "paste", "route0", "route1", "inspect"]),
         (
-            "guess-four",
+            "guess",
             &[
-                "done", "paste", "route0", "route1", "route2", "route3", "inspect",
+                "done",
+                "paste",
+                "inspect",
+                "list",
+                "row-SEER",
+                "always",
+                "elsewhere",
             ],
         ),
-        ("no-answer", &["done", "why", "paste", "ask", "inspect"]),
+        (
+            "guess-four",
+            &["done", "paste", "inspect", "list", "row-SEER"],
+        ),
+        ("no-answer", &["done", "why", "paste", "inspect", "list"]),
         (
             "list-guess",
             &["done", "field", "list", "row-SEER", "footer"],
@@ -313,6 +327,7 @@ fn every_state_draws_its_pieces() {
         ("failed-start", &["paste", "inspect"]),
         ("taken-back", &["paste", "inspect"]),
         ("list-guess", &["paste", "inspect", "route0"]),
+        ("guess", &["field", "route0", "ask"]),
     ];
     let all = stills();
     for (name, pieces) in expect {
@@ -507,6 +522,7 @@ const GOLDENS: &[&str] = &[
     "rule-sent",
     "rule-final",
     "guess",
+    "guess-always",
     "guess-four",
     "no-answer",
     "list-guess",
@@ -672,12 +688,23 @@ fn scripts() -> Vec<Script> {
             ],
             end: 8.8,
         },
+        // The main path: the suggestions, "Always" ticked, then a digit.
         Script {
-            name: "ask-chips",
+            name: "suggest-pick",
+            beats: vec![
+                (0.2, stage(Stage::Transcribing)),
+                (1.2, In(Input::Routed(guess()))),
+                (2.2, Click(Id::Always)),
+                (2.8, In(Input::SendRow(1))),
+            ],
+            end: 6.4,
+        },
+        Script {
+            name: "suggest-escape",
             beats: vec![
                 (0.2, stage(Stage::Transcribing)),
                 (1.2, In(Input::Routed(guess_four()))),
-                (2.6, Click(Id::Route(2))),
+                (2.6, In(Input::Escape)),
             ],
             end: 4.4,
         },

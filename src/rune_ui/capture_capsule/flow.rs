@@ -32,6 +32,8 @@ pub(crate) const MAX_SUGGESTED: usize = 3;
 pub(crate) const MAX_RECENT: usize = 5;
 /// An ask's route chips (Scrawl's `jev::CHIPS`).
 pub(crate) const MAX_ROUTES: usize = 4;
+/// The suggestions a finished capture shows under it, picked with 1–3.
+pub(crate) const SUGGEST_ROWS: usize = 3;
 /// Session names in the capsule are cut to this many characters.
 const ROUTE_NAME_MAX: usize = 18;
 
@@ -186,8 +188,10 @@ pub(crate) enum Input {
     Send {
         always: bool,
     },
-    /// 1–9 in the open list: send to that row.
+    /// 1–9 in the open list (1–3 in the suggestions): send to that row.
     SendRow(usize),
+    /// "Always send <site> here" in the suggestions, ticked or not.
+    ToggleAlways,
     Escape,
     Undone(Undone),
     /// The ✕, or anything that should just close it.
@@ -275,6 +279,8 @@ pub(crate) enum Footer {
     Keep(String),
     /// ⇧⏎ always sends this site to the selected session.
     Always(String),
+    /// The suggestions: 1–3 send, the list shortcut searches every session.
+    Elsewhere,
 }
 
 /// The list under the open capsule.
@@ -285,6 +291,15 @@ pub(crate) struct List {
     /// Across both sections, suggested first.
     pub(crate) selected: usize,
     pub(crate) footer: Footer,
+    /// The suggestions' "Always send <site> here", and whether it's ticked.
+    pub(crate) always: Option<(String, bool)>,
+}
+
+impl List {
+    /// The suggestions a capture opens with, not a search.
+    pub(crate) fn suggesting(&self) -> bool {
+        self.footer == Footer::Elsewhere
+    }
 }
 
 impl List {
@@ -435,6 +450,22 @@ struct Routed {
 struct Open {
     query: String,
     selected: usize,
+    /// Searching every session (the list shortcut, "Elsewhere…"): the field
+    /// takes typing. Otherwise it's the suggestions a capture opens with.
+    typing: bool,
+    /// "Always send <site> here" is ticked: the pick saves a rule.
+    always: bool,
+}
+
+impl Open {
+    fn suggesting() -> Self {
+        Self {
+            query: String::new(),
+            selected: 0,
+            typing: false,
+            always: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -514,6 +545,8 @@ impl Flow {
             (_, Phase::Failed { .. }) => Some(Cue::Failed),
             (Phase::TakenBack { .. }, Phase::TakenBack { .. }) => None,
             (_, Phase::TakenBack { .. }) => Some(Cue::TakenBack),
+            (Phase::Sent(_), Phase::Sent(_)) => None,
+            (_, Phase::Sent(_)) => Some(Cue::Sent),
             (
                 Phase::Routed(Routed {
                     taken_back: true, ..
@@ -541,15 +574,15 @@ impl Flow {
         }
     }
 
-    /// When the send now waiting out its Undo started.
+    /// When the rule's send now counting down started. Only a rule Kit
+    /// saved counts down; a pick goes at once.
     fn counting_since(&self) -> Option<f64> {
         match &self.phase {
             Phase::Routed(Routed {
                 route: Route::Rule { .. },
                 at,
                 ..
-            })
-            | Phase::Sent(Sent { at, .. }) => Some(*at),
+            }) => Some(*at),
             _ => None,
         }
     }
@@ -728,27 +761,46 @@ impl Flow {
                 }),
                 Delivered::Queued { to } => Phase::Queued { to, at: now },
             },
-            (_, Input::Routed(route)) => Phase::Routed(Routed {
-                route,
-                at: now,
-                open: None,
-                taken_back: false,
-                already_with: None,
-            }),
+            // Only a rule Kit saved sends by itself; anything else opens on
+            // its suggestions, and nothing goes until he picks.
+            (_, Input::Routed(route)) => {
+                let suggests = !matches!(route, Route::Rule { .. } | Route::Unreachable { .. })
+                    && sections(&route) != (&[][..], &[][..]);
+                Phase::Routed(Routed {
+                    route,
+                    at: now,
+                    open: suggests.then(Open::suggesting),
+                    taken_back: false,
+                    already_with: None,
+                })
+            }
+            (Phase::Routed(routed), Input::OpenList)
+                if matches!(routed.route, Route::Unreachable { .. }) =>
+            {
+                Phase::Routed(routed)
+            }
             (Phase::Routed(mut routed), Input::OpenList) => {
-                if routed.open.is_none() && !matches!(routed.route, Route::Unreachable { .. }) {
-                    // A guess opens on itself; a rule on the next best place.
-                    let selected = usize::from(matches!(routed.route, Route::Rule { .. }));
-                    routed.open = Some(Open {
-                        query: String::new(),
-                        selected,
-                    });
-                    clamp(&mut routed);
+                match &mut routed.open {
+                    Some(open) if !open.typing => {
+                        open.typing = true;
+                        open.selected = 0;
+                    }
+                    Some(_) => {}
+                    None => {
+                        // A guess opens on itself; a rule on the next best place.
+                        let selected = usize::from(matches!(routed.route, Route::Rule { .. }));
+                        routed.open = Some(Open {
+                            selected,
+                            typing: true,
+                            ..Open::suggesting()
+                        });
+                    }
                 }
+                clamp(&mut routed);
                 Phase::Routed(routed)
             }
             (Phase::Routed(mut routed), input @ (Input::Type(_) | Input::Backspace)) => {
-                if let Some(open) = &mut routed.open {
+                if let Some(open) = routed.open.as_mut().filter(|open| open.typing) {
                     match input {
                         Input::Type(typed) => open.query.push_str(&typed),
                         _ => {
@@ -772,6 +824,12 @@ impl Flow {
             }
             (Phase::Routed(routed), Input::SendRow(row)) => {
                 send(routed, Some(row), false, now, &mut actions)
+            }
+            (Phase::Routed(mut routed), Input::ToggleAlways) => {
+                if let Some(open) = &mut routed.open {
+                    open.always = !open.always;
+                }
+                Phase::Routed(routed)
             }
             (Phase::Routed(mut routed), Input::ClickAway) if !self.hovered => {
                 routed.open = None;
@@ -966,8 +1024,14 @@ impl Flow {
             (_, Id::Undo) => self.input(Input::Escape, now),
             (_, Id::Ask) => self.input(Input::OpenList, now),
             (_, Id::Row(row)) => self.input(Input::SendRow(row), now),
-            // ✕ beside "Sending to X…" cancels the send, as Undo does.
-            (_, Id::Close) => match self.undoable(now) {
+            (_, Id::Always) => self.input(Input::ToggleAlways, now),
+            (_, Id::Elsewhere) => self.input(Input::OpenList, now),
+            // ✕ beside a rule's "Auto-sending to X" cancels the send, as
+            // Undo does; beside a pick's "Sent to X" it just closes.
+            (_, Id::Close) => match self
+                .undoable(now)
+                .filter(|_| self.counting_since().is_some())
+            {
                 Some(undo) => {
                     if let Phase::Routed(routed) = &mut self.phase {
                         routed.open = None;
@@ -993,7 +1057,18 @@ impl Flow {
                 .as_ref()
                 .map(|_| CapsuleKeys::Route { escape: false }),
             Phase::Selecting(_) => Some(CapsuleKeys::Picker),
-            Phase::Routed(Routed { open: Some(_), .. }) => Some(CapsuleKeys::List),
+            Phase::Routed(Routed {
+                open: Some(open),
+                route,
+                ..
+            }) => Some(if open.typing {
+                CapsuleKeys::List
+            } else {
+                let rows = list(route, open).rows().count();
+                CapsuleKeys::Suggest {
+                    rows: u8::try_from(rows).unwrap_or(u8::MAX),
+                }
+            }),
             Phase::Routed(Routed {
                 route: Route::Unreachable { .. },
                 ..
@@ -1158,16 +1233,14 @@ impl Flow {
                 hand_off: true,
                 ..Done::plain(Lead::Check, "Copied")
             }),
-            Phase::Sent(sent) => {
-                let undo = undo_left(sent.at);
-                Pres::Done(Done {
-                    why: sent.rule_saved.then(|| "rule saved".into()),
-                    undo,
-                    undo_ends: undo.map(|_| sent.at + undo_s()),
-                    hand_off: true,
-                    ..Done::plain(lead(undo), sending(&sent.to, undo, false))
-                })
-            }
+            // A pick went at once: the check, and a plain Undo (no ring,
+            // no drain) while it can still be taken back.
+            Phase::Sent(sent) => Pres::Done(Done {
+                why: sent.rule_saved.then(|| "rule saved".into()),
+                undo: undo_left(sent.at),
+                hand_off: true,
+                ..Done::plain(Lead::Check, sending(&sent.to, None))
+            }),
             Phase::Routed(routed) => Pres::Done(routed_done(routed, undo_left(routed.at))),
         }
     }
@@ -1191,12 +1264,14 @@ fn hold_until(phase: &Phase) -> Option<f64> {
             Some(at + tuning::get().done_hold_s)
         }
         Phase::Sent(sent) => Some(sent.at + tuning::get().done_hold_s),
+        // The suggestions leave like any finished capsule; a search, or
+        // a take-back waiting for a pick, stays.
         Phase::Routed(Routed {
             at,
-            open: None,
+            open,
             taken_back: false,
             ..
-        }) => Some(at + tuning::get().done_hold_s),
+        }) if open.as_ref().is_none_or(|open| !open.typing) => Some(at + tuning::get().done_hold_s),
         Phase::TakenBack { at } | Phase::Kept { at } | Phase::Failed { at, .. } => {
             Some(at + tuning::get().brief_hold_s)
         }
@@ -1228,6 +1303,24 @@ fn list(route: &Route, open: &Open) -> List {
             .collect()
     };
     let (suggested, recent) = sections(route);
+    if !open.typing {
+        let site = match route {
+            Route::Guess { site, .. } => site.clone(),
+            _ => None,
+        };
+        return List {
+            suggested: suggested
+                .iter()
+                .chain(recent)
+                .take(SUGGEST_ROWS)
+                .cloned()
+                .collect(),
+            recent: Vec::new(),
+            selected: open.selected,
+            footer: Footer::Elsewhere,
+            always: site.map(|site| (site, open.always)),
+        };
+    }
     let footer = match route {
         Route::Rule { to, .. } => Footer::Keep(to.clone()),
         Route::Guess {
@@ -1240,6 +1333,7 @@ fn list(route: &Route, open: &Open) -> List {
         recent: keep(recent, MAX_RECENT),
         selected: open.selected,
         footer,
+        always: None,
     }
 }
 
@@ -1265,7 +1359,7 @@ fn send(
     let Some(dest) = row.and_then(|row| list.rows().nth(row)) else {
         return Phase::Routed(routed);
     };
-    let site = match (&routed.route, always) {
+    let site = match (&routed.route, always || open.always) {
         (Route::Guess { site, .. } | Route::Rule { site, .. }, true) => site.clone(),
         _ => None,
     };
@@ -1329,8 +1423,8 @@ fn offered_again(route: Route, to: &str, too_late: bool, now: f64) -> Option<Rou
         },
         at: now,
         open: Some(Open {
-            query: String::new(),
-            selected: 0,
+            typing: true,
+            ..Open::suggesting()
         }),
         taken_back: true,
         already_with: too_late.then(|| to.to_owned()),
@@ -1358,13 +1452,11 @@ fn route_chips(route: &Route) -> Box<dyn Iterator<Item = (&Dest, Option<&str>)> 
     }
 }
 
-/// "Sending to X" while a send can be taken back ("Auto-sending" when a
-/// rule sends it, not a pick), then "Sent to X".
-fn sending(to: &str, undo: Option<u32>, auto: bool) -> String {
-    match (undo, auto) {
-        (Some(_), true) => format!("Auto-sending to {}", short(to)),
-        (Some(_), false) => format!("Sending to {}", short(to)),
-        (None, _) => format!("Sent to {}", short(to)),
+/// "Auto-sending to X" while a rule's send counts down, then "Sent to X".
+fn sending(to: &str, undo: Option<u32>) -> String {
+    match undo {
+        Some(_) => format!("Auto-sending to {}", short(to)),
+        None => format!("Sent to {}", short(to)),
     }
 }
 
@@ -1423,13 +1515,9 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
             undo_ends: undo.map(|_| routed.at + undo_s()),
             routes: if undo.is_some() { routes } else { Vec::new() },
             ask: undo.is_none().then(|| "Elsewhere…".into()),
-            ..Done::plain(lead(undo), sending(to, undo, true))
+            ..Done::plain(lead(undo), sending(to, undo))
         },
-        // The chips are the ask; ⌥⇧V still opens the whole list.
-        Route::Guess { .. } if !routes.is_empty() => Done {
-            routes,
-            ..Done::plain(Lead::Check, "Copied")
-        },
+        // The suggestions are the ask (closed, the list shortcut opens them).
         Route::Guess { .. } => Done {
             ask: Some("Send to…".into()),
             ..Done::plain(Lead::Check, "Copied")
@@ -1450,7 +1538,16 @@ fn routed_done(routed: &Routed, undo: Option<u32>) -> Done {
         },
     };
     match &routed.open {
-        // Open, the field takes the chips' place.
+        // The suggestions hang under a finished capsule that keeps Paste
+        // and Inspect, and its note.
+        Some(open) if !open.typing => Done {
+            routes: Vec::new(),
+            ask: None,
+            open: Some((String::new(), list(&routed.route, open))),
+            hand_off: true,
+            ..base
+        },
+        // Searching, the field takes the chips' place.
         Some(open) => Done {
             why: None,
             undo: None,
@@ -1565,6 +1662,8 @@ mod tests {
         assert_ne!(before, after, "so the surface lays the chip out again");
         publish_list_keycaps(None);
         assert!(done(&flow, 0.5).ask_keys.is_empty());
+        // The keycaps are the process's: later tests and stills expect ⌥⇧V.
+        publish_list_keycaps(Some(&HotkeyBinding::capture_list_default()));
     }
 
     #[test]
@@ -1797,7 +1896,7 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1_000.0).text, "Sending to HOME");
+        assert_eq!(done(&flow, 1_000.0).text, "Sent to HOME");
 
         // Clicking away folds the list but keeps the capsule, and the list
         // shortcut opens it again; Escape (or ✕) is the dismissal, and the bundle is kept.
@@ -1824,7 +1923,7 @@ mod tests {
         );
         assert!(flow.tick(1_001.0 + tuning::get().brief_hold_s));
 
-        // ✕ beside "Sending to SEER…" cancels the send rather than letting
+        // ✕ beside "Auto-sending to SEER" cancels the send rather than letting
         // it go unseen.
         let mut flow = Flow::new();
         flow.input(Input::Routed(rule_of_three()), 0.0);
@@ -1836,6 +1935,12 @@ mod tests {
         assert_eq!(rows(&flow, 1.2)[0], "HEX");
         assert!(flow.click(Id::Close, 2.0).is_empty());
         assert_eq!(done(&flow, 2.0).text, "Kept");
+        // Beside a pick's "Sent to X", ✕ just closes.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.input(Input::SendRow(0), 1.0);
+        assert!(flow.click(Id::Close, 2.0).is_empty());
+        assert_eq!(flow.pres(2.0), Pres::Hidden);
         // After the window, ✕ dismisses as before.
         let mut flow = Flow::new();
         flow.input(Input::Routed(rule_of_three()), 0.0);
@@ -1866,7 +1971,7 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1_000.0).text, "Sending to HOME");
+        assert_eq!(done(&flow, 1_000.0).text, "Sent to HOME");
 
         // Folded, it says where it is; dismissed, it just goes.
         let mut flow = Flow::new();
@@ -1902,18 +2007,18 @@ mod tests {
     }
 
     #[test]
-    fn route_chips_send_at_once_and_a_rules_runner_up_redirects() {
+    fn a_pick_sends_at_once_and_a_rules_runner_up_redirects() {
         use super::super::surface::Id;
         let mut flow = Flow::new();
         flow.input(Input::Routed(guess()), 0.0);
         assert_eq!(
-            flow.click(Id::Route(1), 1.0),
+            flow.click(Id::Row(1), 1.0),
             [Action::Send {
                 to: "HEX".into(),
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sending to HEX");
+        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
         assert_eq!(done(&flow, 1.0).undo, Some(5));
 
         let mut flow = Flow::new();
@@ -1926,7 +2031,7 @@ mod tests {
                 to: "HEX".into()
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sending to HEX");
+        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
     }
 
     /// A switch that can't start settles the recording it discarded as
@@ -1999,13 +2104,13 @@ mod tests {
         let mut flow = Flow::new();
         flow.input(Input::Routed(twins()), 0.0);
         assert_eq!(
-            flow.click(Id::Route(1), 1.0),
+            flow.click(Id::Row(1), 1.0),
             [Action::Send {
                 to: "ses_b".into(),
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 1.0).text, "Sending to HEX");
+        assert_eq!(done(&flow, 1.0).text, "Sent to HEX");
 
         let mut flow = Flow::new();
         flow.input(Input::Routed(twins()), 0.0);
@@ -2021,7 +2126,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ask_shows_at_most_four_chips_with_long_names_cut() {
+    fn suggestions_stop_at_three() {
         let mut flow = Flow::new();
         let suggested = ["SEER", "HEX", "HOME", "A VERY LONG SESSION TITLE", "FIFTH"]
             .map(|name| Dest::new(name, ""))
@@ -2034,10 +2139,9 @@ mod tests {
             }),
             0.0,
         );
-        assert_eq!(
-            done(&flow, 0.0).routes,
-            ["Send to SEER", "HEX", "HOME", "A VERY LONG SESSI…"]
-        );
+        let (_, list) = done(&flow, 0.0).open.unwrap();
+        assert_eq!(list.rows().count(), SUGGEST_ROWS);
+        assert_eq!(list.always, None, "no site, no rule to save");
     }
 
     #[test]
@@ -2107,8 +2211,13 @@ mod tests {
         let mut flow = Flow::new();
         flow.input(Input::Routed(guess()), 0.0);
         let asked = done(&flow, 0.0);
-        assert_eq!(asked.routes, ["Send to SEER", "HEX"]);
-        assert!(asked.ask.is_none(), "the chips are the ask");
+        assert!(asked.routes.is_empty() && asked.ask.is_none());
+        assert!(
+            asked.hand_off,
+            "Paste and Inspect stay beside the suggestions"
+        );
+        let (_, suggestions) = asked.open.expect("a guess opens on its suggestions");
+        assert!(suggestions.suggesting());
         flow.input(Input::OpenList, 1.0);
         let open = done(&flow, 1.0);
         let (query, list) = open.open.expect("open");
@@ -2133,8 +2242,56 @@ mod tests {
                 always: None
             }]
         );
-        assert_eq!(done(&flow, 2.0).text, "Sending to HOME");
-        assert_eq!(done(&flow, 2.0).undo, Some(5));
+        let sent = done(&flow, 2.0);
+        assert_eq!(sent.text, "Sent to HOME", "a pick goes at once");
+        assert_eq!(sent.lead, Lead::Check);
+        assert_eq!(sent.undo, Some(5), "and can still be taken back");
+        assert_eq!(sent.undo_ends, None, "without a countdown");
+    }
+
+    #[test]
+    fn a_guess_suggests_three_and_a_digit_sends_nothing_before_it() {
+        use super::super::surface::Id;
+        use crate::capture_host::CapsuleKeys;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        let (_, list) = done(&flow, 0.0).open.unwrap();
+        let names: Vec<_> = list.rows().map(|dest| dest.name.as_str()).collect();
+        assert_eq!(names, ["SEER", "HEX", "HOME"], "suggested, then recent");
+        assert_eq!(list.selected, 0, "the best is marked");
+        assert_eq!(list.footer, Footer::Elsewhere);
+        assert_eq!(list.always, Some(("problems.kitlangton.com".into(), false)));
+        assert_eq!(flow.keys(0.0), Some(CapsuleKeys::Suggest { rows: 3 }));
+        assert!(flow.take_cues().is_empty(), "nothing sent, nothing heard");
+        flow.tick(4.0);
+        assert!(matches!(flow.pres(4.0), Pres::Done(_)), "no countdown runs");
+        flow.click(Id::Always, 4.5);
+        assert!(done(&flow, 4.5).open.unwrap().1.always.unwrap().1);
+        assert_eq!(
+            flow.input(Input::SendRow(1), 5.0),
+            [Action::Send {
+                to: "HEX".into(),
+                always: Some("problems.kitlangton.com".into())
+            }]
+        );
+        assert_eq!(flow.take_cues(), [Cue::Sent], "a pick sounds as it goes");
+        assert_eq!(done(&flow, 5.0).why.as_deref(), Some("rule saved"));
+    }
+
+    #[test]
+    fn escape_folds_the_suggestions_and_they_leave_like_any_capsule() {
+        use crate::capture_host::CapsuleKeys;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.input(Input::Escape, 1.0);
+        let folded = done(&flow, 1.0);
+        assert_eq!(folded.open, None);
+        assert_eq!(folded.ask.as_deref(), Some("Send to…"));
+        assert_eq!(flow.keys(1.0), Some(CapsuleKeys::Route { escape: false }));
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(guess()), 0.0);
+        flow.tick(tuning::get().done_hold_s);
+        assert_eq!(flow.pres(tuning::get().done_hold_s), Pres::Hidden);
     }
 
     #[test]
@@ -2184,7 +2341,7 @@ mod tests {
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Done), 0.0);
         flow.input(Input::Routed(guess()), 0.0);
-        assert_eq!(flow.keys(1.0), Some(CapsuleKeys::Route { escape: false }));
+        assert_eq!(flow.keys(1.0), Some(CapsuleKeys::Suggest { rows: 3 }));
         // Its hold runs out: hidden, but ⌥⇧V is still the capsule's.
         assert!(flow.tick(hold + 1.0));
         assert_eq!(flow.pres(hold + 1.0), Pres::Hidden);
@@ -2382,7 +2539,8 @@ mod tests {
         );
         let shown = done(&flow, 0.0);
         assert_eq!(shown.why.as_deref(), Some("the router didn't answer"));
-        assert_eq!(shown.ask.as_deref(), Some("Send to…"));
+        let (_, list) = shown.open.expect("recent sessions are the suggestions");
+        assert_eq!(list.rows().next().unwrap().name, "HOME");
     }
 
     #[test]

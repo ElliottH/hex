@@ -147,6 +147,11 @@ pub(crate) enum Id {
     /// The open capsule's field.
     Field,
     Row(usize),
+    /// The suggestions' "Always send <site> here".
+    Always,
+    /// The suggestions' "Elsewhere…": the send-to list shortcut searches
+    /// every session.
+    Elsewhere,
 }
 
 impl Id {
@@ -177,6 +182,8 @@ impl Id {
             Id::Inspect => "inspect",
             Id::Field => "field",
             Id::Row(_) => "row",
+            Id::Always => "always",
+            Id::Elsewhere => "elsewhere",
         }
     }
 
@@ -210,7 +217,7 @@ impl Id {
             Id::Ask => 18,
             Id::Inspect => 19,
             Id::Close => 20,
-            Id::Row(_) => 21,
+            Id::Row(_) | Id::Always | Id::Elsewhere => 21,
         }
     }
 }
@@ -315,7 +322,11 @@ fn done_row(done: &Done, routes: &[String], cap: f32, raw: &mut Vec<(Id, String,
             false,
         ));
     }
-    if done.open.is_some() {
+    if done
+        .open
+        .as_ref()
+        .is_some_and(|(_, list)| !list.suggesting())
+    {
         raw.push((Id::Field, String::new(), FIELD_MIN, false));
     }
     if done.undo.is_some() {
@@ -1020,6 +1031,7 @@ mod tests {
                     recent: vec![Dest::new("HOME", "yesterday")],
                     selected: 0,
                     footer: Footer::KeepCopied,
+                    always: None,
                 },
             )),
             ..Done::plain(Lead::Check, "Copied")
