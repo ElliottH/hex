@@ -157,15 +157,10 @@ fn stills() -> Vec<(&'static str, Pres)> {
             ))]),
         ),
         ("rule-sent", after(&routed(rule()))),
-        ("rule-sending", {
-            let mut flow = Flow::new();
-            flow.input(Input::Routed(rule()), 0.0);
-            flow.pres(undo_s() + 0.2)
-        }),
         ("rule-final", {
             let mut flow = Flow::new();
             flow.input(Input::Routed(rule()), 0.0);
-            flow.input(Input::Settled, undo_s() + 0.2);
+            flow.input(Input::Settled, 0.2);
             flow.pres(undo_s() + 1.0)
         }),
         ("guess", after(&routed(guess()))),
@@ -300,7 +295,6 @@ fn every_state_draws_its_pieces() {
         ("saved", &["done", "paste", "inspect", "close"]),
         ("failed", &["done", "close"]),
         ("rule-sent", &["done", "why", "undo", "paste", "inspect"]),
-        ("rule-sending", &["done", "why", "paste", "ask", "inspect"]),
         ("rule-final", &["done", "why", "paste", "ask", "inspect"]),
         (
             "guess",
@@ -538,7 +532,6 @@ const GOLDENS: &[&str] = &[
     "processing",
     "saved",
     "rule-sent",
-    "rule-sending",
     "rule-final",
     "guess",
     "guess-always",
@@ -732,9 +725,9 @@ fn scripts() -> Vec<Script> {
             beats: vec![
                 (0.2, stage(Stage::Transcribing)),
                 (1.2, In(Input::Routed(rule()))),
-                (1.2 + undo_s() + 0.3, In(Input::Settled)),
+                (1.5, In(Input::Settled)),
             ],
-            // The whole countdown, "Sending", then "Sent" once it went.
+            // "Sent" at once, its Undo, then the list chip once it ends.
             end: 1.2 + undo_s() + 1.9,
         },
         Script {

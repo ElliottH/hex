@@ -292,7 +292,7 @@ enum Command {
     #[cfg(hex_capture)]
     #[command(name = "capsule-playground", hide = true)]
     CapsulePlayground {
-        /// Rune's flags, such as `--snap out.png --scene countdown`.
+        /// Rune's flags, such as `--snap out.png --scene rule`.
         #[arg(last = true)]
         rune_args: Vec<String>,
     },

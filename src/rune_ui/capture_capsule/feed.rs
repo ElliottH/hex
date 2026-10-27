@@ -114,9 +114,10 @@ impl Follow {
     }
 
     /// What the router's news for the shown capture tells the capsule. The
-    /// capsule runs a rule's undo window and a chip's send itself, so only
-    /// what it can't know moves it: the answer, a send OpenCode didn't
-    /// take (and its later retry), how an Undo ended, and a failed send.
+    /// capsule shows a rule's or a chip's send as sent itself, so only what
+    /// it can't know moves it: the answer, the send going (for its sound),
+    /// a send OpenCode didn't take (and its later retry), how an Undo
+    /// ended, and a failed send.
     fn routed(&mut self, snapshot: &CaptureSnapshot) -> Vec<Input> {
         let Some((bundle, _)) = &self.shown else {
             return Vec::new();
@@ -671,9 +672,10 @@ mod tests {
             recent: vec![dest("HOME", "yesterday")],
             site: Some("seer.example.com".into()),
         };
-        let pending = Some(RouteDelivery::Pending { to: "SEER".into() });
+        // The router sends a rule's answer at once.
+        let sending = || Some(RouteDelivery::Sending { to: "SEER".into() });
         assert_eq!(
-            follow.next(&routed("a", rule(), pending.clone())),
+            follow.next(&routed("a", rule(), sending())),
             [Input::Routed(Route::Rule {
                 to: Dest::new("SEER", "rule").session("ses_SEER"),
                 suggested: vec![
@@ -684,10 +686,9 @@ mod tests {
                 site: Some("seer.example.com".into()),
             })]
         );
-        // The capsule counts the undo window down and says Sent itself.
-        let sending = Some(RouteDelivery::Sending { to: "SEER".into() });
-        assert_eq!(follow.next(&routed("a", rule(), sending)), []);
-        // Sent only settles it: the list shortcut no longer brings it back.
+        assert_eq!(follow.next(&routed("a", rule(), sending())), []);
+        // Sent settles it (the list shortcut no longer brings it back) and
+        // sounds Sent.
         let sent = Some(RouteDelivery::Sent { to: "SEER".into() });
         assert_eq!(follow.next(&routed("a", rule(), sent)), [Input::Settled]);
         assert_eq!(

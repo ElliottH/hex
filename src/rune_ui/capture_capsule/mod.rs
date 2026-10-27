@@ -250,9 +250,6 @@ pub(crate) struct Animated {
     clock: LiveText,
     /// `surface.morphs` as last passed to the meter's edge glow.
     morphs: u32,
-    /// The Undo chip's fill draining to the end of its window: the
-    /// window's end, the chip's width, and the track.
-    drain: Option<(f64, f32, rune::Tween<[f32; 4]>)>,
 }
 
 impl Animated {
@@ -265,7 +262,6 @@ impl Animated {
             meter,
             clock: LiveText::new(surface.clock.clone()),
             morphs: surface.morphs,
-            drain: None,
         }
     }
 
@@ -278,8 +274,7 @@ impl Animated {
 
     /// Tells the meter what the surface shows: which loops run, at what
     /// speed, and when a morph lights the edge.
-    fn sync(&mut self, surface: &Surface, now: f64) {
-        self.drain(surface, now);
+    fn sync(&mut self, surface: &Surface) {
         let activity = match surface.pres {
             Pres::Recording { .. } => 1,
             Pres::Processing => 2,
@@ -298,42 +293,6 @@ impl Animated {
         if wake {
             self.meter.wake();
         }
-    }
-
-    /// Starts the Undo chip's drain for a new window, from what's left of
-    /// it; a remount keeps the same track, so it never restarts.
-    fn drain(&mut self, surface: &Surface, now: f64) {
-        let ends = match &surface.pres {
-            Pres::Done(Done {
-                undo_ends: Some(ends),
-                ..
-            }) => *ends,
-            _ => {
-                self.drain = None;
-                return;
-            }
-        };
-        let Some(w) = surface
-            .items
-            .iter()
-            .find(|shown| shown.id == Id::Undo)
-            .map(|shown| shown.rect[2])
-        else {
-            return;
-        };
-        if self
-            .drain
-            .as_ref()
-            .is_some_and(|(e, width, _)| *e == ends && (*width - w).abs() < 0.5)
-        {
-            return;
-        }
-        let total = flow::undo_s().max(0.1);
-        let left = (ends - now).clamp(0.0, total);
-        let from = [0.0, 0.0, w * (left / total) as f32, CHIP_H];
-        let tween =
-            rune::Tween::linear(from, [0.0, 0.0, 0.0, CHIP_H], Duration::from_secs_f64(left));
-        self.drain = Some((ends, w, tween));
     }
 }
 
@@ -472,7 +431,7 @@ impl CapsuleState {
         let actions = self.flow.click(id, now);
         self.dispatch(actions);
         self.present(now);
-        self.live.sync(&self.surface, now);
+        self.live.sync(&self.surface);
         tx.wake_after(Duration::ZERO);
     }
 
@@ -481,7 +440,7 @@ impl CapsuleState {
         let now = self.now;
         self.flow.hover(on, now);
         self.present(now);
-        self.live.sync(&self.surface, now);
+        self.live.sync(&self.surface);
         tx.wake_after(Duration::ZERO);
     }
 
@@ -530,7 +489,7 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
         changed |= s.live.set_clock(&mut s.surface, &clock, now);
         wake = earliest(wake, Some(whole as f64 + 1.0 - secs));
     }
-    s.live.sync(&s.surface, now);
+    s.live.sync(&s.surface);
 
     // The overlay stays up while the capsule leaves, then hides.
     let hidden = matches!(s.surface.pres, Pres::Hidden);
@@ -985,39 +944,15 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         Id::Why => placed(row().center_y(), shown)
             .trace_name("why")
             .child(label(shown.text(), SMALL, p.faint())),
-        // The way out of a send that's about to go, so it carries the fill,
-        // and the fill drains over the time left to take it.
+        // The quiet way out of a send that just went.
         Id::Undo => {
-            let tuning = tuning::get();
-            // A rule's countdown fills it; a pick's take-back is quiet.
-            let counting = counting(surface);
-            let mut chip = base
-                .radius(CHIP_H * 0.5)
-                .fill(if counting {
-                    c.layer_02
-                } else {
-                    Color::TRANSPARENT
-                })
-                .clip_rounded(CHIP_H * 0.5)
+            let keys: Vec<String> = UNDO_KEYS.iter().map(|k| (*k).to_owned()).collect();
+            base.radius(CHIP_H * 0.5)
                 .gap(KEYCAP_GAP)
                 .hover(c.hover)
-                .press(c.pressed);
-            if let Some((_, w, drain)) = live.drain.as_ref().filter(|_| !surface.reduced) {
-                chip = chip.child(
-                    el().key("drain")
-                        .absolute(0.0, 0.0)
-                        .size(*w, CHIP_H)
-                        .fill(p.k.alpha(countdown_color(p, tuning.countdown), tuning.drain_alpha))
-                        .live_rect(drain),
-                );
-            }
-            let keys: Vec<String> = UNDO_KEYS.iter().map(|k| (*k).to_owned()).collect();
-            chip.child(keycaps(p, "keys", &keys).w(keycaps_width(UNDO_KEYS)))
-                .child(label(
-                    UNDO_LABEL,
-                    if counting { STRONG } else { MEDIUM },
-                    if counting { p.text() } else { p.muted() },
-                ))
+                .press(c.pressed)
+                .child(keycaps(p, "keys", &keys).w(keycaps_width(UNDO_KEYS)))
+                .child(label(UNDO_LABEL, MEDIUM, p.muted()))
                 .role("button")
                 .label("Undo")
                 .hit()
@@ -1050,16 +985,6 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
             keyed(p, base, &keys, &shown.ident, MEDIUM).on_press_tx(press(id))
         }
-        // Quiet while a send counts down, so Undo is what stands out.
-        Id::Paste if counting(surface) => base
-            .radius(CHIP_H * 0.5)
-            .hover(c.hover)
-            .press(c.pressed)
-            .child(label("Paste", STRONG, p.muted()))
-            .role("button")
-            .label("Paste")
-            .hit()
-            .on_press_tx(press(id)),
         Id::Paste => base
             .radius(CHIP_H * 0.5)
             .fill(c.bg_contrast)
@@ -1149,7 +1074,6 @@ fn glyph(p: Paint, lead: Lead) -> El {
     let (color, id) = match lead {
         Lead::Check => (p.success(), Id::Done),
         Lead::Warning => (p.k.c.warning.fg, Id::Why),
-        Lead::Countdown(seconds) => return countdown(p, seconds),
     };
     canvas(icon(id, CHECK * 2.7 / 24.0, color))
         .absolute(8.0, (CHIP_H - CHECK) * 0.5)
@@ -1157,40 +1081,6 @@ fn glyph(p: Paint, lead: Lead) -> El {
 }
 
 const CHECK: f32 = 16.0;
-
-/// The seconds left to take a send back, in a ring where the check will
-/// be.
-fn countdown(p: Paint, seconds: u32) -> El {
-    let color = countdown_color(p, tuning::get().countdown);
-    row()
-        .center()
-        .absolute(8.0, (CHIP_H - CHECK) * 0.5)
-        .size(CHECK, CHECK)
-        .radius(CHECK * 0.5)
-        .border(1.5, color)
-        .child(label(&seconds.to_string(), RING_DIGIT, color))
-}
-
-const RING_DIGIT: rune::TextStyle = rune::TextStyle::new(10.0, 650.0).features("'tnum' 1");
-
-fn countdown_color(p: Paint, tone: tuning::CountdownColor) -> Color {
-    match tone {
-        tuning::CountdownColor::Text => p.text(),
-        tuning::CountdownColor::Accent => p.accent(),
-        tuning::CountdownColor::Success => p.success(),
-    }
-}
-
-/// A send is counting down to going.
-fn counting(surface: &Surface) -> bool {
-    matches!(
-        &surface.pres,
-        Pres::Done(Done {
-            undo_ends: Some(_),
-            ..
-        })
-    )
-}
 
 /// The timer in tabular digits, bound to its `LiveText` in a box as wide
 /// as the clock.

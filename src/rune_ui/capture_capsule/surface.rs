@@ -135,7 +135,7 @@ pub(crate) enum Id {
     Done,
     /// A quiet word on why, after the label.
     Why,
-    /// The Undo countdown chip.
+    /// The Undo chip, while a send can be taken back.
     Undo,
     /// Pastes the capture: the one accent action.
     Paste,
@@ -1089,7 +1089,7 @@ mod tests {
     }
 
     #[test]
-    fn the_countdown_keeps_its_chip_and_width() {
+    fn the_undo_chip_keeps_its_piece_and_width() {
         let (a, three) = layout(&ruled(Some(3)), "0:00");
         let (b, two) = layout(&ruled(Some(2)), "0:00");
         assert_eq!(a, b, "tabular digits");

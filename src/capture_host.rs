@@ -60,7 +60,7 @@ pub use library::{
     explain as explain_capture, list as list_captures, send as send_capture, show as show_capture,
 };
 pub use routing::CaptureRoute;
-pub use routing::{RouteAnswer, RouteDelivery, RouteDest, UNDO};
+pub use routing::{RouteAnswer, RouteDelivery, RouteDest};
 
 /// The sink's capacity in microphone chunks (about 10 ms each): seconds of
 /// slack before a stalled collector starts dropping audio as a gap.
@@ -200,9 +200,8 @@ pub enum CaptureCommand {
     /// already elsewhere is taken back first. `always` also saves a rule
     /// sending its site or app there from now on.
     Send { to: String, always: bool },
-    /// Takes back the newest capture's send: a rule's send waiting out
-    /// [`routing::UNDO`] never goes; one OpenCode took is withdrawn unless
-    /// the session already acted on it.
+    /// Takes back the newest capture's send: one OpenCode took is
+    /// withdrawn unless the session already acted on it.
     Undo,
     /// Pastes the newest written capture into the app in front, as
     /// Scrawl's Paste chip does: its contact sheet, then its summary.

@@ -149,15 +149,15 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   Unanswered, it goes back to recording after 4 s (never while hovered, and
 │   1.5 s after the pointer leaves). Esc never discards
 ├── Routing (Scrawl's routing.md) -> `last.route` once its answer arrives; the
-│   capsule runs a rule's undo window and a pick's send itself, and follows
-│   only Queued (then Sent), how an Undo ended, and a failed send
-│   ├── A rule Kit saved -> the only send that goes by itself: "Auto-sending
-│   │   to X" with the seconds left in a ring, a filled Undo chip (esc, or ✕)
-│   │   that drains over the 5 s window (`routing::UNDO`; static under Reduce
-│   │   Motion), and a quiet Paste; no runner-up chip, since the router names
-│   │   none beside a saved rule. Then "Sending to X…" until the router says it
-│   │   went, and only then "Sent to X" and the Sent tone, with an "Elsewhere…"
-│   │   chip for the list
+│   capsule shows a rule's and a pick's send as sent itself, and follows
+│   only the send going (its tone), Queued (then Sent), how an Undo ended,
+│   and a failed send
+│   ├── A rule Kit saved -> the only send that goes by itself, at once, with
+│   │   no countdown: "Sent to X" and the same quiet Undo (esc) for 5 s that a
+│   │   pick gets, no ring or drain; ✕ closes. The Sent tone plays when the
+│   │   router says it went. No runner-up chip, since the router names none
+│   │   beside a saved rule; once the Undo window ends, an "Elsewhere…" chip
+│   │   opens the list
 │   ├── Anything else with somewhere to go (a guess, nothing fitting, no
 │   │   answer) -> "Copied" with the suggestions open under it, Paste and
 │   │   Inspect still beside it; nothing sends until Kit picks
@@ -315,8 +315,8 @@ Where it goes                            // capture.route; capture.routing's aut
 │   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer |
 │   Unreachable
 │   ├── Rule -> only a rule the person saved (`routing.sites`, `routing.apps`,
-│   │   an "Always send … here"): Pending, sent after 5 s unless Undo; then
-│   │   Sending -> Sent, or Queued when OpenCode didn't take it. Whatever
+│   │   an "Always send … here"): sent at once, Sending -> Sent, or Queued
+│   │   when OpenCode didn't take it; Undo takes it back as it does a pick. Whatever
 │   │   autoSend, smartRouting, or jevRouting say, a saved rule sends and
 │   │   nothing else sends on its own. smartRouting off decides with the port
 │   │   ladder, after rules and addresses, on the same look
@@ -338,10 +338,10 @@ Where it goes                            // capture.route; capture.routing's aut
 ├── An answer for a capsule already closed (dismissed, or past its 25 s hold)
 │   leaves it closed; `hex capture list` and `send` still offer the capture
 ├── The capsule's commands act only on `last`, the newest routed capture:
-│   ├── Send{to} -> the Rule's own session while Pending sends now; any other
-│   │   pick sends there (taking back a send already elsewhere first) and logs
+│   ├── Send{to} -> the Rule's own session, already sent, does nothing; any
+│   │   other pick sends there (taking back a send already elsewhere first) and logs
 │   │   the correction; `always` also saves a rule for its site or app
-│   └── Undo -> a Pending send never goes; a sent one is withdrawn unless the
+│   └── Undo -> a sent one is withdrawn unless the
 │       session acted on it (TooLate); an undo the router fails is TooLate too
 ├── Two sends to one place agree -> `offer` names the site or app a rule could
 │   send straight there
@@ -443,7 +443,7 @@ Checks:
   `--no-microphone`, and the camera prompt have not run in Hex.
 - Routing, in [routing.rs](../../src/capture_host/routing.rs):
   `only_a_saved_rule_sends_on_its_own`,
-  `a_rule_sends_after_undo_and_lists_the_rest`,
+  `a_rule_sends_and_lists_the_rest`,
   `a_guess_sends_nothing_and_a_failure_still_lists_recent_sessions`, and
   its `looked` tests, which write a bundle and route it through `look` and
   `Worker::written` with fake sessions and tab:
@@ -479,7 +479,8 @@ Checks:
   `a_rule_shows_once_and_only_news_the_capsule_cant_know_moves_it`,
   `a_queued_send_says_so_and_says_sent_when_it_goes`,
   `a_cabled_phone_shows_its_chip`, …),
-  `paste_takes_back_a_waiting_send_and_the_capsule_stays_gone`,
+  `paste_takes_back_a_send_still_undoable_and_the_capsule_stays_gone`,
+  `a_rule_reads_sent_at_once_and_sounds_when_it_went`,
   `undoing_a_rule_send_reopens_the_list_until_a_pick`,
   `undoing_a_pick_reopens_the_list_it_came_from`,
   `too_late_to_take_back_offers_the_list_for_a_copy`,
@@ -493,8 +494,8 @@ Checks:
   jumps, or jiggle. `HEX_CAPSULE_MOTION` also writes rune-motion traces for
   motion-lint. `cues_mark_start_stop_sent_and_taking_back`,
   `nothing_heard_says_so`, and `a_capture_with_no_words_says_nothing_was_heard`
-  cover the tones and the empty transcript. Observed (Oct 26, pro): all 22
-  capsule runs pass lint, including the countdown.
+  cover the tones and the empty transcript. Observed (Oct 26, pro, before rules sent at once): all 22
+  capsule runs pass lint.
 - Playground: `hex capsule-playground` (feature builds; hidden), or
   `scripts/build-capsule-playground.sh` for an ad-hoc signed
   `Hex Playground.app`, runs the real capsule in a window of its own against a
@@ -502,8 +503,8 @@ Checks:
   the tones, and live tuning ([tuning.rs](../../src/rune_ui/capture_capsule/tuning.rs);
   "Copy values" copies its `DEFAULT`). It reads and writes no Hex data and
   records or sends nothing. The whole flow picks the first suggestion;
-  its "Saved rule" toggle plays a rule's countdown instead. `--snap --scene
-  suggestions|always|elsewhere|picked|countdown|recording`
+  its "Saved rule" toggle plays a rule's send, sent at once, instead.
+  `--snap --scene suggestions|always|elsewhere|picked|rule|recording`
   renders it. The tones were checked by waveform and level only, never on
   speakers.
 - Picker, in capture_capsule/picker.rs and tests.rs: geometry, label, and

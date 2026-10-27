@@ -1,7 +1,7 @@
 //! `hex capsule-playground`: the real capsule in a window of its own, on a
 //! plain backdrop, driven by a fake host. Buttons step it through every
 //! state, "Play the whole flow" runs a capture end to end, and the panel
-//! tunes its timings, springs, countdown, and sounds live, then copies
+//! tunes its timings, springs, and sounds live, then copies
 //! them back as the Rust constants.
 //!
 //! It runs beside the installed Hex without touching it: no capture host,
@@ -13,11 +13,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rune::{Cx, El, KeyEvent, Spring, Tx, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, SegmentedControl};
+use rune_kit::{Button, ButtonVariant};
 
 use super::flow::{Action, Cue, Delivered, Dest, Failure, Input, Route, Undone};
 use super::surface::{Id, PANEL_H, PANEL_W};
-use super::tuning::{self, CountdownColor, Tuning};
+use super::tuning::{self, Tuning};
 use super::{CapsuleState, Mode, capsule, tone};
 use crate::rune_ui::controls::{DESCRIPTION, Paint};
 use crate::rune_ui::lists::slider_in;
@@ -44,8 +44,8 @@ pub(crate) struct Playground {
     slow: bool,
     looping: bool,
     reduced: bool,
-    /// Whether a saved rule routes the capture (the countdown) rather
-    /// than suggestions.
+    /// Whether a saved rule routes the capture (sent at once) rather than
+    /// suggestions.
     rule: bool,
     sound: bool,
     volume: f32,
@@ -116,9 +116,7 @@ fn init() -> CapsuleState {
 type Scene = (&'static str, fn(&mut CapsuleState));
 
 const SCENES: &[Scene] = &[
-    ("countdown", |s| {
-        scene(s, &[record(), Step::Input(stop()), done(), routed(rule())])
-    }),
+    ("rule", |s| scene(s, &rule_sent())),
     ("suggestions", |s| {
         scene(s, &[record(), Step::Input(stop()), done(), routed(guess())])
     }),
@@ -160,15 +158,22 @@ const SCENES: &[Scene] = &[
     }),
 ];
 
-/// A saved rule's send, taken back at once: the suggestions again.
-fn taken_back() -> Vec<Step> {
+/// A saved rule's answer, which the router sends at once.
+fn rule_sent() -> Vec<Step> {
     vec![
         record(),
         Step::Input(stop()),
         done(),
         routed(rule()),
-        Step::Click(Id::Undo),
+        Step::Input(Input::Settled),
     ]
+}
+
+/// A saved rule's send, taken back at once: the suggestions again.
+fn taken_back() -> Vec<Step> {
+    let mut steps = rule_sent();
+    steps.push(Step::Click(Id::Undo));
+    steps
 }
 
 fn scene(s: &mut CapsuleState, steps: &[Step]) {
@@ -246,7 +251,12 @@ impl Playground {
             Action::Finish => {
                 self.at(0.0, Step::Input(stop()));
                 self.at(1.4, done());
-                self.at(1.8, routed(if self.rule { rule() } else { guess() }));
+                if self.rule {
+                    self.at(1.8, routed(rule()));
+                    self.at(2.0, Step::Input(Input::Settled));
+                } else {
+                    self.at(1.8, routed(guess()));
+                }
             }
             Action::Undo { .. } => self.at(0.25, Step::Input(Input::Undone(Undone::TakenBack))),
             Action::Cancel
@@ -258,8 +268,8 @@ impl Playground {
     }
 
     /// The whole flow: record, the chips, stop, write, then the
-    /// suggestions and a pick (or, with a saved rule, its countdown),
-    /// sent, and the capsule leaving.
+    /// suggestions and a pick (or a saved rule's send), its Undo, and the
+    /// capsule leaving.
     fn play(&mut self) {
         self.queue.clear();
         self.at(0.0, Step::Input(Input::Dismiss));
@@ -510,9 +520,7 @@ fn states(p: Paint) -> El {
                 .child(state_button(p, "Elsewhere…", || {
                     vec![Step::Input(Input::OpenList)]
                 }))
-                .child(state_button(p, "Saved rule", || {
-                    vec![record(), Step::Input(stop()), done(), routed(rule())]
-                }))
+                .child(state_button(p, "Saved rule", rule_sent))
                 .child(state_button(p, "Undo", || vec![Step::Click(Id::Undo)]))
                 .child(state_button(p, "Rule, then Undo", taken_back))
                 .child(state_button(p, "Queued", || {
@@ -656,17 +664,12 @@ macro_rules! spring {
 
 fn panel(p: Paint, pg: &Playground) -> El {
     let t = pg.tuning;
-    let pick = CountdownColor::ALL
-        .iter()
-        .position(|c| *c == t.countdown)
-        .unwrap_or(0);
-    let labels: Vec<&str> = CountdownColor::ALL.iter().map(|c| c.label()).collect();
     let mut body = col()
         .key("tuning")
         .w(SIDEBAR_W)
         .gap(12.0)
         .padding(16.0)
-        .child(heading(p, "Countdown"))
+        .child(heading(p, "Undo"))
         .child(knob(
             p,
             "undo",
@@ -676,30 +679,6 @@ fn panel(p: Paint, pg: &Playground) -> El {
             " s",
             |t, v| {
                 t.undo_s = f64::from((v * 2.0).round() / 2.0);
-            },
-        ))
-        .child(
-            SegmentedControl::new(&labels, Some(pick))
-                .width(Some(SLIDER_W))
-                .on_pick(|s: &mut CapsuleState, i: usize, _: &mut Tx| {
-                    if let Some(pg) = s.playground.as_mut() {
-                        let mut tuning = pg.tuning;
-                        tuning.countdown = CountdownColor::ALL[i];
-                        pg.set_tuning(tuning);
-                    }
-                })
-                .build(p.k)
-                .key("countdown-color"),
-        )
-        .child(knob(
-            p,
-            "drain",
-            "Drain fill",
-            t.drain_alpha,
-            (0.05, 0.6),
-            "",
-            |t, v| {
-                t.drain_alpha = v;
             },
         ))
         .child(heading(p, "Sound"))

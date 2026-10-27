@@ -1,4 +1,4 @@
-//! The capsule's timings, springs, and countdown look in one place. The
+//! The capsule's timings and springs in one place. The
 //! app reads [`DEFAULT`]; the playground (`hex capsule-playground`) changes
 //! them live in its own process and prints them back as the constants.
 
@@ -6,36 +6,10 @@ use std::sync::RwLock;
 
 use rune::Spring;
 
-/// The colour of the auto-send countdown: its ring and the Undo chip's
-/// draining fill.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CountdownColor {
-    Text,
-    Accent,
-    Success,
-}
-
-impl CountdownColor {
-    pub(crate) const ALL: [CountdownColor; 3] = [
-        CountdownColor::Text,
-        CountdownColor::Accent,
-        CountdownColor::Success,
-    ];
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            CountdownColor::Text => "Text",
-            CountdownColor::Accent => "Accent",
-            CountdownColor::Success => "Success",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Tuning {
-    /// A send can be taken back for this long, counted down in the ring
-    /// and drained from the Undo chip. A rule's send waits the router's
-    /// [`crate::capture_host::UNDO`], which this starts at.
+    /// The Undo window: a send, a rule's or a pick's, can be taken back
+    /// for this long after it goes.
     pub(crate) undo_s: f64,
     /// The finished capsule leaves by itself after this long, unless its
     /// list is open.
@@ -62,13 +36,10 @@ pub(crate) struct Tuning {
     pub(crate) stagger_s: f32,
     /// How long content takes to fade in (× 1.6 for its spring).
     pub(crate) reveal_enter_s: f32,
-    pub(crate) countdown: CountdownColor,
-    /// The Undo chip's draining fill, as an alpha of the countdown colour.
-    pub(crate) drain_alpha: f32,
 }
 
 pub(crate) const DEFAULT: Tuning = Tuning {
-    undo_s: crate::capture_host::UNDO.as_secs_f64(),
+    undo_s: 5.0,
     done_hold_s: 25.0,
     brief_hold_s: 4.0,
     chips_open_s: 3.5,
@@ -83,8 +54,6 @@ pub(crate) const DEFAULT: Tuning = Tuning {
     shell_wait_s: 0.06,
     stagger_s: 0.008,
     reveal_enter_s: 0.16,
-    countdown: CountdownColor::Accent,
-    drain_alpha: 0.22,
 };
 
 static CURRENT: RwLock<Tuning> = RwLock::new(DEFAULT);
@@ -102,9 +71,8 @@ impl Tuning {
     /// The values as `DEFAULT`'s Rust, to paste over it.
     pub(crate) fn to_rust(self) -> String {
         let spring = |s: Spring| format!("Spring::new({:.3}, {:.3})", s.duration, s.bounce);
-        let countdown = self.countdown.label();
         format!(
-            "// src/rune_ui/capture_capsule/tuning.rs (undo_s: also routing::UNDO)\n\
+            "// src/rune_ui/capture_capsule/tuning.rs\n\
              pub(crate) const DEFAULT: Tuning = Tuning {{\n\
              \x20   undo_s: {:.2},\n\
              \x20   done_hold_s: {:.2},\n\
@@ -121,8 +89,6 @@ impl Tuning {
              \x20   shell_wait_s: {:.3},\n\
              \x20   stagger_s: {:.3},\n\
              \x20   reveal_enter_s: {:.3},\n\
-             \x20   countdown: CountdownColor::{countdown},\n\
-             \x20   drain_alpha: {:.2},\n\
              }};\n",
             self.undo_s,
             self.done_hold_s,
@@ -139,7 +105,6 @@ impl Tuning {
             self.shell_wait_s,
             self.stagger_s,
             self.reveal_enter_s,
-            self.drain_alpha,
         )
     }
 }
@@ -155,8 +120,7 @@ mod tests {
             "undo_s: 5.00",
             "island: Spring::new(0.320, 0.000)",
             "reveal_open: Spring::new(0.360, 0.160)",
-            "countdown: CountdownColor::Accent",
-            "drain_alpha: 0.22",
+            "reveal_enter_s: 0.160",
         ] {
             assert!(rust.contains(field), "{field} missing from\n{rust}");
         }
