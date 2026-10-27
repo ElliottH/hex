@@ -308,6 +308,13 @@ an unsaved edit.
 - `commands_enabled on` while `release_microphone_while_idle` is on, and the
   reverse, need `--yes`, because each turns the other off.
 - `voice_action.enabled on` needs a free Voice Action shortcut.
+- With the `capture` build option and experiment, `capture.*` keys appear:
+  `capture.enabled`, `capture.hotkey` (default `option+shift+s`),
+  `capture.list_hotkey` (the capsule's send-to list, default
+  `option+shift+v`), `capture.transcriber`, `capture.folder`,
+  `capture.media_days`, `capture.bundle_days`, and `capture.routing`. Both
+  capture shortcuts need a key, and `capture.enabled on` needs both free; on
+  a Mac whose Paste Last is still ⌥⇧V, rebind one of the two first.
 - `transcription.model` and `transcription.language` are read-only here: use
   `hex model use`. `transcription_recents` and `meetings.calendar.connected`
   are read-only (connecting a calendar asks macOS for access from Settings).

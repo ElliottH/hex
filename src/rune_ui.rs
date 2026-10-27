@@ -266,6 +266,8 @@ pub(crate) fn shortcut_rule(
         HotkeySlot::PasteLast => ShortcutTarget::PasteLast,
         #[cfg(hex_capture)]
         HotkeySlot::Capture => ShortcutTarget::Capture,
+        #[cfg(hex_capture)]
+        HotkeySlot::CaptureList => ShortcutTarget::CaptureList,
     };
     host::validate_hotkey(target, binding)
 }

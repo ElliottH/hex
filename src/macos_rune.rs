@@ -109,6 +109,9 @@ pub(crate) enum ShortcutTarget {
     VoiceAction,
     #[cfg(hex_capture)]
     Capture,
+    /// The capsule's send-to list (`capture.list_hotkey`).
+    #[cfg(hex_capture)]
+    CaptureList,
 }
 
 /// What the runtime last published for the window and the menu bar.

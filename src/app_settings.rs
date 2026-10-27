@@ -41,9 +41,10 @@ static CAPTURE_SETTINGS: OnceLock<RwLock<CaptureSettings>> = OnceLock::new();
 static SCRAWL_APP_RUNNING: AtomicBool = AtomicBool::new(false);
 #[cfg(hex_capture)]
 static CAPTURE_ON: AtomicBool = AtomicBool::new(false);
-/// Paste Last's keycaps once settings are applied; empty while it's off.
+/// The send-to list shortcut's keycaps once settings are applied; empty
+/// while it has none.
 #[cfg(hex_capture)]
-static PASTE_LAST_KEYCAPS: OnceLock<RwLock<Option<Vec<String>>>> = OnceLock::new();
+static LIST_KEYCAPS: OnceLock<RwLock<Option<Vec<String>>>> = OnceLock::new();
 
 #[derive(Default)]
 struct RuntimeTranscriptionSelection {
@@ -409,6 +410,22 @@ impl HotkeyBinding {
         }
     }
 
+    /// Option-Shift-V, Scrawl's key for the send-to list.
+    #[cfg(hex_capture)]
+    pub fn capture_list_default() -> Self {
+        Self {
+            modifiers: HotkeyModifiers {
+                option: Some(ModifierSide::Either),
+                shift: Some(ModifierSide::Either),
+                ..Default::default()
+            },
+            key: Some(HotkeyKey {
+                code: paste_key_code(),
+                label: "V".into(),
+            }),
+        }
+    }
+
     pub fn paste_meeting_default() -> Self {
         Self {
             modifiers: HotkeyModifiers {
@@ -672,17 +689,22 @@ pub struct RuntimeHotkeys {
     pub paste_meeting: Option<RuntimeHotkey>,
     /// The capture shortcut, while captures are on (`cfg(hex_capture)`).
     pub capture: Option<RuntimeHotkey>,
+    /// The capsule's send-to list, while captures are on; [`runtime_hotkeys`]
+    /// has it only while the capsule takes it (`capture_host::list_key_wanted`),
+    /// so it reaches other apps the rest of the time.
+    pub capture_list: Option<RuntimeHotkey>,
 }
 
 impl RuntimeHotkeys {
     /// Every shortcut Hex matches, for suppression and chord evidence.
-    pub fn all(self) -> [Option<RuntimeHotkey>; 5] {
+    pub fn all(self) -> [Option<RuntimeHotkey>; 6] {
         [
             Some(self.dictation),
             self.edit,
             self.paste_last,
             self.paste_meeting,
             self.capture,
+            self.capture_list,
         ]
     }
 }
@@ -696,6 +718,7 @@ impl Default for RuntimeHotkeys {
             paste_meeting: crate::DEVELOPER_FEATURES_ENABLED
                 .then(|| HotkeyBinding::paste_meeting_default().runtime()),
             capture: None,
+            capture_list: None,
         }
     }
 }
@@ -1034,6 +1057,9 @@ pub struct CaptureSettings {
     pub enabled: bool,
     /// Press once to start a capture and again to finish it.
     pub hotkey: HotkeyBinding,
+    /// Opens the capsule's send-to list, only while a capsule shows or the
+    /// latest capture waits for a pick.
+    pub list_hotkey: HotkeyBinding,
     pub transcriber: CaptureTranscriber,
     /// Where new captures go; `None` is Scrawl's own captures folder.
     pub folder: Option<PathBuf>,
@@ -1054,6 +1080,7 @@ impl Default for CaptureSettings {
         Self {
             enabled: false,
             hotkey: HotkeyBinding::capture_default(),
+            list_hotkey: HotkeyBinding::capture_list_default(),
             transcriber: CaptureTranscriber::default(),
             folder: None,
             media_days: week.media_days,
@@ -1649,7 +1676,7 @@ impl AppSettings {
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.runtime_hotkeys();
         #[cfg(hex_capture)]
-        publish_paste_last_keycaps(self.paste_last_hotkey.as_ref());
+        publish_list_keycaps(self.capture_list_hotkey());
         set_transcription_selection(&self.transcription);
         set_microphone_selection(self.microphone.as_deref());
         #[cfg(target_os = "macos")]
@@ -1794,6 +1821,10 @@ impl AppSettings {
             capture: self.capture_on().then(|| self.capture.hotkey.runtime()),
             #[cfg(not(hex_capture))]
             capture: None,
+            #[cfg(hex_capture)]
+            capture_list: self.capture_list_hotkey().map(HotkeyBinding::runtime),
+            #[cfg(not(hex_capture))]
+            capture_list: None,
         }
     }
 
@@ -1863,6 +1894,8 @@ pub enum HotkeySlot {
     PasteLast,
     #[cfg(hex_capture)]
     Capture,
+    #[cfg(hex_capture)]
+    CaptureList,
 }
 
 impl AppSettings {
@@ -1888,7 +1921,23 @@ impl AppSettings {
         if slot != HotkeySlot::Capture && self.capture_on() {
             others.push(self.capture.hotkey.clone());
         }
+        #[cfg(hex_capture)]
+        if slot != HotkeySlot::CaptureList && self.capture_on() {
+            others.push(self.capture.list_hotkey.clone());
+        }
         hotkey_conflicts(binding, others)
+    }
+
+    /// The send-to list's shortcut while captures are on, unless it lost its
+    /// key or overlaps another shortcut (a settings file edited by hand):
+    /// then the other shortcut keeps working and the list has none.
+    #[cfg(hex_capture)]
+    pub fn capture_list_hotkey(&self) -> Option<&HotkeyBinding> {
+        let list = &self.capture.list_hotkey;
+        (self.capture_on()
+            && list.key.is_some()
+            && !self.hotkey_in_use(HotkeySlot::CaptureList, list))
+        .then_some(list)
     }
 }
 
@@ -2104,12 +2153,16 @@ pub fn runtime_hotkeys() -> RuntimeHotkeys {
     if scrawl_app_running() {
         hotkeys.capture = None;
     }
+    #[cfg(hex_capture)]
+    if !crate::capture_host::list_key_wanted() {
+        hotkeys.capture_list = None;
+    }
     hotkeys
 }
 
 #[cfg(hex_capture)]
-pub(crate) fn publish_paste_last_keycaps(binding: Option<&HotkeyBinding>) {
-    *PASTE_LAST_KEYCAPS
+pub(crate) fn publish_list_keycaps(binding: Option<&HotkeyBinding>) {
+    *LIST_KEYCAPS
         .get_or_init(Default::default)
         .write()
         .unwrap_or_else(|error| error.into_inner()) = Some(
@@ -2120,18 +2173,18 @@ pub(crate) fn publish_paste_last_keycaps(binding: Option<&HotkeyBinding>) {
     );
 }
 
-/// Paste Last's keycaps (`["⌥", "⌘", "V"]`), which open a routed capture
-/// capsule's list; empty while Paste Last is off or has no key (it fires
-/// only on a key press), and the default's before settings are applied
-/// (scenes and tests).
+/// The send-to list shortcut's keycaps (`["⌥", "⇧", "V"]`) for the
+/// capsule's Elsewhere chip; empty while the list has no shortcut
+/// ([`AppSettings::capture_list_hotkey`]), and the default's before settings
+/// are applied (scenes and tests).
 #[cfg(hex_capture)]
-pub fn paste_last_keycaps() -> Vec<String> {
-    PASTE_LAST_KEYCAPS
+pub fn list_keycaps() -> Vec<String> {
+    LIST_KEYCAPS
         .get_or_init(Default::default)
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
-        .unwrap_or_else(|| HotkeyBinding::paste_last_default().keycaps())
+        .unwrap_or_else(|| HotkeyBinding::capture_list_default().keycaps())
 }
 
 pub fn dictation_hotkey() -> RuntimeHotkey {
@@ -2287,29 +2340,61 @@ pub(crate) fn migrate_legacy_settings(path: &std::path::Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// A routed capture capsule shows Paste Last's own keys on its list chip,
-    /// since that is the shortcut that opens the list: a fixed ⌥⇧V sent the
-    /// keystroke to the front app for anyone who rebound Paste Last.
+    /// The capsule's Elsewhere chip shows the send-to list's own shortcut,
+    /// ⌥⇧V unless rebound, and no keys while the list has none.
     #[cfg(hex_capture)]
     #[test]
-    fn the_capsule_shows_paste_lasts_own_keys() {
-        assert_eq!(paste_last_keycaps(), ["⌥", "⇧", "V"]);
+    fn the_capsule_shows_the_list_shortcuts_own_keys() {
+        assert_eq!(list_keycaps(), ["⌥", "⇧", "V"]);
         let rebound = HotkeyBinding {
             modifiers: HotkeyModifiers::option_command(),
+            key: Some(HotkeyKey::named("l")),
+        };
+        publish_list_keycaps(Some(&rebound));
+        assert_eq!(list_keycaps(), ["⌥", "⌘", "L"]);
+        publish_list_keycaps(None);
+        assert!(list_keycaps().is_empty());
+        *LIST_KEYCAPS.get().unwrap().write().unwrap() = None;
+    }
+
+    /// Hex matches the list shortcut only while the capsule takes it, so
+    /// ⌥⇧V reaches the app in front the rest of the time.
+    #[cfg(hex_capture)]
+    #[test]
+    fn the_list_shortcut_is_matched_only_while_the_capsule_takes_it() {
+        let list = HotkeyBinding::capture_list_default().runtime();
+        *HOTKEYS.get_or_init(Default::default).write().unwrap() = RuntimeHotkeys {
+            capture_list: Some(list),
+            ..RuntimeHotkeys::default()
+        };
+        assert_eq!(runtime_hotkeys().capture_list, None);
+        let grab = crate::capture_host::take_keys(
+            crate::capture_host::CapsuleKeys::Route { escape: false },
+            |_| {},
+        );
+        assert_eq!(runtime_hotkeys().capture_list, Some(list));
+        grab.set(crate::capture_host::CapsuleKeys::Picker);
+        assert_eq!(runtime_hotkeys().capture_list, None);
+        drop(grab);
+        *HOTKEYS.get().unwrap().write().unwrap() = RuntimeHotkeys::default();
+    }
+
+    /// The list's ⌥⇧V never shares a key with another shortcut: Paste Last
+    /// left on its own ⌥⇧V default keeps it, and the list gets another.
+    #[cfg(hex_capture)]
+    #[test]
+    fn the_list_shortcut_never_overlaps_another() {
+        let mut settings = AppSettings::default();
+        let list = settings.capture.list_hotkey.clone();
+        assert_eq!(list, HotkeyBinding::capture_list_default());
+        assert!(settings.hotkey_in_use(HotkeySlot::CaptureList, &list));
+        settings.paste_last_hotkey = Some(HotkeyBinding {
+            modifiers: HotkeyModifiers::option_command(),
             key: Some(HotkeyKey::named("v")),
-        };
-        publish_paste_last_keycaps(Some(&rebound));
-        assert_eq!(paste_last_keycaps(), ["⌥", "⌘", "V"]);
-        publish_paste_last_keycaps(None);
-        assert!(paste_last_keycaps().is_empty());
-        // A modifier-only Paste Last saved before Settings refused it never fires.
-        let modifiers_only = HotkeyBinding {
-            key: None,
-            ..rebound
-        };
-        publish_paste_last_keycaps(Some(&modifiers_only));
-        assert!(paste_last_keycaps().is_empty());
-        *PASTE_LAST_KEYCAPS.get().unwrap().write().unwrap() = None;
+        });
+        assert!(!settings.hotkey_in_use(HotkeySlot::CaptureList, &list));
+        // Captures off, the list key never takes a shortcut from the others.
+        assert!(!settings.hotkey_in_use(HotkeySlot::PasteLast, &list));
     }
 
     #[test]

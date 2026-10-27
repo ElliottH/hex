@@ -33,6 +33,9 @@ Settings › Experiments › Scrawl          // capture.pane
 │   └── On while the shortcut collides -> refused, the shortcut row says why
 ├── Shortcut (capture.hotkey, default ⌥⇧S) -> same keycap and recorder as dictation;
 │   a key is required; refused when it overlaps dictation, Voice Action, or paste
+├── Send-to list (capture.list_hotkey, default ⌥⇧V) -> the capsule's list; a key
+│   is required, refused on overlap like the shortcut. Paste Last defaults to
+│   ⌥⇧V too, so turning captures on is refused until one of them is rebound
 ├── Screen Recording -> Allow asks macOS once, then opens its System Settings list;
 │   never part of onboarding (macOS also asks at the first capture)
 ├── Transcriber (capture.transcriber) -> Parakeet (default) | Apple
@@ -164,11 +167,18 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   collide; the capsule shows titles
 │   ├── Keys (capture_host::take_keys), never taking focus:
 │   │   ├── Picker -> ⌥⇧S and Esc through the listener
-│   │   ├── Routed -> the Paste Last shortcut (⌥⇧V by default; the chip shows
-│   │   │   the saved one, and no keys while it's off) opens the list instead
-│   │   │   of pasting the last dictation; Esc too while a send can be undone
-│   │   │   or a taken-back capture waits for a pick.
-│   │   │   Unreachable has no list, so Paste Last pastes
+│   │   ├── Routed -> the send-to list shortcut (capture.list_hotkey; the
+│   │   │   "Elsewhere…" chip shows it) opens the list; Esc too while a send
+│   │   │   can be undone or a taken-back capture waits for a pick.
+│   │   │   Unreachable has no list, so the shortcut reaches the app in front
+│   │   ├── Closed, waiting for a pick (a guess or taken-back capture closed
+│   │   │   by Esc, ✕, or its hold, with nothing sent) -> the list shortcut
+│   │   │   brings the capsule back with its list open, until a pick, Paste,
+│   │   │   Inspect, a send from `hex capture send`, or the next capture
+│   │   ├── Otherwise -> the list shortcut isn't Hex's: runtime_hotkeys has it
+│   │   │   only while the capsule takes it (capture_host::list_key_wanted),
+│   │   │   so suppression passes it through
+│   │   ├── A send from the list counting down -> Esc only (CapsuleKeys::Undo)
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a

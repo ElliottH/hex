@@ -418,7 +418,8 @@ pub(super) fn hotkey_key_named(name: &str) -> Result<HotkeyKey, &'static str> {
 
 /// macOS accepts every binding the capture can produce, except that Paste
 /// Last fires only on a key press (`suppression::paste_action`), and the
-/// capture shortcut, pressed once to start and again to finish, needs a key.
+/// capture shortcut, pressed once to start and again to finish, and the
+/// send-to list's need a key.
 pub(super) fn validate_hotkey(
     target: ShortcutTarget,
     binding: &HotkeyBinding,
@@ -427,7 +428,11 @@ pub(super) fn validate_hotkey(
         return Err(tr("Add a key"));
     }
     #[cfg(hex_capture)]
-    if target == ShortcutTarget::Capture && binding.key.is_none() {
+    if matches!(
+        target,
+        ShortcutTarget::Capture | ShortcutTarget::CaptureList
+    ) && binding.key.is_none()
+    {
         return Err(tr("Add a key"));
     }
     Ok(())

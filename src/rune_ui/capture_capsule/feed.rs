@@ -153,6 +153,8 @@ impl Follow {
             {
                 inputs.push(Input::Delivered(Delivered::Sent { to }));
             }
+            // A send the capsule knows of, or one from `hex capture send`.
+            Some(RouteDelivery::Sent { .. }) => inputs.push(Input::Settled),
             Some(RouteDelivery::TakenBack) => inputs.push(Input::Undone(Undone::TakenBack)),
             Some(RouteDelivery::TooLate { .. }) => inputs.push(Input::Undone(Undone::TooLate)),
             Some(RouteDelivery::Failed { to, why }) => {
@@ -686,8 +688,9 @@ mod tests {
         // The capsule counts the undo window down and says Sent itself.
         let sending = Some(RouteDelivery::Sending { to: "SEER".into() });
         assert_eq!(follow.next(&routed("a", rule(), sending)), []);
+        // Sent only settles it: the list shortcut no longer brings it back.
         let sent = Some(RouteDelivery::Sent { to: "SEER".into() });
-        assert_eq!(follow.next(&routed("a", rule(), sent)), []);
+        assert_eq!(follow.next(&routed("a", rule(), sent)), [Input::Settled]);
         assert_eq!(
             follow.next(&routed("a", rule(), Some(RouteDelivery::TakenBack))),
             [Input::Undone(Undone::TakenBack)]

@@ -300,6 +300,7 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
         crate::capture_host::CapsuleKeys::List
             | crate::capture_host::CapsuleKeys::Picker
             | crate::capture_host::CapsuleKeys::Route { escape: true }
+            | crate::capture_host::CapsuleKeys::Undo
     );
     let input = match &key.key {
         Key::Escape if escape => Input::Escape,

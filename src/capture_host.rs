@@ -2077,10 +2077,13 @@ impl CaptureShortcut {
 pub enum CapsuleKeys {
     /// The picker: the capture shortcut ([`CapsuleKey::Shortcut`]) and Escape.
     Picker,
-    /// A routed capsule: the Paste Last shortcut opens its list
-    /// ([`CapsuleKey::OpenList`]) instead of pasting, and Escape too while
-    /// `escape` (a send that can still be undone).
+    /// A routed capsule, or a hidden one whose capture still waits for a
+    /// pick: the send-to list shortcut (`capture.list_hotkey`) opens its
+    /// list ([`CapsuleKey::OpenList`]), and Escape too while `escape` (a
+    /// send that can still be undone).
     Route { escape: bool },
+    /// A send from the list waiting out its Undo: Escape takes it back.
+    Undo,
     /// The open list: every key press without ⌘ or ⌃ that isn't one of
     /// Hex's shortcuts.
     List,
@@ -2092,7 +2095,7 @@ pub enum CapsuleKey {
     /// The capture shortcut, while picking: record what the picker is on.
     Shortcut,
     Escape,
-    /// The Paste Last shortcut, while routed.
+    /// The send-to list shortcut, while routed or waiting for a pick.
     OpenList,
     /// What a key types in the list, in the active layout.
     Text(String),
@@ -2131,6 +2134,7 @@ fn keys_code(keys: Option<CapsuleKeys>) -> u8 {
         Some(CapsuleKeys::Route { escape: false }) => 2,
         Some(CapsuleKeys::Route { escape: true }) => 3,
         Some(CapsuleKeys::List) => 4,
+        Some(CapsuleKeys::Undo) => 5,
     }
 }
 
@@ -2187,12 +2191,19 @@ pub fn picking() -> bool {
 
 /// Whether the capsule takes Escape from the listener.
 pub fn wants_escape() -> bool {
-    matches!(GRAB_KEYS.load(Ordering::Acquire), 1 | 3)
+    matches!(GRAB_KEYS.load(Ordering::Acquire), 1 | 3 | 5)
 }
 
 /// Whether the open list takes every key press at the tap.
 pub fn list_open() -> bool {
     GRAB_KEYS.load(Ordering::Acquire) == keys_code(Some(CapsuleKeys::List))
+}
+
+/// Whether the capsule takes the send-to list shortcut: only then does Hex
+/// match it (`app_settings::runtime_hotkeys`), so it reaches the app in
+/// front the rest of the time.
+pub fn list_key_wanted() -> bool {
+    matches!(GRAB_KEYS.load(Ordering::Acquire), 2..=4)
 }
 
 /// Hands `key` to the capsule if its keys include it; false otherwise.
@@ -2208,6 +2219,7 @@ fn takes(keys: CapsuleKeys, key: &CapsuleKey) -> bool {
     match (keys, key) {
         (CapsuleKeys::Picker, CapsuleKey::Shortcut | CapsuleKey::Escape) => true,
         (CapsuleKeys::Route { escape }, CapsuleKey::Escape) => escape,
+        (CapsuleKeys::Undo, CapsuleKey::Escape) => true,
         (CapsuleKeys::Route { .. } | CapsuleKeys::List, CapsuleKey::OpenList) => true,
         (CapsuleKeys::List, key) => !matches!(key, CapsuleKey::Shortcut),
         _ => false,
@@ -3965,16 +3977,16 @@ mod tests {
             take_keys(CapsuleKeys::Picker, move |key| sent.send((1, key)).unwrap())
         };
         let second = take_keys(CapsuleKeys::Picker, move |key| sent.send((2, key)).unwrap());
-        assert!(picking() && wants_escape());
+        assert!(picking() && wants_escape() && !list_key_wanted());
         assert!(capsule_key(CapsuleKey::Shortcut));
         assert!(!capsule_key(CapsuleKey::OpenList));
         drop(first);
         assert!(capsule_key(CapsuleKey::Escape));
 
-        // A routed capsule: Paste Last opens the list; Escape only while a
-        // send can be undone.
+        // A routed capsule: the list shortcut opens the list; Escape only
+        // while a send can be undone.
         second.set(CapsuleKeys::Route { escape: false });
-        assert!(!picking() && !wants_escape());
+        assert!(!picking() && !wants_escape() && list_key_wanted());
         assert!(!capsule_key(CapsuleKey::Shortcut));
         assert!(!capsule_key(CapsuleKey::Escape));
         assert!(capsule_key(CapsuleKey::OpenList));
@@ -3984,12 +3996,16 @@ mod tests {
         );
         second.set(CapsuleKeys::Route { escape: true });
         assert!(wants_escape());
+        // A send from the list counting down: Escape, and ⌥⇧V goes to the app.
+        second.set(CapsuleKeys::Undo);
+        assert!(wants_escape() && !list_key_wanted());
+        assert!(!capsule_key(CapsuleKey::OpenList));
         second.set(CapsuleKeys::List);
-        assert!(list_open() && !wants_escape());
+        assert!(list_open() && !wants_escape() && list_key_wanted());
         assert!(capsule_key(CapsuleKey::Text("ho".into())));
         assert!(capsule_key(CapsuleKey::Press));
         drop(second);
-        assert!(!picking() && !list_open());
+        assert!(!picking() && !list_open() && !list_key_wanted());
         assert!(!capsule_key(CapsuleKey::Escape));
         assert_eq!(
             keys.try_iter().collect::<Vec<_>>(),

@@ -454,6 +454,10 @@ impl CapsuleState {
             self.recording_since = Some(now);
             self.replace = true;
         }
+        // The list shortcut bringing a closed capsule back: under the pointer.
+        if input == Input::OpenList && !self.shown {
+            self.replace = true;
+        }
         let actions = self.flow.input(input, now);
         self.dispatch(actions);
     }

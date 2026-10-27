@@ -66,10 +66,10 @@ pub(crate) const SMALL: TextStyle = TextStyle::new(11.5, 530.0);
 pub(crate) const PROCESSING: &str = "Processing…";
 pub(crate) const UNDO_KEYS: &[&str] = &["esc"];
 
-/// The Ask chip's keycaps: Paste Last's shortcut, which opens the list
-/// while a routed capsule shows; none while Paste Last is off.
+/// The Ask chip's keycaps: the send-to list's shortcut
+/// (`capture.list_hotkey`); none while it has none.
 pub(crate) fn ask_keys() -> Vec<String> {
-    crate::app_settings::paste_last_keycaps()
+    crate::app_settings::list_keycaps()
 }
 
 /// The capsule unfolds from this fraction of its height, anchored on its
@@ -134,7 +134,7 @@ pub(crate) enum Id {
     Paste,
     /// A route chip, best first.
     Route(usize),
-    /// The ⌥⇧V chip.
+    /// The send-to list's chip (⌥⇧V).
     Ask,
     Inspect,
     /// The open capsule's field.

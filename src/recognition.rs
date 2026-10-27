@@ -1027,6 +1027,20 @@ pub fn listen(
                     continue;
                 }
                 host.shortcut(action, &input);
+                // The send-to list shortcut, matched only while the capsule
+                // takes it; the dictation hotkey still sees the press as a
+                // chord.
+                if let crate::suppression::InputEvent::Key {
+                    code,
+                    down: true,
+                    flags,
+                } = input_event
+                    && crate::app_settings::runtime_hotkeys()
+                        .capture_list
+                        .is_some_and(|list| list.matches_key_press(code, flags))
+                {
+                    crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::OpenList);
+                }
             }
             if voice.is_some() && input_event.is_escape_down() {
                 voice = None;
@@ -1883,13 +1897,6 @@ fn handle_hotkey_action(
             feedback::retract_start();
             dictation.cancel()?;
             reset_command_recognizer(dictation, recognizer)?;
-            // A routed capture capsule on screen takes Paste Last for its list.
-            #[cfg(hex_capture)]
-            if action == HotkeyAction::PasteLast
-                && crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::OpenList)
-            {
-                return emit_engine_state(events, false, worker, mode, device).map(|()| true);
-            }
             let paste_result = match action {
                 HotkeyAction::PasteLast => worker.paste_last(),
                 HotkeyAction::PasteMeeting => worker.paste_meeting(),
