@@ -776,13 +776,13 @@ mod tests {
         follow.next(&routed("a", guess(), None));
         let queued = Some(RouteDelivery::Queued {
             to: "HEX".into(),
-            why: "OpenCode can't see this Mac's files".into(),
+            why: "OpenCode can't see files".into(),
         });
         assert_eq!(
             follow.next(&routed("a", guess(), queued)),
             [Input::Delivered(Delivered::Queued {
                 to: "HEX".into(),
-                why: "OpenCode can't see this Mac's files".into(),
+                why: "OpenCode can't see files".into(),
             })]
         );
         let sent = Some(RouteDelivery::Sent { to: "HEX".into() });

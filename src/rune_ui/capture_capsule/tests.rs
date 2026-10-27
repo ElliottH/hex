@@ -44,7 +44,7 @@ fn rule() -> Route {
 }
 
 /// An ask with more sessions than it has chips for.
-fn guess_four() -> Route {
+fn guess_five() -> Route {
     Route::Guess {
         suggested: ["SEER", "HEX", "HOME", "OPENCODE IOS", "RUNE"]
             .map(|name| Dest::new(name, "guess"))
@@ -169,7 +169,7 @@ fn stills() -> Vec<(&'static str, Pres)> {
             beats.push(Click(Id::Always));
             after(&beats)
         }),
-        ("guess-four", after(&routed(guess_four()))),
+        ("guess-five", after(&routed(guess_five()))),
         (
             "guess-long",
             after(&routed(Route::Guess {
@@ -226,7 +226,7 @@ fn stills() -> Vec<(&'static str, Pres)> {
             "queued",
             after(&[In(Input::Delivered(Delivered::Queued {
                 to: "SEER".into(),
-                why: "OpenCode can't see this Mac's files".into(),
+                why: "OpenCode can't see files".into(),
             }))]),
         ),
         ("taken-back", {
@@ -316,7 +316,7 @@ fn every_state_draws_its_pieces() {
             "guess",
             &["done", "paste", "inspect", "list", "row-SEER", "always"],
         ),
-        ("guess-four", &["done", "paste", "list", "row-SEER"]),
+        ("guess-five", &["done", "paste", "list", "row-SEER"]),
         ("no-answer", &["done", "why", "paste", "list"]),
         (
             "list-guess",
@@ -421,7 +421,8 @@ fn the_widest_states_fit_the_panel() {
     }
 }
 
-/// The capsule says its shortcuts in quiet text ("⌥⇧V", "1–3", "esc");
+/// The capsule says its shortcuts in quiet text ("1–5", "esc"), a hint's
+/// keys in one small rect at most;
 /// keycaps are for Settings.
 #[test]
 fn the_capsule_draws_no_keycaps() {
@@ -447,7 +448,12 @@ fn render(gpu: &rune::render::Gpu, pres: Pres, dark: bool) -> (u32, u32, Vec<u8>
             open: Some((_, list)),
             ..
         }) => super::surface::LIST_Y + super::list_height(list) + 28.0,
-        _ => TOP + 40.0 + 36.0,
+        _ => {
+            // A card's guesses hang under the line.
+            use super::surface::{Anchor, anchor_for, layout_at};
+            let (shell, _) = layout_at(&pres, "0:00", anchor_for(&pres, Anchor::Top));
+            (shell[1] + shell[3] + 36.0).max(TOP + 40.0 + 36.0)
+        }
     };
     let rt = runtime(pres, dark);
     let (w, h) = ((PANEL_W * 2.0) as u32, (PANEL_H * 2.0) as u32);
@@ -495,7 +501,7 @@ const GOLDENS: &[&str] = &[
     "rule-final",
     "guess",
     "guess-always",
-    "guess-four",
+    "guess-five",
     "no-answer",
     "list-guess",
     "sent",
@@ -550,8 +556,8 @@ fn capture_capsule_goldens() {
 }
 
 /// `HEX_CAPSULE_TOP_LINE=quiet|icons` draws the finished capsule's top
-/// line that way, and `HEX_CAPSULE_FOOTER=band|well` the list's footer, to
-/// compare them.
+/// line that way, `HEX_CAPSULE_FOOTER=band|well` the list's footer, and
+/// `HEX_CAPSULE_KEY_BOX=filled|outlined` its hints' keys, to compare them.
 fn top_line_from_env() {
     let mut tuning = super::tuning::DEFAULT;
     if let Ok(name) = std::env::var("HEX_CAPSULE_TOP_LINE") {
@@ -565,6 +571,12 @@ fn top_line_from_env() {
             .into_iter()
             .find(|m| format!("{m:?}").eq_ignore_ascii_case(&name))
             .expect("HEX_CAPSULE_FOOTER is band or well");
+    }
+    if let Ok(name) = std::env::var("HEX_CAPSULE_KEY_BOX") {
+        tuning.key_box = super::tuning::KeyBox::ALL
+            .into_iter()
+            .find(|m| format!("{m:?}").eq_ignore_ascii_case(&name))
+            .expect("HEX_CAPSULE_KEY_BOX is filled or outlined");
     }
     // `HEX_CAPSULE_FLOW=list|toast|menu_bar|cursor|notch` plays that flow,
     // and `HEX_CAPSULE_UNDO_S` shortens Undo's window for a short clip.
@@ -726,7 +738,7 @@ fn scripts() -> Vec<Script> {
             name: "suggest-escape",
             beats: vec![
                 (0.2, stage(Stage::Transcribing)),
-                (1.2, In(Input::Routed(guess_four()))),
+                (1.2, In(Input::Routed(guess_five()))),
                 (2.6, In(Input::Escape)),
             ],
             end: 4.4,

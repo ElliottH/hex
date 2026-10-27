@@ -934,7 +934,7 @@ fn unreachable_why(error: &str) -> String {
 
 /// A send to an OpenCode server on another Mac, with no agent host to copy
 /// the bundle there first.
-const FILES_UNSEEN: &str = "OpenCode can't see this Mac's files";
+const FILES_UNSEEN: &str = "OpenCode can't see files";
 
 /// A failed send (`{err:#}`, outer context first) in the few words the
 /// capsule shows under "Copied". What OpenCode said comes first: it was
@@ -1520,7 +1520,7 @@ mod tests {
                 to: "SEER".into(),
                 why: FILES_UNSEEN.into()
             }),
-            "Queued for SEER: OpenCode can't see this Mac's files"
+            "Queued for SEER: OpenCode can't see files"
         );
     }
 

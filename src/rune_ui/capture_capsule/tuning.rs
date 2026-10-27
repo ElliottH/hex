@@ -75,6 +75,34 @@ impl ListFooter {
     }
 }
 
+/// The rounded rect a hint's keys sit in ("Send [1–5]"), one per hint,
+/// never a keycap per key, while Kit picks one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyBox {
+    /// A quiet fill.
+    Filled,
+    /// A hairline stroke, no fill.
+    Outlined,
+}
+
+impl KeyBox {
+    pub(crate) const ALL: [KeyBox; 2] = [KeyBox::Filled, KeyBox::Outlined];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            KeyBox::Filled => "A · Filled",
+            KeyBox::Outlined => "B · Outlined",
+        }
+    }
+
+    fn rust(self) -> &'static str {
+        match self {
+            KeyBox::Filled => "KeyBox::Filled",
+            KeyBox::Outlined => "KeyBox::Outlined",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Tuning {
     /// The Undo window: a send, a rule's or a pick's, can be taken back
@@ -106,6 +134,7 @@ pub(crate) struct Tuning {
     pub(crate) content_scale: f32,
     pub(crate) top_line: TopLine,
     pub(crate) list_footer: ListFooter,
+    pub(crate) key_box: KeyBox,
     /// The flow after a capture stops: `capture.capsule_flow` in the app,
     /// the playground's switch there.
     pub(crate) flow: CapsuleFlow,
@@ -125,6 +154,7 @@ pub(crate) const DEFAULT: Tuning = Tuning {
     content_scale: 0.92,
     top_line: TopLine::Quiet,
     list_footer: ListFooter::Band,
+    key_box: KeyBox::Filled,
     flow: CapsuleFlow::List,
 };
 
@@ -182,6 +212,7 @@ impl Tuning {
              \x20   content_scale: {:.3},\n\
              \x20   top_line: {},\n\
              \x20   list_footer: {},\n\
+             \x20   key_box: {},\n\
              \x20   flow: CapsuleFlow::{:?},\n\
              }};\n",
             self.undo_s,
@@ -197,6 +228,7 @@ impl Tuning {
             self.content_scale,
             self.top_line.rust(),
             self.list_footer.rust(),
+            self.key_box.rust(),
             self.flow,
         )
     }
@@ -216,6 +248,7 @@ mod tests {
             "content_scale: 0.920",
             "top_line: TopLine::Quiet",
             "list_footer: ListFooter::Band",
+            "key_box: KeyBox::Filled",
             "flow: CapsuleFlow::List",
         ] {
             assert!(rust.contains(field), "{field} missing from\n{rust}");

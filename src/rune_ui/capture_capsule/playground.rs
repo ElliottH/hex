@@ -18,7 +18,7 @@ use rune_kit::{Button, ButtonVariant, ControlSize, SegmentedControl, Switch};
 
 use super::flow::{Action, Cue, Delivered, Dest, Failure, Input, Route, Undone};
 use super::surface::{Id, PANEL_H, PANEL_W};
-use super::tuning::{self, CapsuleFlow, ListFooter, TopLine, Tuning, flow_label};
+use super::tuning::{self, CapsuleFlow, KeyBox, ListFooter, TopLine, Tuning, flow_label};
 use super::{CapsuleState, Mode, capsule, tone};
 use crate::rune_ui::controls::{DESCRIPTION, Paint};
 use crate::rune_ui::lists::slider_in;
@@ -595,7 +595,7 @@ fn states(p: Paint) -> El {
                         done(),
                         Step::Input(Input::Delivered(Delivered::Queued {
                             to: "SEER".into(),
-                            why: "OpenCode can't see this Mac's files".into(),
+                            why: "OpenCode can't see files".into(),
                         })),
                     ]
                 }))
@@ -812,6 +812,21 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
             .build(p.k)
             .key("list-footer"),
     );
+    let boxes: Vec<&str> = KeyBox::ALL.iter().map(|m| m.label()).collect();
+    let picked = KeyBox::ALL.iter().position(|m| *m == t.key_box);
+    let key_box = card("key-box-card").child(
+        SegmentedControl::new(&boxes, picked)
+            .width(Some(SLIDER_W))
+            .on_pick(|s: &mut CapsuleState, i: usize, _: &mut Tx| {
+                if let Some(pg) = s.playground.as_mut() {
+                    let mut tuning = pg.tuning;
+                    tuning.key_box = KeyBox::ALL[i];
+                    pg.set_tuning(tuning);
+                }
+            })
+            .build(p.k)
+            .key("key-box"),
+    );
     // Everything changes together: the walls move while the content blurs,
     // scales and fades over them.
     let transition = card("transition-card")
@@ -963,6 +978,7 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
         .child(section(p, "flow", "Flow after a capture", flow))
         .child(section(p, "top-line", "Top line", top_line))
         .child(section(p, "list-footer", "List footer", list_footer))
+        .child(section(p, "key-box", "Key hints", key_box))
         .child(section(p, "transition", "Transition", transition))
         .child(section(p, "timing", "Timing", timing))
         .child(section(p, "sound", "Sound", sound))

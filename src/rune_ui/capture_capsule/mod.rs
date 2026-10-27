@@ -42,7 +42,7 @@ use self::surface::{
     Surface, THUMB_H, THUMB_W, THUMB_X, TIMER, UNDO_LABEL, chord, clock_width, corner, done_style,
     done_text_x, ellipsize, measure,
 };
-use self::tuning::ListFooter;
+use self::tuning::{KeyBox, ListFooter};
 use super::controls::Paint;
 
 /// Peak blur (pt) of the picker's badge and the list's rows softening in
@@ -1129,6 +1129,12 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             keyed(p, base, &[&key], shown.text(), MEDIUM).on_press_tx(press(id))
         }
         Id::Pick(row) => pick_row(p, base, shown, row),
+        Id::CardHints => base
+            .justify_start()
+            .px(ROW_PX)
+            .child(hint(p, "Send", shown.text()))
+            .role("text")
+            .label(format!("Send {}", shown.text())),
         Id::Why => placed(row().center_y(), shown)
             .trace_name("why")
             .child(quiet(p, shown.text(), done_style())),
@@ -1228,15 +1234,26 @@ fn quiet(p: Paint, content: &str, beside: rune::TextStyle) -> El {
 /// the theme face's ascender less its descender (Inter: 0.969, 0.242).
 const BASELINE_DROP: f32 = 0.364;
 
-/// What a hint does, then its key, both quiet ("Send ⏎"): the words in
-/// the muted ink, the key fainter, as the capsule's chips read.
+/// What a hint does, then its keys in one small rounded rect ("Send
+/// [⏎]"), never a keycap per key: the words in the muted ink, the keys
+/// fainter on a quiet fill or inside a hairline.
 fn hint(p: Paint, copy: &str, keys: &str) -> El {
     let mut hint = row().center_y().gap(HINT_GAP);
     if !copy.is_empty() {
         hint = hint.child(label(copy, SMALL, p.muted()));
     }
     if !keys.is_empty() {
-        hint = hint.child(label(keys, SMALL, p.faint()));
+        let k = p.k;
+        let rect = row()
+            .center()
+            .h(KEY_BOX_H)
+            .px(KEY_BOX_PX)
+            .radius(KEY_BOX_RADIUS)
+            .child(label(keys, SMALL, p.muted()));
+        hint = hint.child(match tuning::get().key_box {
+            KeyBox::Filled => rect.fill(k.alpha(k.c.text_base, 0.07)),
+            KeyBox::Outlined => rect.border(p.hair, k.c.border_base),
+        });
     }
     hint
 }
@@ -1248,8 +1265,18 @@ fn hint_width(copy: &str, keys: &str) -> f32 {
     } else {
         HINT_GAP
     };
-    measure(copy, SMALL) + gap + measure(keys, SMALL)
+    let rect = if keys.is_empty() {
+        0.0
+    } else {
+        measure(keys, SMALL) + 2.0 * KEY_BOX_PX
+    };
+    measure(copy, SMALL) + gap + rect
 }
+
+/// The rounded rect around a hint's keys.
+const KEY_BOX_H: f32 = 18.0;
+const KEY_BOX_PX: f32 = 5.0;
+const KEY_BOX_RADIUS: f32 = 5.0;
 
 /// The open capsule's field: what's typed and the caret, or the
 /// placeholder.
@@ -1515,25 +1542,22 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
 }
 
 /// The list's own hints, as one quiet line: what each key does, then the
-/// key ("Send to SEER ⏎"), as the capsule's chips read.
+/// key ("Send ⏎"); the highlighted row already says where.
 fn send_hints(p: Paint, list: &List, w: f32) -> El {
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
-    let send = list
-        .selected_dest()
-        .map_or("Send".to_owned(), |dest| format!("Send to {}", dest.name));
-    let send = ellipsize(&send, SMALL, room * 0.4);
+    let send = "Send".to_owned();
     let (keys, second): (&[&str], String) = match &list.footer {
-        Footer::KeepCopied => (&["esc"], "Keep copied".to_owned()),
+        Footer::KeepCopied => (&["esc"], "Keep".to_owned()),
         Footer::Keep(to) => (&["esc"], format!("Keep {to}")),
-        Footer::Always(site) => (&["⇧", "⏎"], format!("Always for {site}")),
-        Footer::Suggesting => (&["esc"], "Keep copied".to_owned()),
+        Footer::Always(_) => (&["⇧", "⏎"], "Always".to_owned()),
+        Footer::Suggesting => (&["esc"], "Keep".to_owned()),
     };
     let keys = chord(keys);
     let used = hint_width(&send, "⏎") + HINTS_GAP;
     let second = ellipsize(
         &second,
         SMALL,
-        room - used - measure(&keys, SMALL) - HINT_GAP,
+        room - used - hint_width("", &keys) - HINT_GAP,
     );
     row()
         .center_y()

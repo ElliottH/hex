@@ -74,6 +74,8 @@ pub(crate) const ROW_H: f32 = 30.0;
 /// guess under its top line.
 pub(crate) const CARD_W: f32 = 280.0;
 pub(crate) const PICK_H: f32 = 32.0;
+/// The card's hint line under its guesses.
+pub(crate) const CARD_HINTS_H: f32 = 28.0;
 /// The walls' corners never round more than the one-line capsule's, so a
 /// pill grows into a card without its corners changing.
 pub(crate) fn corner(h: f32) -> f32 {
@@ -139,7 +141,7 @@ pub(crate) fn done_style() -> TextStyle {
 
 /// [`TopLine::Icons`] says nothing for a plain copy: the check is enough.
 pub(crate) fn bare(done: &Done) -> bool {
-    tuning::get().top_line == TopLine::Icons && done.text == "Copied" && done.why.is_none()
+    tuning::get().top_line == TopLine::Icons && done.text.is_empty() && done.why.is_none()
 }
 
 /// The capsule unfolds from this fraction of its height, anchored on its
@@ -210,6 +212,8 @@ pub(crate) enum Id {
     /// A guess in the capsule itself: a chip in the menu-bar flow, a row
     /// in the cursor's and the notch's card.
     Pick(usize),
+    /// The card's key hint under its guesses ("Send 1–5").
+    CardHints,
     /// The toast's next guess (⇥).
     Next,
 }
@@ -240,6 +244,7 @@ impl Id {
             Id::Row(_) => "row",
             Id::Always => "always",
             Id::Pick(_) => "pick",
+            Id::CardHints => "card-hints",
             Id::Next => "next",
         }
     }
@@ -297,7 +302,7 @@ impl Id {
             Id::Pick(row) => 16 + row.min(1) as u8,
             Id::Ask => 18,
             Id::Close => 20,
-            Id::Row(_) | Id::Always => 21,
+            Id::Row(_) | Id::Always | Id::CardHints => 21,
         }
     }
 }
@@ -502,7 +507,23 @@ pub(crate) fn layout_at(pres: &Pres, clock: &str, anchor: Anchor) -> ([f32; 4], 
         });
     }
     if !picks.is_empty() {
-        shell[3] = ISLAND_H - 2.0 + picks.len() as f32 * PICK_H + ISLAND_INSET;
+        let hints_y = rows_y + picks.len() as f32 * PICK_H;
+        let digits = match picks.len() {
+            1 => "1".to_owned(),
+            n => format!("1–{n}"),
+        };
+        items.push(Item {
+            id: Id::CardHints,
+            ident: digits,
+            rect: [
+                shell[0] + ISLAND_INSET,
+                hints_y,
+                shell[2] - 2.0 * ISLAND_INSET,
+                CARD_HINTS_H,
+            ],
+            active: false,
+        });
+        shell[3] = hints_y + CARD_HINTS_H + ISLAND_INSET - shell[1];
     }
     // The notch's walls run up past the top edge, so only its bottom
     // corners round.
@@ -936,7 +957,7 @@ impl Surface {
 /// Where `pres` rests in the flow in use, `was` where it rested before:
 /// the cursor's card stays at the pointer through its send and Undo, and
 /// a new capture starts back under the menu bar.
-fn anchor_for(pres: &Pres, was: Anchor) -> Anchor {
+pub(crate) fn anchor_for(pres: &Pres, was: Anchor) -> Anchor {
     match tuning::get().flow {
         CapsuleFlow::Notch => Anchor::Notch,
         CapsuleFlow::Cursor => match pres {
@@ -994,7 +1015,7 @@ mod tests {
                     always: None,
                 },
             )),
-            ..Done::plain(Lead::Check, "Copied")
+            ..Done::plain(Lead::Check, "")
         })
     }
 
@@ -1222,7 +1243,7 @@ mod tests {
     fn a_written_copy_offers_paste_and_inspect_as_icons() {
         let copied = Pres::Done(Done {
             hand_off: true,
-            ..Done::plain(Lead::Check, "Copied")
+            ..Done::plain(Lead::Check, "")
         });
         let (_, items) = layout(&copied, "0:00");
         let ids: Vec<Id> = items.iter().map(|i| i.id).collect();

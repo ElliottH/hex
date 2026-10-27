@@ -140,12 +140,12 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   recreated window replaces the old one), so recordings leave it out
 ├── Follows `capture_host::watch()`: Recording from the instant `recording` is
 │   Some (the bundle's t0; timer, meter, ✓ finish, ✕ cancel) -> Processing ->
-│   Copied, Failed, or Cancelled, then leaves on its own; a written capture
-│   whose transcript has no words reads "Copied", "no speech heard"
+│   done (the lead alone, no word), Failed, or Cancelled, then leaves on its
+│   own; a written capture whose transcript has no words reads "no speech"
 ├── Tones (`feedback::Tone::Capture*`, at the dictation volume; zero is
 │   silent): start, stop, a rule's send going, an Undo, a failure
-├── Failed -> "Couldn't start the capture" until the engine reports it
-│   recording (`screen`), then "Couldn't save the capture"; a failed send ->
+├── Failed -> "Couldn't start" until the engine reports it
+│   recording (`screen`), then "Couldn't save"; a failed send ->
 │   "Couldn't send to X". Each keeps its `error`, or "Screen Recording is off"
 │   when it isn't granted; a start that fails before any snapshot showed it
 │   recording still shows, but never over a newer recording, and a capture
@@ -153,7 +153,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 ├── A shown recording that leaves with no outcome (a discard, from a chip or
 │   `hex capture discard`) -> the capsule leaves; the picker a chip opened
 │   stays. A switch that can't start settles the recording it discarded as
-│   failed, which the capsule shows as "Couldn't start the capture"
+│   failed, which the capsule shows as "Couldn't start"
 ├── A shortcut start (`target: Pointer`) -> Area · Window · Screen chips, plus
 │   iPhone while the snapshot names a cabled phone, for 3.5 s
 │   ├── `worked` -> they fold once seen for 0.9 s; never while the pointer is on
@@ -186,13 +186,13 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── The Undo chip counts nothing down: the capsule reads the same for the
 │   │   whole window and wakes once, when it ends
 │   ├── Anything else with somewhere to go (a guess, nothing fitting, no
-│   │   answer) -> "Copied" with the suggestions open under it and Paste
+│   │   answer) -> the lead alone with the suggestions open under it and Paste
 │   │   beside it; nothing sends until Kit picks
-│   │   ├── Up to three rows, suggested then recent, numbered 1-3; the first
+│   │   ├── Up to five rows, suggested then recent, numbered 1-5; the first
 │   │   │   carries its reason in the accent
 │   │   ├── "Always send <site> here" (a guess with a site) -> ticked, the pick
 │   │   │   also saves that rule
-│   │   ├── 1-3 or a click -> sends at once: "Sent to X", the Sent tone, and a
+│   │   ├── 1-5 or a click -> sends at once: "Sent to X", the Sent tone, and a
 │   │   │   quiet Undo for the same 5 s, with no ring or drain; ✕ closes;
 │   │   │   the capsule then leaves by itself with its exit
 │   │   ├── The list shortcut -> the full list with its search field
@@ -203,14 +203,14 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   it went to (by session id) once, last of all ("taken back"), with 1-9,
 │   │   typing, and ⇧⏎ as before. Open, it stays, sent nowhere; a click away
 │   │   folds it to "Taken back" with "Send to…", and it leaves after the done
-│   │   hold; nothing here takes Esc. ✕ (or Esc in the typed list) dismisses: "Kept ·
-│   │   hex capture send latest", the bundle untouched. Either way it then
+│   │   hold; nothing here takes Esc. ✕ (or Esc in the typed list) dismisses:
+│   │   "Kept", the bundle untouched. Either way it then
 │   │   waits for the list shortcut, even after the router said the pick went.
 │   │   News of the send being taken back (it went, queued, or failed) leaves
 │   │   that list alone, and a pick made before the router answers the Undo
 │   │   stands: the Undo's answer and the earlier send's news never take it back
 │   ├── Too late to take back -> the same list, the session marked "has it",
-│   │   folded "Sent to X · too late to take back"; a pick sends a copy there,
+│   │   folded "Sent to X · too late"; a pick sends a copy there,
 │   │   and ✕ just closes (it leaves by itself after the brief hold). Closed, it doesn't wait for the list shortcut.
 │   │   An Undo OpenCode refuses (an error) reads as too late
 │   ├── Sends -> CaptureCommand::Send{to} and Undo, naming the
@@ -246,12 +246,12 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── The top line is calm: the label, its note, one action, and ✕. Undo
 │   │   while a send can be taken back, else Paste and Inspect as two quiet
 │   │   icons (tooltips "Paste the capture", "Open the capture") for a written
-│   │   capture, else "Elsewhere…". Where to send it is only ever the list
+│   │   capture. Where to send it is only ever the list
 │   │   under the capsule, which is never narrower than LIST_W; the capsule
 │   │   widens with it. Two looks while Kit picks (tuning `top_line`):
 │   │   TopLine::Quiet (default) says the label in quiet MEDIUM ink;
-│   │   TopLine::Icons says it in STRONG and drops a plain "Copied" for the
-│   │   lead alone
+│   │   TopLine::Icons says it in STRONG. A capture that only copied has no
+│   │   label, the lead alone
 │   ├── The lead is the capture's first frame (`frames/frame-01.png`, else the
 │   │   contact sheet), cropped to a small rounded card once the bundle is
 │   │   written and decoded off the UI thread; until then, or without one, a
@@ -263,10 +263,13 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │       Scrawl.app)
 │   ├── Undo is a click only, with no shortcut: Escape meant for another app
 │   │   was taking sends back
-│   ├── Shortcuts read as quiet text after what they do, on its baseline,
-│   │   never keycaps (those are Settings'): "Elsewhere… ⌥⇧V",
-│   │   and the list's footer "Send 1–3", "Send to X ⏎", "Keep copied esc",
-│   │   "Always for <site> ⇧⏎". The footer sits apart from the rows in one of
+│   ├── Shortcuts read as quiet text after what they do, never a keycap per
+│   │   key (those are Settings'): a hint's keys sit in one small rounded rect,
+│   │   in one of two looks while Kit picks (tuning `key_box`): KeyBox::Filled
+│   │   (default), a quiet fill, or KeyBox::Outlined, a hairline. The list's
+│   │   footer reads "Send 1–5", "Send ⏎", "Keep esc", "Always ⇧⏎"; the
+│   │   cursor's and the notch's cards end in "Send 1–5" under their guesses.
+│   │   The footer sits apart from the rows in one of
 │   │   two looks while Kit picks (tuning `list_footer`): ListFooter::Band
 │   │   (default), a full-width band on its own fill under a rule, or
 │   │   ListFooter::Well, a rounded well inset like the rows
