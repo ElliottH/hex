@@ -317,6 +317,11 @@ fn every_state_draws_its_pieces() {
             &["done", "field", "list", "row-SEER", "footer"],
         ),
         ("sent", &["done", "undo", "paste", "inspect"]),
+        // Taken back, the suggestions again, the wrong one last.
+        (
+            "taken-back",
+            &["done", "list", "row-HEX", "row-SEER", "elsewhere"],
+        ),
         ("queued", &["done", "why", "paste", "inspect"]),
     ];
     // Paste and Inspect are for a written capture, and the open list's
@@ -325,7 +330,6 @@ fn every_state_draws_its_pieces() {
         ("recording-discard", &["cancel", "finish"]),
         ("failed", &["paste", "inspect"]),
         ("failed-start", &["paste", "inspect"]),
-        ("taken-back", &["paste", "inspect"]),
         ("list-guess", &["paste", "inspect", "route0"]),
         ("guess", &["field", "route0", "ask"]),
     ];

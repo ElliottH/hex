@@ -151,6 +151,7 @@ const SCENES: &[Scene] = &[
             ],
         )
     }),
+    ("taken-back", |s| scene(s, &taken_back())),
     ("recording", |s| {
         scene(s, &[record(), Step::Input(Input::Chips)])
     }),
@@ -158,6 +159,17 @@ const SCENES: &[Scene] = &[
         scene(s, &[record(), Step::Click(Id::Cancel)])
     }),
 ];
+
+/// A saved rule's send, taken back at once: the suggestions again.
+fn taken_back() -> Vec<Step> {
+    vec![
+        record(),
+        Step::Input(stop()),
+        done(),
+        routed(rule()),
+        Step::Click(Id::Undo),
+    ]
+}
 
 fn scene(s: &mut CapsuleState, steps: &[Step]) {
     if let Some(pg) = s.playground.as_mut() {
@@ -504,6 +516,7 @@ fn states(p: Paint) -> El {
                     vec![record(), Step::Input(stop()), done(), routed(rule())]
                 }))
                 .child(state_button(p, "Undo", || vec![Step::Click(Id::Undo)]))
+                .child(state_button(p, "Rule, then Undo", taken_back))
                 .child(state_button(p, "Queued", || {
                     vec![
                         record(),
