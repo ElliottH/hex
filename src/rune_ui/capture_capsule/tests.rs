@@ -296,18 +296,10 @@ fn every_state_draws_its_pieces() {
         ("saved", &["done", "paste", "inspect", "close"]),
         ("failed", &["done", "close"]),
         ("rule-sent", &["done", "why", "undo", "paste", "inspect"]),
-        ("rule-final", &["done", "why", "paste", "ask", "inspect"]),
+        ("rule-final", &["done", "why", "paste", "inspect"]),
         (
             "guess",
-            &[
-                "done",
-                "paste",
-                "inspect",
-                "list",
-                "row-SEER",
-                "always",
-                "elsewhere",
-            ],
+            &["done", "paste", "inspect", "list", "row-SEER", "always"],
         ),
         (
             "guess-four",
@@ -322,14 +314,7 @@ fn every_state_draws_its_pieces() {
         // Taken back, the suggestions again, the wrong one last.
         (
             "taken-back",
-            &[
-                "done",
-                "list",
-                "row-HOME",
-                "row-RUNE",
-                "row-SEER",
-                "elsewhere",
-            ],
+            &["done", "list", "row-HOME", "row-RUNE", "row-SEER"],
         ),
         ("queued", &["done", "why", "paste", "inspect"]),
     ];

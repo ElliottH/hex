@@ -125,7 +125,7 @@ const SCENES: &[Scene] = &[
         steps.push(Step::Click(Id::Always));
         scene(s, &steps)
     }),
-    ("elsewhere", |s| {
+    ("search", |s| {
         scene(
             s,
             &[
@@ -513,7 +513,7 @@ fn states(p: Paint) -> El {
                 .child(state_button(p, "Pick 1", || {
                     vec![Step::Input(Input::SendRow(0))]
                 }))
-                .child(state_button(p, "Elsewhere…", || {
+                .child(state_button(p, "Search all", || {
                     vec![Step::Input(Input::OpenList)]
                 }))
                 .child(state_button(p, "Saved rule", rule_sent))

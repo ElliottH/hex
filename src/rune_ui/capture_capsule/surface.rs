@@ -148,9 +148,6 @@ pub(crate) enum Id {
     Row(usize),
     /// The suggestions' "Always send <site> here".
     Always,
-    /// The suggestions' "Elsewhere…": the send-to list shortcut searches
-    /// every session.
-    Elsewhere,
 }
 
 impl Id {
@@ -182,7 +179,6 @@ impl Id {
             Id::Field => "field",
             Id::Row(_) => "row",
             Id::Always => "always",
-            Id::Elsewhere => "elsewhere",
         }
     }
 
@@ -216,7 +212,7 @@ impl Id {
             Id::Ask => 18,
             Id::Inspect => 19,
             Id::Close => 20,
-            Id::Row(_) | Id::Always | Id::Elsewhere => 21,
+            Id::Row(_) | Id::Always => 21,
         }
     }
 }
@@ -1015,7 +1011,7 @@ mod tests {
         Pres::Done(Done {
             why: Some("rule".into()),
             undo,
-            ask: Some("Elsewhere…".into()),
+            ask: Some("Send to…".into()),
             ask_keys: ask_keys(),
             ..Done::plain(Lead::Check, "Sent to SEER")
         })

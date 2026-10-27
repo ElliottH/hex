@@ -2226,7 +2226,7 @@ pub(crate) fn publish_list_keycaps(binding: Option<&HotkeyBinding>) {
 }
 
 /// The send-to list shortcut's keycaps (`["⌥", "⇧", "V"]`) for the
-/// capsule's Elsewhere chip; empty while the list has no shortcut
+/// capsule's ask chip and footer hint; empty while the list has no shortcut
 /// ([`AppSettings::capture_list_hotkey`]), and the default's before settings
 /// are applied (scenes and tests).
 #[cfg(hex_capture)]
@@ -2392,7 +2392,7 @@ pub(crate) fn migrate_legacy_settings(path: &std::path::Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The capsule's Elsewhere chip shows the send-to list's own shortcut,
+    /// The capsule's ask chip and footer hint show the send-to list's own shortcut,
     /// ⌥⇧V unless rebound, and no keys while the list has none.
     #[cfg(hex_capture)]
     #[test]

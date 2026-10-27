@@ -1070,7 +1070,8 @@ pub fn listen(
                 continue;
             }
             // Escape ends a dictation or Voice Action hold first, then
-            // closes the capsule's picker, list, or Undo, then cancels queued
+            // closes the capsule's picker or open list (never an Undo: that is a
+            // click), then cancels queued
             // dictation. It never ends a recording capture: it may be meant
             // for the app being recorded (the capsule's ✕ discards).
             #[cfg(hex_capture)]
@@ -1308,8 +1309,7 @@ pub fn listen(
             }
         }
         // A recording capture never takes Escape: only the capture
-        // shortcut's press before it starts, and the capsule's picker, list,
-        // and Undo.
+        // shortcut's press before it starts, and the capsule's picker.
         #[cfg(hex_capture)]
         let capture_escape = capture_host.is_some() && capture_shortcut.takes_escape();
         #[cfg(not(hex_capture))]

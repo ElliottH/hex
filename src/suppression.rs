@@ -690,13 +690,13 @@ unsafe extern "C" fn event_callback(
     } else {
         None
     };
-    // A press anywhere while the list is open may close it; the click still
+    // A press anywhere while the list or suggestions are open may fold it; the click still
     // goes to the app and to the listener as chord evidence.
     #[cfg(hex_capture)]
     if matches!(
         event_type,
         EVENT_LEFT_MOUSE_DOWN | EVENT_RIGHT_MOUSE_DOWN | EVENT_OTHER_MOUSE_DOWN
-    ) && crate::capture_host::list_open()
+    ) && (crate::capture_host::list_open() || crate::capture_host::suggesting())
     {
         crate::capture_host::capsule_key(crate::capture_host::CapsuleKey::Press);
     }

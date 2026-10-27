@@ -278,7 +278,7 @@ pub(crate) enum Footer {
     /// ⇧⏎ always sends this site to the selected session.
     Always(String),
     /// The suggestions: 1–3 send, the list shortcut searches every session.
-    Elsewhere,
+    Suggesting,
 }
 
 /// The list under the open capsule.
@@ -296,7 +296,7 @@ pub(crate) struct List {
 impl List {
     /// The suggestions a capture opens with, not a search.
     pub(crate) fn suggesting(&self) -> bool {
-        self.footer == Footer::Elsewhere
+        self.footer == Footer::Suggesting
     }
 }
 
@@ -448,7 +448,7 @@ struct Routed {
 struct Open {
     query: String,
     selected: usize,
-    /// Searching every session (the list shortcut, "Elsewhere…"): the field
+    /// Searching every session (the list shortcut): the field
     /// takes typing. Otherwise it's the suggestions a capture opens with.
     typing: bool,
     /// "Always send <site> here" is ticked: the pick saves a rule.
@@ -505,6 +505,9 @@ pub(crate) struct Flow {
     phase: Phase,
     /// The pointer is on the capsule.
     hovered: bool,
+    /// No finished capsule leaves before this: a fold or the pointer's
+    /// leaving gives it a moment more.
+    hold_floor: f64,
     /// An iPhone is cabled.
     phone: bool,
     /// The iPhone chip asked to switch, and its new recording hasn't shown:
@@ -546,6 +549,7 @@ impl Flow {
         Self {
             phase: Phase::Hidden,
             hovered: false,
+            hold_floor: 0.0,
             phone: false,
             switching: false,
             cues: Vec::new(),
@@ -604,6 +608,9 @@ impl Flow {
     /// The pointer came onto the capsule or left it.
     pub(crate) fn hover(&mut self, on: bool, now: f64) {
         self.hovered = on;
+        if !on {
+            self.hold_floor = self.hold_floor.max(now + CHIPS_LINGER_S);
+        }
         if let (
             false,
             Phase::Recording {
@@ -911,7 +918,9 @@ impl Flow {
                 if routed.taken_back {
                     routed.at = now;
                 }
-                routed.open = None;
+                if routed.open.take().is_some() {
+                    self.fold_hold(now);
+                }
                 Phase::Routed(routed)
             }
             (phase, Input::ClickAway) => phase,
@@ -925,31 +934,37 @@ impl Flow {
                     ..
                 }),
                 input @ (Input::Escape | Input::Dismiss),
-            ) if input == Input::Dismiss || open.is_some() => match already_with {
-                None => Phase::Kept { at: now },
-                Some(_) => Phase::Hidden,
-            },
+            ) if input == Input::Dismiss || open.as_ref().is_some_and(|open| open.typing) => {
+                match already_with {
+                    None => Phase::Kept { at: now },
+                    Some(_) => Phase::Hidden,
+                }
+            }
             // Escape only reaches an open list; it folds it. It never takes
             // a send back: that is the Undo button's.
-            (Phase::Routed(mut routed), Input::Escape) => {
-                routed.open = None;
+            (Phase::Routed(mut routed), Input::Escape)
+                if routed.open.as_ref().is_some_and(|open| open.typing) =>
+            {
+                if routed.open.take().is_some() {
+                    self.fold_hold(now);
+                }
                 Phase::Routed(routed)
             }
-            (Phase::Routed(mut routed), Input::Undo) => {
-                match (rule_to(&routed.route).cloned(), now - routed.at < undo_s()) {
+            (Phase::Routed(routed), Input::Undo) => {
+                // The chip is only there while the window runs; a click that
+                // lands as it ends still counts, and the router answers too
+                // late if it was.
+                match (rule_to(&routed.route).cloned(), !routed.taken_back) {
                     (Some(to), true) => {
                         actions.push(Action::Undo {
                             to: to.name.clone(),
                         });
                         taking_back(Some(routed.route), &to, now)
                     }
-                    _ => {
-                        routed.open = None;
-                        Phase::Routed(routed)
-                    }
+                    _ => Phase::Routed(routed),
                 }
             }
-            (Phase::Sent(sent), Input::Undo) if sent.undoable && now - sent.at < undo_s() => {
+            (Phase::Sent(sent), Input::Undo) if sent.undoable => {
                 actions.push(Action::Undo {
                     to: sent.to.clone(),
                 });
@@ -1128,7 +1143,6 @@ impl Flow {
             (_, Id::Ask) => self.input(Input::OpenList, now),
             (_, Id::Row(row)) => self.input(Input::SendRow(row), now),
             (_, Id::Always) => self.input(Input::ToggleAlways, now),
-            (_, Id::Elsewhere) => self.input(Input::OpenList, now),
             // ✕ beside "Sent to X" just closes, a rule's as a pick's.
             (_, Id::Close) => self.input(Input::Dismiss, now),
             _ => Vec::new(),
@@ -1145,8 +1159,9 @@ impl Flow {
         match &self.phase {
             Phase::Hidden | Phase::Kept { .. } => self.waiting.as_ref().map(|_| CapsuleKeys::Route),
             Phase::Selecting(_) => Some(CapsuleKeys::Picker),
-            // Taken back with nothing to list: ✕ dismisses, or it leaves.
-            Phase::TakenBack { .. } => Some(CapsuleKeys::Route),
+            // Nothing to list, so ⌥⇧V reaches the app; ✕ dismisses, or it
+            // leaves by itself.
+            Phase::TakenBack { .. } => None,
             Phase::Routed(Routed {
                 open: Some(open),
                 route,
@@ -1209,7 +1224,8 @@ impl Flow {
                 due
             }
             phase => {
-                let due = hold_until(phase).is_some_and(|at| now >= at);
+                let due = !self.hovered
+                    && hold_until(phase).is_some_and(|at| now >= at.max(self.hold_floor));
                 if due {
                     let before = std::mem::replace(&mut self.phase, Phase::Hidden);
                     self.closed = true;
@@ -1218,6 +1234,12 @@ impl Flow {
                 due
             }
         }
+    }
+
+    /// A folded list leaves the capsule up a brief moment more, not
+    /// at once.
+    fn fold_hold(&mut self, now: f64) {
+        self.hold_floor = self.hold_floor.max(now + tuning::get().brief_hold_s);
     }
 
     /// When `tick` next has something to do.
@@ -1244,10 +1266,10 @@ impl Flow {
             Phase::Sent(sent) if sent.undoable => undo_at(sent.at),
             _ => None,
         };
-        [due, hold_until(&self.phase)]
-            .into_iter()
-            .flatten()
-            .min_by(f64::total_cmp)
+        let hold = hold_until(&self.phase)
+            .map(|at| at.max(self.hold_floor))
+            .filter(|_| !self.hovered);
+        [due, hold].into_iter().flatten().min_by(f64::total_cmp)
     }
 
     /// What the capsule draws at `now`.
@@ -1380,7 +1402,9 @@ fn hold_until(phase: &Phase) -> Option<f64> {
         }) if open.as_ref().is_none_or(|open| !open.typing && !taken_back) => {
             Some(at + tuning::get().done_hold_s)
         }
-        Phase::Kept { at } | Phase::Failed { at, .. } => Some(at + tuning::get().brief_hold_s),
+        Phase::Kept { at } | Phase::TakenBack { at } | Phase::Failed { at, .. } => {
+            Some(at + tuning::get().brief_hold_s)
+        }
         _ => None,
     }
 }
@@ -1423,7 +1447,7 @@ fn list(route: &Route, open: &Open) -> List {
                 .collect(),
             recent: Vec::new(),
             selected: open.selected,
-            footer: Footer::Elsewhere,
+            footer: Footer::Suggesting,
             always: site.map(|site| (site, open.always)),
         };
     }
@@ -1585,7 +1609,8 @@ fn routed_done(routed: &Routed, undo: bool) -> Done {
     let base = match &routed.route {
         // Sent nowhere, it waits for a pick: ⌥⇧V or a click reopens the list.
         _ if routed.taken_back => Done {
-            ask: Some("Elsewhere…".into()),
+            // Too late, it's where it went: nothing to offer.
+            ask: routed.already_with.is_none().then(|| "Send to…".into()),
             why: routed
                 .already_with
                 .as_ref()
@@ -1599,11 +1624,10 @@ fn routed_done(routed: &Routed, undo: bool) -> Done {
             )
         },
         // Sent at once, with a pick's plain Undo while it can be taken
-        // back, then Elsewhere…; ⌥⇧V opens the list throughout.
+        // back; ⌥⇧V opens the list throughout.
         Route::Rule { to, .. } => Done {
             why: Some("rule".into()),
             undo,
-            ask: (!undo).then(|| "Elsewhere…".into()),
             ..Done::plain(Lead::Check, sent_to(&to.name))
         },
         // The suggestions are the ask (closed, the list shortcut opens them).
@@ -1932,7 +1956,7 @@ mod tests {
         assert_eq!(done(&flow, 10.0).text, "Sent to SEER");
         assert_eq!(done(&flow, 10.0).lead, Lead::Check);
         assert_eq!(done(&flow, 10.0).ask, None, "Undo, as a pick has");
-        assert_eq!(done(&flow, 15.0).ask.as_deref(), Some("Elsewhere…"));
+        assert_eq!(done(&flow, 15.0).ask, None, "nothing after the window");
         assert!(done(&flow, 10.0).routes.is_empty(), "no runner-up");
         assert_eq!(done(&flow, 10.0).why.as_deref(), Some("rule"));
         let actions = flow.input(Input::Undo, 11.0);
@@ -1958,6 +1982,36 @@ mod tests {
         assert_eq!(late.next_due(0.0), Some(undo_s()));
         assert!(late.tick(undo_s()));
         assert_eq!(late.pres(undo_s()), Pres::Hidden);
+    }
+
+    /// The pointer on a finished capsule holds it; leaving gives it a moment.
+    /// A click on Undo at the window's edge still counts, and folding a list
+    /// gives a brief hold rather than hiding it at once.
+    #[test]
+    fn hover_and_folding_hold_a_finished_capsule_and_a_late_undo_counts() {
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule()), 0.0);
+        flow.hover(true, 4.0);
+        assert!(!flow.tick(undo_s() + 10.0));
+        assert_eq!(flow.next_due(undo_s() + 10.0), None);
+        flow.hover(false, 20.0);
+        assert!(!flow.tick(20.0 + CHIPS_LINGER_S - 0.1));
+        assert!(flow.tick(20.0 + CHIPS_LINGER_S));
+
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule()), 0.0);
+        assert_eq!(
+            flow.input(Input::Undo, undo_s() + 0.01),
+            [Action::Undo { to: "SEER".into() }]
+        );
+
+        let brief = tuning::get().brief_hold_s;
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule()), 0.0);
+        flow.input(Input::OpenList, 4.0);
+        flow.input(Input::Escape, 9.0);
+        assert!(!flow.tick(9.0 + brief - 0.1));
+        assert!(flow.tick(9.0 + brief));
     }
 
     fn flow_keys_after_send() -> Option<crate::capture_host::CapsuleKeys> {
@@ -2076,10 +2130,12 @@ mod tests {
         flow.input(Input::Undo, 1.0);
         flow.input(Input::Undone(Undone::TakenBack), 1.2);
         assert_eq!(done(&flow, 1.2).text, "Taken back");
-        assert!(!flow.tick(1_000.0));
-        assert_eq!(flow.keys(), Some(CapsuleKeys::Route));
-        flow.input(Input::Dismiss, 1_000.0);
-        let kept = done(&flow, 1_000.0);
+        // Nothing to list: no keys are Hex's, and it leaves by itself.
+        assert_eq!(flow.keys(), None);
+        let brief = tuning::get().brief_hold_s;
+        assert!(!flow.tick(1.0 + brief - 0.1));
+        flow.input(Input::Dismiss, 3.0);
+        let kept = done(&flow, 3.0);
         assert_eq!(
             (kept.text.as_str(), kept.why.as_deref()),
             ("Kept", Some(SEND_LATER))
@@ -2130,7 +2186,7 @@ mod tests {
         flow.input(Input::ClickAway, 2.0);
         let closed = done(&flow, 2.0);
         assert_eq!(closed.text, "Taken back");
-        assert_eq!(closed.ask.as_deref(), Some("Elsewhere…"));
+        assert_eq!(closed.ask.as_deref(), Some("Send to…"));
         let waiting = Some(crate::capture_host::CapsuleKeys::Route);
         assert_eq!(flow.keys(), waiting);
         assert_eq!(flow.next_due(2.0), Some(2.0 + hold));
@@ -2201,7 +2257,7 @@ mod tests {
         let folded = done(&flow, 2.0);
         assert_eq!(folded.text, "Sent to SEER");
         assert_eq!(folded.why.as_deref(), Some("too late to take back"));
-        assert_eq!(folded.ask.as_deref(), Some("Elsewhere…"));
+        assert_eq!(folded.ask, None, "it is where it went");
         flow.input(Input::Dismiss, 3.0);
         assert_eq!(flow.pres(3.0), Pres::Hidden);
         // It's where it went: once gone, nothing waits for a pick.
@@ -2721,7 +2777,7 @@ mod tests {
         let names: Vec<_> = list.rows().map(|dest| dest.name.as_str()).collect();
         assert_eq!(names, ["SEER", "HEX", "HOME"], "suggested, then recent");
         assert_eq!(list.selected, 0, "the best is marked");
-        assert_eq!(list.footer, Footer::Elsewhere);
+        assert_eq!(list.footer, Footer::Suggesting);
         assert_eq!(list.always, Some(("problems.kitlangton.com".into(), false)));
         assert_eq!(flow.keys(), Some(CapsuleKeys::Suggest { rows: 3 }));
         assert!(flow.take_cues().is_empty(), "nothing sent, nothing heard");
@@ -2741,11 +2797,14 @@ mod tests {
     }
 
     #[test]
-    fn escape_folds_the_suggestions_and_they_leave_like_any_capsule() {
+    fn a_click_away_folds_the_suggestions_and_they_leave_like_any_capsule() {
         use crate::capture_host::CapsuleKeys;
         let mut flow = Flow::new();
         flow.input(Input::Routed(guess()), 0.0);
-        flow.input(Input::Undo, 1.0);
+        // Escape is never Hex's here: it changes nothing.
+        assert!(flow.input(Input::Escape, 0.5).is_empty());
+        assert!(done(&flow, 0.5).open.is_some());
+        flow.input(Input::ClickAway, 1.0);
         let folded = done(&flow, 1.0);
         assert_eq!(folded.open, None);
         assert_eq!(folded.ask.as_deref(), Some("Send to…"));

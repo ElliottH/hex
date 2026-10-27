@@ -2154,8 +2154,9 @@ impl CaptureShortcut {
     }
 
     /// Whether Hex's tap keeps Escape from the app for captures: only for
-    /// this press before it records, and for the capsule's picker, list,
-    /// and Undo. A recording capture never takes it.
+    /// this press before it records, and for the capsule's picker. (An open
+    /// list takes Escape at the session tap.) A recording capture never
+    /// takes it, and a send's Undo is a click.
     pub fn takes_escape(&self) -> bool {
         self.armed() || wants_escape()
     }
@@ -2184,8 +2185,8 @@ pub enum CapsuleKeys {
     /// Hex's shortcuts.
     List,
     /// A capture's suggestions: the send-to list shortcut (search every
-    /// session), and 1 to `rows` with no modifier
-    /// ([`CapsuleKey::Digit`]).
+    /// session), 1 to `rows` with no modifier ([`CapsuleKey::Digit`]), and
+    /// a mouse press ([`CapsuleKey::Press`]) that may fold them.
     Suggest { rows: u8 },
 }
 
@@ -2303,7 +2304,7 @@ pub fn list_open() -> bool {
 /// match it (`app_settings::runtime_hotkeys`), so it reaches the app in
 /// front the rest of the time.
 pub fn list_key_wanted() -> bool {
-    matches!(GRAB_KEYS.load(Ordering::Acquire), 2..=4 | 6)
+    matches!(GRAB_KEYS.load(Ordering::Acquire), 2 | 4 | 6)
 }
 
 /// Whether the capsule's suggestions take their digit keys at the tap.
@@ -2328,6 +2329,7 @@ fn takes(keys: CapsuleKeys, key: &CapsuleKey) -> bool {
             CapsuleKey::OpenList,
         ) => true,
         (CapsuleKeys::Suggest { rows }, CapsuleKey::Digit(digit)) => (1..=rows).contains(digit),
+        (CapsuleKeys::Suggest { .. }, CapsuleKey::Press) => true,
         (CapsuleKeys::List, key) => !matches!(key, CapsuleKey::Shortcut),
         _ => false,
     }
@@ -4189,8 +4191,7 @@ mod tests {
         drop(first);
         assert!(capsule_key(CapsuleKey::Escape));
 
-        // A routed capsule: the list shortcut opens the list; Escape only
-        // while a send can be undone.
+        // A routed capsule: the list shortcut opens the list; never Escape.
         second.set(CapsuleKeys::Route);
         assert!(!picking() && !wants_escape() && list_key_wanted());
         assert!(!capsule_key(CapsuleKey::Shortcut));
@@ -4207,6 +4208,7 @@ mod tests {
         second.set(CapsuleKeys::Suggest { rows: 2 });
         assert!(suggesting() && !wants_escape() && list_key_wanted() && !list_open());
         assert!(!capsule_key(CapsuleKey::Escape));
+        assert!(capsule_key(CapsuleKey::Press), "a press may fold them");
         assert!(capsule_key(CapsuleKey::Digit(2)));
         assert!(!capsule_key(CapsuleKey::Digit(3)), "no third row");
         assert!(!capsule_key(CapsuleKey::Text("h".into())));
@@ -4224,6 +4226,7 @@ mod tests {
                 (2, CapsuleKey::Shortcut),
                 (2, CapsuleKey::Escape),
                 (2, CapsuleKey::OpenList),
+                (2, CapsuleKey::Press),
                 (2, CapsuleKey::Digit(2)),
                 (2, CapsuleKey::Text("ho".into())),
                 (2, CapsuleKey::Press),

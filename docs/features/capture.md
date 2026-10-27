@@ -161,8 +161,8 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   pick gets, no ring or drain; ✕ closes. The Sent tone plays when the
 │   │   router says it went. No runner-up chip, since the router names none
 │   │   beside a saved rule; when the Undo window ends the capsule leaves by
-│   │   itself (with the list open it stays). The list shortcut's "Elsewhere…"
-│   │   chip opens the list while it shows. Picking the rule's own session there (without
+│   │   itself (with the list open it stays; the pointer on it holds it, and a
+│   │   folded list gives it a brief hold). Picking the rule's own session there (without
 │   │   "Always") only closes the list; nothing is sent again
 │   ├── The Undo chip counts nothing down: the capsule reads the same for the
 │   │   whole window and wakes once, when it ends
@@ -176,15 +176,15 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   ├── 1-3 or a click -> sends at once: "Sent to X", the Sent tone, and a
 │   │   │   quiet Undo button for the same 5 s, with no ring or drain; ✕ closes;
 │   │   │   the capsule then leaves by itself with its exit
-│   │   ├── The list shortcut or "Elsewhere…" -> the full list with its search field
+│   │   ├── The list shortcut -> the full list with its search field
 │   │   ├── Esc -> not Hex's here: it goes to the app in front
 │   │   └── Unpicked -> they leave with the capsule after the done hold
 │   ├── Taken back (a rule's send or a pick) -> never
 │   │   ends the capture: the list opens again with the same sessions, the one
 │   │   it went to (by session id) once, last of all ("taken back"), with 1-9,
 │   │   typing, and ⇧⏎ as before. Open, it stays, sent nowhere; a click away
-│   │   folds it to "Taken back" with "Elsewhere…", gives Esc back to the app,
-│   │   and it leaves after the done hold. ✕ (or Esc in its open list) dismisses: "Kept ·
+│   │   folds it to "Taken back" with "Send to…", and it leaves after the done
+│   │   hold; nothing here takes Esc. ✕ (or Esc in the typed list) dismisses: "Kept ·
 │   │   hex capture send latest", the bundle untouched. Either way it then
 │   │   waits for the list shortcut, even after the router said the pick went.
 │   │   News of the send being taken back (it went, queued, or failed) leaves
@@ -200,7 +200,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   ├── Keys (capture_host::take_keys), never taking focus:
 │   │   ├── Picker -> ⌥⇧S and Esc through the listener
 │   │   ├── Routed -> the send-to list shortcut (capture.list_hotkey; the
-│   │   │   "Elsewhere…" chip shows it) opens the list; never Esc, so a send is
+│   │   │   "Send to…" chip shows it) opens the list; never Esc, so a send is
 │   │   │   taken back only by clicking Undo.
 │   │   │   Unreachable has no list, so the shortcut reaches the app in front
 │   │   ├── Closed, waiting for a pick (a guess or taken-back capture closed
@@ -214,8 +214,9 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   │   app, and the Undo button is the only way back
 │   │   ├── Suggestions -> the list shortcut through the listener,
 │   │   │   and at the session tap only 1 to the number of rows with no
-│   │   │   modifier (`capture_host::suggesting`); every other key goes on to
-│   │   │   the app
+│   │   │   modifier (`capture_host::suggesting`) and a mouse press, which folds
+│   │   │   them (the click still reaches the app); every other key, Esc
+│   │   │   included, goes on to the app
 │   │   └── List open -> the session tap takes every key press without ⌘ or ⌃
 │   │       that isn't a Hex shortcut: text in the active layout, ⌫, ↑↓, ⏎,
 │   │       ⇧⏎ (always), 1-9, Esc; their releases too. A send, Esc, or a
@@ -375,7 +376,8 @@ Where it goes                            // capture.route; capture.routing's aut
 ├── Queued sends -> retried every 15 s, unless Scrawl.app runs or something
 │   serves the ingest port (that process retries); a retried send can't be
 │   undone, so its "Sent to X" has no Undo. A queued or too-late-to-undo send
-│   leaves after the brief hold (4 s) rather than the 25 s done hold
+│   leaves after the brief hold (4 s) rather than the 25 s done hold; a taken
+│   back capture with nothing to list ('Taken back') does too
 └── autoSend off -> no look, no route; the capture is only copied
 
 hex capture list|show|send|route         // capture.cli; docs/cli.md
@@ -544,7 +546,7 @@ Checks:
   "Copy values" copies its `DEFAULT`). It reads and writes no Hex data and
   records or sends nothing. The whole flow picks the first suggestion;
   its "Saved rule" toggle plays a rule's send, sent at once, instead.
-  `--snap --scene suggestions|always|elsewhere|picked|rule|recording`
+  `--snap --scene suggestions|always|search|picked|rule|recording`
   renders it. The tones were checked by waveform and level only, never on
   speakers.
 - Picker, in capture_capsule/picker.rs and tests.rs: geometry, label, and
