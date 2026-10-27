@@ -1560,13 +1560,14 @@ fn suggest_hints(p: Paint, list: &List, w: f32) -> El {
 }
 
 /// Shift down: the footer says where the rule will send `site`, each in
-/// a rounded badge: "Always send [site] to [SEER]", following the
-/// highlighted row.
+/// a badge with its kind's icon: "Always send [🌐 site] to [💬 SEER]",
+/// following the highlighted row.
 fn saving_hint(p: Paint, list: &List, site: &str, w: f32) -> El {
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
     let to = list.selected_dest().map(|dest| dest.name.as_str());
     let words = measure("Always send", SMALL) + measure("to", SMALL) + 3.0 * BADGE_GAP;
-    let badges = if to.is_some() { 2.0 } else { 1.0 } * 2.0 * BADGE_PX;
+    let badges =
+        if to.is_some() { 2.0 } else { 1.0 } * (2.0 * BADGE_PX + BADGE_ICON + BADGE_ICON_GAP);
     let left = (room - words - badges).max(0.0);
     let to_w = to.map_or(0.0, |to| measure(to, SMALL));
     let site_w = measure(site, SMALL);
@@ -1581,30 +1582,99 @@ fn saving_hint(p: Paint, list: &List, site: &str, w: f32) -> El {
         .gap(BADGE_GAP)
         .key("saving")
         .child(label("Always send", SMALL, p.muted()))
-        .child(badge(p, &ellipsize(site, SMALL, site_room)).key("site"));
+        .child(badge(p, Badge::of_site(site), &ellipsize(site, SMALL, site_room)).key("site"));
     hint = match to {
         Some(to) => hint
             .child(label("to", SMALL, p.muted()))
-            .child(badge(p, &ellipsize(to, SMALL, to_room)).key("to")),
+            .child(badge(p, Badge::Chat, &ellipsize(to, SMALL, to_room)).key("to")),
         None => hint.child(label("to…", SMALL, p.muted())),
     };
     hint.child(el().grow(1.0))
 }
 
 const BADGE_H: f32 = 20.0;
-const BADGE_PX: f32 = 8.0;
+const BADGE_PX: f32 = 6.0;
+const BADGE_RADIUS: f32 = 5.0;
 const BADGE_GAP: f32 = 6.0;
+const BADGE_ICON: f32 = 12.0;
+const BADGE_ICON_GAP: f32 = 4.0;
 
-/// A name in a capsule: what a Shift pick's rule ties together.
-fn badge(p: Paint, name: &str) -> El {
+/// What a [`badge`] names, which picks its icon.
+#[derive(Clone, Copy)]
+enum Badge {
+    Website,
+    App,
+    Chat,
+}
+
+impl Badge {
+    /// A rule's key is a site's host or an app's name.
+    fn of_site(site: &str) -> Self {
+        if site.contains('.') && !site.contains(char::is_whitespace) {
+            Self::Website
+        } else {
+            Self::App
+        }
+    }
+}
+
+/// A name in a rounded rect after its kind's icon: what a Shift pick's
+/// rule ties together.
+fn badge(p: Paint, kind: Badge, name: &str) -> El {
     let k = p.k;
     row()
         .center()
+        .gap(BADGE_ICON_GAP)
         .h(BADGE_H)
         .px(BADGE_PX)
-        .radius(BADGE_H / 2.0)
+        .radius(BADGE_RADIUS)
         .fill(k.alpha(k.c.text_base, 0.09))
+        .child(
+            canvas(badge_icon(kind, BADGE_ICON * 2.2 / 24.0, p.muted()))
+                .size(BADGE_ICON, BADGE_ICON),
+        )
         .child(label(name, SMALL, p.text()))
+}
+
+/// A badge's line icon on the 24 × 24 grid: a globe, an app window, or a
+/// chat bubble.
+fn badge_icon(kind: Badge, width: f32, color: Color) -> Shape {
+    let line = |a: [f32; 2], b: [f32; 2]| Path::new().move_to(a).line_to(b);
+    let paths = match kind {
+        Badge::Website => vec![
+            rounded(3.0, 3.0, 18.0, 18.0, 9.0),
+            line([3.0, 12.0], [21.0, 12.0]),
+            Path::new()
+                .move_to([12.0, 3.0])
+                .cubic_to([7.5, 8.0], [7.5, 16.0], [12.0, 21.0])
+                .cubic_to([16.5, 16.0], [16.5, 8.0], [12.0, 3.0])
+                .close(),
+        ],
+        Badge::App => vec![
+            rounded(3.0, 3.5, 18.0, 17.0, 3.0),
+            line([3.0, 8.5], [21.0, 8.5]),
+        ],
+        Badge::Chat => vec![
+            Path::new()
+                .move_to([7.0, 4.0])
+                .line_to([17.0, 4.0])
+                .cubic_to([19.2, 4.0], [21.0, 5.8], [21.0, 8.0])
+                .line_to([21.0, 13.0])
+                .cubic_to([21.0, 15.2], [19.2, 17.0], [17.0, 17.0])
+                .line_to([11.0, 17.0])
+                .line_to([6.5, 20.5])
+                .line_to([6.5, 17.0])
+                .cubic_to([4.6, 16.8], [3.0, 15.1], [3.0, 13.0])
+                .line_to([3.0, 8.0])
+                .cubic_to([3.0, 5.8], [4.8, 4.0], [7.0, 4.0])
+                .close(),
+        ],
+    };
+    paths
+        .iter()
+        .fold(Shape::new().view_box(24.0, 24.0), |shape, path| {
+            shape.stroke_path(path, width, LineCap::Round, color)
+        })
 }
 
 /// The footer's height, and the list's below its last row.
