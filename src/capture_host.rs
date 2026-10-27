@@ -2244,8 +2244,9 @@ pub enum CapsuleKeys {
     List,
     /// A capture's suggestions: the send-to list shortcut (search every
     /// session), 1 to `rows` with no modifier ([`CapsuleKey::Digit`]), and
-    /// a mouse press ([`CapsuleKey::Press`]) that may fold them.
-    Suggest { rows: u8 },
+    /// a mouse press ([`CapsuleKey::Press`]) that may fold them. `cycle`:
+    /// Return and Tab too, for the toast that offers one guess at a time.
+    Suggest { rows: u8, cycle: bool },
 }
 
 /// A key the capsule gets from Hex's tap.
@@ -2263,6 +2264,10 @@ pub enum CapsuleKey {
     Down,
     /// Return or Enter, ⇧ for always.
     Return {
+        shift: bool,
+    },
+    /// Tab, ⇧ for back: the toast's next guess.
+    Tab {
         shift: bool,
     },
     /// 1 to 9 typed in the list (otherwise text).
@@ -2367,7 +2372,11 @@ pub fn list_key_wanted() -> bool {
 
 /// Whether the capsule's suggestions take their digit keys at the tap.
 pub fn suggesting() -> bool {
-    GRAB_KEYS.load(Ordering::Acquire) == keys_code(Some(CapsuleKeys::Suggest { rows: 0 }))
+    GRAB_KEYS.load(Ordering::Acquire)
+        == keys_code(Some(CapsuleKeys::Suggest {
+            rows: 0,
+            cycle: false,
+        }))
 }
 
 /// Hands `key` to the capsule if its keys include it; false otherwise.
@@ -2386,8 +2395,12 @@ fn takes(keys: CapsuleKeys, key: &CapsuleKey) -> bool {
             CapsuleKeys::Route | CapsuleKeys::List | CapsuleKeys::Suggest { .. },
             CapsuleKey::OpenList,
         ) => true,
-        (CapsuleKeys::Suggest { rows }, CapsuleKey::Digit(digit)) => (1..=rows).contains(digit),
+        (CapsuleKeys::Suggest { rows, .. }, CapsuleKey::Digit(digit)) => (1..=rows).contains(digit),
         (CapsuleKeys::Suggest { .. }, CapsuleKey::Press) => true,
+        (
+            CapsuleKeys::Suggest { cycle: true, .. },
+            CapsuleKey::Return { shift: false } | CapsuleKey::Tab { .. },
+        ) => true,
         (CapsuleKeys::List, key) => !matches!(key, CapsuleKey::Shortcut),
         _ => false,
     }
@@ -2416,6 +2429,9 @@ pub fn list_key(code: u16, flags: u64, typed: &str) -> ListTap {
     let key = match code {
         53 => CapsuleKey::Escape,
         36 | 76 => CapsuleKey::Return {
+            shift: flags & SHIFT != 0,
+        },
+        48 => CapsuleKey::Tab {
             shift: flags & SHIFT != 0,
         },
         126 => CapsuleKey::Up,
@@ -4313,13 +4329,27 @@ mod tests {
         assert!(!wants_escape() && !capsule_key(CapsuleKey::Escape));
         // Suggestions: the list shortcut and only their own digits, never
         // Escape.
-        second.set(CapsuleKeys::Suggest { rows: 2 });
+        second.set(CapsuleKeys::Suggest {
+            rows: 2,
+            cycle: false,
+        });
         assert!(suggesting() && !wants_escape() && list_key_wanted() && !list_open());
         assert!(!capsule_key(CapsuleKey::Escape));
         assert!(capsule_key(CapsuleKey::Press), "a press may fold them");
         assert!(capsule_key(CapsuleKey::Digit(2)));
         assert!(!capsule_key(CapsuleKey::Digit(3)), "no third row");
         assert!(!capsule_key(CapsuleKey::Text("h".into())));
+        assert!(!capsule_key(CapsuleKey::Tab { shift: false }));
+        assert!(!capsule_key(CapsuleKey::Return { shift: false }));
+        // The toast's one guess at a time: Return sends it, Tab moves on.
+        second.set(CapsuleKeys::Suggest {
+            rows: 2,
+            cycle: true,
+        });
+        assert!(suggesting());
+        assert!(capsule_key(CapsuleKey::Tab { shift: false }));
+        assert!(capsule_key(CapsuleKey::Return { shift: false }));
+        assert!(!capsule_key(CapsuleKey::Return { shift: true }));
         second.set(CapsuleKeys::List);
         assert!(!suggesting());
         assert!(list_open() && !wants_escape() && list_key_wanted());
@@ -4336,6 +4366,8 @@ mod tests {
                 (2, CapsuleKey::OpenList),
                 (2, CapsuleKey::Press),
                 (2, CapsuleKey::Digit(2)),
+                (2, CapsuleKey::Tab { shift: false }),
+                (2, CapsuleKey::Return { shift: false }),
                 (2, CapsuleKey::Text("ho".into())),
                 (2, CapsuleKey::Press),
             ]
@@ -4355,6 +4387,7 @@ mod tests {
             list_key(76, shift, "\u{3}"),
             key(CapsuleKey::Return { shift: true })
         );
+        assert_eq!(list_key(48, 0, "\t"), key(CapsuleKey::Tab { shift: false }));
         assert_eq!(list_key(126, 0, ""), key(CapsuleKey::Up));
         assert_eq!(list_key(125, 0, ""), key(CapsuleKey::Down));
         assert_eq!(list_key(51, 0, "\u{7f}"), key(CapsuleKey::Backspace));
@@ -4363,7 +4396,6 @@ mod tests {
         assert_eq!(list_key(18, option, "¡"), key(CapsuleKey::Text("¡".into())));
         assert_eq!(list_key(4, shift, "H"), key(CapsuleKey::Text("H".into())));
         assert_eq!(list_key(123, 0, ""), ListTap::Swallow);
-        assert_eq!(list_key(48, 0, "\t"), ListTap::Swallow);
         assert_eq!(list_key(9, command, "v"), ListTap::Pass);
         assert_eq!(list_key(53, control, "\u{1b}"), ListTap::Pass);
     }

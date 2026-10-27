@@ -18,7 +18,7 @@ use rune_kit::{Button, ButtonVariant, ControlSize, SegmentedControl, Switch};
 
 use super::flow::{Action, Cue, Delivered, Dest, Failure, Input, Route, Undone};
 use super::surface::{Id, PANEL_H, PANEL_W};
-use super::tuning::{self, ListFooter, TopLine, Tuning};
+use super::tuning::{self, CapsuleFlow, ListFooter, TopLine, Tuning, flow_label};
 use super::{CapsuleState, Mode, capsule, tone};
 use crate::rune_ui::controls::{DESCRIPTION, Paint};
 use crate::rune_ui::lists::slider_in;
@@ -366,9 +366,13 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
     let list = keys == crate::capture_host::CapsuleKeys::List;
     let digits = match keys {
         crate::capture_host::CapsuleKeys::List => 9,
-        crate::capture_host::CapsuleKeys::Suggest { rows } => usize::from(rows),
+        crate::capture_host::CapsuleKeys::Suggest { rows, .. } => usize::from(rows),
         _ => 0,
     };
+    let cycle = matches!(
+        keys,
+        crate::capture_host::CapsuleKeys::Suggest { cycle: true, .. }
+    );
     let escape = matches!(
         keys,
         crate::capture_host::CapsuleKeys::List | crate::capture_host::CapsuleKeys::Picker
@@ -390,6 +394,8 @@ fn on_key(s: &mut CapsuleState, key: &KeyEvent, tx: &mut Tx) -> bool {
         Key::Enter if list => Input::Send {
             always: key.mods.shift,
         },
+        Key::Enter if cycle && !key.mods.shift => Input::Send { always: false },
+        Key::Tab if cycle => Input::Cycle(if key.mods.shift { -1 } else { 1 }),
         Key::Backspace if list => Input::Backspace,
         Key::Text(t) if list => Input::Type(t.clone()),
         _ => return false,
@@ -416,8 +422,13 @@ pub(super) fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
     let stage = el()
         .key("stage")
         .size(PANEL_W, PANEL_H)
-        .fill(p.k.c.layer_03)
-        .child(capsule(p, &s.surface, &s.live, cx));
+        .fill(p.k.c.layer_03);
+    let stage = match pg.tuning.flow {
+        _ if s.surface.anchor == super::surface::Anchor::Cursor => stage.child(super::pointer(p)),
+        CapsuleFlow::MenuBar => stage.child(super::menu_item(p)),
+        _ => stage,
+    }
+    .child(capsule(p, &s.surface, &s.live, cx));
     let controls = col()
         .key("controls")
         .w(PANEL_W)
@@ -768,6 +779,24 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
             .build(p.k)
             .key("top-line"),
     );
+    let flows: Vec<&str> = CapsuleFlow::ALL
+        .iter()
+        .map(|f| flow_label(*f).rsplit("· ").next().unwrap_or_default())
+        .collect();
+    let picked = CapsuleFlow::ALL.iter().position(|f| *f == t.flow);
+    let flow = card("flow-card").child(
+        SegmentedControl::new(&flows, picked)
+            .width(Some(w))
+            .on_pick(|s: &mut CapsuleState, i: usize, _: &mut Tx| {
+                if let Some(pg) = s.playground.as_mut() {
+                    let mut tuning = pg.tuning;
+                    tuning.flow = CapsuleFlow::ALL[i];
+                    pg.set_tuning(tuning);
+                }
+            })
+            .build(p.k)
+            .key("flow"),
+    );
     let footers: Vec<&str> = ListFooter::ALL.iter().map(|m| m.label()).collect();
     let picked = ListFooter::ALL.iter().position(|m| *m == t.list_footer);
     let list_footer = card("list-footer-card").child(
@@ -931,6 +960,7 @@ fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
     col()
         .key("tuning")
         .gap(20.0)
+        .child(section(p, "flow", "Flow after a capture", flow))
         .child(section(p, "top-line", "Top line", top_line))
         .child(section(p, "list-footer", "List footer", list_footer))
         .child(section(p, "transition", "Transition", transition))

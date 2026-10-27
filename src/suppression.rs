@@ -829,8 +829,11 @@ fn list_tap(event_type: u32, event: EventRef) -> ListSwallow {
     unsafe { CGEventKeyboardGetUnicodeString(event, typed.len(), &mut length, typed.as_mut_ptr()) };
     let typed = String::from_utf16_lossy(&typed[..length.min(typed.len())]);
     match list_key(code, flags, &typed) {
-        // The suggestions take only their digits; the rest goes on.
-        ListTap::Key(key @ CapsuleKey::Digit(_)) if suggesting => {
+        // The suggestions take only their digits (and the toast Return
+        // and Tab); the rest goes on.
+        ListTap::Key(
+            key @ (CapsuleKey::Digit(_) | CapsuleKey::Return { .. } | CapsuleKey::Tab { .. }),
+        ) if suggesting => {
             *taken |= bit;
             drop(taken);
             if capsule_key(key) {

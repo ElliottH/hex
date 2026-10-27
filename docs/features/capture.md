@@ -279,7 +279,24 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   waits for a wall or for other content; only an entry takes two frames
 │   (the origin pose, then rest). The list under the capsule comes and goes
 │   on the same springs. The playground's Transition card tunes all of it
-└── Reduce Motion -> travel jumps, nothing blurs or scales; opacity still fades
+├── Reduce Motion -> travel jumps, nothing blurs or scales; opacity still fades
+└── After a capture, one of five flows (`capture.capsule_flow`, the
+    playground's "Flow after a capture"; prototypes to compare, clips in
+    r22-flows). Only the guesses' look changes; rules, Undo, ✕ and the
+    keys the capsule takes stay the same
+    ├── list (default) -> today's list under the capsule, as above
+    ├── toast -> one line "Send to X ⏎" with "Next ⇥" for more than one
+    │   guess; ⇥/⇧⇥ cycle (CapsuleKeys::Suggest { cycle }), ⏎ or a click on
+    │   the line sends the one shown
+    ├── menu_bar -> the frame plus "NAME 1/2/3" chips for MENU_HINT_S (4 s),
+    │   then the capsule folds into the menu-bar item; the list shortcut still
+    │   reaches the capture
+    ├── cursor -> recording stays under the menu bar; the "Send to" card
+    │   (number, name, reason) opens at the pointer and its Sent stays there
+    └── notch -> the pill hangs from the top edge (only its bottom corners
+        round) and grows down into the same card
+    Gap: only the shapes are prototyped; the menu-bar item's capture list
+    and a real notch inset are not, and no flow but list has run live
 
 The on-screen picker                     // capture.picker (capture_capsule/picker.rs)
 ├── A full-screen Rune overlay on the pointer's display, under the capsule,
@@ -588,7 +605,12 @@ Checks:
   `shortcuts_read_as_one_quiet_word`, `the_capsule_draws_no_keycaps`,
   `a_written_copy_offers_paste_and_inspect_as_icons`,
   `every_change_moves_at_once`,
-  `entry_lands_the_pose_instantly_then_springs_to_rest_with_its_content`, goldens
+  `entry_lands_the_pose_instantly_then_springs_to_rest_with_its_content`,
+  `the_toast_cycles_its_guesses_and_return_sends_the_one_shown`,
+  `the_menu_bar_hint_is_brief_and_its_chips_send`,
+  `the_cursor_card_lists_its_guesses_at_the_pointer`,
+  `the_notch_hangs_from_the_top_edge`,
+  `the_menu_bar_flow_folds_up_toward_the_menu_bar`, goldens
   `tests/golden/capture-capsule-*.png`, and
   `the_capsule_moves_inside_its_panel_and_comes_to_rest`, which traces every
   scripted state change per frame, Calm and Reduce Motion, for no pops,

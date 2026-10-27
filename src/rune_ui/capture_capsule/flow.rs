@@ -6,7 +6,7 @@
 
 use scrawl_capture::capture::Stage;
 
-use super::tuning;
+use super::tuning::{self, CapsuleFlow};
 
 /// A send, a rule's or a pick's, can be taken back with the Undo button for this
 /// long (Scrawl's `SMART_SEND_UNDO`).
@@ -32,6 +32,9 @@ pub(crate) const MAX_SUGGESTED: usize = 3;
 pub(crate) const MAX_RECENT: usize = 5;
 /// The suggestions a finished capture shows under it, picked with 1–3.
 pub(crate) const SUGGEST_ROWS: usize = 3;
+/// The menu-bar flow's hint of the guesses stays this long, then the
+/// capsule folds into Hex's menu-bar item, where the capture waits.
+pub(crate) const MENU_HINT_S: f64 = 4.0;
 /// Session names in the capsule are cut to this many characters.
 const ROUTE_NAME_MAX: usize = 18;
 
@@ -194,6 +197,9 @@ pub(crate) enum Input {
     },
     /// 1–9 in the open list (1–3 in the suggestions): send to that row.
     SendRow(usize),
+    /// Tab in the toast (⇧ back): its next guess, round again after the
+    /// last.
+    Cycle(i32),
     /// "Always send <site> here" in the suggestions, ticked or not.
     ToggleAlways,
     Escape,
@@ -330,6 +336,14 @@ pub(crate) struct Done {
     pub(crate) open: Option<(String, List)>,
     /// A written capture: Paste and Inspect, as Scrawl's capsule offers.
     pub(crate) hand_off: bool,
+    /// The guesses in the capsule itself, picked with 1–3 or a click: chips
+    /// in the menu-bar flow, rows in the cursor's card and the notch.
+    /// Each is a name and its quiet reason.
+    pub(crate) picks: Vec<(String, String)>,
+    /// The toast's "Next ⇥": more than one guess to go through.
+    pub(crate) cycle: bool,
+    /// The label is the toast's one guess: a click on it sends there.
+    pub(crate) sends: bool,
 }
 
 impl Done {
@@ -343,6 +357,9 @@ impl Done {
             ask_keys: Vec::new(),
             open: None,
             hand_off: false,
+            picks: Vec::new(),
+            cycle: false,
+            sends: false,
         }
     }
 }
@@ -904,6 +921,19 @@ impl Flow {
             (Phase::Routed(routed), Input::SendRow(row)) => {
                 send(routed, Some(row), false, now, &mut actions)
             }
+            (Phase::Routed(mut routed), Input::Cycle(by)) => {
+                let rows = routed
+                    .open
+                    .as_ref()
+                    .filter(|open| !open.typing)
+                    .map_or(0, |open| list(&routed.route, open).rows().count());
+                if let Some(open) = routed.open.as_mut().filter(|_| rows > 0) {
+                    let rows = rows as i64;
+                    open.selected =
+                        (open.selected as i64 + i64::from(by)).rem_euclid(rows) as usize;
+                }
+                Phase::Routed(routed)
+            }
             (Phase::Routed(mut routed), Input::ToggleAlways) => {
                 if let Some(open) = &mut routed.open {
                     open.always = !open.always;
@@ -1139,7 +1169,17 @@ impl Flow {
             }
             (_, Id::Undo) => self.input(Input::Undo, now),
             (_, Id::Ask) => self.input(Input::OpenList, now),
-            (_, Id::Row(row)) => self.input(Input::SendRow(row), now),
+            (_, Id::Row(row) | Id::Pick(row)) => self.input(Input::SendRow(row), now),
+            (_, Id::Next) => self.input(Input::Cycle(1), now),
+            // The toast's line is its one guess: a click sends it.
+            (
+                Phase::Routed(Routed {
+                    open: Some(open), ..
+                }),
+                Id::Done,
+            ) if !open.typing && tuning::get().flow == CapsuleFlow::Toast => {
+                self.input(Input::Send { always: false }, now)
+            }
             (_, Id::Always) => self.input(Input::ToggleAlways, now),
             // ✕ beside "Sent to X" just closes, a rule's as a pick's.
             (_, Id::Close) => self.input(Input::Dismiss, now),
@@ -1170,6 +1210,7 @@ impl Flow {
                 let rows = list(route, open).rows().count();
                 CapsuleKeys::Suggest {
                     rows: u8::try_from(rows).unwrap_or(u8::MAX),
+                    cycle: tuning::get().flow == CapsuleFlow::Toast,
                 }
             }),
             Phase::Routed(Routed {
@@ -1398,7 +1439,16 @@ fn hold_until(phase: &Phase) -> Option<f64> {
             taken_back,
             ..
         }) if open.as_ref().is_none_or(|open| !open.typing && !taken_back) => {
-            Some(at + tuning::get().done_hold_s)
+            // The menu-bar flow's hint is brief: the capture waits in the
+            // menu bar.
+            let hint = open.is_some() && tuning::get().flow == CapsuleFlow::MenuBar;
+            Some(
+                at + if hint {
+                    MENU_HINT_S
+                } else {
+                    tuning::get().done_hold_s
+                },
+            )
         }
         Phase::Kept { at } | Phase::TakenBack { at } | Phase::Failed { at, .. } => {
             Some(at + tuning::get().brief_hold_s)
@@ -1651,12 +1701,7 @@ fn routed_done(routed: &Routed, undo: bool) -> Done {
     match &routed.open {
         // The suggestions hang under a finished capsule that keeps Paste
         // and Inspect, and its note.
-        Some(open) if !open.typing => Done {
-            ask: None,
-            open: Some((String::new(), list(&routed.route, open))),
-            hand_off: true,
-            ..base
-        },
+        Some(open) if !open.typing => offered(base, list(&routed.route, open)),
         // Searching, the field takes the chips' place.
         Some(open) => Done {
             why: None,
@@ -1672,6 +1717,52 @@ fn routed_done(routed: &Routed, undo: bool) -> Done {
             } else {
                 Vec::new()
             },
+            ..base
+        },
+    }
+}
+
+/// The suggestions as the flow in use offers them (`capture.capsule_flow`).
+fn offered(base: Done, list: List) -> Done {
+    let names = || {
+        list.rows()
+            .map(|dest| (short(&dest.name), dest.why.clone()))
+            .collect()
+    };
+    match tuning::get().flow {
+        CapsuleFlow::List => Done {
+            ask: None,
+            open: Some((String::new(), list)),
+            hand_off: true,
+            ..base
+        },
+        // One guess at a time on one quiet line; ⏎ sends it, ⇥ moves on.
+        CapsuleFlow::Toast => Done {
+            text: format!(
+                "Send to {}",
+                list.selected_dest()
+                    .map(|dest| short(&dest.name))
+                    .unwrap_or_default()
+            ),
+            why: Some("⏎".into()),
+            ask: None,
+            cycle: list.rows().count() > 1,
+            sends: true,
+            ..base
+        },
+        // The frame alone, then the guesses as chips.
+        CapsuleFlow::MenuBar => Done {
+            text: String::new(),
+            why: None,
+            ask: None,
+            picks: names(),
+            ..base
+        },
+        CapsuleFlow::Cursor | CapsuleFlow::Notch => Done {
+            text: "Send to".into(),
+            why: None,
+            ask: None,
+            picks: names(),
             ..base
         },
     }
@@ -1744,6 +1835,77 @@ mod tests {
             shown.why.as_deref(),
             Some("OpenCode can't see this Mac's files")
         );
+    }
+
+    /// The toast offers one guess at a time: ⇥ moves on, ⏎ (or a click
+    /// on the line) sends the one it shows.
+    #[test]
+    fn the_toast_cycles_its_guesses_and_return_sends_the_one_shown() {
+        use crate::capture_host::CapsuleKeys;
+        tuning::with_flow(CapsuleFlow::Toast, || {
+            let mut flow = Flow::new();
+            flow.input(Input::Stage(Stage::Done), 0.0);
+            flow.input(Input::Routed(guess()), 0.0);
+            let shown = done(&flow, 0.1);
+            assert_eq!(shown.text, "Send to SEER");
+            assert_eq!(shown.why.as_deref(), Some("⏎"));
+            assert!(shown.cycle && shown.sends && shown.open.is_none());
+            assert_eq!(
+                flow.keys(),
+                Some(CapsuleKeys::Suggest {
+                    rows: 3,
+                    cycle: true
+                })
+            );
+            flow.input(Input::Cycle(1), 0.5);
+            assert_eq!(done(&flow, 0.5).text, "Send to HEX");
+            flow.input(Input::Cycle(-1), 0.6);
+            flow.input(Input::Cycle(-1), 0.7);
+            assert_eq!(
+                done(&flow, 0.7).text,
+                "Send to HOME",
+                "round past the first"
+            );
+            flow.input(Input::Cycle(1), 0.8);
+            let sent = flow.input(Input::Send { always: false }, 1.0);
+            assert_eq!(
+                sent,
+                [Action::Send {
+                    to: "SEER".into(),
+                    always: None
+                }]
+            );
+        });
+    }
+
+    /// The menu-bar flow's guesses are chips for a moment, then the capsule
+    /// goes; the list shortcut still has the capture.
+    #[test]
+    fn the_menu_bar_hint_is_brief_and_its_chips_send() {
+        tuning::with_flow(CapsuleFlow::MenuBar, || {
+            let mut flow = Flow::new();
+            flow.input(Input::Stage(Stage::Done), 0.0);
+            flow.input(Input::Routed(guess()), 0.0);
+            let shown = done(&flow, 0.1);
+            let names: Vec<&str> = shown.picks.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(names, ["SEER", "HEX", "HOME"]);
+            assert!(shown.open.is_none());
+            flow.tick(MENU_HINT_S + 0.1);
+            assert_eq!(flow.pres(MENU_HINT_S + 0.1), Pres::Hidden);
+            assert!(flow.keys().is_some(), "the list shortcut still reaches it");
+
+            let mut flow = Flow::new();
+            flow.input(Input::Stage(Stage::Done), 0.0);
+            flow.input(Input::Routed(guess()), 0.0);
+            let sent = flow.click(super::super::surface::Id::Pick(1), 1.0);
+            assert_eq!(
+                sent,
+                [Action::Send {
+                    to: "HEX".into(),
+                    always: None
+                }]
+            );
+        });
     }
 
     #[test]
@@ -2094,7 +2256,14 @@ mod tests {
             // At once, the same suggestions, the wrong one last.
             assert_eq!(rows(&flow, 1.0), ["HEX", "HOME", "SEER"], "{how}");
             // 1-3 pick, the list shortcut searches; Escape stays the app's.
-            assert_eq!(flow.keys(), Some(CapsuleKeys::Suggest { rows: 3 }), "{how}");
+            assert_eq!(
+                flow.keys(),
+                Some(CapsuleKeys::Suggest {
+                    rows: 3,
+                    cycle: false
+                }),
+                "{how}"
+            );
             // The router's answer changes nothing, and nothing times out.
             flow.input(Input::Undone(Undone::TakenBack), 1.3);
             assert_eq!(rows(&flow, 1.3), ["HEX", "HOME", "SEER"], "{how}");
@@ -2154,7 +2323,10 @@ mod tests {
         assert_eq!(list.selected, 0);
         assert_eq!(
             flow.keys(),
-            Some(crate::capture_host::CapsuleKeys::Suggest { rows: 3 })
+            Some(crate::capture_host::CapsuleKeys::Suggest {
+                rows: 3,
+                cycle: false
+            })
         );
         // It never leaves by itself.
         assert!(flow.next_due(1.2).is_none());
@@ -2768,7 +2940,13 @@ mod tests {
         assert_eq!(list.selected, 0, "the best is marked");
         assert_eq!(list.footer, Footer::Suggesting);
         assert_eq!(list.always, Some(("problems.kitlangton.com".into(), false)));
-        assert_eq!(flow.keys(), Some(CapsuleKeys::Suggest { rows: 3 }));
+        assert_eq!(
+            flow.keys(),
+            Some(CapsuleKeys::Suggest {
+                rows: 3,
+                cycle: false
+            })
+        );
         assert!(flow.take_cues().is_empty(), "nothing sent, nothing heard");
         flow.tick(4.0);
         assert!(matches!(flow.pres(4.0), Pres::Done(_)), "no countdown runs");
@@ -2854,7 +3032,13 @@ mod tests {
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Done), 0.0);
         flow.input(Input::Routed(guess()), 0.0);
-        assert_eq!(flow.keys(), Some(CapsuleKeys::Suggest { rows: 3 }));
+        assert_eq!(
+            flow.keys(),
+            Some(CapsuleKeys::Suggest {
+                rows: 3,
+                cycle: false
+            })
+        );
         // Its hold runs out: hidden, but ⌥⇧V is still the capsule's.
         assert!(flow.tick(hold + 1.0));
         assert_eq!(flow.pres(hold + 1.0), Pres::Hidden);

@@ -566,6 +566,21 @@ fn top_line_from_env() {
             .find(|m| format!("{m:?}").eq_ignore_ascii_case(&name))
             .expect("HEX_CAPSULE_FOOTER is band or well");
     }
+    // `HEX_CAPSULE_FLOW=list|toast|menu_bar|cursor|notch` plays that flow,
+    // and `HEX_CAPSULE_UNDO_S` shortens Undo's window for a short clip.
+    if let Ok(name) = std::env::var("HEX_CAPSULE_FLOW") {
+        tuning.flow = super::tuning::CapsuleFlow::ALL
+            .into_iter()
+            .find(|f| {
+                format!("{f:?}")
+                    .replace('_', "")
+                    .eq_ignore_ascii_case(&name.replace('_', ""))
+            })
+            .expect("HEX_CAPSULE_FLOW is list, toast, menu_bar, cursor or notch");
+    }
+    if let Ok(secs) = std::env::var("HEX_CAPSULE_UNDO_S") {
+        tuning.undo_s = secs.parse().expect("HEX_CAPSULE_UNDO_S is seconds");
+    }
     if tuning != super::tuning::DEFAULT {
         super::tuning::set(tuning);
     }
@@ -750,12 +765,46 @@ fn scripts() -> Vec<Script> {
             ],
             end: 5.4,
         },
+        // Every flow's whole path (`HEX_CAPSULE_FLOW`): a recording that
+        // ⌥⇧S stops (the host's stages), the guesses come, one is picked (the toast's ⇥ then ⏎,
+        // the rest a digit), Sent with Undo, gone; then a saved rule sends
+        // on its own and leaves by itself.
+        Script {
+            name: "flow",
+            beats: flow_beats(),
+            end: 9.6,
+        },
         Script {
             name: "failed",
             beats: vec![(0.2, stage(Stage::Transcribing)), (1.2, In(failed()))],
             end: 6.0,
         },
     ]
+}
+
+fn flow_beats() -> Vec<(f64, Beat)> {
+    let stage = |s| In(Input::Stage(s));
+    let toast = super::tuning::get().flow == super::tuning::CapsuleFlow::Toast;
+    let mut beats = vec![
+        (0.2, stage(Stage::Recording)),
+        (1.6, stage(Stage::Stopping)),
+        (1.8, stage(Stage::Transcribing)),
+        (2.4, stage(Stage::Done)),
+        (2.4, In(Input::Routed(guess()))),
+    ];
+    if toast {
+        beats.push((3.1, In(Input::Cycle(1))));
+        beats.push((3.8, In(Input::Send { always: false })));
+    } else {
+        beats.push((3.8, In(Input::SendRow(0))));
+    }
+    beats.extend([
+        (6.4, stage(Stage::Transcribing)),
+        (7.0, stage(Stage::Done)),
+        (7.0, In(Input::Routed(rule()))),
+        (7.2, In(Input::Settled)),
+    ]);
+    beats
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -965,7 +1014,7 @@ fn presses_reach_the_host() {
 /// `<folder>/runs/<script>-<variant>/trace.jsonl` (`motion-lint analyze
 /// <folder>`), and with `HEX_CAPSULE_FRAMES=1` each frame as a PNG in
 /// `<folder>/frames/<script>-<variant>-<theme>/`. `HEX_CAPSULE_SCRIPTS`
-/// picks scripts by name.
+/// picks scripts by name, and `HEX_CAPSULE_FLOW` the flow they play.
 #[test]
 fn capture_capsule_motion() {
     let Some(folder) = std::env::var_os("HEX_CAPSULE_MOTION") else {
@@ -1004,6 +1053,11 @@ fn capture_capsule_motion() {
             let frames = frames && (reduced_frames || matches!(variant, Variant::Calm));
             for dark in [true, false] {
                 let theme = if dark { "dark" } else { "light" };
+                // `HEX_CAPSULE_THEME=light|dark` writes one theme's frames.
+                let frames = frames
+                    && std::env::var("HEX_CAPSULE_THEME")
+                        .ok()
+                        .is_none_or(|t| t == theme);
                 // One trace per script and variant: the motion is the same
                 // in either theme.
                 let trace = dark.then(|| {

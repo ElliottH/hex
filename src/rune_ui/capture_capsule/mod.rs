@@ -39,7 +39,7 @@ use self::flow::{Action, Cue, Done, Flow, Footer, Input, Lead, List, Mode, Pres}
 use self::surface::{
     CHIP_H, CHIP_PX, HEADER_H, HINT_GAP, Id, LEAD_TEXT_X, LIST_PAD, LIST_Y, MEDIUM, PANEL_H,
     PANEL_W, PROCESSING, PROCESSING_TEXT_X, ROW_H, SEG_ICON, SEG_ICON_GAP, SMALL, STRONG, Shown,
-    Surface, THUMB_H, THUMB_W, THUMB_X, TIMER, UNDO_LABEL, chord, clock_width, done_style,
+    Surface, THUMB_H, THUMB_W, THUMB_X, TIMER, UNDO_LABEL, chord, clock_width, corner, done_style,
     done_text_x, ellipsize, measure,
 };
 use self::tuning::ListFooter;
@@ -335,6 +335,8 @@ pub(crate) struct CapsuleState {
     /// A capture started: the capsule moves to the display under the
     /// pointer, even while still up on another one.
     replace: bool,
+    /// Where the overlay was last placed for ([`Surface::anchor`]).
+    placed: surface::Anchor,
     /// The keys Hex's tap hands the capsule ([`Flow::keys`]): the overlay
     /// never takes focus.
     keys: Option<(
@@ -373,6 +375,7 @@ impl CapsuleState {
             shown: false,
             follow: false,
             replace: false,
+            placed: surface::Anchor::Top,
             keys: None,
             picker: None,
             picker_mode: None,
@@ -497,6 +500,16 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
     }
     s.now = now;
     s.surface.reduced = s.reduced.get();
+    // The app follows `capture.capsule_flow`; the playground and tests set
+    // the tuning themselves.
+    if s.overlay.is_some() {
+        let flow = crate::app_settings::capsule_flow();
+        let mut t = tuning::get();
+        if t.flow != flow {
+            t.flow = flow;
+            tuning::set(t);
+        }
+    }
     let mut changed = false;
     for input in std::mem::take(&mut s.inbox) {
         s.apply(input, now);
@@ -556,6 +569,12 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
     {
         overlay.set_display(rune::DisplayTarget::UnderPointer);
     }
+    if s.placed != s.surface.anchor {
+        s.placed = s.surface.anchor;
+        if let Some(overlay) = &s.overlay {
+            place(overlay, s.placed);
+        }
+    }
     // The picker follows the pointer between displays.
     let follow = matches!(s.surface.pres, Pres::Selecting { .. });
     if s.follow != follow {
@@ -586,6 +605,41 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
         tx.instant();
     }
     changed
+}
+
+/// Moves the overlay to where the capsule rests: under the menu bar, at
+/// the screen's top edge (the notch), or at the pointer (the cursor's
+/// card, whose rect is global, so on the primary display's origin).
+fn place(overlay: &OverlayHandle<CapsuleState>, anchor: surface::Anchor) {
+    use rune::{Align, DisplayTarget, OverlayPlacement, ScreenEdge};
+    let edge = |margin| OverlayPlacement::Edge {
+        edge: ScreenEdge::Top,
+        margin,
+        align: Align::Center,
+        inset: 0.0,
+    };
+    match anchor {
+        surface::Anchor::Top => {
+            overlay.set_display(DisplayTarget::UnderPointer);
+            overlay.set_placement(Some(edge(PANEL_MARGIN)));
+        }
+        surface::Anchor::Notch => {
+            overlay.set_display(DisplayTarget::UnderPointer);
+            overlay.set_placement(Some(edge(0.0)));
+        }
+        surface::Anchor::Cursor => {
+            let Some([x, y]) = scrawl_capture::screens::pointer() else {
+                return;
+            };
+            overlay.set_display(DisplayTarget::Primary);
+            overlay.set_placement(Some(OverlayPlacement::Rect {
+                x: x as f32 + surface::POINTER_OFFSET[0] - surface::CURSOR_X,
+                y: y as f32 + surface::POINTER_OFFSET[1] - surface::CURSOR_Y,
+                width: PANEL_W,
+                height: PANEL_H,
+            }));
+        }
+    }
 }
 
 /// Takes, changes, or lets go of the keys the capsule wants from Hex's tap.
@@ -624,6 +678,7 @@ fn key_input(key: crate::capture_host::CapsuleKey) -> Input {
         CapsuleKey::Up => Input::Move(-1),
         CapsuleKey::Down => Input::Move(1),
         CapsuleKey::Return { shift } => Input::Send { always: shift },
+        CapsuleKey::Tab { shift } => Input::Cycle(if shift { -1 } else { 1 }),
         CapsuleKey::Digit(digit) => Input::SendRow(usize::from(digit.saturating_sub(1))),
         CapsuleKey::Press => Input::ClickAway,
     }
@@ -742,12 +797,59 @@ fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
     let p = Paint::new(cx.system_dark(), cx.env().scale);
     let capsule = capsule(p, &s.surface, &s.live, cx);
     if s.backdrop {
-        return el()
-            .size(PANEL_W, PANEL_H)
-            .fill(p.k.c.layer_03)
-            .child(capsule);
+        let mut backdrop = el().size(PANEL_W, PANEL_H).fill(p.k.c.layer_03);
+        // Stills and clips have no pointer: the cursor's card draws one
+        // where the app would find it.
+        if s.surface.anchor == surface::Anchor::Cursor {
+            backdrop = backdrop.child(pointer(p));
+        }
+        if tuning::get().flow == tuning::CapsuleFlow::MenuBar {
+            backdrop = backdrop.child(menu_item(p));
+        }
+        return backdrop.child(capsule);
     }
     capsule
+}
+
+/// Hex's menu-bar item where the menu-bar flow folds the capsule, for
+/// stills and clips, which have no menu bar.
+fn menu_item(p: Paint) -> El {
+    let [x, y, w, h] = surface::MENU_FOLD;
+    el().key("menu-item")
+        .absolute(x, y)
+        .size(w, h)
+        .radius(h * 0.5)
+        .border(1.2, p.muted())
+        .child(
+            el().absolute(w * 0.5 - 2.5, h * 0.5 - 2.5)
+                .size(5.0, 5.0)
+                .radius(2.5)
+                .fill(p.muted()),
+        )
+}
+
+/// The arrow pointer just above and left of the cursor's card.
+fn pointer(p: Paint) -> El {
+    let arrow = Path::new()
+        .move_to([1.0, 1.0])
+        .line_to([1.0, 16.0])
+        .line_to([5.0, 12.5])
+        .line_to([7.6, 18.2])
+        .line_to([10.2, 17.0])
+        .line_to([7.7, 11.6])
+        .line_to([12.6, 11.2])
+        .close();
+    let shape = Shape::new()
+        .view_box(14.0, 20.0)
+        .fill_path(&arrow, p.k.c.text_base)
+        .stroke_path(&arrow, 1.2, LineCap::Round, p.k.c.bg_base);
+    canvas(shape)
+        .key("pointer")
+        .absolute(
+            surface::CURSOR_X - surface::POINTER_OFFSET[0],
+            surface::CURSOR_Y - surface::POINTER_OFFSET[1],
+        )
+        .size(14.0, 20.0)
 }
 
 /// How content comes and goes, all of it together over the walls' move:
@@ -823,7 +925,7 @@ fn capsule(p: Paint, surface: &Surface, live: &Animated, cx: &mut Cx<CapsuleStat
         .absolute(x, y)
         .size(w, h)
         .motion(surface.shell_motion)
-        .clip_rounded(h * 0.5)
+        .clip_rounded(corner(h))
         .on_hover_change(|s: &mut CapsuleState, on, tx| s.hover(on, tx));
     root = root.child(clip.child(inner.child(content)));
     if let Pres::Done(Done {
@@ -852,7 +954,7 @@ fn shell(p: Paint, surface: &Surface, meter: &Meter) -> El {
         .trace_name("shell")
         .absolute(x, y)
         .size(w, h)
-        .radius(h * 0.5)
+        .radius(corner(h))
         .fill(k.c.bg_base);
     for shadow in &k.elevation.overlay {
         body = body.box_shadow(*shadow);
@@ -862,7 +964,7 @@ fn shell(p: Paint, surface: &Surface, meter: &Meter) -> El {
         el().key("glow")
             .absolute(0.0, 0.0)
             .size(w, h)
-            .radius(h * 0.5)
+            .radius(corner(h))
             .box_shadow(rune::Shadow {
                 y: 1.5,
                 blur: 8.0,
@@ -879,7 +981,7 @@ fn shell(p: Paint, surface: &Surface, meter: &Meter) -> El {
             el().key("rim")
                 .absolute(0.0, 0.0)
                 .size(w, h)
-                .radius(h * 0.5)
+                .radius(corner(h))
                 .border_gradient(0.5, k.light(0.12), k.light(0.03))
                 .motion(surface.shell_motion),
         );
@@ -1003,12 +1105,30 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                         .child(label(&shown.ident, done_style(), ink)),
                 );
             }
+            let sends = matches!(&surface.pres, Pres::Done(done) if done.sends);
+            if sends {
+                return done
+                    .radius(CHIP_H * 0.5)
+                    .hover(c.hover)
+                    .press(c.pressed)
+                    .role("button")
+                    .label(shown.ident.clone())
+                    .hit()
+                    .on_press_tx(press(id));
+            }
             done.role("text").label(if shown.ident.is_empty() {
                 "Copied".to_owned()
             } else {
                 shown.ident.clone()
             })
         }
+        Id::Next => keyed(p, base, &["⇥"], "Next", MEDIUM).on_press_tx(press(id)),
+        // A chip beside the frame in the menu-bar flow, its number after.
+        Id::Pick(row) if tuning::get().flow == tuning::CapsuleFlow::MenuBar => {
+            let key = (row + 1).to_string();
+            keyed(p, base, &[&key], shown.text(), MEDIUM).on_press_tx(press(id))
+        }
+        Id::Pick(row) => pick_row(p, base, shown, row),
         Id::Why => placed(row().center_y(), shown)
             .trace_name("why")
             .child(quiet(p, shown.text(), done_style())),
@@ -1057,6 +1177,31 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         // Rows live in the list, never in the capsule.
         Id::Row(_) | Id::Always => base,
     }
+}
+
+/// A guess in the cursor's or the notch's card, as the list's rows read:
+/// its number, its name, and its reason, the best one's in the accent.
+fn pick_row(p: Paint, base: El, shown: &Shown, row: usize) -> El {
+    let c = &p.k.c;
+    let room = shown.rect[2] - 5.0 * ROW_PX - NUMBER_W - measure(shown.text(), MEDIUM);
+    let note = ellipsize(shown.note(), SMALL, room.max(24.0));
+    base.justify_start()
+        .px(ROW_PX)
+        .gap(ROW_PX)
+        .radius(ROW_RADIUS + 2.0)
+        .hover(c.hover)
+        .press(c.pressed)
+        .child(label(&(row + 1).to_string(), NUMBER, p.faint()).w(NUMBER_W))
+        .child(label(shown.text(), MEDIUM, p.text()))
+        .child(el().grow(1.0))
+        .child(
+            label(&note, SMALL, if row == 0 { p.accent() } else { p.muted() })
+                .offset(0.0, (MEDIUM.size - SMALL.size) * BASELINE_DROP),
+        )
+        .role("button")
+        .label(shown.text().to_owned())
+        .hit()
+        .on_press_tx(press(Id::Pick(row)))
 }
 
 /// A chip's label, then its shortcut as one quiet word ("Send to… ⌥⇧V").
