@@ -940,7 +940,7 @@ scripts/check            # fmt, clippy, every test
 scripts/check meeting::query  # fmt, then only matching tests
 git diff --check
 ./scripts/test-app-identity.sh # macOS only
-./scripts/test-install-linux-release.sh # x86_64 Linux only
+./scripts/test-install-linux-release.sh # x86_64 or aarch64 Linux
 cd sdk/typescript && bun run check && bun run test && bun run build
 ```
 
@@ -972,7 +972,8 @@ render on lavapipe with `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`.
 A scene is a fixture, not native end-to-end proof; the meeting capsules and
 HUDs have no scene.
 
-The supported Linux beta and release host use x86_64 Arch Linux. Install its
+The supported Linux beta host is x86_64 Arch Linux; releases build on Ubuntu
+24.04 (x64 and ARM64) for a glibc 2.39 floor. Install its
 native build dependencies with:
 
 ```sh
@@ -1073,8 +1074,8 @@ public release; dispatched from `production` only). Tags never start a
 release: like OpenCode, the stable run tags `v<VERSION>` (the crate version)
 on the released commit only after every platform published, then creates the
 GitHub release with the built-in `GITHUB_TOKEN`, so a failed run leaves no
-tag; `v*` tags are unrestricted because nothing triggers on them. Like OpenCode's release, build jobs (Linux x86_64 in an Arch
-container, Windows x64 and ARM64 through `.github/workflows/build-desktop.yml`,
+tag; `v*` tags are unrestricted because nothing triggers on them. Like OpenCode's release, build jobs (Linux x64 and ARM64 on
+Ubuntu 24.04 runners with their `.deb` and `.rpm`, Windows x64 and ARM64 through `.github/workflows/build-desktop.yml`,
 macOS as an ad-hoc signed `HEX_RELEASE_UNSIGNED=1` app, installers through
 `windows-installers.yml`, AUR and Homebrew staging) run repository code with
 no environment, secret, or id-token; sign and publish jobs run in `release`,
@@ -1121,7 +1122,8 @@ are built around the signed bytes, and `sign-windows-installers` signs them
 builds never hold signing credentials; until the Azure values exist in
 `release`, dev and check runs have no Windows targets. See `docs/windows-signing.md`.
 
-Run `scripts/build-linux.sh` on x86_64 Linux and `scripts/build-windows.sh`
+Run `scripts/build-linux.sh` on x86_64 or aarch64 Linux (then
+`scripts/package-linux.sh` for the `.deb` and `.rpm`) and `scripts/build-windows.sh`
 from Git Bash once per architecture with `HEX_WINDOWS_ARCH=x86_64` (the
 default; Vulkan SDK required) or `aarch64` (clang-cl and Ninja; best on an
 ARM64 host). Builds use `-DGGML_NATIVE=OFF` so the CPU kernels stay portable,
