@@ -815,12 +815,16 @@ impl Ui {
             _ => {}
         }
         let is_relaunch = request == platform::PlatformRequest::Relaunch;
-        if let Err(error) = self.host.send(request) {
-            if is_relaunch {
-                self.platform.relaunch_failed = true;
-            } else {
-                self.error = Some(error);
+        match self.host.send(request) {
+            // The frame draws right after its actions, before the next poll,
+            // so read the host's answer now (the poll the frame runs anyway,
+            // its refresh moved to now by `send`) rather than show stale
+            // state for a tick.
+            Ok(()) => {
+                self.host.poll(&mut self.platform);
             }
+            Err(_) if is_relaunch => self.platform.relaunch_failed = true,
+            Err(error) => self.error = Some(error),
         }
     }
 

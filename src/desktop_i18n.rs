@@ -264,7 +264,6 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Use Hex for captures", ["Nagrywaj w Hex", "改用 Hex 捕获", "キャプチャに Hex を使う", "Hex für Aufnahmen nutzen", "Usar Hex para capturas"]),
     #[cfg(hex_capture)]
     ("Press to start and again to stop; Esc cancels", ["Naciśnij, aby zacząć, i ponownie, aby zakończyć; Esc anuluje", "按一次开始，再按一次停止；Esc 取消", "押すと開始、もう一度押すと停止。Esc でキャンセル", "Drücken zum Starten, erneut zum Beenden; Esc bricht ab", "Pulsa para empezar y otra vez para parar; Esc cancela"]),
-    #[cfg(hex_capture)]
     ("Send-to list", ["Lista wysyłania", "发送到列表", "送信先リスト", "Senden-an-Liste", "Lista de envío"]),
     #[cfg(hex_capture)]
     ("Opens the list of sessions while a capture is showing or waiting to be sent", ["Otwiera listę sesji, gdy nagranie jest widoczne lub czeka na wysłanie", "在捕获显示或等待发送时打开会话列表", "キャプチャが表示中または送信待ちのときにセッション一覧を開きます", "Öffnet die Liste der Sitzungen, solange eine Aufnahme angezeigt wird oder auf das Senden wartet", "Abre la lista de sesiones mientras una captura se muestra o espera a enviarse"]),
@@ -272,9 +271,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("The send-to list shortcut is already in use. Change it below before turning captures on.", ["Skrót listy wysyłania jest już używany. Zmień go poniżej, zanim włączysz nagrywanie.", "发送到列表的快捷键已被占用。请先在下方更改，再开启捕获。", "送信先リストのショートカットはすでに使われています。オンにする前に下で変更してください。", "Das Kürzel für die Senden-an-Liste wird bereits verwendet. Ändere es unten, bevor du Aufnahmen einschaltest.", "El atajo de la lista de envío ya está en uso. Cámbialo abajo antes de activar las capturas."]),
     #[cfg(hex_capture)]
     ("Saved for when captures are on", ["Zapisany na czas, gdy nagrywanie będzie włączone", "保存，供开启捕获后使用", "キャプチャをオンにしたときのために保存されます", "Gespeichert für eingeschaltete Aufnahmen", "Guardado para cuando actives las capturas"]),
-    #[cfg(hex_capture)]
     ("Screen Recording", ["Nagrywanie ekranu", "屏幕录制", "画面収録", "Bildschirmaufnahme", "Grabación de pantalla"]),
-    #[cfg(hex_capture)]
     ("Lets a capture record your screen", ["Pozwala nagrywać ekran", "允许捕获录制你的屏幕", "キャプチャで画面を記録できます", "Erlaubt Aufnahmen deines Bildschirms", "Permite que una captura grabe tu pantalla"]),
     #[cfg(hex_capture)]
     ("Required to record your screen. macOS asks at your first capture, or allow it here.", ["Wymagane do nagrywania ekranu. macOS zapyta przy pierwszym nagraniu albo zezwól tutaj.", "录制屏幕所必需。macOS 会在首次捕获时询问，也可以在这里允许。", "画面の記録に必要です。最初のキャプチャ時に macOS が確認します。ここで許可することもできます。", "Nötig, um deinen Bildschirm aufzunehmen. macOS fragt bei der ersten Aufnahme, oder erlaube es hier.", "Necesario para grabar tu pantalla. macOS lo pide en la primera captura, o permítelo aquí."]),
