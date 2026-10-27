@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
       - name: Check the version
         run: |
-          actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "voice-control") | .version')
           # Staging publishes a prerelease of it, which release-app.sh stamps in.
           case "$HEX_VERSION" in
             "$actual" | "$actual"-dev.[0-9]* | "$actual"-beta.[0-9]*) ;;
