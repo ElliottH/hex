@@ -243,6 +243,7 @@ fn capsule_route(answer: &RouteAnswer) -> Option<Route> {
             to,
             suggested,
             recent,
+            site,
         } => Route::Rule {
             to: to.name.clone(),
             suggested: dests(std::slice::from_ref(to))
@@ -250,6 +251,7 @@ fn capsule_route(answer: &RouteAnswer) -> Option<Route> {
                 .chain(dests(suggested))
                 .collect(),
             recent: dests(recent),
+            site: site.clone(),
         },
         RouteAnswer::Guess {
             suggested,
@@ -666,6 +668,7 @@ mod tests {
             to: dest("SEER", "rule"),
             suggested: vec![dest("HEX", "last sent")],
             recent: vec![dest("HOME", "yesterday")],
+            site: Some("seer.example.com".into()),
         };
         let pending = Some(RouteDelivery::Pending { to: "SEER".into() });
         assert_eq!(
@@ -677,6 +680,7 @@ mod tests {
                     Dest::new("HEX", "last sent").session("ses_HEX"),
                 ],
                 recent: vec![Dest::new("HOME", "yesterday").session("ses_HOME")],
+                site: Some("seer.example.com".into()),
             })]
         );
         // The capsule counts the undo window down and says Sent itself.

@@ -275,28 +275,37 @@ Where it goes                            // capture.route; capture.routing's aut
 ├── At the stop, beside the writing -> a capture-look thread reads the tab,
 │   terminal, and sessions in front (Scrawl's router, in Hex's process, with
 │   Scrawl's own router folders, so `scrawl router undo` and its evals see Hex's
-│   sends as Scrawl's)
+│   sends as Scrawl's). The whole look has 15 s: steps not begun by then are
+│   skipped, and routing waits 1 s more for the one under way, then goes on
+│   without it. An app rule's folder is read with the sessions, and a failed
+│   page of sessions keeps what was read and still reads the folders and
+│   sessions that rules name
 ├── Written -> the one capture-route thread (queue 16) decides; the snapshot's
 │   `last.route` follows: Looking -> Rule | Guess | Nothing | NoAnswer |
 │   Unreachable
 │   ├── Rule -> only a rule the person saved (`routing.sites`, `routing.apps`,
 │   │   an "Always send … here"): Pending, sent after 5 s unless Undo; then
 │   │   Sending -> Sent, or Queued when OpenCode didn't take it. Whatever
-│   │   autoSend says, nothing else sends on its own
+│   │   autoSend, smartRouting, or jevRouting say, a saved rule sends and
+│   │   nothing else sends on its own. smartRouting off decides with the port
+│   │   ladder, after rules and addresses, on the same look
 │   ├── Guess -> everything else the router would send (Jev's pick, HOME when
 │   │   Jev couldn't tell, a dev server's port, a page's data-session or
 │   │   publisher, a name that was said, the port ladder) is suggestion #1, its
 │   │   reason as the row's word ("Jev's pick", "dev server", "this page"), then
 │   │   the runners-up and recent sessions; nothing sent until one is picked.
 │   │   `site` names what "Always send <site> here" (⇧⏎ in the list, or
-│   │   `send --always`) would save, after which that site's captures are Rules
+│   │   `send --always`) would save, after which that site's captures are Rules;
+│   │   ⇧⏎ in a Rule's list saves the rule for the session picked instead
 │   ├── Each Rule or Guess -> routing.json's `shown`: `as` rule or guess, and
 │   │   `why`, the router's leading reason; `hex capture route` prints it
 │   ├── Nothing / NoAnswer -> recent sessions only
 │   └── Unreachable -> the look read no sessions (OpenCode slow past the look's
-│       10 s, down, or refusing); a warning in process.log with the error, and
+│       deadline, down, or refusing); a warning in process.log with the error, and
 │       the capsule reads "Couldn't reach OpenCode" with why ("didn't answer in
 │       time"), keeping Paste and Inspect
+├── An answer for a capsule already closed (dismissed, or past its 25 s hold)
+│   leaves it closed; `hex capture list` and `send` still offer the capture
 ├── The capsule's commands act only on `last`, the newest routed capture:
 │   ├── Send{to} -> the Rule's own session while Pending sends now; any other
 │   │   pick sends there (taking back a send already elsewhere first) and logs
@@ -315,9 +324,10 @@ hex capture list|show|send|route         // capture.cli; docs/cli.md
 │   where it went
 ├── show <capture> -> one capture's words, files, and send
 ├── send <capture> [--to <session>] [--always] -> needs a listening Hex
-│   ├── The newest routed capture -> as the capsule's pick (no --to: the Rule's
+│   ├── The last routed capture -> as the capsule's pick (no --to: the Rule's
 │   │   session, a Guess's first suggestion, or the recorded destination), so
 │   │   the capsule's Undo follows it; --always also saves the site or app rule
+│   │   for the session it goes to. Also when a newer capture was written first
 │   └── Older -> --to must be a session ID; without it, its recorded
 │       destination; --always is refused
 ├── route <capture> [--ask-jev] -> what the router sees and decides; sends nothing
@@ -404,7 +414,16 @@ Checks:
   `only_a_saved_rule_sends_on_its_own`,
   `a_rule_sends_after_undo_and_lists_the_rest`,
   `a_guess_sends_nothing_and_a_failure_still_lists_recent_sessions`, and
-  `the_ladder_is_a_guess`; `an_always_rule_makes_its_sites_next_capture_a_saved_rule`
+  its `looked` tests, which write a bundle and route it through `look` and
+  `Worker::written` with fake sessions and tab:
+  `a_saved_site_or_app_rule_sends_whatever_the_routing_flags`,
+  `the_port_ladder_is_a_guess`, `a_look_past_its_deadline_is_routed_without`,
+  `an_always_rule_names_the_folder_of_the_session_it_sends_to`, and
+  `a_capture_routed_after_a_newer_one_settled_is_still_sendable_by_name`;
+  `an_always_rule_makes_its_sites_next_capture_a_saved_rule`,
+  `a_failing_page_keeps_what_was_read_and_still_reads_what_rules_name`,
+  `an_app_rules_folder_is_read_with_the_sessions`, and
+  `a_look_past_its_deadline_skips_what_it_hadnt_begun`
   in [look.rs](../../crates/router/src/routing/look.rs); the CLI's
   `a_capture_on_disk_summarizes_its_mode_words_and_send` in
   [library.rs](../../src/capture_host/library.rs), the protocol round trips in
@@ -433,6 +452,8 @@ Checks:
   `undoing_a_rule_send_reopens_the_list_until_a_pick`,
   `undoing_a_pick_reopens_the_list_it_came_from`,
   `too_late_to_take_back_offers_the_list_for_a_copy`,
+  `shift_return_in_a_rules_list_saves_a_rule_elsewhere`,
+  `an_answer_after_the_capsule_closed_leaves_it_closed`,
   `the_capsule_takes_only_the_keys_its_state_needs`,
   `the_hints_keys_stay_inside_their_trays`, goldens
   `tests/golden/capture-capsule-*.png`, and

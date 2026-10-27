@@ -97,11 +97,13 @@ impl Dest {
 /// rule ever sends; a guess suggests).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
-    /// A rule matched, so it was sent to `to`.
+    /// A rule matched, so it was sent to `to`. `site` is what the rule
+    /// matches, for an always-rule sending it elsewhere instead.
     Rule {
         to: String,
         suggested: Vec<Dest>,
         recent: Vec<Dest>,
+        site: Option<String>,
     },
     /// Guesses, best first; nothing was sent. `site` is what a rule
     /// would match ("problems.kitlangton.com").
@@ -448,6 +450,9 @@ pub(crate) struct Flow {
     settled_send: Option<f64>,
     /// The capture shown has no words.
     silent: bool,
+    /// The written capture shown was closed (dismissed, or its hold ran
+    /// out); news of it leaves the capsule closed.
+    closed: bool,
 }
 
 impl Default for Flow {
@@ -466,6 +471,7 @@ impl Flow {
             cues: Vec::new(),
             settled_send: None,
             silent: false,
+            closed: false,
         }
     }
 
@@ -542,7 +548,18 @@ impl Flow {
         let before = self.phase.clone();
         let actions = self.step(input, now);
         self.cue(&before, &actions);
+        self.closing(&before);
         actions
+    }
+
+    fn closing(&mut self, before: &Phase) {
+        let written = !matches!(
+            before,
+            Phase::Hidden | Phase::Selecting(_) | Phase::Recording { .. } | Phase::Processing
+        );
+        if written && self.phase == Phase::Hidden {
+            self.closed = true;
+        }
     }
 
     fn step(&mut self, input: Input, now: f64) -> Vec<Action> {
@@ -553,6 +570,9 @@ impl Flow {
         }
         if input == Input::Stage(Stage::Recording) {
             self.silent = false;
+        }
+        if matches!(input, Input::Stage(_)) {
+            self.closed = false;
         }
         if let Input::Phone(phone) = input {
             self.phone = phone;
@@ -601,6 +621,10 @@ impl Flow {
                 actions.push(Action::Record(mode));
                 Phase::Selecting(mode)
             }
+            // Closed before the router answered (dismissed, or the answer
+            // came after the hold): it stays closed, and `hex capture list`
+            // and `hex capture send` still offer the capture.
+            (Phase::Hidden, Input::Routed(_) | Input::Delivered(_)) if self.closed => Phase::Hidden,
             (_, Input::Delivered(delivered)) => match delivered {
                 Delivered::Sent { to } => Phase::Sent(Sent {
                     to,
@@ -742,6 +766,7 @@ impl Flow {
         if self.cues.len() == cued {
             self.cue(&before, &actions);
         }
+        self.closing(&before);
         actions
     }
 
@@ -893,6 +918,7 @@ impl Flow {
                 let due = hold_until(phase).is_some_and(|at| now >= at);
                 if due {
                     self.phase = Phase::Hidden;
+                    self.closed = true;
                 }
                 due
             }
@@ -1082,7 +1108,7 @@ fn send(
         return Phase::Routed(routed);
     };
     let site = match (&routed.route, always) {
-        (Route::Guess { site, .. }, true) => site.clone(),
+        (Route::Guess { site, .. } | Route::Rule { site, .. }, true) => site.clone(),
         _ => None,
     };
     actions.push(Action::Send {
@@ -1111,9 +1137,12 @@ fn rule_to(route: &Route) -> Option<String> {
 fn offered_again(route: Route, to: &str, too_late: bool, now: f64) -> Option<Routed> {
     let (mut suggested, mut recent, site) = match route {
         Route::Rule {
-            suggested, recent, ..
-        } => (suggested, recent, None),
-        Route::Guess {
+            suggested,
+            recent,
+            site,
+            ..
+        }
+        | Route::Guess {
             suggested,
             recent,
             site,
@@ -1321,6 +1350,7 @@ mod tests {
                 Dest::new("HEX", "last sent"),
             ],
             recent: vec![Dest::new("HOME", "yesterday")],
+            site: Some("problems.kitlangton.com".into()),
         }
     }
 
@@ -1566,6 +1596,7 @@ mod tests {
                 Dest::new("HOME", "recent").session("ses_home"),
             ],
             recent: vec![Dest::new("BOARD", "yesterday").session("ses_board")],
+            site: Some("problems.kitlangton.com".into()),
         }
     }
 
@@ -1953,6 +1984,55 @@ mod tests {
         );
         let shown = done(&flow, 1.0);
         assert_eq!(shown.why.as_deref(), Some("rule saved"));
+    }
+
+    #[test]
+    fn an_answer_after_the_capsule_closed_leaves_it_closed() {
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Done), 0.0);
+        let closed = tuning::get().done_hold_s + 1.0;
+        flow.tick(closed);
+        assert_eq!(flow.pres(closed), Pres::Hidden);
+        assert!(flow.input(Input::Routed(guess()), closed).is_empty());
+        assert_eq!(flow.pres(closed), Pres::Hidden);
+        flow.input(
+            Input::Delivered(Delivered::Queued { to: "SEER".into() }),
+            closed,
+        );
+        assert_eq!(flow.pres(closed), Pres::Hidden);
+        // The next capture shows as ever.
+        flow.input(Input::Stage(Stage::Done), closed + 1.0);
+        flow.input(Input::Routed(guess()), closed + 2.0);
+        assert!(matches!(flow.pres(closed + 2.0), Pres::Done(_)));
+    }
+
+    #[test]
+    fn shift_return_in_a_rules_list_saves_a_rule_elsewhere() {
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        // A rule's list opens on the next best place.
+        flow.input(Input::OpenList, 0.5);
+        assert_eq!(
+            flow.input(Input::Send { always: true }, 1.0),
+            [Action::Send {
+                to: "ses_hex".into(),
+                always: Some("problems.kitlangton.com".into())
+            }]
+        );
+        assert_eq!(done(&flow, 1.0).why.as_deref(), Some("rule saved"));
+
+        // And in the list an Undo of the rule's send reopens.
+        let mut flow = Flow::new();
+        flow.input(Input::Routed(rule_of_three()), 0.0);
+        flow.input(Input::Escape, 1.0);
+        flow.input(Input::Undone(Undone::TakenBack), 1.2);
+        assert_eq!(
+            flow.input(Input::Send { always: true }, 2.0),
+            [Action::Send {
+                to: "ses_hex".into(),
+                always: Some("problems.kitlangton.com".into())
+            }]
+        );
     }
 
     #[test]

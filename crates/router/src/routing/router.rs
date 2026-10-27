@@ -1788,6 +1788,7 @@ mod tests {
                 listener_dir: no_dir,
                 api: sessions,
             },
+            tab: |_, _| None,
             own_port: no_port,
             terminal: no_terminal,
             servers: nothing,

@@ -36,6 +36,7 @@ fn rule() -> Route {
             Dest::new("HEX", "last sent"),
         ],
         recent: vec![Dest::new("HOME", "yesterday")],
+        site: Some("problems.kitlangton.com".into()),
     }
 }
 
@@ -351,6 +352,7 @@ fn the_widest_states_fit_the_panel() {
         to: long(0),
         suggested: vec![Dest::new(long(0), ""), Dest::new(long(1), "")],
         recent: Vec::new(),
+        site: None,
     };
     let ask = Route::Guess {
         suggested: (0..5).map(|n| Dest::new(long(n), "")).collect(),

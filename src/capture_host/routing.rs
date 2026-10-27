@@ -87,11 +87,13 @@ pub enum RouteAnswer {
     Looking,
     /// A rule the person saved (`routing.sites` or `routing.apps`, an
     /// "Always send … here" among them) says where it goes: sent to `to`
-    /// after [`UNDO`] unless taken back.
+    /// after [`UNDO`] unless taken back. `site` is what the rule matches,
+    /// for an always-rule sending it elsewhere instead.
     Rule {
         to: RouteDest,
         suggested: Vec<RouteDest>,
         recent: Vec<RouteDest>,
+        site: Option<String>,
     },
     /// Guesses, best first: everything else the router found (Jev's pick,
     /// HOME when Jev couldn't tell, a dev server's port, a page or its
@@ -170,50 +172,56 @@ fn sends(config: &RouterConfig) -> bool {
 }
 
 /// The tab, terminal, and sessions behind a capture that just stopped,
-/// read while it is written. With smart routing off, also the port
-/// ladder's answer.
+/// read while it is written.
 pub(super) struct Look {
     router: Router,
-    seen: JoinHandle<Seen>,
+    seen: Receiver<Option<look::Live>>,
+    /// When routing stops waiting for it.
+    until: Instant,
 }
 
-struct Seen {
-    live: Option<look::Live>,
-    ladder: Option<Destination>,
-}
+/// How long past its deadline a look's last step may run before routing
+/// goes on without it.
+const LOOK_GRACE: Duration = Duration::from_secs(1);
 
 /// Starts looking, or `None` when captures aren't sent (`autoSend` off).
-/// Only the session reads share `LOOK_BUDGET`; the tab's osascript (6 s),
-/// the terminal's osascript and `tailscale` (2 s each), and the page
-/// publisher's read (1 s) sit outside it, each bounded on its own.
+/// The whole look has [`look::LOOK_DEADLINE`]: the steps not begun by then
+/// are skipped, and routing waits at most [`LOOK_GRACE`] more for the one
+/// under way (the tab's osascript, 6 s at worst), then goes on without it.
 pub(super) fn look(context: RouteContext) -> Option<Look> {
-    let router = router();
+    look_with(context, router(), look::Senses::default())
+}
+
+fn look_with(context: RouteContext, router: Router, senses: look::Senses) -> Option<Look> {
     if !sends(router.config()) {
         return None;
     }
-    let seen = {
+    let deadline = Instant::now() + look::LOOK_DEADLINE;
+    let (found, seen) = mpsc::sync_channel(1);
+    {
         let router = router.clone();
         thread::Builder::new()
             .name("capture-look".into())
             .spawn(move || {
-                router.run(|| {
-                    let front = context.front_bundle_id.as_deref();
-                    let captured = context.captured_bundle_id.as_deref();
-                    let ladder = if router.config().smart_routing {
-                        None
-                    } else {
-                        routing::route_capture(front, captured)
-                    };
-                    Seen {
-                        live: routing::look_capture(front, captured, context.app_pid),
-                        ladder,
-                    }
-                })
+                let live = router.run(|| {
+                    routing::look_capture(
+                        context.front_bundle_id.as_deref(),
+                        context.captured_bundle_id.as_deref(),
+                        context.app_pid,
+                        deadline,
+                        &senses,
+                    )
+                });
+                let _ = found.try_send(live);
             })
             .inspect_err(|error| tracing::warn!(%error, "could not look for a capture's route"))
-            .ok()?
-    };
-    Some(Look { router, seen })
+            .ok()?;
+    }
+    Some(Look {
+        router,
+        seen,
+        until: deadline + LOOK_GRACE,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +438,9 @@ impl Worker {
         to: Option<&str>,
         always: bool,
     ) -> Result<String, String> {
-        if self.is_current(bundle) && self.acting_on_last() {
+        // Named by the CLI, the routed capture is acted on even when a newer
+        // one has taken the capsule.
+        if self.is_current(bundle) {
             let current = self.current.as_ref().ok_or("no capture")?;
             let to = match to {
                 Some(to) => to.to_owned(),
@@ -444,13 +454,13 @@ impl Worker {
                         .ok_or("its route names no session; say where with --to")?,
                 },
             };
-            if self.resolve(&to).is_none() {
+            let Some(dest) = self.listed_as(&to) else {
                 return Err(format!("{to} isn't a session this capture lists"));
-            }
+            };
             if always && current.rule.is_none() && current.offered.is_none() {
                 return Err("no rule can be made for this capture's site or app".into());
             }
-            self.chosen(&to, always);
+            self.choose(dest, always);
             let current = self.current.as_ref().ok_or("no capture")?;
             return Ok(current
                 .route
@@ -459,7 +469,7 @@ impl Worker {
                 .map_or_else(|| "Nothing sent".into(), describe));
         }
         if always {
-            return Err("only the newest routed capture can save a rule".into());
+            return Err("only the last routed capture can save a rule".into());
         }
         let dest = match to {
             Some(to) if to.starts_with("ses") => Destination {
@@ -489,25 +499,33 @@ impl Worker {
     }
 
     fn written(&mut self, bundle: PathBuf, look: Look) {
-        let Look { router, seen } = look;
-        let seen = seen.join().unwrap_or_else(|_| {
-            tracing::error!("looking for a capture's route panicked");
-            Seen {
-                live: None,
-                ladder: None,
-            }
-        });
+        let Look {
+            router,
+            seen,
+            until,
+        } = look;
+        let live = seen
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|error| {
+                match error {
+                    RecvTimeoutError::Timeout => {
+                        tracing::warn!("looking for a capture's route took too long");
+                    }
+                    RecvTimeoutError::Disconnected => {
+                        tracing::error!("looking for a capture's route panicked");
+                    }
+                }
+                None
+            });
         let loaded = scrawl_capture::handoff::load_bundle(&bundle)
             .map(|(_, loaded)| loaded)
             .inspect_err(|error| tracing::warn!(error = %format!("{error:#}"), "could not read a capture to route"))
             .ok();
-        let candidates = seen
-            .live
+        let candidates = live
             .as_ref()
             .map(|live| live.candidates.clone())
             .unwrap_or_default();
-        let smart_routing = router.config().smart_routing;
-        if let Some(live) = &seen.live
+        if let Some(live) = &live
             && let Some(error) = &live.error
         {
             tracing::warn!(
@@ -517,26 +535,15 @@ impl Worker {
                 "a capture's look couldn't read all of OpenCode's sessions"
             );
         }
-        let unread = seen.live.as_ref().and_then(sessions_unread);
+        let unread = live.as_ref().and_then(sessions_unread);
         // Judged even without the sessions: a rule, page, or publisher names
         // one outright, and the record keeps what was seen for a replay.
-        let (decision, url) = router.run(|| match (seen.live, &loaded) {
-            (Some(live), Some(loaded)) if smart_routing => {
+        let (decision, url) = router.run(|| match (live, &loaded) {
+            (Some(live), Some(loaded)) => {
                 let (judgement, url) = routing::judge_capture(&bundle, loaded, live);
                 (judged(judgement.decision, unread.as_deref()), url)
             }
-            (Some(live), _) => {
-                let decision = match seen.ladder {
-                    Some(dest) => Decided::Ladder(dest),
-                    None => judged(
-                        smart::Decision::Keep {
-                            reason: String::new(),
-                        },
-                        unread.as_deref(),
-                    ),
-                };
-                (decision, live.url)
-            }
+            (Some(live), None) => (Decided::Failed, live.url),
             (None, _) => (Decided::Failed, None),
         });
         let bundle_id = loaded
@@ -626,9 +633,12 @@ impl Worker {
     /// taking back a send elsewhere. `always` also saves a rule for its
     /// site or app.
     fn chosen(&mut self, to: &str, always: bool) {
-        let Some(dest) = self.resolve(to) else {
-            return;
-        };
+        if let Some(dest) = self.resolve(to) {
+            self.choose(dest, always);
+        }
+    }
+
+    fn choose(&mut self, dest: Destination, always: bool) {
         let Some(current) = self.current.as_ref() else {
             return;
         };
@@ -777,24 +787,7 @@ impl Worker {
     /// `session`'s project (or the session itself), on top of what
     /// `settings.json` holds now.
     fn save_rule(&self, session: &str) {
-        let Some(current) = &self.current else {
-            return;
-        };
-        let rule = current
-            .offered
-            .as_ref()
-            .map(|offer| (offer.kind, offer.key.clone(), offer.folder.clone()))
-            .or_else(|| {
-                let (kind, key) = current.rule.clone()?;
-                let target = current
-                    .candidates
-                    .iter()
-                    .find(|candidate| candidate.id == session)
-                    .and_then(policy::rule_folder)
-                    .map_or_else(|| session.to_owned(), |folder| folder.display().to_string());
-                Some((kind, key, target))
-            });
-        let Some((kind, key, target)) = rule else {
+        let Some((kind, key, target)) = self.rule_for(session) else {
             tracing::info!("no rule can be made for this capture");
             return;
         };
@@ -820,6 +813,31 @@ impl Worker {
         }
     }
 
+    /// The always-rule sending the current capture's site or app to
+    /// `session`: the rule offered after its send when that send went to
+    /// `session`, else `session`'s project (or the session itself).
+    fn rule_for(&self, session: &str) -> Option<(RuleKind, String, String)> {
+        let current = self.current.as_ref()?;
+        let sent_here = current
+            .sent
+            .as_ref()
+            .is_some_and(|sent| sent.session == session);
+        if let Some(offer) = current.offered.as_ref().filter(|_| sent_here) {
+            return Some((offer.kind, offer.key.clone(), offer.folder.clone()));
+        }
+        let (kind, key) = current.rule.clone().or_else(|| {
+            let offer = current.offered.as_ref()?;
+            Some((offer.kind, offer.key.clone()))
+        })?;
+        let target = current
+            .candidates
+            .iter()
+            .find(|candidate| candidate.id == session)
+            .and_then(policy::rule_folder)
+            .map_or_else(|| session.to_owned(), |folder| folder.display().to_string());
+        Some((kind, key, target))
+    }
+
     /// Logs the person correcting or confirming the router (with Jev routing
     /// on); `detail` is how (`chip`, `reroute`, `dismiss`).
     fn correct(&self, action: jev::Action, detail: &str, to: Option<&Destination>) {
@@ -842,6 +860,12 @@ impl Worker {
         if !self.acting_on_last() {
             return None;
         }
+        self.listed_as(to)
+    }
+
+    /// The routed capture's session named `to`: listed by id or title, or
+    /// any session id.
+    fn listed_as(&self, to: &str) -> Option<Destination> {
         let current = self.current.as_ref()?;
         let to = to.trim();
         let listed = listed(&current.route.answer);
@@ -943,8 +967,6 @@ impl Worker {
 /// What the router made of a capture, before it is shown.
 enum Decided {
     Judged(smart::Decision),
-    /// The port ladder's send (smart routing off).
-    Ladder(Destination),
     /// OpenCode's sessions couldn't be read: why, in a few words.
     Unreachable(String),
     Failed,
@@ -1030,6 +1052,7 @@ fn answer_for(
                     to,
                     suggested,
                     recent,
+                    site,
                 },
                 send: Some(dest),
                 shown: Some(shown),
@@ -1047,16 +1070,6 @@ fn answer_for(
         Decided::Judged(smart::Decision::Keep { .. }) => Answered::of(RouteAnswer::Nothing {
             recent: recent(&[]),
         }),
-        // The port ladder (smart routing off) is never a saved rule.
-        Decided::Ladder(dest) => {
-            let to = RouteDest {
-                session: dest.session.clone(),
-                name: dest.title.clone(),
-                why: why(&dest.via).to_owned(),
-            };
-            let reason = format!("the port ladder ({})", dest.via);
-            guess(vec![to], reason)
-        }
         Decided::Unreachable(why) => Answered::of(RouteAnswer::Unreachable { why }),
         Decided::Failed => Answered::of(RouteAnswer::NoAnswer {
             recent: recent(&[]),
@@ -1138,6 +1151,7 @@ fn listed(answer: &RouteAnswer) -> Vec<&RouteDest> {
             to,
             suggested,
             recent,
+            ..
         } => std::iter::once(to).chain(suggested).chain(recent).collect(),
         RouteAnswer::Guess {
             suggested, recent, ..
@@ -1440,6 +1454,7 @@ mod tests {
             to,
             suggested,
             recent,
+            ..
         } = answer
         else {
             panic!("not a rule: {answer:?}");
@@ -1547,26 +1562,258 @@ mod tests {
         assert_eq!(sessions_unread(&look::Live::default()), None);
     }
 
-    #[test]
-    fn the_ladder_is_a_guess() {
-        let Answered { answer, send, .. } = answer_for(
-            Decided::Ladder(Destination {
-                session: "ses_a".into(),
-                title: "Alpha".into(),
-                via: "localhost".into(),
-                url: None,
-                directory: None,
-            }),
-            None,
-            None,
-            &[],
-            0,
-        );
-        assert!(send.is_none());
-        assert!(matches!(
-            answer,
-            RouteAnswer::Guess { ref suggested, .. }
-                if suggested.len() == 1 && suggested[0].why == "dev server"
-        ));
+    /// Captures written to disk and looked at through `look_with`, with
+    /// OpenCode's sessions, the tab, and the dev server swapped for these.
+    mod looked {
+        use super::*;
+        use scrawl_capture::routing::Hooks;
+
+        fn sessions(path: &str, _: Duration) -> anyhow::Result<Vec<u8>> {
+            let session = |id: &str, title: &str, dir: &str, updated: u64| {
+                serde_json::json!({
+                    "id": id, "title": title, "parentID": null,
+                    "time": {"updated": updated}, "location": {"directory": dir},
+                })
+            };
+            let all = [
+                session("ses_board", "BOARD", "/p/board", 20),
+                session("ses_home", "HOME", "/p/home", 10),
+            ];
+            let body = match path.strip_prefix("/api/session/") {
+                Some(id) => all
+                    .iter()
+                    .find(|s| s["id"] == id)
+                    .map(|s| serde_json::json!({ "data": s }))
+                    .ok_or_else(|| anyhow::anyhow!("404 Not Found"))?,
+                None => {
+                    let dir = path
+                        .split("directory=")
+                        .nth(1)
+                        .map(|d| d.replace("%2F", "/"));
+                    let page: Vec<_> = all
+                        .iter()
+                        .filter(|s| {
+                            dir.as_ref()
+                                .is_none_or(|d| s["location"]["directory"] == *d)
+                        })
+                        .collect();
+                    serde_json::json!({ "data": page })
+                }
+            };
+            Ok(serde_json::to_vec(&body)?)
+        }
+        fn no_sdk(_: &str) -> Option<routing::Registration> {
+            None
+        }
+        fn dev_server(port: u16) -> Option<PathBuf> {
+            (port == 4948).then(|| PathBuf::from("/p/board"))
+        }
+        fn no_terminal(_: &str) -> Option<(PathBuf, String)> {
+            None
+        }
+        fn board_tab(_: Option<&str>, _: Option<&str>) -> Option<String> {
+            Some("https://board.example.com/cards".into())
+        }
+        fn dev_tab(_: Option<&str>, _: Option<&str>) -> Option<String> {
+            Some("http://127.0.0.1:4948/".into())
+        }
+        fn no_tab(_: Option<&str>, _: Option<&str>) -> Option<String> {
+            None
+        }
+
+        fn senses(tab: fn(Option<&str>, Option<&str>) -> Option<String>) -> look::Senses {
+            look::Senses {
+                hooks: Hooks {
+                    sdk: no_sdk,
+                    listener_dir: dev_server,
+                    api: sessions,
+                },
+                tab,
+                own_port: |_| None,
+                terminal: no_terminal,
+                ..look::Senses::default()
+            }
+        }
+
+        fn temp(name: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!(
+                "hex-route-{name}-{}-{}",
+                std::process::id(),
+                NEXT_ROUTES.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+
+        fn written(bundle_id: &str) -> PathBuf {
+            let dir = temp("bundle").join("test.scrawl");
+            std::fs::create_dir(&dir).unwrap();
+            let bundle = serde_json::json!({
+                "version": 1, "id": "test", "createdAtMs": 0, "durationMs": 1000,
+                "target": {
+                    "mode": "display", "app": "Board", "bundleId": bundle_id, "displayId": 1,
+                    "frame": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "scale": 2.0},
+                },
+                "transcript": {"source": "test", "text": "this card", "segments": []},
+                "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "",
+            });
+            std::fs::write(dir.join("scrawl.json"), bundle.to_string()).unwrap();
+            scrawl_capture::handoff::load_bundle(&dir).expect("a bundle");
+            dir
+        }
+
+        fn router_with(config: impl FnOnce(&mut RouterConfig)) -> Router {
+            let mut routing = RouterConfig {
+                send_captures: true,
+                ..RouterConfig::default()
+            };
+            config(&mut routing);
+            Router::new(routing, RouterDirs::under(&temp("router"), None, None)).with_live(false)
+        }
+
+        /// What the worker answers for a capture of `bundle_id` looked at
+        /// with `senses`, and whether a send waits out its Undo.
+        fn route(
+            router: Router,
+            bundle_id: &str,
+            senses: look::Senses,
+        ) -> (RouteAnswer, Option<String>) {
+            let context = RouteContext {
+                front_bundle_id: Some("com.brave.Browser".into()),
+                captured_bundle_id: Some(bundle_id.into()),
+                app_pid: None,
+            };
+            let look = look_with(context, router, senses).expect("captures are sent");
+            let mut worker = Worker::new(SharedOutcomes::default());
+            worker.written(written(bundle_id), look);
+            let answer = worker.current.unwrap().route.answer;
+            let waiting = worker.waiting.first().map(|w| w.dest.session.clone());
+            (answer, waiting)
+        }
+
+        #[test]
+        fn a_saved_site_or_app_rule_sends_whatever_the_routing_flags() {
+            for smart in [false, true] {
+                let sites = router_with(|c| {
+                    c.smart_routing = smart;
+                    c.sites
+                        .insert("https://board.example.com".into(), "/p/board".into());
+                });
+                let (answer, waiting) = route(sites, "com.brave.Browser", senses(board_tab));
+                assert!(
+                    matches!(answer, RouteAnswer::Rule { ref to, .. } if to.session == "ses_board"),
+                    "site rule, smart {smart}: {answer:?}"
+                );
+                assert_eq!(waiting.as_deref(), Some("ses_board"));
+
+                let apps = router_with(|c| {
+                    c.smart_routing = smart;
+                    c.apps.insert("com.example.board".into(), "/p/board".into());
+                });
+                let (answer, waiting) = route(apps, "com.example.board", senses(no_tab));
+                assert!(
+                    matches!(answer, RouteAnswer::Rule { ref to, .. } if to.session == "ses_board"),
+                    "app rule, smart {smart}: {answer:?}"
+                );
+                assert_eq!(waiting.as_deref(), Some("ses_board"));
+            }
+        }
+
+        #[test]
+        fn an_always_rule_names_the_folder_of_the_session_it_sends_to() {
+            let router = router_with(|c| {
+                c.sites
+                    .insert("https://board.example.com".into(), "/p/board".into());
+            });
+            let context = RouteContext {
+                front_bundle_id: Some("com.brave.Browser".into()),
+                captured_bundle_id: Some("com.brave.Browser".into()),
+                app_pid: None,
+            };
+            let look = look_with(context, router, senses(board_tab)).unwrap();
+            let mut worker = Worker::new(SharedOutcomes::default());
+            worker.written(written("com.brave.Browser"), look);
+            let current = worker.current.as_mut().unwrap();
+            current.sent = Some(Sent {
+                delivery_id: "dlv_1".into(),
+                session: "ses_board".into(),
+            });
+            current.offered = Some(scrawl_capture::OfferRule {
+                kind: RuleKind::Site,
+                key: "https://board.example.com".into(),
+                folder: "/p/board".into(),
+            });
+            let site = |folder: &str| {
+                Some((
+                    RuleKind::Site,
+                    "https://board.example.com".to_owned(),
+                    folder.to_owned(),
+                ))
+            };
+            assert_eq!(worker.rule_for("ses_board"), site("/p/board"));
+            assert_eq!(
+                worker.rule_for("ses_home"),
+                site("/p/home"),
+                "--to HOME --always names HOME's folder, not the offer's"
+            );
+        }
+
+        #[test]
+        fn a_capture_routed_after_a_newer_one_settled_is_still_sendable_by_name() {
+            let context = RouteContext {
+                front_bundle_id: Some("com.brave.Browser".into()),
+                captured_bundle_id: Some("com.brave.Browser".into()),
+                app_pid: None,
+            };
+            let outcomes = SharedOutcomes::default();
+            let mut worker = Worker::new(outcomes.clone());
+            let a = written("com.brave.Browser");
+            let look = look_with(context, router_with(|_| {}), senses(dev_tab)).unwrap();
+            // B, started while A was looked at, is written first.
+            lock(&outcomes).fail(written("com.example.board"), "test".into());
+            worker.written(a.clone(), look);
+            assert!(worker.resolve("BOARD").is_none(), "the capsule shows B");
+            assert_eq!(
+                worker.listed_as("BOARD").map(|dest| dest.session),
+                Some("ses_board".into())
+            );
+            assert_eq!(
+                worker.send_bundle(&a, Some("nobody"), false),
+                Err("nobody isn't a session this capture lists".into()),
+                "A is sent as routed, by title or id, not as an older capture"
+            );
+        }
+
+        #[test]
+        fn the_port_ladder_is_a_guess() {
+            for smart in [false, true] {
+                let router = router_with(|c| c.smart_routing = smart);
+                let (answer, waiting) = route(router, "com.brave.Browser", senses(dev_tab));
+                assert!(
+                    matches!(answer, RouteAnswer::Guess { ref suggested, .. }
+                        if suggested.first().is_some_and(|d| d.session == "ses_board" && d.why == "dev server")),
+                    "smart {smart}: {answer:?}"
+                );
+                assert_eq!(waiting, None, "nothing is sent until it's picked");
+            }
+        }
+
+        #[test]
+        fn a_look_past_its_deadline_is_routed_without() {
+            let (_looking, seen) = mpsc::sync_channel(1);
+            let look = Look {
+                router: router_with(|_| {}),
+                seen,
+                until: Instant::now() + Duration::from_millis(50),
+            };
+            let mut worker = Worker::new(SharedOutcomes::default());
+            let started = Instant::now();
+            worker.written(written("com.example.board"), look);
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert!(matches!(
+                worker.current.unwrap().route.answer,
+                RouteAnswer::NoAnswer { .. }
+            ));
+        }
     }
 }

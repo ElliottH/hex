@@ -322,10 +322,8 @@ impl Naming {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Policy {
-    /// Today's ladder (the app still calls `routing::route_capture` when smart routing is off;
-    /// this reproduces it, which the tests check).
-    /// The first source with a clue decides, and its newest session wins.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Smart routing off: `routing::route_capture`'s ladder, which the tests check this
+    /// reproduces. The first source with a clue decides, and its newest session wins.
     Ladder,
     /// Weigh every clue and send only when one candidate is clearly ahead.
     Weigh,

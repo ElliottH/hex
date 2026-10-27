@@ -813,23 +813,28 @@ impl Ui {
     }
 
     /// Adopts settings the host saved, unless they are the stale copy of an
-    /// edit this window just made.
+    /// edit this window just made. While a text field has typing not yet
+    /// saved, its editor keeps it and everything else is adopted beneath,
+    /// so the draft's save never writes back what another writer (`hex
+    /// settings set`, a capture's saved rule) changed meanwhile.
     fn adopt(&mut self, service: AppSettings) -> bool {
         if self.service_settings.as_ref() == Some(&service) {
             return false;
         }
-        let changed = service != self.settings && self.draft_since.is_none();
+        let changed = service != self.settings;
         if changed {
-            if service.transcription.recognition_hints
-                != self.settings.transcription.recognition_hints
-            {
-                self.hints = TextEdit::new(service.transcription.recognition_hints.clone());
-            }
-            if service.dictation_processing != self.settings.dictation_processing {
-                self.modes.reload(&service);
-            }
-            if service.vocabulary != self.settings.vocabulary {
-                self.vocabulary = vocabulary::VocabularyEditor::new(&service.vocabulary);
+            if self.draft_since.is_none() {
+                if service.transcription.recognition_hints
+                    != self.settings.transcription.recognition_hints
+                {
+                    self.hints = TextEdit::new(service.transcription.recognition_hints.clone());
+                }
+                if service.dictation_processing != self.settings.dictation_processing {
+                    self.modes.reload(&service);
+                }
+                if service.vocabulary != self.settings.vocabulary {
+                    self.vocabulary = vocabulary::VocabularyEditor::new(&service.vocabulary);
+                }
             }
             self.settings = service.clone();
             self.settings_changed();

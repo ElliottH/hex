@@ -163,6 +163,7 @@ fn rule() -> Route {
             Dest::new("HEX", "you were just in it"),
         ],
         recent: recent(),
+        site: Some("problems.kitlangton.com".into()),
     }
 }
 

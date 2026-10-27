@@ -602,25 +602,22 @@ pub fn route_capture(
     }
 }
 
-/// Smart routing's first half for a capture that just finished: the tab, terminal and sessions,
-/// or `None` when routing is off.
+/// The first half for a capture that just finished: the tab, terminal and sessions, by
+/// `deadline` ([`look::look_live_by`]), or `None` when routing is off.
 pub fn look_capture(
     front_bundle_id: Option<&str>,
     target_bundle_id: Option<&str>,
     app_pid: Option<i32>,
+    deadline: Instant,
+    senses: &look::Senses,
 ) -> Option<look::Live> {
-    routing_enabled().then(|| {
-        look::look_live(
-            front_bundle_id,
-            target_bundle_id,
-            app_pid,
-            &look::Senses::default(),
-        )
-    })
+    routing_enabled()
+        .then(|| look::look_live_by(front_bundle_id, target_bundle_id, app_pid, deadline, senses))
 }
 
-/// Smart routing's second half, once the bundle is built: decides, saves the evidence beside
-/// the bundle (`RECORD`), and logs the outcome.
+/// The second half, once the bundle is built: decides (weighing every clue with smart routing,
+/// else the port ladder; a saved rule or an address first either way), saves the evidence
+/// beside the bundle (`RECORD`), and logs the outcome.
 pub fn judge_capture(
     dir: &Path,
     bundle: &ScrawlBundle,
@@ -631,7 +628,12 @@ pub fn judge_capture(
         scrawl_log(format!("routing: {error}"));
     }
     let evidence = look::evidence_for(bundle, dir, live);
-    let judgement = smart::decide(&evidence, smart::Policy::Weigh);
+    let policy = if crate::env::get().config.smart_routing {
+        smart::Policy::Weigh
+    } else {
+        smart::Policy::Ladder
+    };
+    let judgement = smart::decide(&evidence, policy);
     let (judgement, jev) = if jev::enabled() {
         let (judgement, record) = jev::judge(
             &evidence,
@@ -693,7 +695,12 @@ pub fn judge_capture(
         smart::Decision::Keep { reason } => format!("clipboard only: {reason}"),
     };
     scrawl_log(format!(
-        "routing (smart): {} clues, {} sessions → {outcome}",
+        "routing ({}): {} clues, {} sessions → {outcome}",
+        if policy == smart::Policy::Weigh {
+            "smart"
+        } else {
+            "ladder"
+        },
         evidence.clues.len(),
         evidence.candidates.len()
     ));
@@ -1251,7 +1258,7 @@ mod tests {
         let mut requests = 0;
         let mut api = within(slow, budget);
         let started = Instant::now();
-        let result = crate::routing::look::read_candidates(
+        let read = crate::routing::look::read_candidates(
             &mut |path: &str| {
                 requests += 1;
                 api(path)
@@ -1263,7 +1270,6 @@ mod tests {
         // Two pages answer, the first folder's read gets the last 150 ms and fails, and the
         // second is refused without asking: 550 ms, not the 800 ms four requests take. The
         // pages already read are kept, with why the rest weren't.
-        let read = result.expect("the newest pages were read");
         assert_eq!(read.candidates.len(), 200);
         assert!(read.error.is_some());
         let took = started.elapsed();

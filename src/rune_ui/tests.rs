@@ -333,6 +333,28 @@ fn service_settings_are_adopted_only_when_the_service_changes_them() {
     assert!(!ui.settings.enable_on_launch);
 }
 
+#[test]
+fn a_draft_saves_over_what_another_writer_changed_meanwhile() {
+    let mut ui = portal_fixture();
+    ui.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
+    let service = ui.settings.clone();
+    ui.adopt(service.clone());
+    ui.hints = TextEdit::new("OpenCode, Effect");
+    let start = std::time::Instant::now();
+    assert!(!ui.save_drafts(start), "waits for a pause");
+    // `hex settings set` (or a capture's saved rule) saves while it waits.
+    let mut elsewhere = service;
+    elsewhere.enable_on_launch = !elsewhere.enable_on_launch;
+    ui.adopt(elsewhere.clone());
+    assert_eq!(ui.hints.text, "OpenCode, Effect", "the typing stays");
+    assert!(ui.save_drafts(start + DRAFT_DELAY));
+    assert_eq!(ui.settings.enable_on_launch, elsewhere.enable_on_launch);
+    assert_eq!(
+        ui.settings.transcription.recognition_hints,
+        "OpenCode, Effect"
+    );
+}
+
 fn settle(rt: &mut Runtime<Ui>) {
     for _ in 0..60 {
         rt.frame(1.0 / 60.0);
