@@ -529,7 +529,10 @@ fn states(p: Paint) -> El {
                         record(),
                         Step::Input(stop()),
                         done(),
-                        Step::Input(Input::Delivered(Delivered::Queued { to: "SEER".into() })),
+                        Step::Input(Input::Delivered(Delivered::Queued {
+                            to: "SEER".into(),
+                            why: "OpenCode can't see this Mac's files".into(),
+                        })),
                     ]
                 }))
                 .child(state_button(p, "Failed", || {

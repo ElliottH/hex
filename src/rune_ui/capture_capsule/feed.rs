@@ -146,8 +146,8 @@ impl Follow {
             return inputs;
         }
         match route.delivery {
-            Some(RouteDelivery::Queued { to }) => {
-                inputs.push(Input::Delivered(Delivered::Queued { to }));
+            Some(RouteDelivery::Queued { to, why }) => {
+                inputs.push(Input::Delivered(Delivered::Queued { to, why }));
             }
             Some(RouteDelivery::Sent { to })
                 if matches!(was, Some(RouteDelivery::Queued { .. })) =>
@@ -707,10 +707,16 @@ mod tests {
             site: None,
         };
         follow.next(&routed("a", guess(), None));
-        let queued = Some(RouteDelivery::Queued { to: "HEX".into() });
+        let queued = Some(RouteDelivery::Queued {
+            to: "HEX".into(),
+            why: "OpenCode can't see this Mac's files".into(),
+        });
         assert_eq!(
             follow.next(&routed("a", guess(), queued)),
-            [Input::Delivered(Delivered::Queued { to: "HEX".into() })]
+            [Input::Delivered(Delivered::Queued {
+                to: "HEX".into(),
+                why: "OpenCode can't see this Mac's files".into(),
+            })]
         );
         let sent = Some(RouteDelivery::Sent { to: "HEX".into() });
         assert_eq!(

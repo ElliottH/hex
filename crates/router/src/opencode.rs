@@ -115,6 +115,9 @@ fn opencode_binary() -> Result<PathBuf> {
     if let Some(path) = on_path("opencode2") {
         return Ok(path);
     }
+    if let Some(path) = crate::env::get().opencode.and_then(|find| find()) {
+        return Ok(path);
+    }
     if let Some(path) = dirs::home_dir()
         .map(|home| home.join("bin/opencode2"))
         .filter(|path| executable(path))
@@ -306,10 +309,15 @@ fn opencode_api(method: &str, path: &str, data: Option<&serde_json::Value>) -> R
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let message = format!("OpenCode API failed: {}", stderr.trim());
-        // `opencode api` prints `HTTP <status> <text>` when the server answered.
-        return Err(match cli_status(&stderr) {
+        // `opencode api` prints `HTTP <status> <text>` to stderr when the server answered, and
+        // the answer's body to stdout.
+        let err = match cli_status(&stderr) {
             Some(status) => anyhow::Error::new(HttpStatus(status)).context(message),
             None => anyhow::anyhow!(message),
+        };
+        return Err(match said(&output.stdout) {
+            Some(said) => err.context(said),
+            None => err,
         });
     }
     Ok(output.stdout)
@@ -560,9 +568,40 @@ fn http_request(
         ensure!(body.len() == length, "Incomplete OpenCode HTTP response");
     }
     if !(200..300).contains(&status) {
-        return Err(HttpStatus(status).into());
+        let err = anyhow::Error::new(HttpStatus(status));
+        return Err(match said(&body) {
+            Some(said) => err.context(said),
+            None => err,
+        });
     }
     Ok(body)
+}
+
+/// What OpenCode said in a refusal (`{"message": …}`, or its text), as `OpenCode said: …`.
+fn said(body: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(body);
+    let text = text.trim();
+    let message = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            let value = value
+                .get("error")
+                .filter(|e| e.is_object())
+                .unwrap_or(&value);
+            value
+                .get("message")
+                .or_else(|| value.get("error"))
+                .and_then(|m| m.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| text.to_owned());
+    let message = message.lines().next().unwrap_or("").trim();
+    (!message.is_empty()).then(|| {
+        format!(
+            "OpenCode said: {}",
+            message.chars().take(300).collect::<String>()
+        )
+    })
 }
 
 /// One request to the local OpenCode server (`method` is `GET`, `POST`, `DELETE`…) within
@@ -1202,6 +1241,86 @@ mod session_lookup {
         let err = anyhow::Error::new(super::HttpStatus(404)).context("OpenCode API failed");
         assert_eq!(super::http_status(&err), Some(404));
         assert_eq!(super::http_status(&anyhow::anyhow!("down")), None);
+    }
+
+    #[test]
+    fn a_refused_post_says_what_opencode_said() {
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 4096];
+            let _ = stream.read(&mut buf).unwrap();
+            let body = br#"{"_tag":"InvalidRequestError","message":"Unable to read attachment: file:///a/contact-sheet.png","field":"files"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let err = http_request(
+            address,
+            None,
+            "POST",
+            "/api/session/ses_x/prompt",
+            Some(b"{}"),
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+        assert_eq!(http_status(&err), Some(400));
+        assert!(
+            format!("{err:#}").starts_with(
+                "OpenCode said: Unable to read attachment: file:///a/contact-sheet.png"
+            ),
+            "{err:#}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn what_opencode_said_reads_its_message_or_its_text() {
+        assert_eq!(
+            said(br#"{"message":"Skill not found: x\nmore","field":"skills"}"#).as_deref(),
+            Some("OpenCode said: Skill not found: x")
+        );
+        assert_eq!(
+            said(br#"{"error":{"message":"nested"}}"#).as_deref(),
+            Some("OpenCode said: nested")
+        );
+        assert_eq!(
+            said(br#"{"error":"flat"}"#).as_deref(),
+            Some("OpenCode said: flat")
+        );
+        assert_eq!(
+            said(b"Bad Request\n").as_deref(),
+            Some("OpenCode said: Bad Request")
+        );
+        assert_eq!(said(b"  \n"), None);
+        assert_eq!(
+            said(&[b'x'; 1000]).unwrap().len(),
+            "OpenCode said: ".len() + 300
+        );
+    }
+
+    #[test]
+    fn the_host_can_say_where_opencode2_is() {
+        fn found() -> Option<PathBuf> {
+            Some(PathBuf::from("/bin/sh"))
+        }
+        if std::env::var_os("OPENCODE_BIN").is_some() || on_path("opencode2").is_some() {
+            return;
+        }
+        let env = crate::env::Env {
+            opencode: Some(found),
+            ..crate::env::Env::default()
+        };
+        let _entered = crate::env::enter(std::sync::Arc::new(env));
+        assert_eq!(opencode_binary().unwrap(), PathBuf::from("/bin/sh"));
     }
 
     fn many(count: usize) -> Vec<OpenCodeSession> {

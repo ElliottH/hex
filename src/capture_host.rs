@@ -336,7 +336,7 @@ impl Host for HexHost {
     }
 
     fn log(&self, line: &str) {
-        tracing::info!(target: "hex::capture", "{line}");
+        tracing::info!("{line}");
     }
 
     fn metric(&self, name: &str, ms: f64) {

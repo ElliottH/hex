@@ -226,6 +226,7 @@ fn stills() -> Vec<(&'static str, Pres)> {
             "queued",
             after(&[In(Input::Delivered(Delivered::Queued {
                 to: "SEER".into(),
+                why: "OpenCode can't see this Mac's files".into(),
             }))]),
         ),
         ("taken-back", {

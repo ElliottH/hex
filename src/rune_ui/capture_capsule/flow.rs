@@ -130,8 +130,14 @@ pub(crate) enum Route {
 /// (`scrawl_capture::delivery::Delivery`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Delivered {
-    Sent { to: String },
-    Queued { to: String },
+    Sent {
+        to: String,
+    },
+    /// `why` it didn't go, in a few words ("OpenCode can't see this Mac's files").
+    Queued {
+        to: String,
+        why: String,
+    },
 }
 
 /// How a send the capsule asked to take back ended (Hex's router undo).
@@ -395,7 +401,7 @@ enum Phase {
     /// Sent elsewhere from the list, or a rule saved.
     Sent(Sent),
     Queued {
-        to: String,
+        why: String,
         at: f64,
     },
     /// Taken back with nowhere else to offer.
@@ -712,7 +718,7 @@ impl Flow {
         if self.superseded
             && let Phase::Sent(sent) = &self.phase
             && match &input {
-                Input::Delivered(Delivered::Sent { to } | Delivered::Queued { to })
+                Input::Delivered(Delivered::Sent { to } | Delivered::Queued { to, .. })
                 | Input::Failed(Failure::Send(to), _) => *to != sent.to,
                 _ => false,
             }
@@ -823,7 +829,7 @@ impl Flow {
                     undoable: false,
                     ..Sent::picked(&Dest::new(to, ""), false, now, None)
                 }),
-                Delivered::Queued { to } => Phase::Queued { to, at: now },
+                Delivered::Queued { why, .. } => Phase::Queued { why, at: now },
             },
             // Only a rule Kit saved sends by itself; anything else opens on
             // its suggestions, and nothing goes until he picks.
@@ -1300,8 +1306,8 @@ impl Flow {
                 hand_off: true,
                 ..Done::plain(Lead::Check, sent_to(to))
             }),
-            Phase::Queued { to, .. } => Pres::Done(Done {
-                why: Some(format!("couldn't reach {}", short(to))),
+            Phase::Queued { why, .. } => Pres::Done(Done {
+                why: Some(why.clone()),
                 hand_off: true,
                 ..Done::plain(Lead::Check, "Copied")
             }),
@@ -1672,6 +1678,27 @@ mod tests {
             Pres::Done(done) => done,
             other => panic!("not done: {other:?}"),
         }
+    }
+
+    /// A send OpenCode didn't take says why, not that the session was
+    /// unreachable ("couldn't reach SEER" read as "cannot find session").
+    #[test]
+    fn a_queued_send_says_why_it_didnt_go() {
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Done), 0.0);
+        flow.input(
+            Input::Delivered(Delivered::Queued {
+                to: "SEER".into(),
+                why: "OpenCode can't see this Mac's files".into(),
+            }),
+            0.5,
+        );
+        let shown = done(&flow, 0.5);
+        assert_eq!(shown.text, "Copied");
+        assert_eq!(
+            shown.why.as_deref(),
+            Some("OpenCode can't see this Mac's files")
+        );
     }
 
     #[test]
@@ -2338,7 +2365,10 @@ mod tests {
         let mut flow = Flow::new();
         picked(&mut flow);
         flow.input(
-            Input::Delivered(Delivered::Queued { to: "SEER".into() }),
+            Input::Delivered(Delivered::Queued {
+                to: "SEER".into(),
+                why: "couldn't reach OpenCode".into(),
+            }),
             1.2,
         );
         flow.input(Input::Undone(Undone::TakenBack), 1.3);
@@ -2363,7 +2393,10 @@ mod tests {
     #[test]
     fn a_send_undone_while_under_way_keeps_the_list_however_it_ends() {
         for ended in [
-            Input::Delivered(Delivered::Queued { to: "SEER".into() }),
+            Input::Delivered(Delivered::Queued {
+                to: "SEER".into(),
+                why: "couldn't reach OpenCode".into(),
+            }),
             Input::Failed(Failure::Send("SEER".into()), Some("500".into())),
         ] {
             let mut flow = Flow::new();
@@ -2686,7 +2719,10 @@ mod tests {
         assert!(flow.input(Input::Routed(guess()), closed).is_empty());
         assert_eq!(flow.pres(closed), Pres::Hidden);
         flow.input(
-            Input::Delivered(Delivered::Queued { to: "SEER".into() }),
+            Input::Delivered(Delivered::Queued {
+                to: "SEER".into(),
+                why: "couldn't reach OpenCode".into(),
+            }),
             closed,
         );
         assert_eq!(flow.pres(closed), Pres::Hidden);
