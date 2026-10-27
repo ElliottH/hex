@@ -358,7 +358,7 @@ enum CommandsCommand {
     },
 }
 
-#[cfg(any(debug_assertions, hex_capture))]
+#[cfg(all(target_os = "macos", any(debug_assertions, hex_capture)))]
 #[derive(Subcommand)]
 enum CaptureCommand {
     /// Start recording a capture.
