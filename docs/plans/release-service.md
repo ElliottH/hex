@@ -21,7 +21,7 @@ https://anoma.ly/release/hex/              the service (its dev stage, dev.anoma
 ```
 
 - App `hex`, artifact `desktop`. `stable` is the public channel; every push
-  to `dev` publishes `<next>-dev.<run number>` on the `dev` channel. `beta` is
+  to `dev` publishes `0.0.0-dev-<run number>` on the `dev` channel. `beta` is
   registered for later use.
 - Every executable and archive is signed before upload (Developer ID +
   notarization on macOS, Authenticode on Windows); the service stores bytes and
@@ -74,6 +74,15 @@ https://anoma.ly/hex (see `docs/releasing.md`).
 10 seconds after launch, hourly (the Dev channel every 10 minutes and when the window gains focus, at most once a minute), and on Check now, with `If-None-Match`, and
 decides with the protocol's client rules (`updater/protocol.rs`, which passes
 the service's `test-vectors/` copied to `tests/fixtures/release-protocol`).
+Versions are never compared: Hex takes the channel's current release whenever
+it is not the running build, identified on Linux and Windows by the
+executable's SHA-256 (the target file itself) and on macOS by its exact
+version. `required` releases skip the rollout. The checked channel is the
+Update channel setting, else the channel the build was published on
+(`HEX_BUILD_CHANNEL`, stamped by Release; older builds: `dev` for a dev
+version, else the receipt's). A setting other than the build's channel is a
+switch: Settings, the Windows tray, and the macOS menu offer "Switch to
+Stable 2.3.1", and nothing downloads until the user confirms.
 
 ```ts
 install method              distribution   channel           acts on install

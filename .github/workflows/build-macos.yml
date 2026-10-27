@@ -81,11 +81,10 @@ jobs:
         if: steps.secrets.outputs.available == 'true'
         run: |
           actual=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "voice-control") | .version')
-          # Staging publishes a prerelease of it, which release-app.sh stamps in;
-          # the dev channel may build the next patch's (set-crate-version.sh).
-          next=$(printf '%s\n' "$actual" | awk -F. '{ print $1 "." $2 "." $3 + 1 }')
+          # release-app.sh stamps a dev build's 0.0.0-dev-<run> or a beta in
+          # (set-crate-version.sh).
           case "$HEX_VERSION" in
-            "$actual" | "$actual"-dev.[0-9]* | "$actual"-beta.[0-9]* | "$next"-dev.[0-9]*) ;;
+            "$actual" | "$actual"-beta.[0-9]* | 0.0.0-dev-[0-9]*) ;;
             *)
               echo "::error::$(git rev-parse --short HEAD) is version $actual, not $HEX_VERSION or a prerelease of it."
               exit 1

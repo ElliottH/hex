@@ -60,7 +60,7 @@ Download Hex                              // setup.download-recovery
 Install on Windows                        // setup.windows-installer
 ├── Setup.exe, per user, no admin -> managed versions\<version>\hex.exe
 │   ├── x64 without vulkan-1.dll -> stop with driver guidance
-│   ├── newer self-updated version installed -> refuse, nothing changed
+│   ├── another version installed (e.g. self-updated) -> install this one over it
 │   └── finish -> Open Hex -> first-run tour downloads a model
 └── Settings › Apps -> uninstall every version, shortcut, Launch at login; keep data
 
@@ -90,8 +90,8 @@ Headless Chromium renders of the WebGPU, Canvas 2D, reduced-motion and phone pat
 showed no console errors; a deterministic 60 fps capture was reviewed frame by
 frame. These checks do not exercise real speakers or a physical phone.
 
-The Windows installer is silently installed, reinstalled, refused as a
-downgrade, and uninstalled on x64 and ARM64 runners by
+The Windows installer is silently installed, reinstalled, installed over
+another version, and uninstalled on x64 and ARM64 runners by
 [test-windows-installer.ps1](../../scripts/test-windows-installer.ps1); no
 interactive install, SmartScreen prompt, or first launch on a real PC has been
 observed. The Linux library diagnosis has no automated check. The site's
@@ -719,11 +719,15 @@ failed; no visual or installed-app startup verification is claimed.
 Hex checks the release service            // maintain.updates
 ├── 10 s after launch, hourly (Dev channel: every 10 min and on window focus), and Check for updates -> anoma.ly/release/hex/desktop/<channel>.json
 │   └── <channel> -> updates.channel (General › Application › Update channel: Stable | Dev,
-│       or `hex settings set updates.channel`), else dev for an X.Y.Z-dev.N build,
-│       else the installer receipt's channel, else stable; package managers always stable
+│       or `hex settings set updates.channel`), else the channel the build was published on
+│       (HEX_BUILD_CHANNEL; older builds: dev for a dev version, else the receipt's);
+│       package managers always stable
 │       └── Choosing a channel -> checks now; a staged update stays staged
-├── Dev -> stable -> nothing until stable is strictly newer (never a downgrade)
-├── Protocol client rules (shared vectors) -> newer, required (minimum), revoked, or none
+├── Versions never compared: channel's current release != running build -> take it
+│   ├── Running build -> Linux/Windows: executable SHA-256 = target's; macOS: same version
+│   ├── Another channel than the build's -> sidebar, tray, menu bar: Switch to Stable 2.3.1
+│   │   └── Only after the user confirms -> download -> stage (never switches by itself)
+│   ├── required -> install without waiting for the rollout
 │   └── Rollout -> device-local bucket in <support>/update-bucket, never sent
 ├── Direct install -> download (resumable) -> size + SHA-256 -> code signature -> stage
 │   ├── macOS -> unpack beside Hex.app -> Developer ID 5NZ4Q7NXJ4, anomaly.hex, notarized
@@ -732,7 +736,7 @@ Hex checks the release service            // maintain.updates
 │   └── Sidebar Update, menu bar / tray: Restart to update
 │       └── macOS -> renamex_np swap (also at quit) -> relaunch -> old bundle removed at launch
 ├── macOS location not replaceable (read-only, translocated, root-owned) -> Download update (DMG)
-├── Package manager (pacman, Nix) -> its command, once it serves the newer version
+├── Package manager (pacman, Nix) -> its command, once it serves another version
 ├── Source build, test build -> never checks
 └── Failure -> keep the running version, back off, Check for updates retries
 
@@ -756,8 +760,9 @@ window, menu bar, and tray show; `updater/protocol.rs` passes the release
 service's shared test vectors (`tests/fixtures/release-protocol`), and the
 per-OS modules have tests for activation, the macOS bundle swap and
 signature checks (ad-hoc fixtures against the real requirement), the rollout
-bucket, receipts, the channel choice, a dev-to-stable switch that does not
-downgrade, and Windows Authenticode (a Microsoft-signed system file). The
+bucket, receipts, the channel choice, never comparing versions (a legacy
+2.3.2-dev.29 follows 0.0.0-dev-N; dev to stable is a switch), the switch
+waiting for confirmation, and Windows Authenticode (a Microsoft-signed system file). The
 Update channel row shows only while this install updates itself (not test,
 source, managed, or package-manager installs); the `mac-settings-dev-channel`
 scene renders it, and `rune_ui` tests cover saving and hiding it.
@@ -843,7 +848,8 @@ Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
 ├── Escape -> Cancel; a held modifier alone never ends or cancels a capture
 ├── Paste -> Waits for Shift, Alt, and Win; a held Ctrl is kept and harmless
 ├── Update staged (managed install) -> Tray, sidebar footer: Restart to update
-├── Newer release (unmanaged install) -> Tray, sidebar footer: Download update
+├── Another release (unmanaged install) -> Tray, sidebar footer: Download update
+├── Another channel chosen -> Tray, sidebar footer: Switch to Stable 2.3.1 (confirm)
 ├── Otherwise -> Sidebar footer: Check for updates
 └── Modes, Voice Action, History, Activity, transformations -> as on macOS
 ```

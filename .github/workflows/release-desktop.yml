@@ -13,11 +13,12 @@ name: Release
 # dev. Run stable from production or push an app-v tag.
 #
 # channel=check (the dispatch default) builds, signs, and verifies every
-# platform as <next>-dev.<run number> and publishes nothing. channel=stable
+# platform as 0.0.0-dev-<run number> and publishes nothing. channel=stable
 # (or an app-v<version> tag) publishes to https://anoma.ly/release, the
 # GitHub release, the AUR, Homebrew, and the production site.
 #
-# channel=dev publishes a build of dev, stamped <next>-dev.<run number>, to
+# channel=dev publishes a build of dev, stamped 0.0.0-dev-<run number> as
+# OpenCode numbers its dev builds, to
 # the production service's dev channel (https://anoma.ly/release), where
 # installs set to the Dev update channel and the site's /hex/download/dev
 # link pick it up. Every push to dev that changes more than docs or the site
@@ -27,9 +28,11 @@ name: Release
 # platform whose signing isn't configured in release-dev (macOS: the Apple
 # secrets; Windows: Azure Artifact Signing) is left out, with a note in the
 # summary. It touches nothing else: no GitHub release, AUR, Homebrew, Nix
-# record, or site deploy. <next> is the crate version, or its next patch once
-# that version has an app-v tag, so a dev build is always newer than the
-# stable release before it and switching back to Stable never downgrades.
+# record, or site deploy. Versions are display text: installs follow the
+# channel's current release and never compare versions, so a dev build
+# numbered below the last stable release is fine. Every build is stamped with
+# the channel it is published on (HEX_BUILD_CHANNEL), so it knows when the
+# user chose another channel.
 #
 # check also runs in release-dev (for its signing values); stable runs in
 # release, which waits for a reviewer.
@@ -123,20 +126,12 @@ jobs:
               release_channel=stable release_version=$version
               ;;
             dev | check)
-              # Once X.Y.Z is released (tagged), dev builds are X.Y.(Z+1)-dev.N,
-              # which SemVer orders above X.Y.Z.
-              # ls-remote exits 2 only when the tag is absent; any other
-              # failure stops the run rather than stamp a version below it.
-              status=0
-              git ls-remote --exit-code origin "refs/tags/app-v$version" >/dev/null || status=$?
-              case "$status" in
-                0) base=$(printf '%s\n' "$version" | awk -F. '{ print $1 "." $2 "." $3 + 1 }') ;;
-                2) base=$version ;;
-                *) echo "::error::Could not look up tag app-v$version (git ls-remote exited $status)."; exit 1 ;;
-              esac
+              # Numbered like OpenCode's dev builds. The version is display
+              # text: installs follow the channel's current release and never
+              # compare versions.
               service=https://anoma.ly/release tag="dev-$GITHUB_RUN_ID"
               notes="https://github.com/$GITHUB_REPOSITORY/commit/$sha"
-              release_channel=dev release_version="$base-dev.$GITHUB_RUN_NUMBER"
+              release_channel=dev release_version="0.0.0-dev-$GITHUB_RUN_NUMBER"
               ;;
             *) echo "::error::Unknown channel $CHANNEL."; exit 1 ;;
           esac

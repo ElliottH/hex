@@ -769,10 +769,18 @@ CoreAudio formats, AppleScript details, or event serialization.
   root, Rune overlay HUD). Closing the window never stops the runtime, listener,
   HUD, or accepted work.
 - Updates follow the release protocol's client rules exactly (the shared
-  vectors must pass): a strictly newer version unless the running one is
-  revoked, the minimum version before rollout, and a rollout bucket drawn once
-  from the OS's secure random source, kept in `<support>/update-bucket`, and
-  never sent. Requests carry nothing about the install. Checks run 10 seconds
+  vectors must pass). Versions are display text and never compared: each
+  channel has one current release, and Hex takes it whenever it is not the
+  running build (Linux and Windows: the executable's SHA-256 against the
+  target's; macOS: the exact version). A rollback is the service making an
+  earlier release current. `required` releases install without waiting for
+  the rollout; others wait for a rollout bucket drawn once from the OS's
+  secure random source, kept in `<support>/update-bucket`, and never sent.
+  Each build knows the channel it was published on (`HEX_BUILD_CHANNEL`,
+  stamped by Release); when the Update channel setting names another, Hex
+  offers that channel's current release as "Switch to Stable 2.3.1" and
+  installs it only once the user confirms, never by itself. Dev builds are
+  `0.0.0-dev-<run number>`, as OpenCode numbers them. Requests carry nothing about the install. Checks run 10 seconds
   after launch, hourly (every 10 minutes and on window focus, at most once a minute, on the Dev channel), and on the sidebar footer's Check for updates, backing off on errors; manifests are
   not signed, so nothing runs before the download's size and SHA-256 match
   the manifest and, on macOS and Windows, its code signature passes: macOS
@@ -784,7 +792,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   names the channel) and the version layout, macOS a `Hex.app` this user can
   rename in a writable, non-translocated folder. A read-only macOS location
   shows Download update (the DMG); package-managed installs (pacman, Nix) show
-  their manager's command once it serves the newer version; source and test
+  their manager's command once it serves another version; source and test
   builds never check; `DisableUpdates` (macOS `anomaly.hex` defaults domain,
   Windows `SOFTWARE\Policies\Anomaly\Hex` in HKLM or HKCU) turns checks off.
   Never escalate privileges, and never overwrite development, root, or
@@ -1059,10 +1067,11 @@ layout `install-windows.ps1` creates, so self-updates keep working:
 `install.json` direct-install receipt, and a Start Menu shortcut carrying the
 managed mark. Its uninstaller lives in `voice-control\uninstall` because
 updates prune old version directories; it removes every version, the
-receipt, the shortcut, and Launch at login, and keeps settings. It refuses to
-roll back a newer self-updated version. Keep its `AppId` forever: the updater
-rewrites that Apps & Features entry's version. Release and the Windows
-installer workflow install, reinstall, refuse a downgrade with, and uninstall
+receipt, the shortcut, and Launch at login, and keeps settings. It installs
+its version over whatever is installed (versions are never compared). Keep
+its `AppId` forever: the updater rewrites that Apps & Features entry's
+version. Release and the Windows installer workflow install, reinstall,
+install over another version with, and uninstall
 it silently on x64 and ARM64 runners (`scripts/test-windows-installer.ps1`).
 With `sign-windows` (Release), Build desktop's `windows-package` job, the only
 one in the `release` environment, Authenticode-signs both `hex.exe` through

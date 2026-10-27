@@ -373,7 +373,7 @@ jobs:
         with:
           name: ${{ inputs.artifact-prefix }}-windows-${{ matrix.arch }}
           path: dist
-      - name: Install, reinstall, refuse a downgrade, and uninstall silently
+      - name: Install, reinstall, install over another version, and uninstall silently
         shell: pwsh
         run: |
           tools/scripts/test-windows-installer.ps1 -Installer "dist/Hex-Setup-$env:HEX_VERSION-windows-${{ matrix.label }}.exe" -Executable "dist/Hex-$env:HEX_VERSION-windows-${{ matrix.label }}.exe" -Version $env:HEX_VERSION

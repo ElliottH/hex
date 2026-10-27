@@ -73,7 +73,7 @@ runs only for stable releases.
 ## Channels
 
 - `check` (the dispatch default, run from `dev`) builds, signs, and verifies
-  every platform as `<next>-dev.<run number>` in `release-dev` and publishes
+  every platform as `0.0.0-dev-<run number>` in `release-dev` and publishes
   nothing anywhere: a dry run of the build and packaging.
 - `dev` publishes a build of `dev` to the production service's `dev`
   channel (`https://anoma.ly/release/hex/desktop/dev.json`), which installs
@@ -82,11 +82,17 @@ runs only for stable releases.
   `site/`, or Markdown; a newer push cancels a dev run still in progress, and
   `gh workflow run release-desktop.yml --ref dev -f channel=dev -f ref=dev`
   runs it by hand. It runs in `release-dev`, so it needs no approval. The
-  version is `<next>-dev.<run number>`, where `<next>` is the crate version,
-  or its next patch once tag `app-v<version>` exists (so today
-  `2.3.2-dev.N`): every dev build is newer than the stable release before it,
-  and switching an install back to Stable waits for the next stable release
-  instead of downgrading. It publishes only signed builds, because the
+  version is `0.0.0-dev-<run number>`, as OpenCode numbers its dev builds.
+  Versions are display text that nothing compares: each channel has one
+  current release and installs follow it, so a dev build below 2.3.1 is fine,
+  and a rollback is making an earlier release current (the service's
+  `promote` with a history `sequence`, or Make current in its admin panel).
+  Every build is stamped with its channel (`HEX_BUILD_CHANNEL`); an install
+  whose Update channel setting names another channel offers that channel's
+  current release ("Switch to Stable 2.3.1") and switches only once the user
+  confirms. The first build after this change, 2.3.2-dev.<run> on
+  2026-10-27, carried the new client to installs whose older client took only
+  higher versions; every build since is `0.0.0-dev-<run>`. It publishes only signed builds, because the
   updater checks signatures: until `release-dev` has the Apple secrets it has
   no macOS targets, and until Azure Artifact Signing works there it has no
   Windows targets (the run summary says so); Linux needs no signing. It
@@ -168,8 +174,9 @@ to the `macos-arm64-dmg` file, or answers 404 with a plain message when no dev
 release (or no Mac build of it) exists. The release service is another Worker
 on the anoma.ly zone, so the site Worker sets the `global_fetch_strictly_public`
 compatibility flag for that fetch to reach it. A DMG install updates itself
-from the dev channel because its version is a dev build; installs from the
-stable link switch in Settings › General › Update channel.
+from the dev channel because it was built for that channel; installs from
+the stable link switch in Settings › General › Update channel, after
+confirming the switch.
 The route ships with the Worker, so it is live on production only after a
 production site deploy of a commit that has it: the next stable Release, or
 Site dispatched with `mode: production` from `production` once `production`

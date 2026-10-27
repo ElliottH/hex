@@ -308,10 +308,11 @@ an unsaved edit.
 - `commands_enabled on` while `release_microphone_while_idle` is on, and the
   reverse, need `--yes`, because each turns the other off.
 - `voice_action.enabled on` needs a free Voice Action shortcut.
-- `updates.channel` takes `stable`, `dev`, or `none` (follow the build:
-  `dev` for an `X.Y.Z-dev.N` build, otherwise the install's channel), and
-  checks for updates at once. Switching to `stable` never downgrades: Hex
-  waits for a stable release newer than the one it runs.
+- `updates.channel` takes `stable`, `dev`, or `none` (follow the build: the
+  channel it was published on), and checks for updates at once. Choosing
+  another channel than the build's offers that channel's current release
+  ("Switch to Stable 2.3.1" in the window); Hex installs it only once you
+  confirm there. Versions are never compared.
 - With the `capture` build option and experiment, `capture.*` keys appear:
   `capture.enabled`, `capture.hotkey` (default `option+shift+s`),
   `capture.list_hotkey` (the capsule's send-to list, default

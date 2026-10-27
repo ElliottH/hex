@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use color_eyre::eyre::{Result, eyre};

@@ -75,7 +75,8 @@ if ($manifest.app -ne 'hex' -or $manifest.artifact -ne 'desktop' -or $manifest.c
     throw "The manifest is not Hex desktop on the $channel channel."
 }
 $version = $manifest.release.version
-if ($version -notmatch '^\d+\.\d+\.\d+(-(beta|dev)\.\d+)?$') { throw "Unexpected version $version." }
+# Display text that names a directory; versions are never compared.
+if ($version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$') { throw "Unexpected version $version." }
 $file = $manifest.release.targets.$target
 if (-not $file) { throw "Hex $version has no $target build." }
 if ($file.sha256 -notmatch '^[0-9a-f]{64}$' -or $file.size -le 0) { throw "The manifest's $target entry is invalid." }
