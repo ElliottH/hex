@@ -119,9 +119,16 @@ substitute for source inspection or a second roadmap.
   normalization, cancellation, and inference. In the app, clips up to 30 s run
   on the dictation engine's model when it is the one requested; otherwise the
   service loads its own, released after a long clip when the engine holds it.
+- `transcription_stream`: live `/streams` transcription of another app's
+  pushed audio on the engine's loaded model: pause-cut windows fed through
+  yielding engine streams that any dictation request closes, a bounded
+  backlog held while dictation is busy, offline fallback windows, the lease,
+  and one live stream at a time.
 - `local_api`: authenticated loopback discovery or direct-child endpoint
   handoff, bounded HTTP parsing, model preparation progress, and raw
-  transcription routes, plus the always-on authenticated `POST /control`.
+  transcription routes, the `/streams` routes (contract:
+  [`docs/streams.md`](docs/streams.md)), plus the always-on authenticated
+  `POST /control`.
 - `control`: the release `hex` control surface: the versioned
   `ControlRequest`/`ControlReply` protocol, the settings registry behind
   `hex settings` (one dotted key per persisted setting, with the window's

@@ -155,6 +155,8 @@ mod transcription_models;
 mod transcription_preparation;
 #[cfg(target_os = "macos")]
 mod transcription_service;
+#[cfg(target_os = "macos")]
+mod transcription_stream;
 mod updater;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod vocabulary;

@@ -1059,6 +1059,8 @@ layout evidence.
 ```ts
 TypeScript SDK + macOS local service
 ├── Caller records audio -> Explicit helper -> Raw transcription
+├── Caller streams audio -> Running app's /streams -> Partials, segments, final
+│   └── Dictation first; uses the loaded model only (docs/streams.md)
 ├── Running desktop capture API -> Separate microphone ownership protocol
 │   └── No silence gate                  // raw model output, unlike hotkey dictation
 └── Distribution
@@ -1076,6 +1078,13 @@ Developer ID identity validation as the app; identity fixtures do not establish
 a signed helper distribution. Low-level blocking-peek and
 FIN/half-close limitations in [local_api.rs](../../src/local_api.rs) must not be
 generalized to every SDK cancellation path.
+
+Live streams (`/streams`, [contract](../streams.md)) are exercised by fake
+engines only: `transcription_stream` tests cover windows, partials, the
+backlog during dictation, preemption and offline fallback, the lease, cancel,
+and busy; `local_api::streams` tests cover routes, auth, and bounds; and
+`transcription_engine` tests cover yielding streams closed by dictation. No
+real-model or live-app stream has been run.
 
 Model progress and dictation levels share bounded SSE framing in
 [sse.ts](../../sdk/typescript/src/sse.ts). In-memory
