@@ -320,6 +320,13 @@ impl Hotkeys {
             edit.break_chord(now);
         }
     }
+
+    fn forgo_chord_breaks(&mut self) {
+        self.dictation.forgo_chord_break();
+        if let Some(edit) = &mut self.edit {
+            edit.forgo_chord_break();
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1195,6 +1202,10 @@ pub fn listen(
                         )?;
                     }
                 }
+            }
+            // A shortcut press during voice-delimited dictation starts nothing.
+            if voice.is_some() {
+                hotkeys.forgo_chord_breaks();
             }
         }
         if programmatic.is_none()

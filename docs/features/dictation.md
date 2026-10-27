@@ -119,21 +119,38 @@ Kit out of a fullscreen Space before the paste. Tap detectors (Raycast,
 Karabiner's `to_if_alone`, AutoHotkey's Start-menu mask) cancel a tap when any
 key goes down while the modifier is held. Once Hex owns a modifier-only press
 it now posts one press of key code 0x44 under the modifiers held at that
-moment, once per press and only while they are still physically down:
+moment, once per press and only while exactly the shortcut's modifiers are
+still physically down (any other modifier already breaks the tap):
 
 ```ts
 Hold past 300 ms (Hold mode, or a held second tap) -> Chord breaker
-Toggle start press, press that finishes a lock     -> Chord breaker at once
+Toggle start press, 40 ms after the press          -> Chord breaker
+  (the start tone's chord grace: an extra modifier pressed with it,
+   as for ⌥⇧S, discards the press first; a toggle tap is too short
+   to wait out the 300 ms hold)
+Press that finishes a lock                         -> Chord breaker at once
 Short tap, chord discard, double-tap lock taps     -> Nothing (still a tap)
+Press during voice-delimited dictation             -> Nothing (starts nothing)
 Keyed shortcuts (consumed), Globe/Fn (system tap)  -> Nothing
 Voice Action ⌥⌘, including promotion               -> Its own, after its hold
 ```
 
+The breaker never reaches the focused app:
+
+```ts
+Posted at HID with Hex's marker
+  ├── HID taps, session taps            -> See a key: tap cancelled
+  ├── NSEvent global monitors           -> See a key: tap cancelled
+  ├── Hex's HID tap and its key tap     -> Marker: not a key, chord, or HID evidence
+  └── Hex's annotated-session key tap   -> Dropped
+      -> The focused app never gets it, so it never beeps (a non-text
+         view, or any text view with ⌘ held, beeps at an unhandled key)
+```
+
 0x44 is a hole in the virtual key codes (between keypad `*` and `+`): no
 keyboard sends it, it has no system action, and of the 264 layouts macOS ships
-only Unicode Hex Input maps it (to U+0000, never with Option alone). The event
-carries Hex's synthetic marker, so neither of Hex's taps reads it as a key,
-a chord, or HID evidence. Source: `DictationHotkey::break_chord` in
+only Unicode Hex Input maps it (to U+0000, never with Option alone). Source:
+`DictationHotkey::break_chord` and `event_callback` in
 [suppression.rs](../../src/suppression.rs), `post_chord_breaker` in
 [keyboard.rs](../../src/keyboard.rs), called from the listener loop once no
 input is pending. Checks:
@@ -141,9 +158,19 @@ input is pending. Checks:
 `short_taps_chords_and_other_bindings_never_break_the_chord`,
 `locked_and_toggle_captures_break_the_chord_only_for_presses_hex_owns`,
 `voice_action_promotion_breaks_its_own_chord_after_its_hold`,
-`marked_chord_breaker_never_reaches_the_shortcut_machines`. Not yet observed
-with Raycast on a physical keyboard; an app focused on a non-text view might
-beep at an unhandled key, which is also unobserved.
+`marked_chord_breaker_never_reaches_the_shortcut_machines_or_the_app`.
+
+Observed October 27, 2026 on a macOS 27.0.1 VM (`macvm`), with a stand-in for
+Hex (the same marked HID post, dropped by a head-inserted annotated-session
+default tap) rather than Hex itself: an Option hold reached a test app as an
+unhandled `keyDown` that beeped in a plain view when the breaker passed
+through; when dropped, the app received nothing, while an Option-tap detector
+on a HID tap, a session tap, and an NSEvent global monitor each saw the key and
+cancelled its tap. Without the breaker all three fired. Unproven: Raycast
+itself (its binary uses both event taps and a global monitor), a detector on
+an annotated-session tap placed after Hex's (it never sees the key), and a
+physical keyboard. If Hex's key tap is briefly disabled by a timeout, the
+breaker reaches the app.
 
 ### Shortcut Mode
 

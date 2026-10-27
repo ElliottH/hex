@@ -101,6 +101,8 @@ sample-for-sample audio continuity through promotion.
 A modifier-only Voice Action shortcut, promoted or not, gets Dictation's
 [chord breaker](dictation.md#hold-and-short-taps) once its own hold is
 accepted, so a modifier-tap hotkey in another app does not fire on release.
+Hex drops the breaker before the focused app, which would otherwise beep at an
+unhandled key with ⌘ held, even in a text field.
 Check: `voice_action_promotion_breaks_its_own_chord_after_its_hold`.
 
 `voice_action_uses_separate_binding_after_dictation_is_rebound` in

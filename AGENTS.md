@@ -419,10 +419,13 @@ CoreAudio formats, AppleScript details, or event serialization.
   intentional-hold threshold. Ordinary shortcut chords must not mute output,
   pause media, or prevent sleep.
 - A modifier-only shortcut (not Globe/Fn) passes through, so once Hex owns
-  the press (hold past the threshold, Toggle start, lock-finishing press)
-  it posts one marked press of unassigned key code 0x44 while the modifiers
-  are still down, so other apps' modifier-tap hotkeys read a chord. Short
-  taps and chords never get one, and it never reaches Hex's state machines.
+  the press (hold past the threshold, Toggle start after the 40 ms chord
+  grace, lock-finishing press) it posts one marked press of unassigned key
+  code 0x44 at HID while exactly its modifiers are still down, so other
+  apps' modifier-tap hotkeys read a chord. Hex's annotated-session key tap
+  drops it, so the focused app never receives it (and never beeps). Short
+  taps, chords, and presses during voice-delimited dictation never get one,
+  and it never reaches Hex's state machines.
 - The start tone confirms the shortcut press itself, not the hold threshold: it
   is provisional, sounds after a 40 ms chord grace, and a chord, short tap,
   cancel, or Voice Action takeover retracts it (silently inside the grace, else

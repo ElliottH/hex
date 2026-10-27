@@ -659,7 +659,18 @@ unsafe extern "C" fn event_callback(
     if unsafe { CGEventGetIntegerValueField(event, EVENT_SOURCE_USER_DATA) }
         == crate::keyboard::SYNTHETIC_EVENT_MARKER
     {
-        return event;
+        // The chord breaker has already passed the HID and session taps and
+        // global monitors that watch for modifier taps; the focused app would
+        // only beep at it.
+        let chord_breaker = matches!(event_type, EVENT_KEY_DOWN | EVENT_KEY_UP)
+            // SAFETY: CoreGraphics supplied a valid keyboard event.
+            && unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) }
+                == i64::from(crate::keyboard::CHORD_BREAKER_KEY_CODE);
+        return if chord_breaker {
+            ptr::null_mut()
+        } else {
+            event
+        };
     }
     #[cfg(hex_capture)]
     let list_swallows = match list_tap(event_type, event) {
@@ -1450,8 +1461,9 @@ impl DictationHotkey {
 
     /// A bare modifier passes through to other apps, so a hold reads to them
     /// as a tap on release (Raycast's Option-tap hotkey, for one). Once Hex
-    /// owns the press (a hold past the threshold, a Toggle start, or the press
-    /// that finishes a lock) it is owed one chord breaker while still held.
+    /// owns the press (a hold past the threshold, a Toggle start past the
+    /// chord grace, or the press that finishes a lock) it is owed one chord
+    /// breaker while still held.
     fn track_chord_break(
         &mut self,
         event: InputEvent,
@@ -1472,8 +1484,11 @@ impl DictationHotkey {
         };
         match action {
             Some(HotkeyAction::Start) if matches!(self.state, State::Recording { .. }) => {
+                // Toggle's press is usually a short tap, so it can't wait out
+                // the hold; the grace lets an extra modifier pressed with it
+                // discard it first.
                 self.chord_break_at = Some(if self.toggle {
-                    now
+                    now + crate::feedback::CHORD_GRACE
                 } else {
                     now + MINIMUM_HOLD_DURATION
                 });
@@ -1487,6 +1502,12 @@ impl DictationHotkey {
         }
     }
 
+    /// Drops the chord breaker the current press would be owed, for a press
+    /// Hex does not act on.
+    pub fn forgo_chord_break(&mut self) {
+        self.chord_break_at = None;
+    }
+
     /// Whether the held press is due its chord breaker at `now`; true at most
     /// once per press.
     pub fn take_chord_break(&mut self, now: CaptureInstant) -> bool {
@@ -1497,16 +1518,17 @@ impl DictationHotkey {
         due
     }
 
-    /// Posts the chord breaker the held press is due, if its modifiers are
-    /// still physically down. The posted key carries Hex's marker, so neither
-    /// tap sees it.
+    /// Posts the chord breaker the held press is due, if exactly its modifiers
+    /// are still physically down; any other modifier already breaks the tap.
+    /// The posted key carries Hex's marker, so neither shortcut machine sees
+    /// it, and the key tap drops it before the focused app.
     pub fn break_chord(&mut self, now: CaptureInstant) {
         if !self.take_chord_break(now) {
             return;
         }
         // SAFETY: A read-only query of the documented HID system state.
         let flags = unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) };
-        if !self.binding.required_modifiers_down(flags) {
+        if !self.binding.exact_modifiers(flags) {
             return;
         }
         if let Err(error) = crate::keyboard::post_chord_breaker(flags) {
@@ -3725,6 +3747,11 @@ mod tests {
         suspended.process(InputEvent::Flags(OPTION_KEY_MASK), now);
         suspended.suspend();
         assert!(!suspended.take_chord_break(later));
+        // Neither does a press voice-delimited dictation ignores.
+        let mut ignored = test_hotkey(false, now);
+        ignored.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        ignored.forgo_chord_break();
+        assert!(!ignored.take_chord_break(later));
     }
 
     #[test]
@@ -3754,16 +3781,28 @@ mod tests {
         programmatic.process(InputEvent::Flags(NO_FLAGS), at(1_060));
         assert!(!programmatic.take_chord_break(at(1_060)));
 
-        // Toggle: the starting press is Hex's at once while held.
+        // Toggle: the starting press is Hex's once past the chord grace.
+        let grace = crate::feedback::CHORD_GRACE;
         let mut toggle = test_hotkey(false, now);
         toggle.set_toggle(true);
         toggle.process(InputEvent::Flags(OPTION_KEY_MASK), now);
-        assert!(toggle.take_chord_break(now));
+        assert!(!toggle.take_chord_break(now));
+        assert!(!toggle.take_chord_break(now + (grace - Duration::from_millis(1))));
+        assert!(toggle.take_chord_break(now + grace));
         toggle.process(InputEvent::Flags(NO_FLAGS), at(80));
         assert!(toggle.is_locked());
         assert!(!toggle.take_chord_break(at(1_000)));
         toggle.process(InputEvent::Flags(OPTION_KEY_MASK), at(2_000));
         assert!(toggle.take_chord_break(at(2_000)));
+        // Shift pressed with it, as for Option-Shift-S, discards the press first.
+        let mut chord = test_hotkey(false, now);
+        chord.set_toggle(true);
+        chord.process(InputEvent::Flags(OPTION_KEY_MASK), now);
+        assert_eq!(
+            chord.process(InputEvent::Flags(OPTION_KEY_MASK | SHIFT_KEY_MASK), at(20)),
+            Some(HotkeyAction::Discard(DiscardCause::ExtraModifier))
+        );
+        assert!(!chord.take_chord_break(at(1_000)));
     }
 
     #[test]
@@ -3796,38 +3835,49 @@ mod tests {
     }
 
     /// The chord breaker is posted through both taps; its mark keeps it from
-    /// becoming the user's chord or HID chord evidence.
+    /// becoming the user's chord or HID chord evidence, and the key tap drops
+    /// it so the focused app never beeps at it. Hex's other synthetic keys,
+    /// such as the paste shortcut, still reach the app.
     #[test]
-    fn marked_chord_breaker_never_reaches_the_shortcut_machines() {
-        for marked in [true, false] {
+    fn marked_chord_breaker_never_reaches_the_shortcut_machines_or_the_app() {
+        let breaker = crate::keyboard::CHORD_BREAKER_KEY_CODE;
+        for (code, marked) in [(breaker, true), (breaker, false), (9, true)] {
             let (mut context, receiver) = test_tap_context(false);
             // SAFETY: This locally owned event and context live through both callbacks.
             unsafe {
-                let event = CGEventCreate(ptr::null_mut());
-                assert!(!event.is_null());
-                CGEventSetType(event, EVENT_KEY_DOWN);
-                CGEventSetFlags(event, OPTION_KEY_MASK);
-                CGEventSetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE, 0x44);
-                if marked {
-                    CGEventSetIntegerValueField(
-                        event,
-                        EVENT_SOURCE_USER_DATA,
-                        crate::keyboard::SYNTHETIC_EVENT_MARKER,
-                    );
-                }
                 let user_info = (&mut context as *mut EventTapContext).cast();
-                let returned = event_callback(ptr::null_mut(), EVENT_KEY_DOWN, event, user_info);
-                assert_eq!(returned, event);
-                let returned =
-                    physical_event_callback(ptr::null_mut(), EVENT_KEY_DOWN, event, user_info);
-                assert_eq!(returned, event);
-                CFRelease(event.cast_const());
+                for event_type in [EVENT_KEY_DOWN, EVENT_KEY_UP] {
+                    let event = CGEventCreate(ptr::null_mut());
+                    assert!(!event.is_null());
+                    CGEventSetType(event, event_type);
+                    CGEventSetFlags(event, OPTION_KEY_MASK);
+                    CGEventSetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE, i64::from(code));
+                    if marked {
+                        CGEventSetIntegerValueField(
+                            event,
+                            EVENT_SOURCE_USER_DATA,
+                            crate::keyboard::SYNTHETIC_EVENT_MARKER,
+                        );
+                    }
+                    let returned = event_callback(ptr::null_mut(), event_type, event, user_info);
+                    if marked && code == breaker {
+                        assert!(returned.is_null());
+                    } else {
+                        assert_eq!(returned, event);
+                    }
+                    if event_type == EVENT_KEY_DOWN {
+                        let returned =
+                            physical_event_callback(ptr::null_mut(), event_type, event, user_info);
+                        assert_eq!(returned, event);
+                    }
+                    CFRelease(event.cast_const());
+                }
             }
             let observed = receiver.try_iter().count();
             if marked {
                 assert_eq!(observed, 0);
             } else {
-                assert_eq!(observed, 2, "an unmarked key is the user's chord");
+                assert_eq!(observed, 3, "an unmarked key is the user's chord");
             }
         }
     }
