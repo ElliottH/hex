@@ -1505,7 +1505,7 @@ fn list_view(p: Paint, list: &List, x: f32, w: f32, reduced: bool) -> El {
         }
     }
     let footer = match &list.always {
-        Some((site, true)) => saving_hint(p, site, w),
+        Some((site, true)) => saving_hint(p, list, site, w),
         _ if suggesting => suggest_hints(p, list, w),
         _ => send_hints(p, list, w),
     };
@@ -1559,14 +1559,52 @@ fn suggest_hints(p: Paint, list: &List, w: f32) -> El {
         .child(el().grow(1.0))
 }
 
-/// Shift down: the footer says where the rule will send `site`.
-fn saving_hint(p: Paint, site: &str, w: f32) -> El {
+/// Shift down: the footer says where the rule will send `site`, each in
+/// a rounded badge: "Always send [site] to [SEER]", following the
+/// highlighted row.
+fn saving_hint(p: Paint, list: &List, site: &str, w: f32) -> El {
     let room = w - 2.0 * LIST_PAD - 2.0 * ROW_PX;
-    let copy = format!("Always send {site} to…");
-    row()
+    let to = list.selected_dest().map(|dest| dest.name.as_str());
+    let words = measure("Always send", SMALL) + measure("to", SMALL) + 3.0 * BADGE_GAP;
+    let badges = if to.is_some() { 2.0 } else { 1.0 } * 2.0 * BADGE_PX;
+    let left = (room - words - badges).max(0.0);
+    let to_w = to.map_or(0.0, |to| measure(to, SMALL));
+    let site_w = measure(site, SMALL);
+    let (site_room, to_room) = if site_w + to_w <= left {
+        (site_w, to_w)
+    } else {
+        let to_room = to_w.min(left * 0.4);
+        (left - to_room, to_room)
+    };
+    let mut hint = row()
         .center_y()
-        .child(label(&ellipsize(&copy, SMALL, room), SMALL, p.text()).key("saving"))
-        .child(el().grow(1.0))
+        .gap(BADGE_GAP)
+        .key("saving")
+        .child(label("Always send", SMALL, p.muted()))
+        .child(badge(p, &ellipsize(site, SMALL, site_room)).key("site"));
+    hint = match to {
+        Some(to) => hint
+            .child(label("to", SMALL, p.muted()))
+            .child(badge(p, &ellipsize(to, SMALL, to_room)).key("to")),
+        None => hint.child(label("to…", SMALL, p.muted())),
+    };
+    hint.child(el().grow(1.0))
+}
+
+const BADGE_H: f32 = 20.0;
+const BADGE_PX: f32 = 8.0;
+const BADGE_GAP: f32 = 6.0;
+
+/// A name in a capsule: what a Shift pick's rule ties together.
+fn badge(p: Paint, name: &str) -> El {
+    let k = p.k;
+    row()
+        .center()
+        .h(BADGE_H)
+        .px(BADGE_PX)
+        .radius(BADGE_H / 2.0)
+        .fill(k.alpha(k.c.text_base, 0.09))
+        .child(label(name, SMALL, p.text()))
 }
 
 /// The footer's height, and the list's below its last row.

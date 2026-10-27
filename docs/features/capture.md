@@ -193,7 +193,8 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   │   words ("you were just in it", "same page", "mentioned", "recent")
 │   │   │   or nothing; never "guess"
 │   │   ├── Shift down (a guess or rule with a site or app) -> the footer reads
-│   │   │   "Always send <site> to…" and the highlighted row "always"; up, the
+│   │   │   "Always send [site] to [row]", the site and the highlighted row's
+│   │   │   name each in a rounded badge, and that row reads "always"; up, the
 │   │   │   footer is "Send 1–5  Always ⇧" again. Shift+1-5 or Shift+click
 │   │   │   sends and saves the rule: "Sent to X · saved rule", and its Undo
 │   │   │   takes back the send and the rule (what the key held before, or
