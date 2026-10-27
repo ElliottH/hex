@@ -948,13 +948,14 @@ fn send_why(error: &str, agent_host: bool) -> String {
     if error.contains("Unable to read attachment") && !agent_host {
         return FILES_UNSEEN.into();
     }
+    if error.contains("HTTP 404") {
+        return "session not found".into();
+    }
     if let Some(said) = error.strip_prefix("OpenCode said: ") {
         let said = said.split(": OpenCode API failed").next().unwrap_or(said);
         return fit(said.lines().next().unwrap_or(said));
     }
-    if error.contains("HTTP 404") {
-        "session not found".into()
-    } else if error.starts_with("Could not reach server") {
+    if error.starts_with("Could not reach server") {
         "couldn't reach OpenCode".into()
     } else if error.contains("didn't answer in time") {
         "OpenCode didn't answer".into()
@@ -1500,6 +1501,10 @@ mod tests {
             ),
             (
                 "OpenCode API failed: HTTP 404 Not Found",
+                "session not found",
+            ),
+            (
+                "OpenCode said: Session not found: ses_x: OpenCode API failed: HTTP 404 Not Found",
                 "session not found",
             ),
             ("bundle has no contact sheet", "bundle has no contact sheet"),

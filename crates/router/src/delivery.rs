@@ -238,7 +238,15 @@ fn retry_due_on(captures: &Path, now: u64, forward: Forward, machine: Option<&st
                 continue;
             }
         };
-        if pending.next_at > now || !pending.retried_on(machine) {
+        if !pending.retried_on(machine) {
+            // Copied from another Mac, which retries its own; once that Mac would have given
+            // up, it stops keeping the bundle from retention here.
+            if now.saturating_sub(pending.first_at) >= GIVE_UP_AFTER_MS {
+                let _ = std::fs::rename(dir.join(PENDING), dir.join(FAILED));
+            }
+            continue;
+        }
+        if pending.next_at > now {
             continue;
         }
         match forward(&dir, &pending.session) {
@@ -438,6 +446,12 @@ mod tests {
             "the Air's marker is left alone"
         );
         assert!(!ours.join(PENDING).exists() && !old.join(PENDING).exists());
+
+        // Once the Air would have given up, the copy stops counting as pending here.
+        let report = retry_due_on(&captures, GIVE_UP_AFTER_MS, counted_forward, Some("STUDIO"));
+        assert_eq!(report, Report::default());
+        assert_eq!(COPIED_TRIES.load(Ordering::SeqCst), 2);
+        assert!(!copied.join(PENDING).exists() && copied.join(FAILED).exists());
         std::fs::remove_dir_all(captures).unwrap();
     }
 

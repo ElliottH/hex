@@ -63,13 +63,17 @@ pub fn process_executable(_pid: i32) -> Option<PathBuf> {
 /// the network.
 #[cfg(target_os = "macos")]
 pub fn machine_id() -> Option<String> {
-    let mut id = [0_u8; 16];
-    let wait = libc::timespec {
-        tv_sec: 1,
-        tv_nsec: 0,
-    };
-    (unsafe { libc::gethostuuid(id.as_mut_ptr(), &wait) } == 0)
-        .then(|| id.iter().map(|byte| format!("{byte:02X}")).collect())
+    static ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let mut id = [0_u8; 16];
+        let wait = libc::timespec {
+            tv_sec: 1,
+            tv_nsec: 0,
+        };
+        (unsafe { libc::gethostuuid(id.as_mut_ptr(), &wait) } == 0)
+            .then(|| id.iter().map(|byte| format!("{byte:02X}")).collect())
+    })
+    .clone()
 }
 
 #[cfg(not(target_os = "macos"))]
