@@ -242,6 +242,14 @@ The on-screen picker                     // capture.picker (capture_capsule/pick
 └── Windows load off the UI thread (`list_selectable_windows`); nothing picks
     until they arrive
 
+Hex's own windows                        // capture.own-windows
+├── Chrome (the capsule, ink, picker, HUDs, meeting capsules: Hex's named
+│   windows and any of its windows above the normal level) -> never recorded,
+│   never in the window log, never the target, clicks on it not logged
+└── Normal windows (Settings) -> like any app's: recorded, logged, pickable,
+    and Hex is the front app when its window is the topmost normal one, so a
+    capture of Settings routes by Hex's name
+
 Ink and laser                            // capture.ink
 ├── A click-through overlay over the recorded display, excluded from the recording
 ├── Shift strokes draw as ink, hold 650 ms, then fade over 650 ms
@@ -253,7 +261,7 @@ While a capture records                  // capture.input
 ├── Keys pressed in the app -> logged; keys Hex consumes (its shortcuts, Esc) and
 │   anything while a shortcut is being recorded -> not logged
 ├── Scrawl's rules in the engine (hosted_input): Shift drag inks, a click pins,
-│   clicks on Hex's own windows ignored
+│   clicks on Hex's capture chrome ignored
 └── Shift still held from ⌥⇧S -> must come up once before it can ink; Shift up
     at the start -> the first Shift drag inks
 
@@ -328,7 +336,9 @@ Where it goes                            // capture.route; capture.routing's aut
 │   │   ladder, after rules and addresses, on the same look
 │   ├── Guess -> everything else the router would send (Jev's pick, HOME when
 │   │   Jev couldn't tell, a dev server's port, a page's data-session or
-│   │   publisher, a name that was said, the port ladder) is suggestion #1, its
+│   │   publisher, a name that was said, the captured app's checkout (the one
+│   │   open session folder named like the app, such as `…/hex` for Hex's own
+│   │   Settings; smartRouting only), the port ladder) is suggestion #1, its
 │   │   reason as the row's word ("Jev's pick", "dev server", "this page"), then
 │   │   the runners-up and recent sessions; nothing sent until one is picked.
 │   │   `site` names what "Always send <site> here" (⇧⏎ in the list, or
@@ -438,6 +448,10 @@ Checks:
   `a_failed_start_ends_before_escape_or_the_shortcut_sees_it`;
   `the_capture_shortcut_is_suppressed_and_never_chord_evidence` and
   `a_capture_logs_only_keys_that_reach_the_app` in suppression.rs;
+  `the_hosts_normal_windows_count_and_its_chrome_does_not` in
+  [window_log.rs](../../crates/capture/src/window_log.rs) and
+  `helper_windows_are_scrawl_s_except_the_capture_source` in
+  [capture.rs](../../crates/capture/src/capture.rs) for Hex's own windows;
   the ink and click rules in hosted_input.rs, including
   `a_capture_started_by_its_shortcut_waits_for_shift_to_come_up`,
   `a_capture_started_without_shift_held_inks_from_the_first_stroke`, and
@@ -454,7 +468,8 @@ Checks:
   its `looked` tests, which write a bundle and route it through `look` and
   `Worker::written` with fake sessions and tab:
   `a_saved_site_or_app_rule_sends_whatever_the_routing_flags`,
-  `the_port_ladder_is_a_guess`, `a_look_past_its_deadline_is_routed_without`,
+  `the_port_ladder_is_a_guess`, `the_captured_apps_checkout_is_a_guess`,
+  `a_look_past_its_deadline_is_routed_without`,
   `an_always_rule_names_the_folder_of_the_session_it_sends_to`, and
   `a_capture_routed_after_a_newer_one_settled_is_still_sendable_by_name`;
   `an_always_rule_makes_its_sites_next_capture_a_saved_rule`,

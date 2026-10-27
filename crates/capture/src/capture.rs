@@ -1643,8 +1643,13 @@ impl SharedCaptureTelemetry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        let excluded = self
+            .excluded_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let source = self.capture_source_pid.load(Ordering::Acquire);
-        on_own_window(windows, (x, y), &passthrough, source, is_helper)
+        on_own_window(windows, (x, y), &passthrough, &excluded, source, is_helper)
     }
 
     pub fn normalize_point(&self, screen_x: f64, screen_y: f64) -> (f32, f32, u32, u32) {
@@ -1978,18 +1983,21 @@ fn poll_clicks(
 }
 
 /// Whether the topmost window under global point `at` (in `windows`, front to back, looking
-/// through `passthrough` ones) is the host's own: this process's, or a helper's other than the
-/// app being captured (`source`). Clicks and scrolls there aren't part of what is being shown.
+/// through `passthrough` ones) is the host's own: this process's chrome
+/// ([`is_own_chrome`](crate::windows::is_own_chrome), with the host's `excluded` windows), or a
+/// helper's other than the app being captured (`source`). Clicks and scrolls there aren't part
+/// of what is being shown; on the host's normal windows (Hex's Settings) they are.
 pub fn on_own_window(
     windows: &[crate::windows::RawWindow],
     (x, y): (f64, f64),
     passthrough: &[u32],
+    excluded: &[u32],
     source: i32,
     is_helper: impl Fn(i32) -> bool,
 ) -> bool {
     let own = std::process::id() as i32;
-    crate::windows::owned_window_at(windows, x, y, passthrough, |pid| {
-        pid == own || (pid != source && is_helper(pid))
+    crate::windows::owned_window_at(windows, x, y, passthrough, |w| {
+        crate::windows::is_own_chrome(w, own, excluded) || (w.pid != source && is_helper(w.pid))
     })
 }
 
@@ -2622,6 +2630,7 @@ impl Engine {
                         target.frame,
                         started_at,
                         Arc::clone(&telemetry.window_log_request),
+                        Arc::clone(&telemetry.excluded_window_ids),
                     )
                 });
                 (
@@ -3156,7 +3165,15 @@ mod tests {
         let own = std::process::id() as i32;
         let (settings, mirror, app) = (own + 1, own + 2, own + 3);
         let windows = [
-            window(1, own, [0.0, 0.0, 1728.0, 1117.0]), // the ink overlay, click-through
+            crate::windows::RawWindow {
+                layer: 25,
+                ..window(1, own, [0.0, 0.0, 1728.0, 1117.0]) // the ink overlay, click-through
+            },
+            crate::windows::RawWindow {
+                layer: 27,
+                ..window(5, own, [700.0, 1000.0, 320.0, 44.0]) // the host's capsule
+            },
+            window(6, own, [1300.0, 900.0, 400.0, 200.0]), // the host's own Settings window
             window(2, settings, [100.0, 100.0, 600.0, 400.0]),
             window(3, mirror, [1300.0, 100.0, 300.0, 650.0]),
             window(4, app, [0.0, 0.0, 1728.0, 1117.0]),
@@ -3168,6 +3185,11 @@ mod tests {
         assert!(at(300.0, 300.0), "Settings");
         assert!(!at(1400.0, 400.0), "the iPhone mirror");
         assert!(!at(1000.0, 900.0), "the app under the ink overlay");
+        assert!(at(800.0, 1020.0), "the host's capsule");
+        assert!(
+            !at(1500.0, 1000.0),
+            "the host's Settings, which can be what's shown"
+        );
         telemetry.set_capture_source_pid(0);
         assert!(at(1400.0, 400.0), "a helper that isn't the source");
     }

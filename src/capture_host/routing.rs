@@ -1756,6 +1756,26 @@ mod tests {
             }
         }
 
+        /// With smart routing, a capture of an app (Hex's own Settings among them) suggests the
+        /// open session whose checkout is named like the app, and sends nothing until it's
+        /// picked, however confident sends may be. The port ladder doesn't read the app.
+        #[test]
+        fn the_captured_apps_checkout_is_a_guess() {
+            for auto_send in [policy::AutoSend::Rules, policy::AutoSend::Confident] {
+                let router = router_with(|c| {
+                    c.smart_routing = true;
+                    c.auto_send = auto_send;
+                });
+                let (answer, sent) = route(router, "com.example.board", senses(no_tab));
+                assert!(
+                    matches!(answer, RouteAnswer::Guess { ref suggested, .. }
+                        if suggested.first().is_some_and(|d| d.session == "ses_board")),
+                    "{auto_send:?}: {answer:?}"
+                );
+                assert_eq!(sent, None, "nothing is sent until it's picked");
+            }
+        }
+
         #[test]
         fn a_look_past_its_deadline_is_routed_without() {
             let (_looking, seen) = mpsc::sync_channel(1);
