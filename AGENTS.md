@@ -1054,23 +1054,26 @@ Every platform is built, signed, and published by one run of
 Run it with `workflow_dispatch` (`ref`, `channel`: `check` builds and
 verifies without publishing, `dev` publishes the dev channel, `stable` the
 public release), or push an `app-v<VERSION>` tag, which must match the crate
-version. It builds Linux x86_64 in an Arch container (`scripts/build-linux.sh`)
-and Windows x64 and ARM64 on native runners (`scripts/build-windows.sh`)
-through the reusable `.github/workflows/build-desktop.yml`, and macOS through
-`build-macos.yml`. `.github/workflows/test-builds.yml` calls the same desktop
+version. Like OpenCode's release, build jobs (Linux x86_64 in an Arch
+container, Windows x64 and ARM64 through `.github/workflows/build-desktop.yml`,
+macOS as an ad-hoc signed `HEX_RELEASE_UNSIGNED=1` app, installers through
+`windows-installers.yml`, AUR and Homebrew staging) run repository code with
+no environment, secret, or id-token; sign and publish jobs run in `release`,
+check out only `.github/release/`, and run only those scripts and SHA-pinned
+actions on artifacts treated as data (macOS Developer ID signing,
+notarization, and stapling; Azure Authenticode; the release service through
+OIDC; the AUR and Homebrew pushes). Every artifact carries a `SHA256SUMS`
+whose digest its job reports and every consumer checks. Keep that boundary:
+never add a step that builds, installs dependencies, or runs repository code
+to a job that holds a secret or an OIDC token, and pin every action by SHA.
+`.github/` changes need Dax (CODEOWNERS and the "release boundary" ruleset).
+`.github/workflows/test-builds.yml` calls the same desktop
 workflow on every push to `dev` with `test-build`, plus an ad-hoc signed
 `Hex Test.app` (`HEX_TEST_BUILD=1 scripts/build-app.sh`: bundle ID
 `anomaly.hex.test`, its own `hex-test` data folder and `~/.config/hex-test`;
 it must never read the real `hex` data), as unsigned 14-day artifacts for
 teammates (`docs/test-builds.md`). `HEX_TEST_BUILD=1` builds never update
-themselves. The `collect` job checks the files, the absence of Visual C++
-runtime imports, and (stable) Authenticode signatures; `publish` uploads each
-target and then the release with `scripts/release-service.sh`, the only job
-holding `id-token: write` for the service, with no other secrets and actions
-pinned by SHA. The GitHub release mirror, the AUR package (built from the
-published Linux file), the Homebrew cask (pushed to `anomalyco/homebrew-tap`
-with its own deploy key), and the AUR/brew/nix distribution records follow.
-Every push to `dev` (except docs/site-only changes) publishes a dev-channel
+themselves. Every push to `dev` (except docs/site-only changes) publishes a dev-channel
 build (the service lets a run from `dev` publish only the `dev` channel, and
 only signed platforms are published). Stable runs only from `production` or
 an `app-v*` tag. Like OpenCode, every run uses the one `release` environment,
@@ -1093,13 +1096,12 @@ its `AppId` forever: the updater rewrites that Apps & Features entry's
 version. Release and the Windows installer workflow install, reinstall,
 install over another version with, and uninstall
 it silently on x64 and ARM64 runners (`scripts/test-windows-installer.ps1`).
-With `sign-windows` (Release), Build desktop's `windows-package` job, the only
-one in the `release` environment, Authenticode-signs both `hex.exe` through
-Azure Artifact Signing (GitHub OIDC, SHA-256, RFC 3161 timestamp) before
-building the installers, then signs the installers
-(`scripts/windows-authenticode.ps1` checks them). Compile jobs and test builds
-never hold signing credentials, and signing is skipped with a warning until
-the Azure values exist in `release`. See `docs/windows-signing.md`.
+Release's `sign-windows` job Authenticode-signs both `hex.exe` through Azure
+Artifact Signing (GitHub OIDC, SHA-256, RFC 3161 timestamp), the installers
+are built around the signed bytes, and `sign-windows-installers` signs them
+(`.github/release/verify-authenticode.ps1` checks both). Compile jobs and test
+builds never hold signing credentials; until the Azure values exist in
+`release`, dev and check runs have no Windows targets. See `docs/windows-signing.md`.
 
 Run `scripts/build-linux.sh` on x86_64 Linux and `scripts/build-windows.sh`
 from Git Bash once per architecture with `HEX_WINDOWS_ARCH=x86_64` (the

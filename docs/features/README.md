@@ -98,7 +98,7 @@ observed. The Linux library diagnosis has no automated check. The site's
 platform states were captured once in headless Chromium with `?platform=`.
 
 Sources: [website](../../site/src/Download.tsx), [installer](../../packaging/windows/hex.iss),
-[release publisher](../../scripts/release-service.sh),
+[release publisher](../../.github/release/release-service.sh),
 [mirror publisher](../../scripts/publish-app-mirror.sh),
 [macOS release publisher](../../scripts/release-app.sh),
 [Linux installer](../../scripts/install-linux-release.sh), and

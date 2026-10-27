@@ -7,6 +7,20 @@
 . "$(dirname "$0")/lib.sh"
 
 root=$(posix "$1")
+# download-artifact unpacks a lone matching artifact straight into <dir>; put
+# it back under its name, found by its manifest's reported digest.
+if [ -f "$root/SHA256SUMS" ]; then
+  lone=$(sha256 "$root/SHA256SUMS" | cut -c1-64)
+  name=""
+  for pair in ${HEX_DIGESTS:-}; do
+    if [ "${pair#*=}" = "$lone" ]; then name=${pair%%=*}; fi
+  done
+  [ -n "$name" ] || die "The downloaded artifact's SHA256SUMS has no reported digest"
+  staging=$(mktemp -d)
+  find "$root" -mindepth 1 -maxdepth 1 -exec mv {} "$staging/" \;
+  mv "$staging" "$root/$name"
+fi
+shopt -s nullglob
 found=0
 for dir in "$root"/*/; do
   name=$(basename "$dir")

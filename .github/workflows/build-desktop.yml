@@ -117,9 +117,12 @@ jobs:
     outputs:
       digest: ${{ steps.upload.outputs.digest }}
     steps: &windows-steps
+      # In a subdirectory: the Vulkan SDK installs into the workspace, and a
+      # release build needs a clean tree.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.sha }}
+          path: source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
@@ -128,6 +131,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         if: inputs.test-build
         with:
+          workspaces: source -> target
           key: test-build
           cache-on-failure: true
       - name: Install the Vulkan SDK
@@ -163,7 +167,7 @@ jobs:
           # a second source file.
           export MSYS2_ENV_CONV_EXCL=CL
           export HEX_RELEASE_DIST="$(cygpath -u "$RUNNER_TEMP")/dist"
-          scripts/build-windows.sh
+          source/scripts/build-windows.sh
       - name: Check the executable needs no Visual C++ Redistributable
         shell: pwsh
         run: |
@@ -175,7 +179,7 @@ jobs:
           $redist = $imports | Select-String -Pattern 'VCRUNTIME|MSVCP|vcomp'
           if ($redist) { throw "hex.exe imports Visual C++ runtime DLLs: $redist" }
       - id: upload
-        uses: ./.github/release/upload
+        uses: ./source/.github/release/upload
         with:
           name: ${{ inputs.artifact-prefix }}-windows-${{ env.HEX_WINDOWS_ARCH }}
           path: ${{ runner.temp }}/dist

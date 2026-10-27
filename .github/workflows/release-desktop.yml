@@ -376,7 +376,7 @@ jobs:
   # What a user's Mac and the in-app updater check, and a launch.
   verify-macos:
     needs: [plan, sign-macos]
-    if: ${{ !cancelled() && needs.sign-macos.outputs.signed == 'true' }}
+    if: ${{ !cancelled() && needs.sign-macos.result == 'success' && needs.sign-macos.outputs.signed == 'true' }}
     runs-on: macos-26
     timeout-minutes: 30
     env:

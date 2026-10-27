@@ -8,23 +8,63 @@ The service's dev stage, `https://dev.anoma.ly/release`, is only for testing
 the release service itself: Hex never publishes to it or reads from it. Builds
 are tested before stable on the production service's `dev` channel.
 
+Like OpenCode's release, building is split from everything that holds a
+secret. `.github/workflows/release-desktop.yml` and `.github/release/` are the
+security boundary:
+
+- **Build jobs** run repository code (cargo, build.rs, bun, makepkg, brew)
+  with no environment, no secret, and no id-token, and make unsigned files.
+- **Sign and publish jobs** run in the `release` environment, check out only
+  `.github/release/` (sparse checkout), and run only those scripts and
+  SHA-pinned actions, on artifacts they treat as data. They never build,
+  install dependencies, or run repository code or the artifacts.
+- **Artifacts** each carry a `SHA256SUMS`; the job that made one reports that
+  manifest's digest as a job output, and every job that downloads it checks
+  the digest and every file (`.github/release/verify-artifacts.sh`), so
+  nothing swapped in between jobs is signed or published.
+
 ```ts
 Release (workflow_dispatch: ref, channel; push to dev: dev channel; push tag app-v<version>: stable)
-├─ resolve        version from Cargo.toml, channel, service origin, tag
-├─ build          build-desktop.yml: Linux x86_64 (Arch container), Windows x64 + ARM64,
-│                 Authenticode via Azure Artifact Signing (docs/windows-signing.md)
-├─ macos          build-macos.yml: Developer ID, notarized DMG and ZIP (docs/plans/macos-signing.md)
-├─ collect        one release-files artifact; dev and stable require macOS, stable Authenticode
-├─ publish        curl + GitHub OIDC: upload every target, then the release (scripts/release-service.sh);
-│                 records the Nix flake
-├─ github         mirrors the files to the GitHub release (scripts/publish-github-release.sh); not dev
-├─ aur            builds and installs hex-bin from the published file; stable pushes it; not dev
-├─ record-aur     records that the AUR serves the version
-├─ homebrew       renders Casks/hex.rb from the published DMG, brew style + audit; stable pushes it; not dev
-│                 to anomalyco/homebrew-tap (scripts/release-homebrew.sh)
-├─ record-brew    records that the cask serves the version
-└─ site           stable: deploys the production site, whose links read the new manifest
+├─ plan                     .github/release/plan.sh: version, channel, tag, notes
+├─ build                    build-desktop.yml: Linux x86_64 (Arch), Windows x64 + ARM64, unsigned   [build]
+├─ build-macos              Hex.app as anomaly.hex, ad-hoc signed (HEX_RELEASE_UNSIGNED)             [build]
+├─ sign-macos               Developer ID inside-out, notarize + staple, ZIP + DMG (sign-macos.sh)     [release]
+├─ verify-macos             validate-app.sh, Gatekeeper, updater requirement, launch                 [build]
+├─ sign-windows             Azure Artifact Signing of both hex.exe, Authenticode check                [release]
+├─ installers               windows-installers.yml: Setup.exe around them, tested on x64 + ARM64      [build]
+├─ sign-windows-installers  Azure Artifact Signing of both Setup.exe                                  [release]
+├─ publish                  OIDC: every signed target, then the release (release-service.sh); Nix     [release]
+├─ github                   stable: tag + GitHub release mirror (publish-github-release.sh)          [contents: write]
+├─ aur-stage → aur          stable: makepkg + install from the published file → push-aur.sh           [build → release]
+├─ homebrew-stage → homebrew stable: render + brew style/audit → push-homebrew.sh                     [build → release]
+└─ record-aur, record-brew  OIDC: the package manager serves the version                              [release]
 ```
+
+Without a platform's signing values, dev and check runs go on without that
+platform (the summary says so); stable fails. The site is no longer deployed
+by Release: after a stable release, run **Site** with `mode: production` from
+`production`.
+
+### Signing values (`release` environment)
+
+- macOS: secret `APPLE_SIGNING_CERTIFICATE` (base64 `.p12` with the Developer
+  ID Application identity for team `5NZ4Q7NXJ4`; optional secret
+  `APPLE_SIGNING_CERTIFICATE_PASSWORD` if the `.p12` has one), secret
+  `APPLE_NOTARY_KEY` (the App Store Connect API `.p8`), and variables
+  `APPLE_NOTARY_KEY_ID` and `APPLE_NOTARY_ISSUER_ID`. `macos-credentials.sh`
+  imports them into a throwaway keychain and prints nothing secret.
+- Windows: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
+  `AZURE_TRUSTED_SIGNING_ENDPOINT`, `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`,
+  `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE`, with a federated credential for
+  `repo:anomalyco/hex:environment:release` (docs/windows-signing.md).
+
+### Who can change the boundary
+
+`.github/CODEOWNERS` names @thdxr for `/.github/`. GitHub has no push rulesets
+(file-path restrictions) for public repositories, so the lock is the branch
+ruleset "release boundary (.github needs Dax)" on `dev` and `production`:
+pull requests only, with code-owner review, and Dax as the one bypass actor.
+Repository admins can still change rulesets.
 
 ## The release service
 
@@ -42,12 +82,9 @@ release  refs/heads/dev                            channel  dev
 Like OpenCode, every run uses one environment, `release`, with no required
 reviewer (every push to `dev` publishes); its deployment policy admits `dev`,
 `production`, and `app-v*` tags. The registry ties channels to refs, so a
-build of `dev` can never publish to `stable`. No key or secret publishes. Only the
-`publish`, `record-aur`, and `record-brew` jobs get `id-token: write`, run in
-that environment, receive no other secrets, and use actions pinned by SHA.
-Signing values live only in `release` (the Apple secrets, and the Azure
-values with a federated credential for
-`repo:anomalyco/hex:environment:release`).
+build of `dev` can never publish to `stable`. No key or secret publishes:
+only the `publish`, `record-aur`, and `record-brew` jobs present an OIDC
+token, and the Windows signing jobs one for Azure.
 
 `publish` uploads each file under its own name with its SHA-256 (files over
 95 MiB in 90 MiB parts), then posts the release naming each target by file
@@ -65,10 +102,10 @@ clients check HTTPS, each file's size and SHA-256, and the OS code signature
 app from the release's `macos-arm64-dmg` file URL and SHA-256, `auto_updates
 true` (Hex updates any writable `Hex.app` itself), a livecheck on the stable
 manifest, and zap paths for the new identity and the shared `hex` data folder.
-The `homebrew` job renders it on a macOS runner, runs `brew style` and `brew
-audit --cask --strict --online` in a local copy of the tap, and pushes it with
-the tap deploy key under its own SSH alias; only that step sees the key. It
-runs only for stable releases.
+The `homebrew-stage` job renders it on a macOS runner and runs `brew style`
+and `brew audit --cask --strict --online` in a local copy of the tap, without
+secrets; the `homebrew` job pushes that verified file with the tap deploy key
+(`.github/release/push-homebrew.sh`). Stable releases only.
 
 ## Channels
 
@@ -272,7 +309,7 @@ it. No reviewer is required.
   once the service has a release): the user-local version layout plus the
   `install.json` receipt; it updates itself from the service's manifest and
   the window offers "Update" (restart into the staged version).
-- **AUR** `hex-bin` (`packaging/aur`, `scripts/release-aur.sh`):
+- **AUR** `hex-bin` (`packaging/aur`, staged by `scripts/release-aur.sh`, pushed by `.github/release/push-aur.sh`):
   `/usr/bin/hex`, the desktop entry, and the systemd user unit
   `/usr/lib/systemd/user/hex.service`, from the release service's
   `linux-x64` file. Not a prebuilt of the official `extra/hex` (a hex dump tool
