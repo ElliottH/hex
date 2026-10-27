@@ -34,6 +34,11 @@ const MAX_OPENCODE_OUTPUT_BYTES: u64 = 16 * 1024 * 1024;
 const SERVICE_INFO_ENDPOINTS: [&str; 3] = ["/api/info", "/api/status", "/api/health"];
 /// Newest one-shot generation route first; older OpenCode V2 builds only serve the later name.
 const GENERATE_ENDPOINTS: [&str; 2] = ["/api/experimental/generate", "/api/generate"];
+/// Binary names OpenCode 2 ships under, preferred first. Current releases
+/// install `opencode` (Homebrew's `opencode-v2` installs nothing else) and keep
+/// `opencode2` only as a compatibility shim, so any `opencode2` beats every
+/// `opencode`, which may still be OpenCode 1.
+const OPENCODE_BINARY_NAMES: [&str; 2] = ["opencode2", "opencode"];
 
 pub use crate::app_settings::DictationPostProcessing as PostProcessingSettings;
 
@@ -1137,6 +1142,21 @@ fn discover_opencode_service_with(
         }
         output = run(&["api", "get", endpoint])?;
     }
+    // OpenCode 1 also installs `opencode` but has no `api` command; name it
+    // rather than reporting a bare discovery failure.
+    if !output.status.success()
+        && !endpoint_is_missing(&output)
+        && executable.file_name() == Some(OsStr::new("opencode"))
+        && let Some(version) = run(&["--version"])
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| opencode_1_version(&output.stdout))
+    {
+        return Err(eyre!(
+            "{} is OpenCode {version}; Hex needs OpenCode 2 from https://v2.opencode.ai/",
+            executable.display()
+        ));
+    }
     let info: ServiceInfo = serde_json::from_str(&decode(output)?)
         .map_err(|_| eyre!("OpenCode returned an invalid service info response"))?;
     // A failed `debug paths` is not final: the default state directory remains.
@@ -1161,6 +1181,18 @@ fn discover_opencode_service_with(
         }
     }
     Err(last_error)
+}
+
+/// The version `--version` printed when it is an OpenCode 1 release, which
+/// prints a bare `1.x.y`.
+#[cfg(not(target_os = "windows"))]
+fn opencode_1_version(stdout: &[u8]) -> Option<String> {
+    let version = std::str::from_utf8(stdout)
+        .ok()?
+        .split_whitespace()
+        .last()?;
+    let version = version.strip_prefix('v').unwrap_or(version);
+    (version.split('.').next() == Some("1")).then(|| version.to_owned())
 }
 
 /// The CLI reports a missing route as a final `HTTP 404 Not Found` stderr
@@ -1516,36 +1548,42 @@ fn find_opencode_executable(
     if let Some(configured) = configured {
         return Some(absolute_path(configured, current_directory));
     }
-    let path_candidates = path
+    let path_directories = path
         .into_iter()
         .flat_map(std::env::split_paths)
-        .map(|directory| absolute_path(directory.join("opencode2"), current_directory));
-    let home_candidates = home.into_iter().flat_map(|home| {
+        .map(|directory| absolute_path(directory, current_directory));
+    let home_directories = home.into_iter().flat_map(|home| {
         [
-            home.join(".opencode/bin/opencode2"),
-            home.join(".vite-plus/bin/opencode2"),
-            home.join(".bun/bin/opencode2"),
-            home.join("Library/pnpm/opencode2"),
-            home.join("Library/pnpm/bin/opencode2"),
-            home.join(".yarn/bin/opencode2"),
-            home.join(".config/yarn/global/node_modules/.bin/opencode2"),
-            home.join(".npm-global/bin/opencode2"),
-            home.join(".local/bin/opencode2"),
-            home.join("bin/opencode2"),
-            home.join(".volta/bin/opencode2"),
-            home.join(".asdf/shims/opencode2"),
-            home.join(".local/share/mise/shims/opencode2"),
-            home.join(".nodenv/shims/opencode2"),
+            home.join(".opencode/bin"),
+            home.join(".vite-plus/bin"),
+            home.join(".bun/bin"),
+            home.join("Library/pnpm"),
+            home.join("Library/pnpm/bin"),
+            home.join(".yarn/bin"),
+            home.join(".config/yarn/global/node_modules/.bin"),
+            home.join(".npm-global/bin"),
+            home.join(".local/bin"),
+            home.join("bin"),
+            home.join(".volta/bin"),
+            home.join(".asdf/shims"),
+            home.join(".local/share/mise/shims"),
+            home.join(".nodenv/shims"),
         ]
     });
-    path_candidates
-        .chain(home_candidates)
-        .chain(version_manager_candidates(home))
+    let directories: Vec<PathBuf> = path_directories
+        .chain(home_directories)
+        .chain(version_manager_directories(home))
         .chain([
-            PathBuf::from("/opt/homebrew/bin/opencode2"),
-            PathBuf::from("/usr/local/bin/opencode2"),
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
         ])
-        .find(|path| is_executable(path))
+        .collect();
+    OPENCODE_BINARY_NAMES.into_iter().find_map(|name| {
+        directories
+            .iter()
+            .map(|directory| directory.join(name))
+            .find(|path| is_executable(path))
+    })
 }
 
 fn absolute_path(path: PathBuf, current_directory: Option<&Path>) -> PathBuf {
@@ -1559,24 +1597,21 @@ fn absolute_path(path: PathBuf, current_directory: Option<&Path>) -> PathBuf {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn version_manager_candidates(home: Option<&Path>) -> Vec<PathBuf> {
+fn version_manager_directories(home: Option<&Path>) -> Vec<PathBuf> {
     let Some(home) = home else {
         return Vec::new();
     };
     let roots = [
-        (home.join(".nvm/versions/node"), "bin/opencode2"),
+        (home.join(".nvm/versions/node"), "bin"),
         (
             home.join("Library/Application Support/fnm/node-versions"),
-            "installation/bin/opencode2",
+            "installation/bin",
         ),
         (
             home.join(".local/share/fnm/node-versions"),
-            "installation/bin/opencode2",
+            "installation/bin",
         ),
-        (
-            home.join(".fnm/node-versions"),
-            "installation/bin/opencode2",
-        ),
+        (home.join(".fnm/node-versions"), "installation/bin"),
     ];
     roots
         .into_iter()
@@ -1628,13 +1663,11 @@ mod cli {
 
     use super::{
         CommandOutput, DefaultModelResponse, GENERATE_ENDPOINTS, Model, ModelCatalog,
-        ModelsResponse, Response, absolute_path, build_model_catalog, decode_api_response,
-        encode_uri_component, endpoint_is_missing, generate_with_candidates, read_output,
+        ModelsResponse, OPENCODE_BINARY_NAMES, Response, absolute_path, build_model_catalog,
+        decode_api_response, encode_uri_component, endpoint_is_missing, generate_with_candidates,
+        read_output,
     };
 
-    /// Binary names the CLI ships under, newest first; any `opencode2` beats
-    /// every `opencode`.
-    const OPENCODE_BINARY_NAMES: [&str; 2] = ["opencode2", "opencode"];
     const CATALOG_DEADLINE: Duration = Duration::from_secs(10);
 
     static CACHED_RANKED_CANDIDATES: std::sync::Mutex<Option<Vec<Model>>> =
@@ -2318,6 +2351,68 @@ mod tests {
         fs::remove_file(&official).unwrap();
         fs::create_dir(&official).unwrap();
         assert_eq!(find(None, None), Some(fallback));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn plain_opencode_is_found_when_no_opencode2_exists() {
+        let root = std::env::temp_dir().join(format!(
+            "hex-opencode-names-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        let path = root.join("path");
+        let plain = path.join("opencode");
+        let shim = root.join(".bun/bin/opencode2");
+        fake_executable(&plain);
+        let find = || find_opencode_executable(None, Some(path.as_os_str()), Some(&root), None);
+        assert_eq!(find(), Some(plain.clone()));
+        // Any `opencode2`, even a later standard location, beats an `opencode`
+        // on PATH, which may still be OpenCode 1.
+        fake_executable(&shim);
+        assert_eq!(find(), Some(shim));
+        fs::remove_dir_all(&root).unwrap();
+
+        // Outside the GUI PATH, a standard location holding only `opencode`
+        // (as Homebrew's `opencode-v2` leaves /opt/homebrew/bin) is found too.
+        let installed = root.join(".opencode/bin/opencode");
+        fake_executable(&installed);
+        let found =
+            find_opencode_executable(None, Some(OsStr::new("/usr/bin:/bin")), Some(&root), None);
+        assert_eq!(found, Some(installed));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn service_discovery_names_an_opencode_1_install() {
+        let root = std::env::temp_dir().join(format!(
+            "hex-service-opencode-1-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let executable = root.join("opencode");
+        write_script(
+            &executable,
+            "#!/bin/sh\ncase \"$*\" in\n'--version') echo '1.19.4' ;;\n*) echo 'Commands:' >&2; exit 1 ;;\nesac\n",
+        );
+        let error = discover_opencode_service_with(
+            &executable,
+            &root,
+            None,
+            Duration::from_secs(10),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("is OpenCode 1.19.4"), "{error}");
+        assert!(error.contains("https://v2.opencode.ai/"), "{error}");
+
+        assert_eq!(opencode_1_version(b"opencode v2.2.0\n"), None);
+        assert_eq!(opencode_1_version(b"0.0.0-dev-18334\n"), None);
+        assert_eq!(opencode_1_version(b"v1.2.3\n"), Some("1.2.3".into()));
         fs::remove_dir_all(root).unwrap();
     }
 

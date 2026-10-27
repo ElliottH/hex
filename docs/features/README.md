@@ -505,6 +505,13 @@ absent from the inherited PATH. `standard_install_location_finds_opencode_outsid
 in [dictation_processor.rs](../../src/dictation_processor.rs) covers this with
 a temporary executable; it does not run an installed Vite Plus shim or provider.
 
+Any `opencode2` wins; otherwise the same locations are searched for
+`opencode`, the name current OpenCode 2 releases (including Homebrew's
+`opencode-v2`) install. An `opencode` that is OpenCode 1 fails with an error
+naming its path and version. `plain_opencode_is_found_when_no_opencode2_exists`
+and `service_discovery_names_an_opencode_1_install` cover the name order and
+that error with temporary executables, not a Homebrew or OpenCode 1 install.
+
 `ordinary_processing_snapshots_modes_before_stage_and_keeps_transformations` in
 [parakeet.rs](../../src/parakeet.rs) checks processing-time profile acquisition,
 conditional Processing-stage emission, and retained transformation selection.

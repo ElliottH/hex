@@ -78,11 +78,12 @@ substitute for source inspection or a second roadmap.
   for macOS, Windows, and Linux: context-selected corrections, deadline-bounded
   OpenCode rewrite profiles with corrected-transcript fallback, the ranked
   model catalog, Voice Action generation, and the transformation stage. Every
-  OS discovers the `opencode2` beta executable and links missing installs to
-  `https://v2.opencode.ai/`. On macOS and Linux, `opencode2 api get` discovers
-  or starts the managed service, and generation uses the matching owner-only
-  service registration and authenticated loopback HTTP through the system curl;
-  request bodies and credentials use stdin, never argv or new temporary files.
+  OS discovers the OpenCode 2 executable (any `opencode2` first, then
+  `opencode`) and links missing installs to `https://v2.opencode.ai/`. On
+  macOS and Linux, `opencode2 api get` discovers or starts the managed service,
+  and generation uses the matching owner-only service registration and
+  authenticated loopback HTTP through the system curl; request bodies and
+  credentials use stdin, never argv or new temporary files.
   Windows sends the same requests through the `opencode2 api` CLI inside a job
   object.
 - `parakeet`: the strict-Metal `transcribe.cpp` adapter plus the dictation

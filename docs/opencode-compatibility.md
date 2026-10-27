@@ -23,10 +23,15 @@ new provider-backed validation must record its own CLI and server versions.
 
 ## Integration Contract
 
-HEX discovers a separately installed `opencode2`, optionally overridden by
-`VOICE_CONTROL_OPENCODE_CLI`. It does not bundle or pin the runtime CLI, own the
-managed service, or restart or update it. `opencode2 api` discovers or starts
-the service through OpenCode's own lifecycle.
+HEX discovers a separately installed OpenCode 2 CLI, optionally overridden by
+`VOICE_CONTROL_OPENCODE_CLI`. It looks for `opencode2` in PATH and the standard
+install locations, then for `opencode`: current releases install `opencode`
+(Homebrew's `opencode-v2` formula installs nothing else) and keep `opencode2`
+as a compatibility shim. When the CLI found has no `api` command and reports
+an OpenCode 1 version, the error names that install and links OpenCode 2. It
+does not bundle or pin the runtime CLI, own the managed service, or restart or
+update it. `opencode2 api` discovers or starts the service through OpenCode's
+own lifecycle.
 
 Catalog loading and generation use `opencode2 api get /api/info` to identify
 the authenticated active server, starting it through the CLI when needed. A
