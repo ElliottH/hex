@@ -3148,7 +3148,9 @@ mod tests {
     }
 
     /// Clicks on `scrawl-helper`'s windows (the SwiftUI capsule, Settings, onboarding) are
-    /// Scrawl's own, except on the iPhone mirror, which is what's being recorded.
+    /// Scrawl's own, except on the iPhone mirror, which is what's being recorded. The host's
+    /// chrome takes clicks unless it lets them through: Hex's capsule is a 640×424 panel, named
+    /// and click-through (only its pill, which Hex checks itself, takes clicks).
     #[test]
     fn helper_windows_are_scrawl_s_except_the_capture_source() {
         let (sender, _receiver) = flume::unbounded();
@@ -3166,26 +3168,38 @@ mod tests {
         let (settings, mirror, app) = (own + 1, own + 2, own + 3);
         let windows = [
             crate::windows::RawWindow {
-                layer: 25,
+                layer: 26,
                 ..window(1, own, [0.0, 0.0, 1728.0, 1117.0]) // the ink overlay, click-through
             },
             crate::windows::RawWindow {
                 layer: 27,
-                ..window(5, own, [700.0, 1000.0, 320.0, 44.0]) // the host's capsule
+                ..window(5, own, [544.0, 0.0, 640.0, 424.0]) // the host's capsule panel
+            },
+            crate::windows::RawWindow {
+                layer: 25,
+                ..window(7, own, [700.0, 1000.0, 320.0, 44.0]) // a HUD of the host's
             },
             window(6, own, [1300.0, 900.0, 400.0, 200.0]), // the host's own Settings window
             window(2, settings, [100.0, 100.0, 600.0, 400.0]),
             window(3, mirror, [1300.0, 100.0, 300.0, 650.0]),
             window(4, app, [0.0, 0.0, 1728.0, 1117.0]),
         ];
-        telemetry.passthrough_window_ids.lock().unwrap().push(1);
+        *telemetry.excluded_window_ids.lock().unwrap() = vec![5, 1];
+        *telemetry.passthrough_window_ids.lock().unwrap() = vec![1, 5];
         telemetry.set_capture_source_pid(mirror as u32);
         let helper = |pid| pid == settings || pid == mirror;
         let at = |x, y| telemetry.scrawl_window_in(&windows, x, y, helper);
         assert!(at(300.0, 300.0), "Settings");
         assert!(!at(1400.0, 400.0), "the iPhone mirror");
         assert!(!at(1000.0, 900.0), "the app under the ink overlay");
-        assert!(at(800.0, 1020.0), "the host's capsule");
+        assert!(!at(1100.0, 300.0), "the app under the capsule's panel");
+        assert!(at(800.0, 1020.0), "the host's HUD, unnamed");
+        telemetry
+            .passthrough_window_ids
+            .lock()
+            .unwrap()
+            .retain(|id| *id != 5);
+        assert!(at(1100.0, 300.0), "a named window that takes clicks");
         assert!(
             !at(1500.0, 1000.0),
             "the host's Settings, which can be what's shown"

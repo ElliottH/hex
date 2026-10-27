@@ -344,14 +344,91 @@ impl Host for HexHost {
     }
 
     fn own_windows(&self) -> OwnWindows {
-        let own = OWN_WINDOWS
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        OwnWindows {
-            excluded: own.iter().flatten().copied().collect(),
-            passthrough: own[OwnWindow::Ink as usize].into_iter().collect(),
-        }
+        own_windows_of(
+            &OWN_WINDOWS
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        )
     }
+}
+
+/// What a capture leaves out of its recording (every window Hex named) and
+/// looks through for clicks: the ink overlay, and the capsule's panel, which
+/// lets clicks through everywhere but its pill. Clicks on the pill never
+/// reach the engine ([`CapsulePill`]).
+fn own_windows_of(own: &[Option<u32>; 3]) -> OwnWindows {
+    OwnWindows {
+        excluded: own.iter().flatten().copied().collect(),
+        passthrough: [OwnWindow::Ink, OwnWindow::Capsule]
+            .into_iter()
+            .filter_map(|role| own[role as usize])
+            .collect(),
+    }
+}
+
+/// The capsule's pill `[x, y, w, h]` in its panel's points while it shows.
+static CAPSULE_PILL: Mutex<Option<[f32; 4]>> = Mutex::new(None);
+
+/// Where the capsule's pill is in its panel while it shows, `None` when it
+/// hides: the capsule's panel is far larger than the pill and lets clicks
+/// through everywhere else.
+pub fn set_capsule_pill(pill: Option<[f32; 4]>) {
+    *CAPSULE_PILL
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = pill;
+}
+
+/// Whether a click lands on the capsule's pill, which takes it, rather than
+/// the app beneath. The panel's place comes from the window list, reread at
+/// most every 250 ms (scrolls come in bursts); it only moves between
+/// captures.
+#[derive(Default)]
+struct CapsulePill {
+    panel: Option<(Instant, u32, Option<[f64; 2]>)>,
+}
+
+impl CapsulePill {
+    fn contains(&mut self, x: f64, y: f64) -> bool {
+        let Some(pill) = *CAPSULE_PILL
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+        else {
+            return false;
+        };
+        let Some(window) = OWN_WINDOWS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())[OwnWindow::Capsule as usize]
+        else {
+            return false;
+        };
+        let origin = match self.panel {
+            Some((at, id, origin)) if id == window && at.elapsed() < Duration::from_millis(250) => {
+                origin
+            }
+            _ => {
+                let origin = panel_origin(&scrawl_capture::windows::raw_windows(), window);
+                self.panel = Some((Instant::now(), window, origin));
+                origin
+            }
+        };
+        origin.is_some_and(|origin| on_pill(origin, pill, x, y))
+    }
+}
+
+/// The top-left of `window` on screen, in global points.
+fn panel_origin(windows: &[scrawl_capture::windows::RawWindow], window: u32) -> Option<[f64; 2]> {
+    windows
+        .iter()
+        .find(|w| w.id == window)
+        .map(|w| [w.bounds[0], w.bounds[1]])
+}
+
+/// Whether global point `(x, y)` is on `pill`, given in the points of a
+/// panel whose top-left is `origin`.
+fn on_pill(origin: [f64; 2], pill: [f32; 4], x: f64, y: f64) -> bool {
+    let [px, py, pw, ph] = pill.map(f64::from);
+    let (left, top) = (origin[0] + px, origin[1] + py);
+    x >= left && x <= left + pw && y >= top && y <= top + ph
 }
 
 /// Hex's windows a capture leaves out of its recording, one per role. A
@@ -361,6 +438,8 @@ static OWN_WINDOWS: Mutex<[Option<u32>; 3]> = Mutex::new([None, None, None]);
 /// Which of Hex's windows a capture leaves out.
 #[derive(Clone, Copy, Debug)]
 pub enum OwnWindow {
+    /// A panel far larger than the pill: click-through but for the pill
+    /// ([`set_capsule_pill`]).
     Capsule,
     /// Click-through, so a click on it never counts as a click on Hex.
     Ink,
@@ -1887,6 +1966,7 @@ impl LiveInput {
     /// capture's clock; the engine then applies its ink, pin, and
     /// own-window rules (Hex's windows are this process's).
     fn forward(&self, received: Receiver<(CaptureInstant, Tapped)>) {
+        let mut pill = CapsulePill::default();
         for (at, tapped) in received {
             let mut state = self.state();
             let Some(target) = state.target.as_mut() else {
@@ -1909,6 +1989,14 @@ impl LiveInput {
             let Some(event) = target.rules.translate(t_ms, input) else {
                 continue;
             };
+            // A press or scroll on the capsule's pill is Hex's; anywhere
+            // else on its panel it's the app's beneath.
+            if let scrawl_capture::capture::InputEvent::ButtonDown { x, y, .. }
+            | scrawl_capture::capture::InputEvent::Scroll { x, y, .. } = event
+                && pill.contains(x, y)
+            {
+                continue;
+            }
             let worked = matches!(
                 event,
                 scrawl_capture::capture::InputEvent::ButtonDown { .. }
@@ -2769,6 +2857,57 @@ impl AudioTimeline for WavTimeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The capsule is one 640×424 panel above everything, but only its pill
+    /// takes clicks: a click elsewhere on the panel, or under the
+    /// full-screen ink overlay, is a click on the app beneath, while one on
+    /// the pill is Hex's and never reaches the engine.
+    #[test]
+    fn only_the_capsules_pill_and_not_its_panel_takes_clicks() {
+        use scrawl_capture::windows::RawWindow;
+        let own = std::process::id() as i32;
+        let window = |id, pid, bounds, layer| RawWindow {
+            id,
+            pid,
+            owner: String::new(),
+            title: String::new(),
+            bounds,
+            layer,
+            alpha: 1.0,
+        };
+        let (ink, capsule, app) = (11, 12, 13);
+        let windows = [
+            window(ink, own, [0.0, 0.0, 1728.0, 1117.0], 26),
+            window(capsule, own, [544.0, 0.0, 640.0, 424.0], 27),
+            window(app, own + 1, [0.0, 0.0, 1728.0, 1117.0], 0),
+        ];
+        let roles = [Some(capsule), Some(ink), None];
+        let OwnWindows {
+            excluded,
+            passthrough,
+        } = own_windows_of(&roles);
+        assert_eq!(excluded, [capsule, ink]);
+        let engine_says_hex = |x, y| {
+            scrawl_capture::capture::on_own_window(
+                &windows,
+                (x, y),
+                &passthrough,
+                &excluded,
+                0,
+                |_| false,
+            )
+        };
+        let pill = [160.0, 14.0, 320.0, 44.0];
+        let origin = panel_origin(&windows, capsule).unwrap();
+        assert_eq!(origin, [544.0, 0.0]);
+        let hex_takes = |x, y| on_pill(origin, pill, x, y) || engine_says_hex(x, y);
+
+        assert!(hex_takes(864.0, 36.0), "the pill");
+        assert!(!hex_takes(600.0, 300.0), "the panel's empty part");
+        assert!(!hex_takes(864.0, 100.0), "just under the pill");
+        assert!(!hex_takes(1500.0, 900.0), "under the ink overlay only");
+        assert_eq!(panel_origin(&windows, 99), None, "a panel not on screen");
+    }
 
     fn t(ms: u64) -> CaptureInstant {
         CaptureInstant::from_nanos(90_000_000_000 + ms * 1_000_000)

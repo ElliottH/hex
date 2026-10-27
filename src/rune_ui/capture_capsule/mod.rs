@@ -518,6 +518,7 @@ fn poll(s: &mut CapsuleState, now: f64, tx: &mut Tx) -> bool {
             }
         }
     }
+    crate::capture_host::set_capsule_pill(shown.then_some(s.surface.shell));
     // Shown, it stays put; a new capture brings it to the pointer.
     if std::mem::take(&mut s.replace)
         && let Some(overlay) = &s.overlay
