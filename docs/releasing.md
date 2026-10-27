@@ -2,9 +2,11 @@
 
 One run of the **Release** workflow (`.github/workflows/release-desktop.yml`)
 builds, signs, and publishes every platform from one commit to the Anomaly
-release service (`anomalyco/release`; production `https://anoma.ly/release`,
-dev `https://dev.anoma.ly/release`). Hex's names on the service are in
-[`plans/release-service.md`](plans/release-service.md).
+release service (`anomalyco/release`, `https://anoma.ly/release`). Hex's
+names on the service are in [`plans/release-service.md`](plans/release-service.md).
+The service's dev stage, `https://dev.anoma.ly/release`, is only for testing
+the release service itself: Hex never publishes to it or reads from it. Builds
+are tested before stable on the production service's `dev` channel.
 
 ```ts
 Release (workflow_dispatch: ref, channel; push to dev: dev channel; push tag app-v<version>: stable)
@@ -37,7 +39,7 @@ release      refs/heads/production, refs/tags/app-v*   channels stable, beta   w
 release-dev  refs/heads/dev                            channel  dev            no approval (deployment branch: dev)
 ```
 
-Stable runs use `release`; dev and staging runs use `release-dev`, so a dev
+Stable runs use `release`; dev and check runs use `release-dev`, so a dev
 build can never publish to `stable`. No key or secret publishes. Only the
 `publish`, `record-aur`, and `record-brew` jobs get `id-token: write`, run in
 that environment, receive no other secrets, and use actions pinned by SHA.
@@ -64,25 +66,15 @@ app from the release's `macos-arm64-dmg` file URL and SHA-256, `auto_updates
 true` (Hex updates any writable `Hex.app` itself), a livecheck on the stable
 manifest, and zap paths for the new identity and the shared `hex` data folder.
 The `homebrew` job renders it on a macOS runner, runs `brew style` and `brew
-audit --cask --strict --online` in a local copy of the tap, and on stable pushes
-it with the tap deploy key under its own SSH alias; only that step sees the
-key. A staging run without a macOS build checks the cask around the frozen
-2.3.1 DMG and pushes nothing.
+audit --cask --strict --online` in a local copy of the tap, and pushes it with
+the tap deploy key under its own SSH alias; only that step sees the key. It
+runs only for stable releases.
 
 ## Channels
 
-- `staging` (the default) is the dry run, in `release-dev`: every platform is built as
-  `<version>-dev.<run number>` (`scripts/set-crate-version.sh` stamps it into
-  the build, so the binaries report it) and published on the dev service's
-  `dev` channel (the service refuses publishing a channel's current version
-  again, and every build's bytes differ), with a draft prerelease GitHub release tagged `staging-<run-id>`;
-  the AUR package is built from the published file and installed in a
-  container but not pushed, and the AUR and Nix versions are recorded on the
-  dev service. Rerunning a failed run republishes nothing: the same version
-  with the same files is accepted as already published. Point a build at the
-  dev service with `HEX_RELEASE_BASE_URL=https://dev.anoma.ly/release`; the
-  dev site (`https://dev.anoma.ly/hex`) links the dev service's `stable`
-  files when it has any.
+- `check` (the dispatch default, run from `dev`) builds, signs, and verifies
+  every platform as `<next>-dev.<run number>` in `release-dev` and publishes
+  nothing anywhere: a dry run of the build and packaging.
 - `dev` publishes a build of `dev` to the production service's `dev`
   channel (`https://anoma.ly/release/hex/desktop/dev.json`), which installs
   set to the Dev update channel follow and `https://anoma.ly/hex/download/dev`
@@ -122,10 +114,9 @@ refuses force pushes and deletion.
 
 1. Bump `version` in `Cargo.toml` (and `Cargo.lock`), add
    `docs/releases/<version>.md`, push to `dev`.
-2. Run Release from `dev` with `channel: staging` and `ref: dev`; check the
-   summary, the manifest at
-   `https://dev.anoma.ly/release/hex/desktop/stable.json`, the draft release,
-   and a staged update.
+2. Let the push to `dev` publish its dev-channel build
+   (`https://anoma.ly/release/hex/desktop/dev.json`) and try it on an install
+   set to the Dev update channel.
 3. Fast-forward `production` to that commit (`git push origin
    <commit>:production`, which refuses anything but a fast-forward), then run
    Release from `production` with `channel: stable` (its default `ref`).
@@ -254,7 +245,9 @@ the release service compile `https://anoma.ly/release`.
 
 ## Secrets (`release` environment, limited to `dev`, `production`, and `app-v*`)
 
-`dev` is allowed because dev site deploys and staging releases run from it.
+`dev` is allowed because dev site deploys run from it. Dev-channel builds
+use the separate `release-dev` environment (branch `dev`, no approval), which
+holds only signing values.
 
 | Name | Use |
 | --- | --- |

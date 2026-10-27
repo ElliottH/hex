@@ -946,8 +946,9 @@ precedence while available; override everything with `--device`. The app bundle
 build requires Xcode 26 for Icon Composer compilation and a Developer ID signing
 identity. `scripts/release-app.sh prepare` builds the notarized and stapled
 DMG and ZIP the Release workflow publishes. Hex publishes every platform to
-the Anomaly release service (`anomalyco/release`; `https://anoma.ly/release`,
-dev `https://dev.anoma.ly/release`) from the Release workflow with curl and its
+the Anomaly release service (`anomalyco/release`, `https://anoma.ly/release`;
+its dev stage, `dev.anoma.ly/release`, only tests the service itself, and Hex
+never publishes to or reads from it) from the Release workflow with curl and its
 GitHub OIDC token, under app `hex`, artifact `desktop`;
 [`docs/plans/release-service.md`](docs/plans/release-service.md) pins the
 target and file names and the direct-install receipt, and
@@ -1013,9 +1014,9 @@ hooks or persist a second launch-at-login flag.
 
 Every platform is built, signed, and published by one run of
 `.github/workflows/release-desktop.yml` ("Release"; see `docs/releasing.md`).
-Run it with `workflow_dispatch` (`ref`, `channel`: `staging` publishes the
-release to the dev service with a draft GitHub release, `stable` to
-production), or push an `app-v<VERSION>` tag, which must match the crate
+Run it with `workflow_dispatch` (`ref`, `channel`: `check` builds and
+verifies without publishing, `dev` publishes the dev channel, `stable` the
+public release), or push an `app-v<VERSION>` tag, which must match the crate
 version. It builds Linux x86_64 in an Arch container (`scripts/build-linux.sh`)
 and Windows x64 and ARM64 on native runners (`scripts/build-windows.sh`)
 through the reusable `.github/workflows/build-desktop.yml`, and macOS through

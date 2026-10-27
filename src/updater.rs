@@ -455,7 +455,8 @@ fn check(shared: &Shared, method: &Method, cache: &mut transport::ManifestCache)
 }
 
 /// `HEX_RELEASE_BASE_URL` (HTTPS only) points a build at another service
-/// origin, e.g. `https://dev.anoma.ly/release`, for dry runs.
+/// origin, for local tests against a fixture service. Nothing defaults to the
+/// service's dev stage, which only tests the service itself.
 fn manifest_url(channel: &str) -> String {
     let origin = std::env::var("HEX_RELEASE_BASE_URL")
         .ok()

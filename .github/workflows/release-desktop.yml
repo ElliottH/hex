@@ -3,19 +3,19 @@ name: Release
 # Builds, signs, and publishes Hex for macOS, Windows, and Linux from one
 # exact commit to the Anomaly release service (docs/releasing.md,
 # docs/plans/release-service.md). The service authorizes this workflow file
-# by its GitHub OIDC token: repository anomalyco/hex, ref dev, production or
-# app-v*, environment release (anomalyco/release registry/hex.json).
+# by its GitHub OIDC token: repository anomalyco/hex, and the release-dev
+# environment from dev (dev channel only) or the release environment from
+# production or app-v* (anomalyco/release registry/hex.json). Hex never
+# publishes to or reads from the service's dev stage, dev.anoma.ly/release,
+# which only tests the service itself.
 #
 # production holds what was released and only moves by a fast-forward from
-# dev. Run staging from dev; run stable from production or push an app-v tag.
+# dev. Run stable from production or push an app-v tag.
 #
-# channel=staging (the default) is the dry run: every platform is built as
-# <version>-dev.<run number> and published on the dev service's dev channel,
-# https://dev.anoma.ly/release (the service refuses publishing a channel's
-# current version again), with a draft GitHub release, and the AUR package is
-# built and installed but not pushed. channel=stable (or an
-# app-v<version> tag) publishes to https://anoma.ly/release, the GitHub
-# release, the AUR, and the production site.
+# channel=check (the dispatch default) builds, signs, and verifies every
+# platform as <next>-dev.<run number> and publishes nothing. channel=stable
+# (or an app-v<version> tag) publishes to https://anoma.ly/release, the
+# GitHub release, the AUR, Homebrew, and the production site.
 #
 # channel=dev publishes a build of dev, stamped <next>-dev.<run number>, to
 # the production service's dev channel (https://anoma.ly/release), where
@@ -31,8 +31,8 @@ name: Release
 # that version has an app-v tag, so a dev build is always newer than the
 # stable release before it and switching back to Stable never downgrades.
 #
-# staging also runs in release-dev; stable runs in release, which waits for a
-# reviewer.
+# check also runs in release-dev (for its signing values); stable runs in
+# release, which waits for a reviewer.
 on:
   workflow_dispatch:
     inputs:
@@ -41,10 +41,10 @@ on:
         required: true
         default: production
       channel:
-        description: staging (dry run on dev.anoma.ly/release), dev (the public dev channel; run from dev), or stable (public)
+        description: check (build and verify, publish nothing), dev (the dev channel; run from dev), or stable (public)
         type: choice
-        options: [staging, dev, stable]
-        default: staging
+        options: [check, dev, stable]
+        default: check
   push:
     branches: [dev]
     tags: ["app-v*"]
@@ -96,8 +96,8 @@ jobs:
             echo "::error::Stable releases run from production or an app-v tag, not $REF_NAME."
             exit 1
           fi
-          if [ "$CHANNEL" = dev ] && [ "$REF_NAME" != dev ]; then
-            echo "::error::The dev channel publishes from dev, not $REF_NAME."
+          if { [ "$CHANNEL" = dev ] || [ "$CHANNEL" = check ]; } && [ "$REF_NAME" != dev ]; then
+            echo "::error::The $CHANNEL channel runs from dev, not $REF_NAME."
             exit 1
           fi
           # A dispatch builds inputs.ref, not the branch it runs from, so check
@@ -122,12 +122,7 @@ jobs:
               notes="https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag"
               release_channel=stable release_version=$version
               ;;
-            staging)
-              service=https://dev.anoma.ly/release tag="staging-$GITHUB_RUN_ID"
-              notes="https://github.com/$GITHUB_REPOSITORY/commit/$sha"
-              release_channel=dev release_version="$version-dev.$GITHUB_RUN_NUMBER"
-              ;;
-            dev)
+            dev | check)
               # Once X.Y.Z is released (tagged), dev builds are X.Y.(Z+1)-dev.N,
               # which SemVer orders above X.Y.Z.
               # ls-remote exits 2 only when the tag is absent; any other
@@ -139,7 +134,7 @@ jobs:
                 2) base=$version ;;
                 *) echo "::error::Could not look up tag app-v$version (git ls-remote exited $status)."; exit 1 ;;
               esac
-              service=https://anoma.ly/release tag="dev-$GITHUB_RUN_ID"
+              service=https://anoma.ly/release tag="
               notes="https://github.com/$GITHUB_REPOSITORY/commit/$sha"
               release_channel=dev release_version="$base-dev.$GITHUB_RUN_NUMBER"
               ;;
@@ -188,8 +183,8 @@ jobs:
       optional: ${{ needs.resolve.outputs.channel != 'stable' }}
 
   # Collects every platform's files into one artifact and checks them. Stable
-  # needs every platform signed; dev publishes only signed platforms; staging
-  # rehearses with whatever was built.
+  # needs every platform signed; dev publishes only signed platforms; check
+  # reports what it built.
   collect:
     needs: [resolve, build, macos]
     if: ${{ !cancelled() && needs.build.result == 'success' && needs.macos.result == 'success' }}
@@ -256,11 +251,11 @@ jobs:
           if-no-files-found: error
 
   # The only job that can publish: its OIDC token carries the environment the
-  # service requires (release for stable, release-dev for dev and staging). No
+  # service requires (release for stable, release-dev for dev). No
   # other credentials reach it.
   publish:
     needs: [resolve, collect]
-    if: ${{ !cancelled() && needs.collect.result == 'success' }}
+    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.resolve.outputs.channel != 'check' }}
     runs-on: ubuntu-24.04
     environment: ${{ needs.resolve.outputs.environment }}
     permissions:
@@ -289,22 +284,20 @@ jobs:
           { echo '### Manifest'; echo '```json'; cat dist/manifest.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Record the Nix flake
         # The flake builds this commit from source, so it serves the version now.
-        if: needs.resolve.outputs.channel != 'dev'
+        if: needs.resolve.outputs.channel == 'stable'
         run: scripts/release-service.sh distribution nix "$HEX_VERSION"
 
   github:
     name: GitHub release
     needs: [resolve, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel != 'dev' }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel == 'stable' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
       HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       HEX_RELEASE_COMMIT: ${{ needs.resolve.outputs.sha }}
-      HEX_RELEASE_CHANNEL: ${{ needs.resolve.outputs.channel }}
       HEX_RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
-      HEX_RELEASE_NOTES_URL: ${{ needs.resolve.outputs.service }}/hex/desktop/${{ needs.resolve.outputs.release-channel }}.json
       HEX_RELEASE_SOURCE: ${{ github.workspace }}/source
     steps:
       - uses: actions/checkout@v7
@@ -327,7 +320,7 @@ jobs:
   aur:
     name: AUR
     needs: [resolve, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel != 'dev' }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel == 'stable' }}
     runs-on: ubuntu-24.04
     container: archlinux:base-devel
     environment: ${{ needs.resolve.outputs.environment }}
@@ -358,13 +351,11 @@ jobs:
           curl -fsS "$LINUX_URL" | cmp - "dist/hex-$HEX_VERSION-linux-x64"
           { echo '### AUR PKGBUILD'; echo '```'; cat aur/PKGBUILD; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Push to the AUR
-        if: needs.resolve.outputs.channel == 'stable'
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: tools/scripts/release-aur.sh publish aur
 
-  # Tells AUR installs about the version only once the AUR serves it. A
-  # staging run records it on the dev service to rehearse the call.
+  # Tells AUR installs about the version only once the AUR serves it.
   record-aur:
     needs: [resolve, aur]
     if: ${{ !cancelled() && needs.aur.result == 'success' }}
@@ -383,13 +374,12 @@ jobs:
           persist-credentials: false
       - run: scripts/release-service.sh distribution aur "$HEX_VERSION"
 
-  # Renders the cask from the published DMG and checks it with brew; stable
-  # pushes it to anomalyco/homebrew-tap with the tap's deploy key. A staging
-  # run without a macOS build checks the cask around the frozen 2.3.1 DMG.
+  # Renders the cask from the published DMG, checks it with brew, and pushes
+  # it to anomalyco/homebrew-tap with the tap's deploy key.
   homebrew:
     name: Homebrew
     needs: [resolve, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel != 'dev' }}
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.resolve.outputs.channel == 'stable' }}
     runs-on: macos-15
     environment: ${{ needs.resolve.outputs.environment }}
     permissions:
@@ -398,7 +388,6 @@ jobs:
       RELEASE: ${{ needs.resolve.outputs.service }}
       HEX_VERSION: ${{ needs.resolve.outputs.release-version }}
       RELEASE_CHANNEL: ${{ needs.resolve.outputs.release-channel }}
-      CHANNEL: ${{ needs.resolve.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -408,18 +397,12 @@ jobs:
           curl -fsS "$RELEASE/hex/desktop/$RELEASE_CHANNEL.json" -o manifest.json
           version=$(jq -er .release.version manifest.json)
           test "$version" = "$HEX_VERSION"
-          if dmg=$(jq -ec '.release.targets["macos-arm64-dmg"]' manifest.json); then
-            url="${RELEASE%/release}$(printf '%s' "$dmg" | jq -r .url)"
-            sha256=$(printf '%s' "$dmg" | jq -r .sha256)
-          elif [ "$CHANNEL" = staging ]; then
-            echo "::warning::No macOS build in this release; checking the cask around the frozen 2.3.1 DMG."
-            version=2.3.1
-            url=https://anoma.ly/hex/files/releases/HEX-2.3.1-arm64.dmg
-            sha256=56de94665da8fefbe0fe6310368fd7b62497dff593b6818475f9c5fa751def7a
-          else
+          dmg=$(jq -ec '.release.targets["macos-arm64-dmg"]' manifest.json) || {
             echo "::error::Hex $version has no macos-arm64-dmg build."
             exit 1
-          fi
+          }
+          url="${RELEASE%/release}$(printf '%s' "$dmg" | jq -r .url)"
+          sha256=$(printf '%s' "$dmg" | jq -r .sha256)
           scripts/release-homebrew.sh render "$version" "$url" "$sha256" hex.rb
           { echo '### Casks/hex.rb'; echo '```ruby'; cat hex.rb; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Check it with brew
@@ -430,19 +413,13 @@ jobs:
           brew tap anomalyco/tap
           cp hex.rb "$(brew --repo anomalyco/tap)/Casks/hex.rb"
           brew style --cask anomalyco/tap/hex
-          # Before a stable release exists, the livecheck on the stable
-          # manifest has nothing to compare against.
-          except=
-          [ "$CHANNEL" = stable ] || except=--except=livecheck_version
-          brew audit --cask --strict --online $except anomalyco/tap/hex
+          brew audit --cask --strict --online anomalyco/tap/hex
       - name: Push to anomalyco/homebrew-tap
-        if: needs.resolve.outputs.channel == 'stable'
         env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: scripts/release-homebrew.sh publish hex.rb "$HEX_VERSION"
 
-  # Tells Homebrew installs about the version only once the tap serves it. A
-  # staging run records it on the dev service to rehearse the call.
+  # Tells Homebrew installs about the version only once the tap serves it.
   record-brew:
     needs: [resolve, homebrew]
     if: ${{ !cancelled() && needs.homebrew.result == 'success' }}
