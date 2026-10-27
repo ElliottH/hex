@@ -415,12 +415,15 @@ CoreAudio formats, AppleScript details, or event serialization.
   One exception skips the 100 ms wait: when tracked keys alone block a press of
   the binding itself (Idle, or Dirty for any binding; never Locked or a pending
   gesture), the press resynchronizes and counts as a fresh press only if a
-  modifier-change event reported no modifiers after every tracked key went
-  down, only the binding's modifiers went down since, and every tracked key and
-  every other modifier reads up in combined-session state (Fn metadata as
-  below). It fences input
-  stamped at or before the press. Any other press stays ignored and logs
-  `shortcut press ignored` with its reason and key codes.
+  modifier-change event reported no modifiers after each tracked key's own
+  press (typing in between is fine), only the binding's modifiers went down
+  since, and every tracked key and every other modifier reads up in
+  combined-session state (Fn metadata as below). It fences input stamped
+  before the press, not at it, so a same-tick chord still discards, and keeps
+  the binding's key safe from an older delayed release. Fenced edges, edges
+  from before a disabled tap, and a suspension leave no modifier evidence.
+  Any other press stays ignored and logs `shortcut press ignored` with its
+  reason and key codes.
   Native `SecondaryFn` navigation metadata may be ignored only with timestamped
   modifier-change evidence that Fn is up; the full key scan and delayed-event
   fences remain required. Never strip Fn globally from shortcut matching.

@@ -95,21 +95,33 @@ resynchronize instead of waiting for the poll.
 
 ```ts
 Command-Tab -> Tab still tracked (IDLE or DIRTY)
+  -> typing, Return, Shift …                          // don't matter
   -> binding press: the binding's own down edge
-     ├── keyboard reported no modifiers after every tracked key went down
+     ├── keyboard reported no modifiers after each tracked key's own press
      ├── only the binding's modifiers went down since
      └── tracked keys + every other modifier read up now  // same source as recovery
-        -> clear tracked keys, fence older input -> fresh press -> Start
+        -> clear tracked keys, fence input stamped before the press
+           -> fresh press -> Start
+              ├── chord at the same tick -> Discard     // not fenced
+              └── older delayed release of the key -> ignored
   -> any check fails -> press ignored (logged with reason + key_codes)
                      -> 100 ms poll as before
 LOCKED + stale keys -> press ignored, poll still repairs   // lock semantics unchanged
+fenced edges, edges before a disabled tap, suspension -> no neutral evidence
 ```
 Checks in [suppression.rs](../../src/suppression.rs):
 `option_soon_after_command_tab_records`,
 `shortcut_press_after_command_tab_from_dirty_records`,
+`typing_after_command_tab_does_not_block_the_next_press`,
+`a_delayed_release_cannot_untrack_a_resynchronized_key_press`,
+`a_chord_at_the_resynchronized_press_still_discards_it`,
+`voice_action_takes_over_right_after_command_tab`,
+`fenced_and_pre_reset_modifier_edges_are_not_neutral_evidence`,
 `stale_press_waits_for_recovery_while_anything_else_is_held`,
 `stale_press_requires_a_neutral_keyboard_after_the_tracked_keys`,
-`stale_press_leaves_locks_and_escape_unchanged`.
+`stale_press_leaves_locks_and_escape_unchanged`. Unit tests read a keyboard
+that is all up unless a test sets one, so every shortcut test can take this
+path.
 A binding press ignored while stale or DIRTY logs `shortcut press ignored` to
 `process.log` with its reason; a resynchronized one logs `resynchronized stale
 input tracking on a shortcut press`. Proof limit: synthetic events and injected
