@@ -20,6 +20,11 @@ pub(crate) const CHIPS_MIN_S: f64 = 0.9;
 /// The chips never fold under the pointer, and stay this much longer once
 /// it leaves (Scrawl's `REVEAL_LINGER_MS`).
 pub(crate) const CHIPS_LINGER_S: f64 = 1.2;
+/// The recording's ✕ asks "Discard?" for this long, then the capsule goes
+/// back to recording; never while the pointer is on it, and this much
+/// longer once it leaves.
+pub(crate) const DISCARD_ASK_S: f64 = 4.0;
+pub(crate) const DISCARD_LINGER_S: f64 = 1.5;
 /// How to send a kept capture later, which "Kept" says.
 pub(crate) const SEND_LATER: &str = "hex capture send latest";
 /// The most rows each list section shows.
@@ -349,9 +354,11 @@ pub(crate) enum Pres {
         mode: Mode,
         phone: bool,
     },
+    /// `discarding`: its ✕ was pressed, and it asks before discarding.
     Recording {
         chips: bool,
         phone: bool,
+        discarding: bool,
     },
     Processing,
     Done(Done),
@@ -373,8 +380,11 @@ impl Pres {
 enum Phase {
     Hidden,
     Selecting(Mode),
+    /// `discard_until`: the ✕ asks "Discard?" until then (Escape never
+    /// ends a recording, so discarding takes two clicks).
     Recording {
         chips_until: Option<f64>,
+        discard_until: Option<f64>,
     },
     Processing,
     /// Written, with no word from the router (yet).
@@ -550,11 +560,17 @@ impl Flow {
         if let (
             false,
             Phase::Recording {
-                chips_until: Some(until),
+                chips_until,
+                discard_until,
             },
         ) = (on, &mut self.phase)
         {
-            *until = until.max(now + CHIPS_LINGER_S);
+            if let Some(until) = chips_until {
+                *until = until.max(now + CHIPS_LINGER_S);
+            }
+            if let Some(until) = discard_until {
+                *until = until.max(now + DISCARD_LINGER_S);
+            }
         }
     }
 
@@ -633,7 +649,10 @@ impl Flow {
         let phase = std::mem::replace(&mut self.phase, Phase::Hidden);
         self.phase = match (phase, input) {
             (_, Input::Stage(stage)) => match stage {
-                Stage::Recording => Phase::Recording { chips_until: None },
+                Stage::Recording => Phase::Recording {
+                    chips_until: None,
+                    discard_until: None,
+                },
                 Stage::Stopping | Stage::Transcribing | Stage::Rendering | Stage::Writing => {
                     Phase::Processing
                 }
@@ -653,15 +672,23 @@ impl Flow {
                 },
                 why: why.as_deref().map(short_reason),
             },
-            (Phase::Recording { .. }, Input::Chips) => Phase::Recording {
+            (Phase::Recording { discard_until, .. }, Input::Chips) => Phase::Recording {
                 chips_until: Some(now + tuning::get().chips_open_s),
+                discard_until,
             },
-            (Phase::Recording { chips_until }, Input::Worked) => Phase::Recording {
+            (
+                Phase::Recording {
+                    chips_until,
+                    discard_until,
+                },
+                Input::Worked,
+            ) => Phase::Recording {
                 chips_until: chips_until.map(|until| {
                     until
                         .min(until - tuning::get().chips_open_s + CHIPS_MIN_S)
                         .max(now)
                 }),
+                discard_until,
             },
             (Phase::Recording { .. }, Input::Gone) => Phase::Hidden,
             (Phase::Selecting(mode), Input::Record) => {
@@ -782,7 +809,9 @@ impl Flow {
                 });
                 Phase::Sent(sent)
             }
-            (Phase::Recording { .. } | Phase::Selecting(_), Input::Escape) => {
+            // Escape closes the picker, but never ends a recording: it may be
+            // meant for the app being recorded.
+            (Phase::Selecting(_), Input::Escape) => {
                 actions.push(Action::Cancel);
                 Phase::Hidden
             }
@@ -817,6 +846,7 @@ impl Flow {
                     Phase::Routed,
                 )
             }
+            (phase @ Phase::Recording { .. }, Input::Escape) => phase,
             (_, Input::Escape | Input::Dismiss) => Phase::Hidden,
             (phase, _) => phase,
         };
@@ -855,11 +885,17 @@ impl Flow {
             // and Area drop it and become the picker.
             (Phase::Recording { .. }, Id::Mode(mode)) => match mode {
                 Mode::Screen => {
-                    self.phase = Phase::Recording { chips_until: None };
+                    self.phase = Phase::Recording {
+                        chips_until: None,
+                        discard_until: None,
+                    };
                     Vec::new()
                 }
                 Mode::Iphone => {
-                    self.phase = Phase::Recording { chips_until: None };
+                    self.phase = Phase::Recording {
+                        chips_until: None,
+                        discard_until: None,
+                    };
                     self.switching = true;
                     vec![Action::Switch(mode)]
                 }
@@ -869,7 +905,29 @@ impl Flow {
                 }
             },
             (Phase::Recording { .. }, Id::Finish) => vec![Action::Finish],
-            (Phase::Recording { .. } | Phase::Selecting(_), Id::Cancel | Id::Close) => {
+            // Discarding a recording takes a second click: ✕ asks first.
+            (Phase::Recording { .. }, Id::Cancel | Id::Close) => {
+                self.phase = Phase::Recording {
+                    chips_until: None,
+                    discard_until: Some(now + DISCARD_ASK_S),
+                };
+                Vec::new()
+            }
+            (Phase::Recording { .. }, Id::Keep) => {
+                self.phase = Phase::Recording {
+                    chips_until: None,
+                    discard_until: None,
+                };
+                Vec::new()
+            }
+            (
+                Phase::Recording {
+                    discard_until: Some(_),
+                    ..
+                },
+                Id::Discard,
+            )
+            | (Phase::Selecting(_), Id::Cancel | Id::Close) => {
                 self.phase = Phase::Hidden;
                 vec![Action::Cancel]
             }
@@ -974,11 +1032,18 @@ impl Flow {
             self.cues.push(Cue::Sent);
         }
         match &mut self.phase {
-            Phase::Recording { chips_until }
-                if !self.hovered && chips_until.is_some_and(|t| now >= t) =>
-            {
-                *chips_until = None;
-                true
+            Phase::Recording {
+                chips_until,
+                discard_until,
+            } => {
+                let mut due = false;
+                for until in [chips_until, discard_until] {
+                    if !self.hovered && until.is_some_and(|t| now >= t) {
+                        *until = None;
+                        due = true;
+                    }
+                }
+                due
             }
             phase => {
                 let due = hold_until(phase).is_some_and(|at| now >= at);
@@ -1001,7 +1066,14 @@ impl Flow {
             (left > 0.0).then_some(now + if step < 1e-6 { 1.0 } else { step })
         };
         let due = match &self.phase {
-            Phase::Recording { chips_until } => chips_until.filter(|_| !self.hovered),
+            Phase::Recording {
+                chips_until,
+                discard_until,
+            } => [*chips_until, *discard_until]
+                .into_iter()
+                .flatten()
+                .min_by(f64::total_cmp)
+                .filter(|_| !self.hovered),
             Phase::Routed(Routed {
                 route: Route::Rule { .. },
                 at,
@@ -1041,10 +1113,17 @@ impl Flow {
                 mode: *mode,
                 phone: self.phone,
             },
-            Phase::Recording { chips_until } => Pres::Recording {
-                chips: chips_until.is_some_and(|t| self.hovered || now < t),
-                phone: self.phone,
-            },
+            Phase::Recording {
+                chips_until,
+                discard_until,
+            } => {
+                let discarding = discard_until.is_some_and(|t| self.hovered || now < t);
+                Pres::Recording {
+                    chips: !discarding && chips_until.is_some_and(|t| self.hovered || now < t),
+                    phone: self.phone,
+                    discarding,
+                }
+            }
             Phase::Processing => Pres::Processing,
             Phase::Saved { .. } => Pres::Done(Done {
                 hand_off: true,
@@ -1540,7 +1619,8 @@ mod tests {
             flow.pres(0.0),
             Pres::Recording {
                 chips: false,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
         flow.input(Input::Chips, 1.0);
@@ -1548,7 +1628,8 @@ mod tests {
             flow.pres(1.0),
             Pres::Recording {
                 chips: true,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
         assert!(flow.tick(1.0 + tuning::get().chips_open_s));
@@ -1556,7 +1637,8 @@ mod tests {
             flow.pres(5.0),
             Pres::Recording {
                 chips: false,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
         for stage in [Stage::Stopping, Stage::Transcribing, Stage::Writing] {
@@ -1581,7 +1663,8 @@ mod tests {
             flow.pres(1.0),
             Pres::Recording {
                 chips: false,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
 
@@ -1593,7 +1676,8 @@ mod tests {
             flow.pres(7.0),
             Pres::Recording {
                 chips: true,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
         flow.hover(false, 7.0);
@@ -1966,7 +2050,8 @@ mod tests {
             flow.pres(0.1),
             Pres::Recording {
                 chips: true,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
         assert_eq!(flow.click(Id::Mode(Mode::Screen), 0.5), []);
@@ -1974,7 +2059,8 @@ mod tests {
             flow.pres(0.5),
             Pres::Recording {
                 chips: false,
-                phone: false
+                phone: false,
+                discarding: false,
             }
         );
 
@@ -1984,7 +2070,8 @@ mod tests {
             flow.pres(1.1),
             Pres::Recording {
                 chips: true,
-                phone: true
+                phone: true,
+                discarding: false,
             }
         );
         assert_eq!(
@@ -1995,7 +2082,8 @@ mod tests {
             flow.pres(1.5),
             Pres::Recording {
                 chips: false,
-                phone: true
+                phone: true,
+                discarding: false,
             }
         );
 
@@ -2226,11 +2314,14 @@ mod tests {
         flow.tick(9.0);
         assert_eq!(flow.take_cues(), [Cue::TakenBack]);
 
-        // A cancelled recording, and a failure.
+        // A discarded recording (Escape sounds nothing), and a failure.
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Recording), 0.0);
-        flow.input(Input::Escape, 1.0);
-        assert_eq!(flow.take_cues(), [Cue::Start, Cue::TakenBack]);
+        flow.input(Input::Escape, 0.5);
+        flow.click(super::super::surface::Id::Cancel, 0.8);
+        assert_eq!(flow.take_cues(), [Cue::Start]);
+        flow.click(super::super::surface::Id::Discard, 1.0);
+        assert_eq!(flow.take_cues(), [Cue::TakenBack]);
         flow.input(Input::Failed(Failure::Start, None), 2.0);
         assert_eq!(flow.take_cues(), [Cue::Failed]);
     }
@@ -2316,11 +2407,88 @@ mod tests {
         assert_eq!(done(&flow, 0.5).open, None);
     }
 
+    /// Kit: Escape never ends a screen recording (it may be meant for the
+    /// app); ✕ asks, and Discard, the second click, ends it.
     #[test]
-    fn cancel_and_failure() {
+    fn discarding_a_recording_takes_two_clicks() {
+        use super::super::surface::Id;
+        let discarding = |flow: &Flow, now| {
+            matches!(
+                flow.pres(now),
+                Pres::Recording {
+                    discarding: true,
+                    chips: false,
+                    ..
+                }
+            )
+        };
         let mut flow = Flow::new();
         flow.input(Input::Stage(Stage::Recording), 0.0);
-        assert_eq!(flow.input(Input::Escape, 1.0), vec![Action::Cancel]);
+        assert_eq!(flow.keys(0.5), None, "Escape stays the app's");
+        assert!(flow.input(Input::Escape, 0.5).is_empty());
+        assert!(matches!(flow.pres(0.5), Pres::Recording { .. }));
+        assert!(flow.click(Id::Discard, 0.6).is_empty(), "not asked yet");
+
+        assert!(flow.click(Id::Cancel, 1.0).is_empty());
+        assert!(discarding(&flow, 1.0));
+        assert!(flow.input(Input::Escape, 1.5).is_empty());
+        assert!(discarding(&flow, 1.5));
+        assert_eq!(flow.keys(1.5), None);
+        // Nothing clicked: back to recording on its own.
+        assert_eq!(flow.next_due(1.0), Some(1.0 + DISCARD_ASK_S));
+        assert!(!flow.tick(1.0 + DISCARD_ASK_S - 0.1));
+        assert!(flow.tick(1.0 + DISCARD_ASK_S));
+        assert!(!discarding(&flow, 1.0 + DISCARD_ASK_S));
+        assert!(flow.cues.iter().all(|cue| *cue != Cue::TakenBack));
+
+        // Never under the pointer, and a moment after it leaves; the
+        // chips' ✕ asks too.
+        flow.input(Input::Chips, 9.0);
+        assert!(flow.click(Id::Close, 10.0).is_empty());
+        flow.hover(true, 10.0);
+        assert!(!flow.tick(20.0));
+        assert!(discarding(&flow, 20.0));
+        flow.hover(false, 20.0);
+        assert!(!flow.tick(20.0 + DISCARD_LINGER_S - 0.1));
+        assert!(flow.tick(20.0 + DISCARD_LINGER_S));
+        assert!(!discarding(&flow, 22.0));
+
+        // Keep recording goes back at once.
+        flow.click(Id::Cancel, 30.0);
+        assert!(flow.click(Id::Keep, 31.0).is_empty());
+        assert!(!discarding(&flow, 31.0));
+
+        // Discard ends it, keeping nothing.
+        flow.click(Id::Cancel, 40.0);
+        assert_eq!(flow.click(Id::Discard, 41.0), [Action::Cancel]);
+        assert_eq!(flow.pres(41.0), Pres::Hidden);
+
+        // The picker still closes on Escape, and on ✕ at once.
+        for close in [Input::Escape, Input::Dismiss] {
+            let mut flow = Flow::new();
+            flow.input(Input::Stage(Stage::Recording), 0.0);
+            flow.input(Input::Chips, 0.5);
+            flow.click(Id::Mode(Mode::Window), 1.0);
+            assert_eq!(
+                flow.keys(1.0),
+                Some(crate::capture_host::CapsuleKeys::Picker)
+            );
+            if close == Input::Escape {
+                assert_eq!(flow.input(close, 2.0), [Action::Cancel]);
+            } else {
+                assert_eq!(flow.click(Id::Close, 2.0), [Action::Cancel]);
+            }
+            assert_eq!(flow.pres(2.0), Pres::Hidden);
+        }
+    }
+
+    #[test]
+    fn cancel_and_failure() {
+        use super::super::surface::Id;
+        let mut flow = Flow::new();
+        flow.input(Input::Stage(Stage::Recording), 0.0);
+        flow.click(Id::Cancel, 0.5);
+        assert_eq!(flow.click(Id::Discard, 1.0), vec![Action::Cancel]);
         assert_eq!(flow.pres(1.0), Pres::Hidden);
         flow.input(Input::Stage(Stage::Failed), 2.0);
         assert_eq!(done(&flow, 2.0).lead, Lead::Warning);

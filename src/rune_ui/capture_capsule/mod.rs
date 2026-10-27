@@ -914,13 +914,31 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 .hit()
                 .on_press_tx(press(id))
         }
-        Id::Cancel => base
+        Id::Cancel | Id::Keep => {
+            let name = if id == Id::Cancel {
+                "Cancel"
+            } else {
+                surface::KEEP_LABEL
+            };
+            base.radius(CHIP_H * 0.5)
+                .hover(c.hover)
+                .press(c.pressed)
+                .child(label(name, MEDIUM, p.muted()))
+                .role("button")
+                .label(name)
+                .hit()
+                .on_press_tx(press(id))
+        }
+        // Destructive, so the danger ink on the neutral chip, never the
+        // accent.
+        Id::Discard => base
             .radius(CHIP_H * 0.5)
+            .fill(c.layer_02)
             .hover(c.hover)
             .press(c.pressed)
-            .child(label("Cancel", MEDIUM, p.muted()))
+            .child(label(surface::DISCARD_LABEL, STRONG, p.danger()))
             .role("button")
-            .label("Cancel")
+            .label(surface::DISCARD_LABEL)
             .hit()
             .on_press_tx(press(id)),
         Id::Close => base.child(

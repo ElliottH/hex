@@ -121,6 +121,9 @@ const SCENES: &[Scene] = &[
     ("recording", |s| {
         scene(s, &[record(), Step::Input(Input::Chips)])
     }),
+    ("discard", |s| {
+        scene(s, &[record(), Step::Click(Id::Cancel)])
+    }),
 ];
 
 fn scene(s: &mut CapsuleState, steps: &[Step]) {
@@ -411,6 +414,9 @@ fn states(p: Paint) -> El {
                 .child(state_button(p, "Record", || vec![record()]))
                 .child(state_button(p, "Chips", || {
                     vec![record(), Step::Input(Input::Chips)]
+                }))
+                .child(state_button(p, "Discard?", || {
+                    vec![record(), Step::Click(Id::Cancel)]
                 }))
                 .child(state_button(p, "Picker", || {
                     vec![record(), Step::Click(Id::Mode(Mode::Area))]

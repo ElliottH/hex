@@ -128,6 +128,10 @@ fn stills() -> Vec<(&'static str, Pres)> {
         ("picker-iphone", after(&picking(Mode::Iphone))),
         ("recording", after(&[In(Input::Stage(Stage::Recording))])),
         (
+            "recording-discard",
+            after(&[In(Input::Stage(Stage::Recording)), Click(Id::Cancel)]),
+        ),
+        (
             "recording-chips",
             after(&[In(Input::Stage(Stage::Recording)), In(Input::Chips)]),
         ),
@@ -269,6 +273,7 @@ fn every_state_draws_its_pieces() {
         ("picker-screen", &["record", "close"]),
         ("picker-iphone", &["chip:iPhone", "record", "close"]),
         ("recording", &["lead", "cancel", "finish"]),
+        ("recording-discard", &["lead", "keep", "discard"]),
         (
             "recording-chips",
             &["lead", "chip:Area", "chip:Screen", "close"],
@@ -303,6 +308,7 @@ fn every_state_draws_its_pieces() {
     // Paste and Inspect are for a written capture, and the open list's
     // field takes their place.
     let without: &[(&str, &[&str])] = &[
+        ("recording-discard", &["cancel", "finish"]),
         ("failed", &["paste", "inspect"]),
         ("failed-start", &["paste", "inspect"]),
         ("taken-back", &["paste", "inspect"]),
@@ -492,6 +498,7 @@ const GOLDENS: &[&str] = &[
     "picker-area",
     "picker-window",
     "recording",
+    "recording-discard",
     "recording-chips",
     "recording-chips-iphone",
     "picker-iphone",
@@ -637,10 +644,22 @@ fn scripts() -> Vec<Script> {
             beats: vec![(0.2, stage(Stage::Recording)), (1.0, In(Input::Chips))],
             end: 5.6,
         },
+        // Escape ends nothing while recording; ✕ asks, and Discard ends it.
         Script {
             name: "cancel",
-            beats: vec![(0.2, stage(Stage::Recording)), (1.4, In(Input::Escape))],
-            end: 2.4,
+            beats: vec![
+                (0.2, stage(Stage::Recording)),
+                (1.0, In(Input::Escape)),
+                (1.4, Click(Id::Cancel)),
+                (2.2, Click(Id::Discard)),
+            ],
+            end: 3.2,
+        },
+        // Nothing clicked: the ask goes back to recording on its own.
+        Script {
+            name: "discard-ask",
+            beats: vec![(0.2, stage(Stage::Recording)), (1.0, Click(Id::Cancel))],
+            end: 1.0 + super::flow::DISCARD_ASK_S + 1.2,
         },
         Script {
             name: "rule-undo",
@@ -885,6 +904,25 @@ fn presses_reach_the_host() {
         .unwrap();
     let (_, actions) = play(&script, Variant::Calm, true, None, |_, _| {});
     assert_eq!(actions, vec![Action::Undo { to: "SEER".into() }]);
+    for (name, expected) in [
+        ("cancel", vec![Action::Cancel]),
+        ("discard-ask", Vec::new()),
+    ] {
+        let script = scripts().into_iter().find(|s| s.name == name).unwrap();
+        let (samples, actions) = play(&script, Variant::Calm, true, None, |_, _| {});
+        assert_eq!(actions, expected, "{name}");
+        let last = &samples.last().unwrap().pres;
+        match name {
+            "cancel" => assert_eq!(*last, Pres::Hidden),
+            _ => assert!(matches!(
+                last,
+                Pres::Recording {
+                    discarding: false,
+                    ..
+                }
+            )),
+        }
+    }
 }
 
 /// `HEX_CAPSULE_MOTION=<folder>` plays every script, light and dark, calm

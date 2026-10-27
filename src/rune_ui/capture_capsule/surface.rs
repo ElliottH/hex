@@ -112,6 +112,9 @@ pub(crate) fn keycaps_width(keys: &[&str]) -> f32 {
 
 /// The Undo chip's label; the seconds left show in the ring.
 pub(crate) const UNDO_LABEL: &str = "Undo";
+/// The recording's ✕ asks before it discards.
+pub(crate) const KEEP_LABEL: &str = "Keep recording";
+pub(crate) const DISCARD_LABEL: &str = "Discard";
 
 /// Something the capsule shows, or a click on a row of its list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,6 +123,10 @@ pub(crate) enum Id {
     Record,
     Cancel,
     Finish,
+    /// Asked after the recording's ✕: back to recording.
+    Keep,
+    /// Asked after the recording's ✕: ends it, keeping nothing.
+    Discard,
     Close,
     /// The recording dot and timer.
     Lead,
@@ -153,6 +160,8 @@ impl Id {
             Id::Record => "record",
             Id::Cancel => "cancel",
             Id::Finish => "finish",
+            Id::Keep => "keep",
+            Id::Discard => "discard",
             Id::Close => "close",
             Id::Lead => "lead",
             Id::Processing => "processing",
@@ -192,8 +201,8 @@ impl Id {
             Id::Mode(Mode::Screen) => 6,
             Id::Mode(Mode::Iphone) => 7,
             Id::Record => 8,
-            Id::Cancel => 9,
-            Id::Finish => 10,
+            Id::Cancel | Id::Keep => 9,
+            Id::Finish | Id::Discard => 10,
             Id::Field => 11,
             Id::Undo => 12,
             Id::Paste => 13,
@@ -393,10 +402,27 @@ pub(crate) fn layout(pres: &Pres, clock: &str) -> ([f32; 4], Vec<Item>) {
             }
             raw.push((Id::Close, String::new(), CHIP_H, false));
         }
-        Pres::Recording { chips, phone } => {
+        Pres::Recording {
+            chips,
+            phone,
+            discarding,
+        } => {
             let lead = LEAD_TEXT_X + clock_width(clock) + LEAD_TRAIL;
             raw.push((Id::Lead, String::new(), lead, false));
-            if *chips {
+            if *discarding {
+                raw.push((
+                    Id::Keep,
+                    String::new(),
+                    chip_width(measure(KEEP_LABEL, MEDIUM)),
+                    false,
+                ));
+                raw.push((
+                    Id::Discard,
+                    String::new(),
+                    chip_width(measure(DISCARD_LABEL, STRONG)),
+                    false,
+                ));
+            } else if *chips {
                 held_row = true;
                 modes(&mut raw, Mode::Screen, *phone);
                 raw.push((Id::Close, String::new(), CHIP_H, false));
@@ -961,6 +987,7 @@ mod tests {
         Pres::Recording {
             chips,
             phone: false,
+            discarding: false,
         }
     }
 
