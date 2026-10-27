@@ -206,8 +206,12 @@ impl Updater {
     pub fn status(&self) -> DesktopUpdateStatus {
         match &*lock(&self.shared.state) {
             State::Disabled(status) => status.clone(),
+            // A package manager updates Hex: its own checks only look for
+            // the manager's command, so they show nothing of their own.
+            State::Checking | State::Current | State::Failed if self.shared.packaged => {
+                DesktopUpdateStatus::PackageManager
+            }
             State::Checking => DesktopUpdateStatus::Checking,
-            State::Current if self.shared.packaged => DesktopUpdateStatus::PackageManager,
             State::Current => DesktopUpdateStatus::Current,
             State::Failed => DesktopUpdateStatus::Failed,
             State::Downloading => DesktopUpdateStatus::Downloading,
@@ -534,6 +538,32 @@ mod tests {
         assert_eq!(Method::Package("aur").distribution(), "aur");
         assert_eq!(Method::Unknown.distribution(), "unknown");
         assert_eq!(Method::Package("aur").channel(), "stable");
+    }
+
+    #[test]
+    fn a_package_manager_install_never_shows_its_own_checks() {
+        let updater = |state: State, packaged: bool| Updater {
+            shared: Arc::new(Shared {
+                state: Mutex::new(state),
+                packaged,
+                wake: Mutex::new(Wake::default()),
+                signal: Condvar::new(),
+            }),
+        };
+        for state in [State::Checking, State::Current, State::Failed] {
+            assert_eq!(
+                updater(state, true).status(),
+                DesktopUpdateStatus::PackageManager
+            );
+        }
+        assert_eq!(
+            updater(State::Checking, false).status(),
+            DesktopUpdateStatus::Checking
+        );
+        assert_eq!(
+            updater(State::Failed, false).status(),
+            DesktopUpdateStatus::Failed
+        );
     }
 
     #[test]

@@ -78,6 +78,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
+          INPUT_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
           CHANNEL: ${{ github.event_name == 'workflow_dispatch' && inputs.channel || github.event_name == 'schedule' && 'dev' || 'stable' }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -94,6 +95,18 @@ jobs:
           if [ "$CHANNEL" = dev ] && [ "$REF_NAME" != dev ]; then
             echo "::error::The dev channel publishes from dev, not $REF_NAME."
             exit 1
+          fi
+          # A dispatch builds inputs.ref, not the branch it runs from, so check
+          # that too: dev builds dev; stable builds production or its app-v tag.
+          if [ "$EVENT" = workflow_dispatch ]; then
+            if [ "$CHANNEL" = dev ] && [ "$INPUT_REF" != dev ]; then
+              echo "::error::The dev channel builds ref dev, not $INPUT_REF."
+              exit 1
+            fi
+            if [ "$CHANNEL" = stable ] && [ "$INPUT_REF" != production ] && [ "$INPUT_REF" != "app-v$version" ]; then
+              echo "::error::Stable releases build ref production or app-v$version, not $INPUT_REF."
+              exit 1
+            fi
           fi
           if [ "$EVENT:$REF_TYPE" = push:tag ] && [ "$REF_NAME" != "app-v$version" ]; then
             echo "::error::Tag $REF_NAME does not match version $version."
@@ -113,10 +126,15 @@ jobs:
             dev)
               # Once X.Y.Z is released (tagged), dev builds are X.Y.(Z+1)-dev.N,
               # which SemVer orders above X.Y.Z.
-              base=$version
-              if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/app-v$version" >/dev/null 2>&1; then
-                base=$(printf '%s\n' "$version" | awk -F. '{ print $1 "." $2 "." $3 + 1 }')
-              fi
+              # ls-remote exits 2 only when the tag is absent; any other
+              # failure stops the run rather than stamp a version below it.
+              status=0
+              git ls-remote --exit-code origin "refs/tags/app-v$version" >/dev/null || status=$?
+              case "$status" in
+                0) base=$(printf '%s\n' "$version" | awk -F. '{ print $1 "." $2 "." $3 + 1 }') ;;
+                2) base=$version ;;
+                *) echo "::error::Could not look up tag app-v$version (git ls-remote exited $status)."; exit 1 ;;
+              esac
               service=https://anoma.ly/release tag="dev-$GITHUB_RUN_ID"
               notes="https://github.com/$GITHUB_REPOSITORY/commit/$sha"
               release_channel=dev release_version="$base-dev.$GITHUB_RUN_NUMBER"

@@ -210,6 +210,16 @@ fn choosing_an_update_channel_saves_it_and_checks_now() {
 }
 
 #[test]
+fn choosing_the_channel_in_effect_keeps_following_the_build() {
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    assert_eq!(rt.state.settings.updates.channel, None);
+    tap(&mut rt, "update-channel-control/segment0");
+    assert_eq!(rt.state.settings.updates.channel, None);
+    assert_eq!(saved(&rt), 0);
+    assert!(sent(&rt).is_empty());
+}
+
+#[test]
 fn installs_that_never_update_hide_the_update_channel() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
     assert!(rt.find("update-channel").is_some());

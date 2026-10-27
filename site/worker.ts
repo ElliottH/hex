@@ -74,7 +74,7 @@ async function devDownload(request: Request, env: Env): Promise<Response> {
   }
   let response: Response
   try {
-    response = await fetch(manifestUrl, { headers: { "User-Agent": "hex-site" } })
+    response = await fetch(manifestUrl, { headers: { "User-Agent": "hex-site" }, cache: "no-store" })
   } catch {
     return text("Hex's release service did not answer. Try again in a minute.", 502)
   }
@@ -94,7 +94,17 @@ async function devDownload(request: Request, env: Env): Promise<Response> {
   const dmg = manifest.release?.targets?.["macos-arm64-dmg"]?.url
   if (!dmg) return text(`The latest dev build of Hex (${version}) has no Mac download.`, 404)
   // Target URLs resolve against the manifest's URL (anomalyco/release docs/protocol.md).
-  const headers = new Headers({ Location: new URL(dmg, manifestUrl).toString(), "Cache-Control": "no-store" })
+  // Only redirect to the service's own files, never to another origin.
+  let location: URL
+  try {
+    location = new URL(dmg, manifestUrl)
+  } catch {
+    return text("Hex's dev release manifest has an invalid Mac download URL.", 502)
+  }
+  if (location.origin !== new URL(manifestUrl).origin || !location.pathname.startsWith("/release/hex/files/")) {
+    return text("Hex's dev release manifest points the Mac download outside the release service.", 502)
+  }
+  const headers = new Headers({ Location: location.toString(), "Cache-Control": "no-store" })
   secure(headers)
   return new Response(null, { status: 302, headers })
 }

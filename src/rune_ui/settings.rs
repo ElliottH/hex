@@ -1483,7 +1483,7 @@ fn update_channel_row(ui: &Ui, p: Paint) -> Option<El> {
     if !updates {
         return None;
     }
-    let channel = ui.settings.updates.channel.unwrap_or(
+    let shown = ui.settings.updates.channel.unwrap_or(
         if crate::updater::is_dev_build(env!("CARGO_PKG_VERSION")) {
             UpdateChannel::Dev
         } else {
@@ -1505,11 +1505,13 @@ fn update_channel_row(ui: &Ui, p: Paint) -> Option<El> {
             &labels,
             UpdateChannel::ALL
                 .iter()
-                .position(|item| *item == channel)
+                .position(|item| *item == shown)
                 .unwrap_or(0),
-            |ui, index| {
+            move |ui, index| {
+                // Choosing the channel already in effect saves nothing, so an
+                // unset channel keeps following the build.
                 let channel = UpdateChannel::ALL[index];
-                if ui.settings.updates.channel != Some(channel)
+                if channel != shown
                     && ui.update(|settings| settings.updates.channel = Some(channel))
                 {
                     ui.send(Request::Desktop(DesktopAction::CheckForUpdates));
