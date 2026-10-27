@@ -157,7 +157,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   pick gets, no ring or drain; ✕ closes. The Sent tone plays when the
 │   │   router says it went. No runner-up chip, since the router names none
 │   │   beside a saved rule; once the Undo window ends, an "Elsewhere…" chip
-│   │   opens the list
+│   │   opens the list. Picking the rule's own session there (without
+│   │   "Always") only closes the list; nothing is sent again
+│   ├── The Undo chip counts nothing down: the capsule reads the same for the
+│   │   whole window and wakes once, when it ends
 │   ├── Anything else with somewhere to go (a guess, nothing fitting, no
 │   │   answer) -> "Copied" with the suggestions open under it, Paste and
 │   │   Inspect still beside it; nothing sends until Kit picks
@@ -177,7 +180,10 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   folds it to "Taken back" with "Elsewhere…", gives Esc back to the app,
 │   │   and it leaves after the done hold. Esc or ✕ dismisses: "Kept ·
 │   │   hex capture send latest", the bundle untouched. Either way it then
-│   │   waits for the list shortcut, even after the router said the pick went
+│   │   waits for the list shortcut, even after the router said the pick went.
+│   │   News of the send being taken back (it went, queued, or failed) leaves
+│   │   that list alone, and a pick made before the router answers the Undo
+│   │   stands: the Undo's answer and the earlier send's news never take it back
 │   ├── Too late to take back -> the same list, the session marked "has it",
 │   │   folded "Sent to X · too late to take back"; a pick sends a copy there,
 │   │   and Esc or ✕ just closes. Closed, it doesn't wait for the list shortcut.
@@ -198,7 +204,7 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   ├── Otherwise -> the list shortcut isn't Hex's: runtime_hotkeys has it
 │   │   │   only while the capsule takes it (capture_host::list_key_wanted),
 │   │   │   so suppression passes it through
-│   │   ├── A send from the list counting down -> Esc only (CapsuleKeys::Undo)
+│   │   ├── A send from the list still undoable -> Esc only (CapsuleKeys::Undo)
 │   │   ├── Suggestions -> Esc and the list shortcut through the listener,
 │   │   │   and at the session tap only 1 to the number of rows with no
 │   │   │   modifier (`capture_host::suggesting`); every other key goes on to
@@ -483,6 +489,11 @@ Checks:
   `a_rule_reads_sent_at_once_and_sounds_when_it_went`,
   `undoing_a_rule_send_reopens_the_list_until_a_pick`,
   `undoing_a_pick_reopens_the_list_it_came_from`,
+  `a_pick_during_an_undo_stands_when_the_undo_answers`,
+  `a_send_undone_while_under_way_keeps_the_list_however_it_ends`,
+  `the_undo_window_wakes_the_capsule_once_at_its_end`,
+  `every_rule_send_sounds_sent_once`,
+  `picking_the_rules_own_session_just_closes_the_list`,
   `too_late_to_take_back_offers_the_list_for_a_copy`,
   `shift_return_in_a_rules_list_saves_a_rule_elsewhere`,
   `an_answer_after_the_capsule_closed_leaves_it_closed`,

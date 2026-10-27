@@ -329,11 +329,11 @@ fn done_row(done: &Done, routes: &[String], cap: f32, raw: &mut Vec<(Id, String,
     {
         raw.push((Id::Field, String::new(), FIELD_MIN, false));
     }
-    if done.undo.is_some() {
+    if done.undo {
         raw.push((
             Id::Undo,
             String::new(),
-            keyed_width(UNDO_KEYS, UNDO_LABEL, STRONG),
+            keyed_width(UNDO_KEYS, UNDO_LABEL, MEDIUM),
             false,
         ));
     }
@@ -1012,7 +1012,7 @@ mod tests {
         now
     }
 
-    fn ruled(undo: Option<u32>) -> Pres {
+    fn ruled(undo: bool) -> Pres {
         Pres::Done(Done {
             why: Some("rule".into()),
             undo,
@@ -1064,7 +1064,7 @@ mod tests {
                 mode: Mode::Screen,
                 phone: false,
             },
-            ruled(Some(3)),
+            ruled(true),
             open(),
         ] {
             let (shell, items) = layout(&pres, "0:00");
@@ -1088,28 +1088,22 @@ mod tests {
         );
     }
 
+    /// The Undo chip is laid out as wide as it's drawn: its label in
+    /// MEDIUM, after its keycaps.
     #[test]
-    fn the_undo_chip_keeps_its_piece_and_width() {
-        let (a, three) = layout(&ruled(Some(3)), "0:00");
-        let (b, two) = layout(&ruled(Some(2)), "0:00");
-        assert_eq!(a, b, "tabular digits");
-        assert_eq!(three, two);
-        let mut s = Surface::new().settled(ruled(Some(3)));
-        let key = s
-            .items
-            .iter()
-            .find(|i| i.id == Id::Undo)
-            .unwrap()
-            .key
-            .clone();
-        s.set(ruled(Some(2)), 1.0);
-        run(&mut s, 1.0, 1.5);
-        assert_eq!(s.items.iter().find(|i| i.id == Id::Undo).unwrap().key, key);
+    fn the_undo_chip_is_as_wide_as_its_label_is_drawn() {
+        let (_, items) = layout(&ruled(true), "0:00");
+        let undo = items.iter().find(|i| i.id == Id::Undo).unwrap();
+        assert_eq!(undo.rect[2], keyed_width(UNDO_KEYS, UNDO_LABEL, MEDIUM));
+        assert_ne!(
+            keyed_width(UNDO_KEYS, UNDO_LABEL, MEDIUM),
+            keyed_width(UNDO_KEYS, UNDO_LABEL, STRONG)
+        );
     }
 
     #[test]
     fn a_new_label_is_a_new_piece() {
-        let mut s = Surface::new().settled(ruled(None));
+        let mut s = Surface::new().settled(ruled(false));
         let old = s
             .items
             .iter()
@@ -1169,7 +1163,7 @@ mod tests {
         let now = run(&mut s, now, now + 1.0);
         s.set(Pres::Processing, now);
         let now = run(&mut s, now, now + 1.0);
-        s.set(ruled(Some(3)), now);
+        s.set(ruled(true), now);
         assert!(
             !s.items.iter().any(|i| i.id == Id::Close),
             "close waits for the wall"
