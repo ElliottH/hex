@@ -1056,9 +1056,8 @@ verifies without publishing, `dev` publishes the dev channel, `stable` the
 public release; dispatched from `production` only). Tags never start a
 release: like OpenCode, the stable run tags `v<VERSION>` (the crate version)
 on the released commit only after every platform published, then creates the
-GitHub release, so a failed run leaves no tag. The "release tags" ruleset
-lets only Dax and the release deploy key (`HEX_RELEASE_TAG_KEY`) create,
-move, or delete `v*` tags. Like OpenCode's release, build jobs (Linux x86_64 in an Arch
+GitHub release with the built-in `GITHUB_TOKEN`, so a failed run leaves no
+tag; `v*` tags are unrestricted because nothing triggers on them. Like OpenCode's release, build jobs (Linux x86_64 in an Arch
 container, Windows x64 and ARM64 through `.github/workflows/build-desktop.yml`,
 macOS as an ad-hoc signed `HEX_RELEASE_UNSIGNED=1` app, installers through
 `windows-installers.yml`, AUR and Homebrew staging) run repository code with

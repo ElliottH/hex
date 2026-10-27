@@ -33,13 +33,12 @@ name: Release
 #   published. Versions are display text: installs follow the channel's
 #   current release and never compare versions.
 # - check: a dispatch from dev builds, signs, and verifies the same and
-#   publishes nothing; its tag job pushes and deletes a throwaway
-#   v0.0.0-test-<run> tag to prove the tag ruleset admits it.
+#   publishes nothing; its last job pushes and deletes a throwaway
+#   v0.0.0-test-<run> tag to prove it can tag.
 # - stable: a dispatch from production publishes the crate version with every
-#   platform signed, the AUR, and Homebrew. Tags never start a release: only
-#   after everything published does the tag job tag v<version> on the
-#   released commit, then the GitHub release follows, so a failed run leaves
-#   no tag. Deploy the production site afterwards with Site.
+#   platform signed, the AUR, and Homebrew. Tags trigger nothing: only after
+#   everything published does the last job tag v<version> on the released
+#   commit and create the GitHub release, so a failed run leaves no tag. Deploy the production site afterwards with Site.
 on:
   workflow_dispatch:
     inputs:
@@ -439,8 +438,7 @@ jobs:
       linux-url: ${{ steps.publish.outputs.linux-url }}
     steps:
       - *checkout-release
-      - &download-release
-        name: Download
+      - name: Download
         uses: ./.github/release/download
         with:
           pattern: "{build-linux-x86_64,sign-macos,sign-windows,sign-windows-installers}"
@@ -449,8 +447,7 @@ jobs:
             sign-macos=${{ needs.sign-macos.outputs.digest }}
             sign-windows=${{ needs.sign-windows.outputs.digest }}
             sign-windows-installers=${{ needs.sign-windows-installers.outputs.digest }}
-      - &assemble
-        name: Gather the release files
+      - name: Gather the release files
         run: bash .github/release/assemble.sh "$RUNNER_TEMP/in" "$RUNNER_TEMP/dist"
       - id: publish
         name: Publish
@@ -465,41 +462,31 @@ jobs:
         if: needs.plan.outputs.channel == 'stable'
         run: bash .github/release/release-service.sh distribution nix "$HEX_VERSION"
 
-  # Tags v<version> on the released commit only now that every platform and
-  # the release service published; a check run proves the ruleset admits the
-  # release deploy key with a throwaway tag it deletes.
-  tag:
-    needs: [plan, publish, sign-macos, verify-macos, sign-windows, installers, sign-windows-installers]
+  # Last, once every platform and the release service published: tags
+  # v<version> on the released commit and mirrors the files to its GitHub
+  # release, with the built-in token; a failed run leaves no tag. Tags trigger
+  # nothing. A check run pushes and deletes a throwaway v0.0.0-test-<run> tag
+  # to prove the token can tag.
+  github:
+    name: Tag and GitHub release
+    needs: [plan, build, publish, sign-macos, verify-macos, sign-windows, installers, sign-windows-installers]
     if: >-
       ${{ !cancelled() && (
         (needs.plan.outputs.channel == 'stable' && needs.publish.result == 'success')
         || (needs.plan.outputs.channel == 'check' && needs.installers.result == 'success'
             && (needs.verify-macos.result == 'success' || needs.sign-macos.outputs.signed != 'true')) ) }}
     runs-on: ubuntu-24.04
-    environment: release
-    steps:
-      - *checkout-release
-      - name: Tag
-        env:
-          SHA: ${{ needs.plan.outputs.sha }}
-          HEX_RELEASE_TAG: ${{ needs.plan.outputs.tag }}
-          HEX_RELEASE_TAG_TEST: ${{ needs.plan.outputs.channel == 'check' && '1' || '' }}
-          HEX_RELEASE_TAG_KEY: ${{ secrets.HEX_RELEASE_TAG_KEY }}
-        run: bash .github/release/tag-release.sh
-
-  github:
-    name: GitHub release
-    needs: [plan, build, sign-macos, sign-windows, sign-windows-installers, tag]
-    if: ${{ !cancelled() && needs.tag.result == 'success' && needs.plan.outputs.channel == 'stable' }}
-    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
+      SHA: ${{ needs.plan.outputs.sha }}
       HEX_VERSION: ${{ needs.plan.outputs.release-version }}
       HEX_RELEASE_COMMIT: ${{ needs.plan.outputs.sha }}
       HEX_RELEASE_TAG: ${{ needs.plan.outputs.tag }}
       HEX_RELEASE_SOURCE: ${{ github.workspace }}
     steps:
+      # Credentials stay so the job can push the tag; it runs no repository
+      # code beyond .github/release/.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -507,10 +494,26 @@ jobs:
             /.github/release/
             /docs/releases/
           sparse-checkout-cone-mode: false
-          persist-credentials: false
-      - *download-release
-      - *assemble
-      - env:
+      - name: Tag
+        env:
+          HEX_RELEASE_TAG_TEST: ${{ needs.plan.outputs.channel == 'check' && '1' || '' }}
+        run: bash .github/release/tag-release.sh
+      - name: Download
+        if: needs.plan.outputs.channel == 'stable'
+        uses: ./.github/release/download
+        with:
+          pattern: "{build-linux-x86_64,sign-macos,sign-windows,sign-windows-installers}"
+          digests: >-
+            build-linux-x86_64=${{ needs.build.outputs.linux-digest }}
+            sign-macos=${{ needs.sign-macos.outputs.digest }}
+            sign-windows=${{ needs.sign-windows.outputs.digest }}
+            sign-windows-installers=${{ needs.sign-windows-installers.outputs.digest }}
+      - name: Gather the release files
+        if: needs.plan.outputs.channel == 'stable'
+        run: bash .github/release/assemble.sh "$RUNNER_TEMP/in" "$RUNNER_TEMP/dist"
+      - name: GitHub release
+        if: needs.plan.outputs.channel == 'stable'
+        env:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/release/publish-github-release.sh "$RUNNER_TEMP/dist"
 

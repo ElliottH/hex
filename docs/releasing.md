@@ -34,9 +34,9 @@ Release (push to dev: dev channel; workflow_dispatch: ref + channel check | dev 
 ├─ installers               windows-installers.yml: Setup.exe around them, tested on x64 + ARM64      [build]
 ├─ sign-windows-installers  Azure Artifact Signing of both Setup.exe                                  [release]
 ├─ publish                  OIDC: every signed target, then the release (release-service.sh); Nix     [release]
-├─ tag                      stable: v<version> on the released commit, last (tag-release.sh, deploy key) [release]
+├─ github                   last: tag v<version> on the released commit (tag-release.sh), then the    [contents: write]
+│                           GitHub release mirror (publish-github-release.sh); GITHUB_TOKEN only.
 │                           check: pushes and deletes a throwaway v0.0.0-test-<run> tag
-├─ github                   stable: GitHub release mirror on that tag (publish-github-release.sh)    [contents: write]
 ├─ aur-stage → aur          stable: makepkg + install from the published file → push-aur.sh           [build → release]
 ├─ homebrew-stage → homebrew stable: render + brew style/audit → push-homebrew.sh                     [build → release]
 └─ record-aur, record-brew  OIDC: the package manager serves the version                              [release]
@@ -62,12 +62,9 @@ by Release: after a stable release, run **Site** with `mode: production` from
 
 ### Release tags
 
-The "release tags" ruleset covers `refs/tags/v*`: only Dax (user 826656) and
-deploy keys may create, move, or delete them. The repository's one write
-deploy key is `github-actions-hex-release-tag`, whose private half is
-`HEX_RELEASE_TAG_KEY` in `release`; the GitHub Actions app cannot be a bypass
-actor of a repository ruleset, so `GITHUB_TOKEN` cannot tag. Branch rulesets
-still keep the key off `dev` and `production`.
+`v*` tags are not restricted: tags trigger nothing. The final `github` job
+pushes `v<version>` with the built-in `GITHUB_TOKEN` (`contents: write` on
+that job only, no environment).
 
 ### Who can change the boundary
 
@@ -155,11 +152,10 @@ secrets; the `homebrew` job pushes that verified file with the tap deploy key
   version from `Cargo.toml` to `https://anoma.ly/release`, the AUR, and
   Homebrew. It needs every platform signed and `docs/releases/<version>.md`,
   and refuses a version already tagged `v<version>` or `app-v<version>`.
-  Tags never start a release. As OpenCode does, the tag is pushed by a deploy
-  key that a tag ruleset admits, but only last: once every platform and the
-  release service published, the `tag` job tags `v<version>` on the released
-  commit, then the GitHub release `v<version>` (kept off "Latest", which the
-  SDK uses) mirrors the files. A failed run leaves no tag. Releases through
+  Tags trigger nothing. Only last, once every platform and the release
+  service published, the `github` job tags `v<version>` on the released
+  commit with `GITHUB_TOKEN` and the GitHub release `v<version>` (kept off
+  "Latest", which the SDK uses) mirrors the files. A failed run leaves no tag. Releases through
   2.3.1 used `app-v<version>` tags, which stay as history. Deploy the
   production site afterwards with Site.
 
