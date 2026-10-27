@@ -7,7 +7,8 @@
 //! It runs beside the installed Hex without touching it: no capture host,
 //! settings, captures, tap, or network. Nothing records and nothing sends;
 //! the fake host only answers the capsule's actions with the inputs a real
-//! capture would bring.
+//! capture would bring. With the `playground` experiment, the same states
+//! are stories in Hex's own window playground too ([`stories`]).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,6 +22,9 @@ use super::tuning::{self, Tuning};
 use super::{CapsuleState, Mode, capsule, tone};
 use crate::rune_ui::controls::{DESCRIPTION, Paint};
 use crate::rune_ui::lists::slider_in;
+
+mod stories;
+pub(crate) use stories::add as stories;
 
 /// How much slow motion slows the capsule.
 const SLOW: f64 = 0.25;
@@ -608,7 +612,7 @@ fn log(p: Paint, pg: &Playground) -> El {
 
 /// A slider over `lo..=hi` for one tuning value.
 fn knob(
-    p: Paint,
+    (p, width): (Paint, f32),
     key: &str,
     label: &str,
     value: f32,
@@ -623,7 +627,7 @@ fn knob(
         label,
         (value - lo) / (hi - lo),
         display,
-        SLIDER_W,
+        width,
         move |s: &mut CapsuleState, at: f32, _| {
             if let Some(pg) = s.playground.as_mut() {
                 let mut tuning = pg.tuning;
@@ -636,12 +640,12 @@ fn knob(
 
 /// A spring's duration and bounce, as two sliders.
 macro_rules! spring {
-    ($p:expr, $t:expr, $field:ident, $label:expr) => {
+    ($p:expr, $w:expr, $t:expr, $field:ident, $label:expr) => {
         col()
             .key(stringify!($field))
             .gap(6.0)
             .child(knob(
-                $p,
+                ($p, $w),
                 "duration",
                 &format!("{} duration", $label),
                 $t.$field.duration,
@@ -650,7 +654,7 @@ macro_rules! spring {
                 |t, v| t.$field = Spring::new(v, t.$field.bounce),
             ))
             .child(knob(
-                $p,
+                ($p, $w),
                 "bounce",
                 &format!("{} bounce", $label),
                 $t.$field.bounce,
@@ -662,15 +666,27 @@ macro_rules! spring {
 }
 
 fn panel(p: Paint, pg: &Playground) -> El {
+    col()
+        .key("panel-scroll")
+        .w(SIDEBAR_W)
+        .h(WINDOW.1)
+        .fill(p.k.c.layer_01)
+        .scroll(rune::ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(tuning(p, pg, SLIDER_W, true).w(SIDEBAR_W).padding(16.0))
+}
+
+/// The tuning controls, their sliders `w` wide. Standalone, they also
+/// switch Hex's sounds and set their volume; inside Hex those stay Hex's.
+fn tuning(p: Paint, pg: &Playground, w: f32, standalone: bool) -> El {
     let t = pg.tuning;
     let mut body = col()
         .key("tuning")
-        .w(SIDEBAR_W)
         .gap(12.0)
-        .padding(16.0)
         .child(heading(p, "Undo"))
         .child(knob(
-            p,
+            (p, w),
             "undo",
             "Undo window",
             t.undo_s as f32,
@@ -686,11 +702,13 @@ fn panel(p: Paint, pg: &Playground) -> El {
                 .key("sound-row")
                 .gap(6.0)
                 .flex_wrap()
-                .child(button(p, "sound", "Sound", pg.sound, |s, _| {
-                    if let Some(pg) = s.playground.as_mut() {
-                        pg.sound = !pg.sound;
-                        crate::feedback::set_enabled(pg.sound);
-                    }
+                .children(standalone.then(|| {
+                    button(p, "sound", "Sound", pg.sound, |s, _| {
+                        if let Some(pg) = s.playground.as_mut() {
+                            pg.sound = !pg.sound;
+                            crate::feedback::set_enabled(pg.sound);
+                        }
+                    })
                 }))
                 .children(
                     [
@@ -711,23 +729,25 @@ fn panel(p: Paint, pg: &Playground) -> El {
                     }),
                 ),
         )
-        .child(slider_in(
-            p,
-            "volume",
-            "Volume",
-            pg.volume,
-            format!("{:.0}%", pg.volume * 100.0),
-            SLIDER_W,
-            |s: &mut CapsuleState, at: f32, _| {
-                if let Some(pg) = s.playground.as_mut() {
-                    pg.volume = at;
-                    crate::feedback::set_volume(at);
-                }
-            },
-        ))
+        .children(standalone.then(|| {
+            slider_in(
+                p,
+                "volume",
+                "Volume",
+                pg.volume,
+                format!("{:.0}%", pg.volume * 100.0),
+                w,
+                |s: &mut CapsuleState, at: f32, _| {
+                    if let Some(pg) = s.playground.as_mut() {
+                        pg.volume = at;
+                        crate::feedback::set_volume(at);
+                    }
+                },
+            )
+        }))
         .child(heading(p, "Holds"))
         .child(knob(
-            p,
+            (p, w),
             "done-hold",
             "Finished capsule stays",
             t.done_hold_s as f32,
@@ -738,7 +758,7 @@ fn panel(p: Paint, pg: &Playground) -> El {
             },
         ))
         .child(knob(
-            p,
+            (p, w),
             "brief-hold",
             "Taken back / failed stays",
             t.brief_hold_s as f32,
@@ -749,7 +769,7 @@ fn panel(p: Paint, pg: &Playground) -> El {
             },
         ))
         .child(knob(
-            p,
+            (p, w),
             "chips-open",
             "Chips stay open",
             t.chips_open_s as f32,
@@ -761,7 +781,7 @@ fn panel(p: Paint, pg: &Playground) -> El {
         ))
         .child(heading(p, "Timings"))
         .child(knob(
-            p,
+            (p, w),
             "shell-wait",
             "Walls wait (narrowing)",
             t.shell_wait_s,
@@ -772,7 +792,7 @@ fn panel(p: Paint, pg: &Playground) -> El {
             },
         ))
         .child(knob(
-            p,
+            (p, w),
             "stagger",
             "Chip stagger",
             t.stagger_s,
@@ -783,7 +803,7 @@ fn panel(p: Paint, pg: &Playground) -> El {
             },
         ))
         .child(knob(
-            p,
+            (p, w),
             "reveal-enter",
             "Content fade-in",
             t.reveal_enter_s,
@@ -794,14 +814,14 @@ fn panel(p: Paint, pg: &Playground) -> El {
             },
         ))
         .child(heading(p, "Springs"))
-        .child(spring!(p, t, island, "Walls"))
-        .child(spring!(p, t, island_scale, "Entry"))
-        .child(spring!(p, t, reveal_open, "Chips open"))
-        .child(spring!(p, t, reveal_close, "Chips close"))
-        .child(spring!(p, t, switch_width, "Mode switch"))
-        .child(spring!(p, t, switch_slide, "Switch slide"))
-        .child(spring!(p, t, highlight, "Highlight"))
-        .child(spring!(p, t, presence_exit, "Exit"));
+        .child(spring!(p, w, t, island, "Walls"))
+        .child(spring!(p, w, t, island_scale, "Entry"))
+        .child(spring!(p, w, t, reveal_open, "Chips open"))
+        .child(spring!(p, w, t, reveal_close, "Chips close"))
+        .child(spring!(p, w, t, switch_width, "Mode switch"))
+        .child(spring!(p, w, t, switch_slide, "Switch slide"))
+        .child(spring!(p, w, t, highlight, "Highlight"))
+        .child(spring!(p, w, t, presence_exit, "Exit"));
     body = body.child(
         row()
             .key("copy-row")
@@ -831,13 +851,5 @@ fn panel(p: Paint, pg: &Playground) -> El {
             .color(p.faint())
             .wrap(),
     );
-    col()
-        .key("panel-scroll")
-        .w(SIDEBAR_W)
-        .h(WINDOW.1)
-        .fill(p.k.c.layer_01)
-        .scroll(rune::ScrollSpec {
-            stick_bottom: false,
-        })
-        .child(body)
+    body
 }

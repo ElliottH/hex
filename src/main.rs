@@ -1039,9 +1039,7 @@ fn open_app(
     rune_args: Vec<String>,
 ) -> Result<()> {
     if !rune_args.is_empty() {
-        crate::rune_ui::app(Default::default())
-            .args(rune_args)
-            .run();
+        crate::rune_ui::render_app(rune_args).run();
         return Ok(());
     }
     let _instance = instance::acquire("listener")?;

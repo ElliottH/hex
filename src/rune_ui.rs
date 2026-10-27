@@ -33,6 +33,7 @@ mod onboarding;
 mod picker;
 mod platform;
 mod platform_settings;
+pub(crate) mod playground;
 #[cfg(hex_capture)]
 mod scrawl;
 mod settings;
@@ -163,12 +164,34 @@ pub(crate) fn run_app(
 }
 
 /// The window as a Rune app whose lifetime the caller chooses, connected to
-/// its host through `connect`.
+/// its host through `connect`, with the playground when its experiment is on.
 pub(crate) fn app(connect: host::Connect) -> rune::App<Ui> {
-    let app = rune::App::new(spec())
+    build(connect, playground::enabled())
+}
+
+/// `hex app -- --snap …`: a headless render of a fixture scene. With the
+/// `playground` experiment on, `--playground [story]` renders the playground.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn render_app(rune_args: Vec<String>) -> rune::App<Ui> {
+    let playground = rune_args.iter().any(|arg| arg == "--playground");
+    build(Default::default(), playground && playground::enabled()).args(rune_args)
+}
+
+fn build(connect: host::Connect, with_playground: bool) -> rune::App<Ui> {
+    let spec = if with_playground {
+        playground::spec(spec())
+    } else {
+        spec()
+    };
+    let app = rune::App::new(spec)
         .init(move || Ui::load_with(connect))
         .on_close(on_close)
         .compositor(hero::HeroCompositor::default());
+    let app = if with_playground {
+        playground::attach(app)
+    } else {
+        app
+    };
     let window = app.handle();
     // Nothing shown reads the handle, so this asks for no frame. The first
     // frame's poll ran without it, so the window's tick starts from here.
@@ -310,7 +333,14 @@ pub(crate) fn meeting_failed(ui: &mut Ui, error: String) {
 /// scene, or `live` for the running Hex's `hex status`.
 #[cfg(target_os = "linux")]
 pub(crate) fn render() {
-    rune::run_with(spec(), hero::HeroCompositor::default());
+    let with_playground =
+        std::env::args().any(|arg| arg == "--playground") && playground::enabled();
+    if !with_playground {
+        rune::run_with(spec(), hero::HeroCompositor::default());
+        return;
+    }
+    let app = rune::App::new(playground::spec(spec())).compositor(hero::HeroCompositor::default());
+    playground::attach(app).run();
 }
 
 /// The window's logical size, which every pane and the picker fit.
@@ -319,9 +349,13 @@ const WINDOW_SIZE: (f32, f32) = (980.0, 760.0);
 /// One fixed size the user cannot change. Tiling window managers float such
 /// a window instead of tiling it: sway, Hyprland, niri, and i3 on Linux
 /// (Wayland has no other way to ask for floating), and AeroSpace, yabai, and
-/// Spaceman on macOS, where the first-run tour opens centred this way.
+/// Spaceman on macOS, where the first-run tour opens centred this way. With
+/// the playground, it resizes, so the stage beside its columns has room.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn fixed_window() -> rune::WindowOptions {
+    if playground::enabled() {
+        return rune::WindowOptions::default();
+    }
     rune::WindowOptions {
         min_size: Some(WINDOW_SIZE),
         max_size: Some(WINDOW_SIZE),

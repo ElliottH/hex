@@ -1081,6 +1081,11 @@ objc2::define_class!(
             with_window(|window| window.close());
         }
 
+        #[unsafe(method(togglePlayground:))]
+        fn toggle_playground(&self, _sender: Option<&AnyObject>) {
+            with_window(|window| window.update(|_, tx| tx.toggle_playground()));
+        }
+
         #[unsafe(method(minimizeWindow:))]
         fn minimize_window(&self, _sender: Option<&AnyObject>) {
             let mtm = self.mtm();
@@ -1121,7 +1126,8 @@ fn with_window(f: impl FnOnce(&rune::AppHandle<Ui>)) {
     }
 }
 
-/// The menu bar while the window is active: Hex, File, Window.
+/// The menu bar while the window is active: Hex, File, View (with the
+/// `playground` experiment), Window.
 /// Rune draws no Edit menu items, so ⌘C/⌘V reach its text fields as keys.
 fn install_main_menu(target: &MenuTarget, mtm: MainThreadMarker) {
     let main = NSMenu::new(mtm);
@@ -1139,17 +1145,26 @@ fn install_main_menu(target: &MenuTarget, mtm: MainThreadMarker) {
         None,
         Some((quit.as_str(), sel!(quitHex:), "q")),
     ]);
-    for (title, items) in [
+    let mut menus = vec![
         (name, application),
         (
             "File",
             vec![Some(("Close Window", sel!(closeWindow:), "w"))],
         ),
-        (
-            "Window",
-            vec![Some(("Minimize", sel!(minimizeWindow:), "m"))],
-        ),
-    ] {
+    ];
+    // Rune's own View › Playground item, which this menu bar replaces. A
+    // capital letter adds Shift: ⇧⌘D.
+    if crate::rune_ui::playground::enabled() {
+        menus.push((
+            "View",
+            vec![Some(("Playground", sel!(togglePlayground:), "D"))],
+        ));
+    }
+    menus.push((
+        "Window",
+        vec![Some(("Minimize", sel!(minimizeWindow:), "m"))],
+    ));
+    for (title, items) in menus {
         let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title));
         for item in items {
             match item {
