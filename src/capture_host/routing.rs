@@ -621,7 +621,7 @@ impl Worker {
         if let Some(sent) = current.sent.take() {
             let undone = current.router.undo(&sent.delivery_id, UNDO_DEADLINE);
             let delivery = match undone {
-                Ok(report) => {
+                Ok(report) if report.undone != Undone::Unfinished => {
                     tracing::info!(
                         bundle = %bundle_name(&current.bundle),
                         undone = report.undone.label(),
@@ -631,15 +631,22 @@ impl Worker {
                         Undone::Withdrawn | Undone::Reverted | Undone::Disowned => {
                             RouteDelivery::TakenBack
                         }
-                        Undone::Gone | Undone::TooOld => RouteDelivery::TooLate {
-                            to: to.unwrap_or_default(),
-                        },
+                        Undone::Gone | Undone::TooOld | Undone::Unfinished => {
+                            RouteDelivery::TooLate {
+                                to: to.unwrap_or_default(),
+                            }
+                        }
                     }
                 }
-                // Still where it went: the capsule, already showing it
-                // taken back, hears that it's too late.
-                Err(error) => {
-                    tracing::warn!(error = %format!("{error:#}"), "could not take a capture's send back");
+                // Still where it went (or staged for removal, which
+                // another undo can finish): the capsule, already showing
+                // it taken back, hears that it's too late.
+                failed => {
+                    let error = match failed {
+                        Ok(report) => report.text(),
+                        Err(error) => format!("{error:#}"),
+                    };
+                    tracing::warn!(error = %error, "could not take a capture's send back");
                     current.sent = Some(sent);
                     current.route.delivery = Some(RouteDelivery::TooLate {
                         to: to.unwrap_or_default(),
