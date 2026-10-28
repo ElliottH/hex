@@ -214,7 +214,6 @@ fn toggles_save_through_the_host() {
 #[test]
 fn choosing_an_update_channel_saves_it_and_checks_now() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "advanced-toggle");
     assert_eq!(rt.state.settings.updates.channel, None);
     tap(&mut rt, "update-channel-control/segment1");
     assert_eq!(
@@ -237,7 +236,6 @@ fn choosing_an_update_channel_saves_it_and_checks_now() {
 #[test]
 fn choosing_the_channel_in_effect_keeps_following_the_build() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "advanced-toggle");
     assert_eq!(rt.state.settings.updates.channel, None);
     tap(&mut rt, "update-channel-control/segment0");
     assert_eq!(rt.state.settings.updates.channel, None);
@@ -248,8 +246,10 @@ fn choosing_the_channel_in_effect_keeps_following_the_build() {
 #[test]
 fn installs_that_never_update_hide_the_update_channel() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "advanced-toggle");
-    assert!(rt.find("update-channel").is_some());
+    assert!(
+        rt.find("application/card/update-channel").is_some(),
+        "the Application card shows it without opening Advanced"
+    );
     if let Some(view) = &mut rt.state.view {
         view.update_status = DesktopUpdateStatus::PackageManager;
     }

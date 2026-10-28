@@ -422,6 +422,7 @@ General                                  // settings
 │   ├── Intentional capture only, not ordinary shortcut chords
 │   └── Pause/resume only players already reported running by macOS
 ├── Application card -> Sound volume: immediate feedback; zero suppresses tones
+│   └── Update channel last, always shown on self-updating installs (maintain.updates)
 └── Voice Action shortcut -> Voice Action pane; Meetings -> Meetings › Settings
 
 Intentional recording                    // recording.environment

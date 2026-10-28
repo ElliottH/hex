@@ -561,6 +561,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Shortcut mode", ["Tryb skrótu", "快捷键模式", "ショートカットモード", "Kürzelmodus", "Modo del atajo"]),
     ("Show Dock icon", ["Pokaż ikonę w Docku", "显示程序坞图标", "Dock にアイコンを表示", "Dock-Symbol anzeigen", "Mostrar icono en el Dock"]),
     ("Update channel", ["Kanał aktualizacji", "更新渠道", "アップデートチャンネル", "Update-Kanal", "Canal de actualizaciones"]),
+    ("Dev gets new builds first", ["Deweloperski dostaje nowe wersje jako pierwszy", "开发版最先获得新版本", "開発版は新しいビルドを先に受け取ります", "Entwicklung erhält neue Builds zuerst", "Desarrollo recibe las nuevas versiones primero"]),
     ("Stable", ["Stabilny", "稳定版", "安定版", "Stabil", "Estable"]),
     ("Dev", ["Deweloperski", "开发版", "開発版", "Entwicklung", "Desarrollo"]),
     ("Sound volume", ["Głośność dźwięków", "提示音音量", "効果音の音量", "Lautstärke der Töne", "Volumen de sonidos"]),
