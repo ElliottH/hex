@@ -58,6 +58,8 @@ pub(super) struct Capabilities {
     pub(super) hud_lab: bool,
     /// Modifier-only shortcuts can require the left or right key (macOS).
     pub(super) modifier_sides: bool,
+    /// Failures play the sound set's error sound (macOS).
+    pub(super) error_sound: bool,
 }
 
 impl Capabilities {
@@ -76,6 +78,7 @@ impl Capabilities {
         fun: false,
         hud_lab: false,
         modifier_sides: false,
+        error_sound: false,
     };
 
     pub(super) const MACOS: Self = Self {
@@ -93,6 +96,7 @@ impl Capabilities {
         fun: true,
         hud_lab: true,
         modifier_sides: true,
+        error_sound: true,
     };
 
     pub(super) const WINDOWS: Self = Self {
@@ -110,6 +114,7 @@ impl Capabilities {
         fun: false,
         hud_lab: false,
         modifier_sides: false,
+        error_sound: false,
     };
 
     /// This OS's capabilities, with the rows its window host decides.

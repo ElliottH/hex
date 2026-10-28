@@ -778,12 +778,32 @@ Record -> Release -> Transcribing/processing/paste -> Finished // dictate.feedba
 ```ts
 Settings > Sounds (next to Sound volume)                    // dictate.sound-set
 ├── Default / older settings -> Hex signature
-├── Hex signature / Classic / Click / Soft tone / Wood / Warm synth
-│   └── Choose -> Save and apply live; preview its start then done
-│       └── Classic has no done -> preview start then stop
+├── Row shows the saved set -> Opens the Sounds sheet
+│   ├── Stage -> A capsule acts out a short dictation as its sounds play
+│   │   ├── Start (0 s) -> Recording: red dot + moving levels
+│   │   ├── Stop (1.4 s) -> Transcribing: three dots
+│   │   └── Done (2.1 s) -> Pasted: check; empty again at 2.9 s
+│   ├── Chips -> Start / Stop / Done / Cancel / Error (macOS) play one sound
+│   │   └── Set has no such sound (Classic's done) -> Chip faint and inert
+│   ├── Each set -> Name, what it sounds like, play button
+│   │   ├── Play -> Plays its dictation without choosing it; again stops it
+│   │   └── Press the set -> Save and apply live; play its dictation
+│   ├── Any playback -> Stops the one before it (20 ms fade)
+│   ├── Sound volume -> Plays at it; Off plays nothing, the capsule still acts
+│   ├── Reduce Motion -> Levels and dots hold still; moments still follow
+│   └── Close / Escape / scrim / leaving the pane -> Stops playback
 ├── hex settings set sound_set <signature|classic|click|soft|wood|analog>
 └── Every set -> Same loudness per sound at a given volume
 ```
+
+The sheet is a modal like the shortcut explainer, opened from a
+`sheet_button` because its choices need room to be heard, not a menu. Checks:
+`auditions_play_each_sound_at_its_moment`,
+`stopping_an_audition_fades_all_of_it`,
+`each_moment_shows_from_its_sound_to_the_next`,
+`the_sound_sets_sheet_plays_and_chooses_sets` (Linux), and the `sound-sets`
+and `sound-sets-playing` goldens. The capsule is a stand-in drawn with theme
+tokens, not the native HUD.
 
 Hex signature (2026-10-27) is one kalimba-like FM voice playing one motif,
 D-B-A-D (a sixth, since "hex" is six): start D5 to B5 (116 ms), stop B5 to A5

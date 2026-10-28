@@ -459,7 +459,7 @@ General                                  // settings
 │   ├── Intentional capture only, not ordinary shortcut chords
 │   └── Pause/resume only players already reported running by macOS
 ├── Application card -> Sound volume: immediate feedback; zero suppresses tones
-│   └── Sounds -> Choose a sound set; previews start then done
+│   └── Sounds -> Sheet: hear each set acted out in a capsule, pick one
 └── Voice Action shortcut -> Voice Action pane; Meetings -> Meetings › Settings
 
 Intentional recording                    // recording.environment

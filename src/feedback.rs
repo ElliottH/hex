@@ -50,7 +50,8 @@ pub enum Tone {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Request {
     Play(Tone),
-    Preview(SoundSet),
+    Audition(SoundSet, Audition),
+    StopAudition,
     ProvisionalStart,
     RetractStart,
     Prepare,
@@ -181,6 +182,7 @@ pub fn preload() -> Result<()> {
         // holds no output stream. Publish before any tone arrives.
         publish_player(&DICTATION_PLAYER, sender, ready_sender, Ok(()));
         let mut start_tone = ProvisionalStart::default();
+        let mut audition = Auditioning::default();
         loop {
             let timeout = start_tone.wait(Instant::now(), OBSERVATION_INTERVAL);
             let request = match receiver.recv_timeout(timeout) {
@@ -194,6 +196,7 @@ pub fn preload() -> Result<()> {
             output.release_when_idle(enabled, received_at);
             if !enabled {
                 start_tone.retract();
+                audition.stop();
                 continue;
             }
             let tone = match request {
@@ -218,13 +221,21 @@ pub fn preload() -> Result<()> {
                     output.prepare(received_at);
                     None
                 }
-                Some(Request::Preview(set)) => {
-                    let set_sounds = sounds.set(set);
-                    let start = set_sounds.start.clone();
-                    let after = start.total_duration().unwrap_or_default() + PREVIEW_GAP;
-                    let ending = set_sounds.done.as_ref().unwrap_or(&set_sounds.stop);
-                    output.play(start, Tone::DictationStart);
-                    output.play(ending.clone().delay(after), Tone::DictationDone);
+                Some(Request::Audition(set, what)) => {
+                    audition.stop();
+                    let stopped = audition.begin();
+                    for (sound, at, cue) in sounds.audition(set, what) {
+                        let (sound, _) = Retractable::with_flag(sound.delay(at), stopped.clone());
+                        output.play(sound, (set, cue));
+                    }
+                    #[cfg(target_os = "macos")]
+                    if what == Audition::Cue(Cue::Error) && !set.has_own_error() {
+                        audition.system = spawn_system_sound("Basso");
+                    }
+                    None
+                }
+                Some(Request::StopAudition) => {
+                    audition.stop();
                     None
                 }
                 None => None,
@@ -259,9 +270,7 @@ pub fn play(tone: Tone) {
         #[cfg(target_os = "macos")]
         Tone::Wake | Tone::Sleep => play_system_sound(tone),
         #[cfg(target_os = "macos")]
-        Tone::Error if BUNDLED_SETS[sound_set() as usize].error.is_none() => {
-            play_system_sound(tone)
-        }
+        Tone::Error if !sound_set().has_own_error() => play_system_sound(tone),
         _ => enqueue(DICTATION_PLAYER.get(), Request::Play(tone)),
     }
 }
@@ -308,11 +317,105 @@ impl SoundSet {
         }
     }
 
+    /// What the set sounds like, in a few words, as the sound picker lists it.
+    pub fn character(self) -> &'static str {
+        match self {
+            Self::Signature => "A kalimba motif that rises and comes home",
+            Self::Classic => "The tones Hex first shipped with",
+            Self::Click => "Mechanical key clicks",
+            Self::Soft => "Warm, rounded blips",
+            Self::Wood => "Soft marimba and hollow wood blocks",
+            Self::Analog => "A mellow analogue synth",
+        }
+    }
+
+    /// Whether the set plays a sound for `cue`. Classic has no done sound;
+    /// its errors play macOS Basso, and errors sound only on macOS.
+    pub fn has(self, cue: Cue) -> bool {
+        cue != Cue::Done || BUNDLED_SETS[self as usize].done.is_some()
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn has_own_error(self) -> bool {
+        BUNDLED_SETS[self as usize].error.is_some()
+    }
+
     fn decode(value: u8) -> Self {
         Self::ALL
             .get(usize::from(value))
             .copied()
             .unwrap_or_default()
+    }
+}
+
+/// A moment of dictation that has its own sound, as the sound picker plays
+/// them one at a time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Cue {
+    Start,
+    Stop,
+    Done,
+    Cancel,
+    Error,
+}
+
+impl Cue {
+    pub const ALL: [Self; 5] = [
+        Self::Start,
+        Self::Stop,
+        Self::Done,
+        Self::Cancel,
+        Self::Error,
+    ];
+
+    /// The English label the sound picker shows, translated where shown.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::Stop => "Stop",
+            Self::Done => "Done",
+            Self::Cancel => "Cancel",
+            Self::Error => "Error",
+        }
+    }
+}
+
+/// What the sound picker plays of a set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Audition {
+    /// A short dictation: start, a moment of speaking, stop, a moment of
+    /// transcribing, then done.
+    Dictation,
+    Cue(Cue),
+}
+
+/// When a dictation audition plays each sound, from its start.
+const DICTATION_CUES: [(Cue, Duration); 3] = [
+    (Cue::Start, Duration::ZERO),
+    (Cue::Stop, Duration::from_millis(1_400)),
+    (Cue::Done, Duration::from_millis(2_100)),
+];
+
+impl Audition {
+    /// Each cue it plays and when, from its start. A cue the set has no
+    /// sound for keeps its moment and plays nothing.
+    pub fn cues(self) -> &'static [(Cue, Duration)] {
+        match self {
+            Self::Dictation => &DICTATION_CUES,
+            Self::Cue(Cue::Start) => &[(Cue::Start, Duration::ZERO)],
+            Self::Cue(Cue::Stop) => &[(Cue::Stop, Duration::ZERO)],
+            Self::Cue(Cue::Done) => &[(Cue::Done, Duration::ZERO)],
+            Self::Cue(Cue::Cancel) => &[(Cue::Cancel, Duration::ZERO)],
+            Self::Cue(Cue::Error) => &[(Cue::Error, Duration::ZERO)],
+        }
+    }
+
+    /// How long its moments show, past its last sound.
+    pub fn length(self) -> Duration {
+        match self {
+            Self::Dictation => Duration::from_millis(2_900),
+            Self::Cue(_) => Duration::from_millis(900),
+        }
     }
 }
 
@@ -326,16 +429,47 @@ fn sound_set() -> SoundSet {
     SoundSet::decode(SOUND_SET.load(Ordering::Relaxed))
 }
 
-/// Plays `set`'s start tone and then its done tone (its stop tone for a set
-/// without one) at the current volume, so a choice in Settings can be heard.
-pub fn preview(set: SoundSet) {
+/// Plays `what` of `set` at the current volume, so the sound picker can be
+/// heard. It ends the audition still sounding, if any.
+pub fn audition(set: SoundSet, what: Audition) {
     if sounds_enabled() {
-        enqueue(DICTATION_PLAYER.get(), Request::Preview(set));
+        enqueue(DICTATION_PLAYER.get(), Request::Audition(set, what));
     }
 }
 
-/// How long after the start tone ends a preview plays the done tone.
-const PREVIEW_GAP: Duration = Duration::from_millis(250);
+/// Ends the audition still sounding, fading it out over [`RETRACT_FADE`].
+pub fn stop_audition() {
+    enqueue(DICTATION_PLAYER.get(), Request::StopAudition);
+}
+
+/// The worker's view of the audition sounding, if any.
+#[derive(Default)]
+struct Auditioning {
+    stopped: Option<Arc<AtomicBool>>,
+    /// Basso, for Classic's error.
+    #[cfg(target_os = "macos")]
+    system: Option<std::process::Child>,
+}
+
+impl Auditioning {
+    /// The flag that stops the audition beginning now.
+    fn begin(&mut self) -> Arc<AtomicBool> {
+        self.stopped
+            .insert(Arc::new(AtomicBool::new(false)))
+            .clone()
+    }
+
+    fn stop(&mut self) {
+        if let Some(stopped) = self.stopped.take() {
+            stopped.store(true, Ordering::Release);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(mut child) = self.system.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
 
 /// One set's bundled files, in `resources/audio/sounds/<set>/`. A missing
 /// done tone stays silent, a missing error plays macOS Basso, and a missing
@@ -345,8 +479,6 @@ struct BundledSet {
     stop: &'static [u8],
     done: Option<&'static [u8]>,
     cancel: &'static [u8],
-    /// Windows and Linux failures stay silent.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     error: Option<&'static [u8]>,
     success: Option<&'static [u8]>,
 }
@@ -402,7 +534,7 @@ struct SetSounds {
     stop: SamplesBuffer,
     done: Option<SamplesBuffer>,
     cancel: SamplesBuffer,
-    #[cfg(target_os = "macos")]
+    /// Played for failures on macOS, and auditioned on every OS.
     error: Option<SamplesBuffer>,
     success: Option<SamplesBuffer>,
 }
@@ -415,7 +547,6 @@ impl SetSounds {
             stop: decode_wav(bundled.stop)?,
             done: optional(bundled.done)?,
             cancel: decode_wav(bundled.cancel)?,
-            #[cfg(target_os = "macos")]
             error: optional(bundled.error)?,
             success: optional(bundled.success)?,
         })
@@ -445,6 +576,25 @@ impl Sounds {
 
     fn set(&self, set: SoundSet) -> &SetSounds {
         &self.sets[set as usize]
+    }
+
+    /// The sounds `what` plays of `set`, each with when it starts. Classic's
+    /// error is macOS Basso, which the worker plays itself.
+    fn audition(&self, set: SoundSet, what: Audition) -> Vec<(SamplesBuffer, Duration, Cue)> {
+        let sounds = self.set(set);
+        what.cues()
+            .iter()
+            .filter_map(|&(cue, at)| {
+                let sound = match cue {
+                    Cue::Start => Some(&sounds.start),
+                    Cue::Stop => Some(&sounds.stop),
+                    Cue::Done => sounds.done.as_ref(),
+                    Cue::Cancel => Some(&sounds.cancel),
+                    Cue::Error => sounds.error.as_ref(),
+                };
+                sound.map(|sound| (sound.clone(), at, cue))
+            })
+            .collect()
     }
 
     /// `tone` in `set`, or `None` when it plays nothing (or a system sound).
@@ -592,7 +742,11 @@ struct Retractable<S> {
 
 impl<S: Source> Retractable<S> {
     fn new(inner: S) -> (Self, Arc<AtomicBool>) {
-        let retracted = Arc::new(AtomicBool::new(false));
+        Self::with_flag(inner, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Fades out once `retracted` is set, with every other sound sharing it.
+    fn with_flag(inner: S, retracted: Arc<AtomicBool>) -> (Self, Arc<AtomicBool>) {
         let fade_frames = RETRACT_FADE.as_secs_f32() * inner.sample_rate().get() as f32;
         let sound = Self {
             inner,
@@ -671,7 +825,7 @@ impl FeedbackOutput<MixerDeviceSink> {
 
     /// Plays a sound, opening the output first if needed. Returns whether it
     /// reached the mixer.
-    fn play(&mut self, sound: impl Source + Send + 'static, tone: Tone) -> bool {
+    fn play(&mut self, sound: impl Source + Send + 'static, tone: impl std::fmt::Debug) -> bool {
         self.prepare(Instant::now());
         // Opening may have been slow; recheck the latest preference before
         // retaining the output or playing the queued sound.
@@ -698,8 +852,19 @@ fn play_system_sound(tone: Tone) {
         Tone::Error => "Basso",
         _ => return,
     };
+    if let Some(mut child) = spawn_system_sound(sound) {
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}
+
+/// Starts `/System/Library/Sounds/<sound>.aiff` at the current volume. The
+/// caller waits for it.
+#[cfg(target_os = "macos")]
+fn spawn_system_sound(sound: &str) -> Option<std::process::Child> {
     let volume = volume().to_string();
-    let child = Command::new("/usr/bin/afplay")
+    Command::new("/usr/bin/afplay")
         .args([
             "-v",
             &volume,
@@ -708,12 +873,8 @@ fn play_system_sound(tone: Tone) {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn();
-    if let Ok(mut child) = child {
-        thread::spawn(move || {
-            let _ = child.wait();
-        });
-    }
+        .spawn()
+        .ok()
 }
 
 /// Decodes one of Hex's bundled 16-bit PCM sounds.
@@ -1177,6 +1338,63 @@ mod tests {
                 .is_some()
         );
         assert!(sounds.get(SoundSet::Classic, Tone::DictationDone).is_none());
+    }
+
+    /// A dictation audition plays start, stop and done at their moments,
+    /// each finished before the next, and every cue plays alone at once.
+    #[test]
+    fn auditions_play_each_sound_at_its_moment() {
+        let sounds = Sounds::load().unwrap();
+        for set in SoundSet::ALL {
+            let dictation = sounds.audition(set, Audition::Dictation);
+            let cues: Vec<_> = dictation.iter().map(|&(_, at, cue)| (cue, at)).collect();
+            let expected: Vec<_> = DICTATION_CUES
+                .into_iter()
+                .filter(|&(cue, _)| set.has(cue))
+                .collect();
+            assert_eq!(cues, expected, "{set:?}");
+            for pair in dictation.windows(2) {
+                let ends = pair[0].1 + pair[0].0.total_duration().unwrap();
+                assert!(ends < pair[1].1, "{set:?} {:?} overlaps", pair[0].2);
+            }
+            assert!(Audition::Dictation.length() > DICTATION_CUES[2].1);
+
+            for cue in Cue::ALL {
+                let alone = sounds.audition(set, Audition::Cue(cue));
+                let own = set.has(cue) && (cue != Cue::Error || set.has_own_error());
+                assert_eq!(alone.len(), usize::from(own), "{set:?} {cue:?}");
+                assert!(
+                    alone
+                        .iter()
+                        .all(|&(_, at, played)| at.is_zero() && played == cue)
+                );
+            }
+        }
+        assert!(!SoundSet::Classic.has(Cue::Done));
+        assert!(SoundSet::Classic.has(Cue::Error));
+    }
+
+    /// Stopping fades every sound of the audition, even one still waiting
+    /// out its delay, and the next audition starts unstopped.
+    #[test]
+    fn stopping_an_audition_fades_all_of_it() {
+        let mut audition = Auditioning::default();
+        let stopped = audition.begin();
+        let sound = || {
+            SamplesBuffer::new(
+                std::num::NonZero::new(1).unwrap(),
+                std::num::NonZero::new(48_000).unwrap(),
+                vec![1.0; 48_000],
+            )
+        };
+        let (now, _) = Retractable::with_flag(sound(), stopped.clone());
+        let (later, _) =
+            Retractable::with_flag(sound().delay(Duration::from_secs(1)), stopped.clone());
+        audition.stop();
+        let fade = (RETRACT_FADE.as_secs_f32() * 48_000.0) as usize;
+        assert!(now.count() <= fade + 2);
+        assert!(later.count() <= fade + 2);
+        assert!(!audition.begin().load(Ordering::Acquire));
     }
 
     #[test]

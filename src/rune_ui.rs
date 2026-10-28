@@ -40,6 +40,7 @@ pub(crate) mod playground;
 #[cfg(hex_capture)]
 mod scrawl;
 mod settings;
+mod sound_sets;
 mod vocabulary;
 mod voice_action;
 
@@ -218,6 +219,7 @@ fn on_close(ui: &mut Ui, _: &mut Tx) {
     models::close(ui);
     picker::close(ui);
     explainer::close(ui);
+    sound_sets::close(ui);
     // HUD Lab's demo would otherwise stay on screen; reopening starts at
     // General, and coming back to HUD Lab starts the demo again.
     if ui.pane == Pane::HudLab {
@@ -259,6 +261,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
     };
     picker::close(ui);
     explainer::close(ui);
+    sound_sets::close(ui);
     if pane.shown(ui) {
         ui.select_pane(pane, tx);
     }
@@ -550,8 +553,6 @@ enum Menu {
     Microphone,
     /// The microphone under the tour's practice field.
     TourMicrophone,
-    /// The feedback sound set.
-    SoundSet,
     Language,
     /// The speech model's language.
     TranscriptionLanguage,
@@ -612,6 +613,7 @@ pub(crate) struct Ui {
     modes: modes::ModesPane,
     picker: picker::Picker,
     explainer: explainer::Explainer,
+    sound_sets: sound_sets::SoundSets,
     tour: Option<onboarding::Tour>,
     /// The OS's capabilities and the OS-only state its panes show.
     platform: platform::PlatformState,
@@ -700,6 +702,7 @@ impl Ui {
             modes,
             picker: picker::Picker::default(),
             explainer: explainer::Explainer::default(),
+            sound_sets: sound_sets::SoundSets::default(),
             tour: None,
             platform: platform::PlatformState::new(platform::Capabilities::current()),
             host: platform::PlatformHost::None,
@@ -971,6 +974,7 @@ impl Ui {
         models::close(self);
         picker::close(self);
         explainer::close(self);
+        sound_sets::close(self);
         if self.pane == Pane::HudLab {
             self.ask(platform::PlatformRequest::EndHudDemo);
         }
@@ -989,7 +993,7 @@ impl Ui {
 
 /// Shortcut recording takes every key; Command-1 through 9 open the
 /// sidebar's panes in order; otherwise Escape closes the shortcut explainer,
-/// the picker, or the open menu.
+/// the sound sets sheet, the picker, or the open menu.
 fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if settings::on_key(ui, event, tx) {
         return true;
@@ -998,6 +1002,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
         && !event.mods.alt
         && !ui.picker.open
         && !ui.explainer.open
+        && !ui.sound_sets.open
         && ui.tour.is_none()
     {
         let index = digit as usize - '1' as usize;
@@ -1016,6 +1021,9 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     }
     if ui.explainer.open {
         explainer::close(ui);
+        true
+    } else if ui.sound_sets.open {
+        sound_sets::close(ui);
         true
     } else if ui.picker.open {
         picker::close(ui);
@@ -1138,6 +1146,7 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
     changed |= onboarding::poll(ui);
     let visible = ui.window.as_ref().is_none_or(rune::AppHandle::is_visible);
     changed |= explainer::poll(ui, clock, visible, tx);
+    changed |= sound_sets::poll(ui, clock, visible, tx);
     changed | settings::advance_capture(ui, clock, tx)
 }
 
@@ -1198,6 +1207,9 @@ fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
         layer.extend(modal);
     }
     if let Some(modal) = explainer::modal(ui, cx, p) {
+        layer.extend(modal);
+    }
+    if let Some(modal) = sound_sets::modal(ui, cx, p) {
         layer.extend(modal);
     }
     let mut tour_layer = Vec::new();
@@ -1852,10 +1864,21 @@ const SCENES: &[Scene] = &[
     }),
     // macOS and Windows surfaces, from preview data (see `platform`).
     ("mac-settings", |ui| *ui = mac_fixture()),
-    // The sound sets menu, open in the Application card.
-    ("mac-sound-set", |ui| {
+    // The sound sets sheet, at rest and as Wood's dictation reaches stop.
+    ("sound-sets", |ui| {
         *ui = mac_fixture();
-        ui.open = Some(Menu::SoundSet);
+        sound_sets::fixture(ui, None);
+    }),
+    ("sound-sets-playing", |ui| {
+        *ui = mac_fixture();
+        sound_sets::fixture(
+            ui,
+            Some((
+                crate::feedback::SoundSet::Wood,
+                crate::feedback::Audition::Dictation,
+                600.0,
+            )),
+        );
     }),
     ("mac-microphone-missing", |ui| {
         *ui = mac_fixture();
