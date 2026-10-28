@@ -434,8 +434,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   it tracks a held key, and it stays locked so a fresh press can still finish it.
   It emits no capture actions.
   One exception skips the 100 ms wait: when tracked keys alone block a press of
-  the binding itself (Idle, or Dirty for any binding; never Locked or a pending
-  gesture), the press resynchronizes and counts as a fresh press only if a
+  the binding itself (Idle or Locked for a modifier-only binding, or Dirty for
+  any binding; never a pending gesture), the press resynchronizes and counts
+  as a fresh press (a lock stays locked, so the press finishes it) only if a
   modifier-change event reported no modifiers after each tracked key's own
   press (typing in between is fine), only the binding's modifiers went down
   since, and every tracked key and every other modifier reads up in

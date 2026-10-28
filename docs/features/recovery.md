@@ -91,22 +91,25 @@ keyboard or remapping.
 
 `recover.shortcut-press`: Command-Tab swallows Tab's release, and Kit often
 presses Option within 100 ms of letting go of Command. The press itself can
-resynchronize instead of waiting for the poll.
+resynchronize instead of waiting for the poll. Switching apps with Command-Tab
+while a Toggle or double-tap capture is locked left Tab tracked too, and every
+press that should have finished the lock logged `locked with stale tracked
+keys` and did nothing; the finishing press now resynchronizes the same way.
 
 ```ts
-Command-Tab -> Tab still tracked (IDLE or DIRTY)
+Command-Tab -> Tab still tracked (IDLE, DIRTY, or LOCKED)
   -> typing, Return, Shift …                          // don't matter
   -> binding press: the binding's own down edge
      ├── keyboard reported no modifiers after each tracked key's own press
      ├── only the binding's modifiers went down since
      └── tracked keys + every other modifier read up now  // same source as recovery
         -> clear tracked keys, fence input stamped before the press
-           -> fresh press -> Start
+           -> fresh press -> Start (IDLE, DIRTY) or Finish (LOCKED)
               ├── chord at the same tick -> Discard     // not fenced
               └── older delayed release of the key -> ignored
   -> any check fails -> press ignored (logged with reason + key_codes)
                      -> 100 ms poll as before
-LOCKED + stale keys -> press ignored, poll still repairs   // lock semantics unchanged
+LOCKED + Escape -> Cancel, stale keys or not
 fenced edges, edges before a disabled tap, suspension -> no neutral evidence
 ```
 Checks in [suppression.rs](../../src/suppression.rs):
@@ -119,7 +122,8 @@ Checks in [suppression.rs](../../src/suppression.rs):
 `fenced_and_pre_reset_modifier_edges_are_not_neutral_evidence`,
 `stale_press_waits_for_recovery_while_anything_else_is_held`,
 `stale_press_requires_a_neutral_keyboard_after_the_tracked_keys`,
-`stale_press_leaves_locks_and_escape_unchanged`. Unit tests read a keyboard
+`stale_press_finishes_a_lock_and_leaves_escape_unchanged`,
+`toggle_mode_finishes_after_command_tab_while_recording`. Unit tests read a keyboard
 that is all up unless a test sets one, so every shortcut test can take this
 path.
 A binding press ignored while stale or DIRTY logs `shortcut press ignored` to
