@@ -41,6 +41,9 @@ static CAPTURE_SETTINGS: OnceLock<RwLock<CaptureSettings>> = OnceLock::new();
 static SCRAWL_APP_RUNNING: AtomicBool = AtomicBool::new(false);
 #[cfg(hex_capture)]
 static CAPTURE_ON: AtomicBool = AtomicBool::new(false);
+/// [`CaptureSettings::capsule_flow`] for the capsule, without a lock.
+#[cfg(hex_capture)]
+static CAPSULE_FLOW: AtomicU8 = AtomicU8::new(0);
 /// The send-to list shortcut's keycaps once settings are applied; empty
 /// while it has none.
 #[cfg(hex_capture)]
@@ -1111,6 +1114,40 @@ pub struct CaptureSettings {
     /// overlays: the capture capsule, picker, and ink, the dictation HUD,
     /// and the meeting capsules. Off keeps them out (`capture_host`).
     pub show_overlays_in_recordings: bool,
+    /// How the capsule offers where to send a finished capture, while Kit
+    /// compares the directions.
+    pub capsule_flow: CapsuleFlow,
+}
+
+/// The capsule's flow after a capture stops, one of five prototypes.
+#[cfg(hex_capture)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapsuleFlow {
+    /// (a) "Copied", and the suggestions in a list under the capsule.
+    #[default]
+    List,
+    /// (b) One quiet line, "Send to SEER ⏎"; ⇥ moves to the next guess.
+    Toast,
+    /// (c) A short hint of the guesses in the capsule, which then folds
+    /// into Hex's menu-bar item.
+    MenuBar,
+    /// (d) The guesses in a small card at the pointer.
+    Cursor,
+    /// (e) A pill hanging from the top edge that grows down into the
+    /// guesses.
+    Notch,
+}
+
+#[cfg(hex_capture)]
+impl CapsuleFlow {
+    pub const ALL: [Self; 5] = [
+        Self::List,
+        Self::Toast,
+        Self::MenuBar,
+        Self::Cursor,
+        Self::Notch,
+    ];
 }
 
 #[cfg(hex_capture)]
@@ -1127,6 +1164,7 @@ impl Default for CaptureSettings {
             bundle_days: week.bundle_days,
             routing: CaptureRouting::default(),
             show_overlays_in_recordings: false,
+            capsule_flow: CapsuleFlow::default(),
         }
     }
 }
@@ -1698,6 +1736,11 @@ impl AppSettings {
                 .unwrap_or_else(|error| error.into_inner()) = self.capture.clone();
             CAPTURE_ON.store(self.capture_on(), Ordering::Release);
             crate::capture_host::record_own_windows(self.capture.show_overlays_in_recordings);
+            let flow = CapsuleFlow::ALL
+                .iter()
+                .position(|flow| *flow == self.capture.capsule_flow)
+                .unwrap_or_default();
+            CAPSULE_FLOW.store(flow as u8, Ordering::Release);
         }
         HEX_MICROPHONE_ENABLED.store(self.experimental.hex_microphone, Ordering::Release);
         crate::hex_microphone::sync_from_settings(
@@ -2269,6 +2312,15 @@ pub fn capture_settings() -> CaptureSettings {
         .read()
         .unwrap_or_else(|error| error.into_inner())
         .clone()
+}
+
+/// The saved [`CapsuleFlow`], without cloning the capture settings.
+#[cfg(hex_capture)]
+pub fn capsule_flow() -> CapsuleFlow {
+    CapsuleFlow::ALL
+        .get(usize::from(CAPSULE_FLOW.load(Ordering::Acquire)))
+        .copied()
+        .unwrap_or_default()
 }
 
 /// Captures are on: [`capture_available`] and `capture.enabled`.
