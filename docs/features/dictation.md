@@ -775,22 +775,44 @@ Record -> Release -> Transcribing/processing/paste -> Finished // dictate.feedba
      -> Loader keeps running; later tones play once the output opens
 ```
 
-The sounds are Hex's own (2026-10-27), one kalimba-like FM voice playing one
-motif, D-B-A-D (a sixth, since "hex" is six): start D5 to B5 (116 ms), stop B5
-to A5 (230 ms), done D6 over A5 (330 ms), cancel B5 down to D5 (225 ms), error
-D4 then a minor D4+Bb4 (280 ms), and onboarding success, the whole motif
-landing on a D sixth chord (1.1 s), played when the first-run tour reaches
-its last step. They are 48 kHz mono WAVs in `resources/audio/`, each starting
-on its first sample, made by
+```ts
+Settings > Sounds (next to Sound volume)                    // dictate.sound-set
+├── Default / older settings -> Hex signature
+├── Hex signature / Classic / Click / Soft tone / Wood / Warm synth
+│   └── Choose -> Save and apply live; preview its start then done
+│       └── Classic has no done -> preview start then stop
+├── hex settings set sound_set <signature|classic|click|soft|wood|analog>
+└── Every set -> Same loudness per sound at a given volume
+```
+
+Hex signature (2026-10-27) is one kalimba-like FM voice playing one motif,
+D-B-A-D (a sixth, since "hex" is six): start D5 to B5 (116 ms), stop B5 to A5
+(230 ms), done D6 over A5 (330 ms), cancel B5 down to D5 (225 ms), error D4
+then a minor D4+Bb4 (280 ms), and onboarding success, the whole motif landing
+on a D sixth chord (1.1 s), played when the first-run tour reaches its last
+step. Click is mechanical key clicks, Soft tone warm sine blips in A major,
+Wood a soft-mallet marimba with hollow wood blocks for cancel and error, and
+Warm synth two detuned saws through a closing low-pass filter. Classic is the
+sounds Hex played before the signature set (start clicks, stop swish, cancel
+thud), restored from git; it has no done tone, errors play macOS Basso as they
+did, and onboarding success plays signature's.
+
+Each set is a folder in `resources/audio/sounds/` made by
 [`scripts/sounds/synth.py`](../../scripts/sounds/synth.py)
-(`uv run scripts/sounds/synth.py` rewrites them). Their levels match the
-sounds they replaced at the same volume: start like the old start clicks
-(-25.5 LUFS momentary), stop like the old swish, error like macOS Basso;
-cancel is far quieter than the old thud. Windows and Linux play start, stop,
-done, and cancel; their failures stay silent as before. Check:
+(`uv run scripts/sounds/synth.py` rewrites them; signature regenerates
+byte-identical). Synthesized sounds are 48 kHz mono WAVs starting on their
+first sample; Classic keeps its 44.1 kHz stereo, trimmed to start at its first
+audible sample. Every sound is normalized to one loudness per kind (start
+-25.5 LUFS max momentary, stop and done -27, cancel and error -26.5, success
+-25), so a volume sounds the same in every set. Classic's start and stop come
+up 3 and 4 dB (a soft limiter touches 0.1% of the start's samples) and its
+cancel, once 18 dB louder than the rest, comes down. Windows and Linux play
+start, stop, done, and cancel; their failures stay silent as before. Checks:
 `bundled_sounds_are_short_and_sound_immediately` (each sound under its length
-budget, audible within 1 ms). The sounds were checked by waveform, spectrum
-and loudness only, never played aloud on a Mac.
+budget; every start, and every synthesized sound, audible within 1 ms),
+`every_set_but_classic_has_every_sound`, `sound_set_offers_every_set`. The
+sounds were checked by waveform, spectrum and loudness only, never played
+aloud on a Mac.
 
 Feedback admission is advisory on every platform: a cold audio stack can exceed
 the two-second preload timeout, so the recognition worker logs a warning and

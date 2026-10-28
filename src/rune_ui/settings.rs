@@ -1520,6 +1520,36 @@ fn application_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             },
         ),
     ));
+    let sound_set = settings.sound_set;
+    let sound_sets = crate::feedback::SoundSet::ALL
+        .iter()
+        .map(|&set| Choice {
+            label: tr(set.name()).to_string(),
+            detail: None,
+            selected: set == sound_set,
+            choose: Box::new(move |ui: &mut Ui| {
+                ui.open = None;
+                if ui.update(|settings| settings.sound_set = set) && ui.live() {
+                    crate::feedback::preview(set);
+                }
+            }),
+        })
+        .collect();
+    rows.push(setting_row(
+        p,
+        "sound-set",
+        tr("Sounds"),
+        None,
+        select(
+            p,
+            "sound-set-control",
+            tr(sound_set.name()),
+            ui.open == Some(Menu::SoundSet),
+            sound_sets,
+            |ui: &mut Ui| toggle_menu(ui, Menu::SoundSet),
+            layer,
+        ),
+    ));
     let language = tr(crate::desktop_i18n::choice_name(
         settings.ui_language.as_deref(),
     ));

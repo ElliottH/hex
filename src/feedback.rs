@@ -1,7 +1,7 @@
 use std::io::Cursor;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread;
@@ -11,6 +11,7 @@ use color_eyre::eyre::{Result, WrapErr, eyre};
 use rodio::buffer::SamplesBuffer;
 use rodio::cpal::BufferSize;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tone {
@@ -49,6 +50,7 @@ pub enum Tone {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Request {
     Play(Tone),
+    Preview(SoundSet),
     ProvisionalStart,
     RetractStart,
     Prepare,
@@ -216,16 +218,26 @@ pub fn preload() -> Result<()> {
                     output.prepare(received_at);
                     None
                 }
+                Some(Request::Preview(set)) => {
+                    let set_sounds = sounds.set(set);
+                    let start = set_sounds.start.clone();
+                    let after = start.total_duration().unwrap_or_default() + PREVIEW_GAP;
+                    let ending = set_sounds.done.as_ref().unwrap_or(&set_sounds.stop);
+                    output.play(start, Tone::DictationStart);
+                    output.play(ending.clone().delay(after), Tone::DictationDone);
+                    None
+                }
                 None => None,
             };
             if let Some(tone) = tone {
-                if let Some(sound) = sounds.get(tone) {
+                if let Some(sound) = sounds.get(sound_set(), tone) {
                     output.play(sound.clone(), tone);
                 }
             } else if timed_out && start_tone.is_due(Instant::now()) {
                 // Only an empty queue reaches here, so a retraction sent while
                 // the device opened always wins over the tone.
-                let (sound, retracted) = Retractable::new(sounds.start.clone());
+                let start = sounds.set(sound_set()).start.clone();
+                let (sound, retracted) = Retractable::new(start);
                 if output.play(sound, Tone::DictationStart) {
                     start_tone.sounding(retracted);
                 } else {
@@ -246,17 +258,104 @@ pub fn play(tone: Tone) {
     match tone {
         #[cfg(target_os = "macos")]
         Tone::Wake | Tone::Sleep => play_system_sound(tone),
+        #[cfg(target_os = "macos")]
+        Tone::Error if BUNDLED_SETS[sound_set() as usize].error.is_none() => {
+            play_system_sound(tone)
+        }
         _ => enqueue(DICTATION_PLAYER.get(), Request::Play(tone)),
     }
 }
 
-/// Hex's own sounds, one voice and motif made by `scripts/sounds/synth.py`,
-/// which regenerates these files.
+/// A set of feedback sounds, chosen in Settings. Every set has its own start,
+/// stop and cancel, and all are level-matched, so a volume sounds the same in
+/// each. `scripts/sounds/synth.py` makes their files.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[repr(u8)]
+pub enum SoundSet {
+    /// One kalimba-like voice playing one motif across a dictation.
+    #[default]
+    Signature = 0,
+    /// The sounds Hex played before the signature set. It has no done tone,
+    /// and errors play macOS Basso as they did.
+    Classic = 1,
+    Click = 2,
+    Soft = 3,
+    Wood = 4,
+    Analog = 5,
+}
+
+impl SoundSet {
+    /// In the order Settings lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Signature,
+        Self::Classic,
+        Self::Click,
+        Self::Soft,
+        Self::Wood,
+        Self::Analog,
+    ];
+
+    /// The English name Settings shows, translated where it is shown.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Signature => "Hex signature",
+            Self::Classic => "Classic",
+            Self::Click => "Click",
+            Self::Soft => "Soft tone",
+            Self::Wood => "Wood",
+            Self::Analog => "Warm synth",
+        }
+    }
+
+    fn decode(value: u8) -> Self {
+        Self::ALL
+            .get(usize::from(value))
+            .copied()
+            .unwrap_or_default()
+    }
+}
+
+static SOUND_SET: AtomicU8 = AtomicU8::new(SoundSet::Signature as u8);
+
+pub fn set_sound_set(set: SoundSet) {
+    SOUND_SET.store(set as u8, Ordering::Relaxed);
+}
+
+fn sound_set() -> SoundSet {
+    SoundSet::decode(SOUND_SET.load(Ordering::Relaxed))
+}
+
+/// Plays `set`'s start tone and then its done tone (its stop tone for a set
+/// without one) at the current volume, so a choice in Settings can be heard.
+pub fn preview(set: SoundSet) {
+    if sounds_enabled() {
+        enqueue(DICTATION_PLAYER.get(), Request::Preview(set));
+    }
+}
+
+/// How long after the start tone ends a preview plays the done tone.
+const PREVIEW_GAP: Duration = Duration::from_millis(250);
+
+/// One set's bundled files, in `resources/audio/sounds/<set>/`. A missing
+/// done tone stays silent, a missing error plays macOS Basso, and a missing
+/// success plays the signature set's.
+struct BundledSet {
+    start: &'static [u8],
+    stop: &'static [u8],
+    done: Option<&'static [u8]>,
+    cancel: &'static [u8],
+    error: Option<&'static [u8]>,
+    success: Option<&'static [u8]>,
+}
+
 macro_rules! bundled_sound {
-    ($name:literal) => {
+    ($set:literal, $name:literal) => {
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/resources/audio/",
+            "/resources/audio/sounds/",
+            $set,
+            "/",
             $name,
             ".wav"
         ))
@@ -264,24 +363,68 @@ macro_rules! bundled_sound {
     };
 }
 
-const START_SOUND: &[u8] = bundled_sound!("dictationStart");
-const STOP_SOUND: &[u8] = bundled_sound!("dictationStop");
-const DONE_SOUND: &[u8] = bundled_sound!("dictationDone");
-const CANCEL_SOUND: &[u8] = bundled_sound!("dictationCancel");
-#[cfg(any(target_os = "macos", test))]
-const ERROR_SOUND: &[u8] = bundled_sound!("error");
-const ONBOARDING_SUCCESS_SOUND: &[u8] = bundled_sound!("onboardingSuccess");
+/// A set `synth.py` makes whole.
+macro_rules! synthesized_set {
+    ($set:literal) => {
+        BundledSet {
+            start: bundled_sound!($set, "start"),
+            stop: bundled_sound!($set, "stop"),
+            done: Some(bundled_sound!($set, "done")),
+            cancel: bundled_sound!($set, "cancel"),
+            error: Some(bundled_sound!($set, "error")),
+            success: Some(bundled_sound!($set, "success")),
+        }
+    };
+}
 
-/// The decoded sounds the playback worker plays. Wake and sleep stay the
-/// quieter macOS system sounds.
-struct Sounds {
+/// In [`SoundSet::ALL`]'s order.
+const BUNDLED_SETS: [BundledSet; 6] = [
+    synthesized_set!("signature"),
+    BundledSet {
+        start: bundled_sound!("classic", "start"),
+        stop: bundled_sound!("classic", "stop"),
+        done: None,
+        cancel: bundled_sound!("classic", "cancel"),
+        error: None,
+        success: None,
+    },
+    synthesized_set!("click"),
+    synthesized_set!("soft"),
+    synthesized_set!("wood"),
+    synthesized_set!("analog"),
+];
+
+/// One set, decoded.
+struct SetSounds {
     start: SamplesBuffer,
     stop: SamplesBuffer,
-    done: SamplesBuffer,
+    done: Option<SamplesBuffer>,
     cancel: SamplesBuffer,
     #[cfg(target_os = "macos")]
-    error: SamplesBuffer,
-    onboarding_success: SamplesBuffer,
+    error: Option<SamplesBuffer>,
+    success: Option<SamplesBuffer>,
+}
+
+impl SetSounds {
+    fn load(bundled: &BundledSet) -> Result<Self> {
+        let optional = |bytes: Option<&'static [u8]>| bytes.map(decode_wav).transpose();
+        Ok(Self {
+            start: decode_wav(bundled.start)?,
+            stop: decode_wav(bundled.stop)?,
+            done: optional(bundled.done)?,
+            cancel: decode_wav(bundled.cancel)?,
+            #[cfg(target_os = "macos")]
+            error: optional(bundled.error)?,
+            success: optional(bundled.success)?,
+        })
+    }
+}
+
+/// The decoded sounds the playback worker plays, every set at once so a new
+/// choice plays at once. Wake and sleep stay the quieter macOS system sounds.
+struct Sounds {
+    /// In [`SoundSet::ALL`]'s order.
+    sets: Vec<SetSounds>,
     #[cfg(hex_capture)]
     capture: [SamplesBuffer; 5],
 }
@@ -289,27 +432,35 @@ struct Sounds {
 impl Sounds {
     fn load() -> Result<Self> {
         Ok(Self {
-            start: decode_wav(START_SOUND)?,
-            stop: decode_wav(STOP_SOUND)?,
-            done: decode_wav(DONE_SOUND)?,
-            cancel: decode_wav(CANCEL_SOUND)?,
-            #[cfg(target_os = "macos")]
-            error: decode_wav(ERROR_SOUND)?,
-            onboarding_success: decode_wav(ONBOARDING_SUCCESS_SOUND)?,
+            sets: BUNDLED_SETS
+                .iter()
+                .map(SetSounds::load)
+                .collect::<Result<_>>()?,
             #[cfg(hex_capture)]
             capture: capture_sounds()?,
         })
     }
 
-    fn get(&self, tone: Tone) -> Option<&SamplesBuffer> {
+    fn set(&self, set: SoundSet) -> &SetSounds {
+        &self.sets[set as usize]
+    }
+
+    /// `tone` in `set`, or `None` when it plays nothing (or a system sound).
+    fn get(&self, set: SoundSet, tone: Tone) -> Option<&SamplesBuffer> {
+        let sounds = self.set(set);
         Some(match tone {
-            Tone::DictationStart => &self.start,
-            Tone::DictationStop => &self.stop,
-            Tone::DictationDone => &self.done,
-            Tone::Cancel => &self.cancel,
-            Tone::OnboardingSuccess => &self.onboarding_success,
+            Tone::DictationStart => &sounds.start,
+            Tone::DictationStop => &sounds.stop,
+            Tone::DictationDone => return sounds.done.as_ref(),
+            Tone::Cancel => &sounds.cancel,
+            Tone::OnboardingSuccess => {
+                return sounds
+                    .success
+                    .as_ref()
+                    .or(self.set(SoundSet::Signature).success.as_ref());
+            }
             #[cfg(target_os = "macos")]
-            Tone::Error => &self.error,
+            Tone::Error => return sounds.error.as_ref(),
             #[cfg(target_os = "macos")]
             Tone::Wake | Tone::Sleep => return None,
             #[cfg(hex_capture)]
@@ -542,6 +693,7 @@ fn play_system_sound(tone: Tone) {
     let sound = match tone {
         Tone::Wake => "Pop",
         Tone::Sleep => "Tink",
+        Tone::Error => "Basso",
         _ => return,
     };
     let volume = volume().to_string();
@@ -602,19 +754,31 @@ mod tests {
         }
     }
 
-    /// Every bundled sound with the longest it may run.
-    const BUNDLED: [(&str, &[u8], Duration); 6] = [
-        ("start", START_SOUND, Duration::from_millis(130)),
-        ("stop", STOP_SOUND, Duration::from_millis(250)),
-        ("done", DONE_SOUND, Duration::from_millis(350)),
-        ("cancel", CANCEL_SOUND, Duration::from_millis(250)),
-        ("error", ERROR_SOUND, Duration::from_millis(300)),
-        (
-            "onboarding success",
-            ONBOARDING_SUCCESS_SOUND,
-            Duration::from_millis(1_200),
-        ),
-    ];
+    /// Every bundled sound of `set` with the longest it may run. The
+    /// classic sounds keep their original lengths.
+    fn bundled(set: SoundSet) -> Vec<(&'static str, &'static [u8], Duration)> {
+        let bundled = &BUNDLED_SETS[set as usize];
+        let classic = set == SoundSet::Classic;
+        let budget = |synthesized: u64, classic_ms: u64| {
+            Duration::from_millis(if classic { classic_ms } else { synthesized })
+        };
+        let mut sounds = vec![
+            ("start", bundled.start, budget(130, 300)),
+            ("stop", bundled.stop, budget(250, 450)),
+            ("cancel", bundled.cancel, budget(250, 2_100)),
+        ];
+        let optional = [
+            ("done", bundled.done, budget(350, 0)),
+            ("error", bundled.error, budget(300, 0)),
+            ("onboarding success", bundled.success, budget(1_200, 0)),
+        ];
+        for (name, bytes, budget) in optional {
+            if let Some(bytes) = bytes {
+                sounds.push((name, bytes, budget));
+            }
+        }
+        sounds
+    }
 
     fn leading_silence(sound: SamplesBuffer) -> Duration {
         let channels = usize::from(sound.channels().get());
@@ -627,18 +791,52 @@ mod tests {
         Duration::from_secs_f64((first / channels) as f64 / f64::from(rate))
     }
 
+    /// Every start sounds at once. The classic stop and cancel keep their
+    /// original soft onsets.
     #[test]
     fn bundled_sounds_are_short_and_sound_immediately() {
-        for (name, bytes, budget) in BUNDLED {
-            let sound = decode_wav(bytes).unwrap();
-            let length = sound.total_duration().unwrap();
-            assert!(length <= budget, "{name} runs {length:?}, over {budget:?}");
-            let silence = leading_silence(sound);
-            assert!(
-                silence <= Duration::from_millis(1),
-                "{name} starts after {silence:?} of silence"
-            );
+        for set in SoundSet::ALL {
+            for (name, bytes, budget) in bundled(set) {
+                let sound = decode_wav(bytes).unwrap();
+                let length = sound.total_duration().unwrap();
+                assert!(
+                    length <= budget,
+                    "{set:?} {name} runs {length:?}, over {budget:?}"
+                );
+                if set == SoundSet::Classic && name != "start" {
+                    continue;
+                }
+                let silence = leading_silence(sound);
+                assert!(
+                    silence <= Duration::from_millis(1),
+                    "{set:?} {name} starts after {silence:?} of silence"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn every_set_but_classic_has_every_sound() {
+        for set in SoundSet::ALL {
+            let bundled = &BUNDLED_SETS[set as usize];
+            let whole =
+                bundled.done.is_some() && bundled.error.is_some() && bundled.success.is_some();
+            assert_eq!(whole, set != SoundSet::Classic, "{set:?}");
+        }
+    }
+
+    #[test]
+    fn sound_set_round_trips_by_name_and_index() {
+        for set in SoundSet::ALL {
+            assert_eq!(SoundSet::decode(set as u8), set);
+            let json = serde_json::to_string(&set).unwrap();
+            assert_eq!(serde_json::from_str::<SoundSet>(&json).unwrap(), set);
+        }
+        assert_eq!(SoundSet::decode(u8::MAX), SoundSet::Signature);
+        assert_eq!(
+            serde_json::to_string(&SoundSet::Analog).unwrap(),
+            "\"analog\""
+        );
     }
 
     #[test]
@@ -898,7 +1096,7 @@ mod tests {
                 .and_then(|device| rodio::DeviceTrait::description(&device).ok())
                 .map(|description| description.name().to_owned());
         eprintln!("default output: {device:?}");
-        let start = decode_wav(START_SOUND).unwrap();
+        let start = decode_wav(BUNDLED_SETS[SoundSet::Signature as usize].start).unwrap();
         let open = || {
             if legacy {
                 let mut sink = DeviceSinkBuilder::open_default_sink().unwrap();
@@ -956,13 +1154,27 @@ mod tests {
     #[test]
     fn bundled_sounds_decode_without_an_audio_device() {
         let sounds = Sounds::load().unwrap();
-        for (name, bytes, _) in BUNDLED {
-            let mut sound = decode_wav(bytes).unwrap();
-            assert!(sound.total_duration().unwrap() > Duration::ZERO, "{name}");
-            assert!(sound.any(|sample| sample.abs() > 0.0), "{name}");
+        for set in SoundSet::ALL {
+            for (name, bytes, _) in bundled(set) {
+                let mut sound = decode_wav(bytes).unwrap();
+                assert!(
+                    sound.total_duration().unwrap() > Duration::ZERO,
+                    "{set:?} {name}"
+                );
+                assert!(sound.any(|sample| sample.abs() > 0.0), "{set:?} {name}");
+            }
+            // Every set plays onboarding success, the classic one signature's.
+            assert!(
+                sounds.get(set, Tone::OnboardingSuccess).is_some(),
+                "{set:?}"
+            );
         }
-        assert!(sounds.get(Tone::DictationDone).is_some());
-        assert!(sounds.get(Tone::OnboardingSuccess).is_some());
+        assert!(
+            sounds
+                .get(SoundSet::Signature, Tone::DictationDone)
+                .is_some()
+        );
+        assert!(sounds.get(SoundSet::Classic, Tone::DictationDone).is_none());
     }
 
     #[test]

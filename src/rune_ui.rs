@@ -550,6 +550,8 @@ enum Menu {
     Microphone,
     /// The microphone under the tour's practice field.
     TourMicrophone,
+    /// The feedback sound set.
+    SoundSet,
     Language,
     /// The speech model's language.
     TranscriptionLanguage,
@@ -1850,6 +1852,11 @@ const SCENES: &[Scene] = &[
     }),
     // macOS and Windows surfaces, from preview data (see `platform`).
     ("mac-settings", |ui| *ui = mac_fixture()),
+    // The sound sets menu, open in the Application card.
+    ("mac-sound-set", |ui| {
+        *ui = mac_fixture();
+        ui.open = Some(Menu::SoundSet);
+    }),
     ("mac-microphone-missing", |ui| {
         *ui = mac_fixture();
         ui.settings.microphone = Some("Shure MV7".into());

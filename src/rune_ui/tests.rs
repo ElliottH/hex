@@ -1204,6 +1204,22 @@ fn changing_only_the_language_prepares_the_same_model_again() {
 }
 
 #[test]
+fn choosing_a_sound_set_saves_it() {
+    use crate::feedback::SoundSet;
+    let mut rt = runtime("portal", true, GOLDEN_SIZE);
+    assert_eq!(rt.state.settings.sound_set, SoundSet::Signature);
+    tap(&mut rt, "sound-set-control-field-trigger");
+    assert_eq!(rt.state.open, Some(Menu::SoundSet));
+    let wood = SoundSet::ALL
+        .iter()
+        .position(|set| *set == SoundSet::Wood)
+        .unwrap();
+    tap(&mut rt, &format!("sound-set-control-item{wood}"));
+    assert_eq!(rt.state.open, None);
+    assert_eq!(rt.state.settings.sound_set, SoundSet::Wood);
+}
+
+#[test]
 fn a_download_in_progress_can_be_cancelled() {
     let mut rt = runtime("picker-downloading", true, PANE_SIZE);
     tap(&mut rt, "model1/top/actions/cancel-model");
