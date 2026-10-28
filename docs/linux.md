@@ -24,9 +24,11 @@ Hex on Linux is **one process per user** (and per data directory), not a
 system-wide/root daemon. It owns the microphone, shortcuts, model downloads and
 workers, sounds, paste, History, the recording pill, and the window. The window
 is optional: closing it stops neither dictation nor a model download, and
-launching Hex again opens it. There is no Linux tray icon; quit with
-**Quit Hex** at the bottom of the window's sidebar, the launcher's **Quit Hex**
-action, or `hex quit`.
+launching Hex again opens it. When the desktop has a tray (a
+StatusNotifierItem host, such as Waybar, KDE, or Omarchy's bar), Hex shows a
+tray icon: click it to open the window, or use its menu's **Show Hex** and
+**Quit Hex**. Without a tray, quit with **Quit Hex** at the bottom of the
+window's sidebar, the launcher's **Quit Hex** action, or `hex quit`.
 
 The window has one fixed size on Linux, 980×760 logical pixels (so fractional
 scaling keeps it sharp); it cannot be resized. Wayland has no way to ask a
