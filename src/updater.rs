@@ -44,7 +44,9 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const DEV_CHECK_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// Opening or focusing the window checks the Dev channel at most this often.
 const FOCUS_CHECK_GAP: Duration = Duration::from_secs(60);
-const MAX_BACKOFF: Duration = Duration::from_secs(6 * 60 * 60);
+/// Failed checks back off, but never past hourly: the release service counts
+/// a running install from at least one check an hour.
+const MAX_BACKOFF: Duration = CHECK_INTERVAL;
 /// The manifest fetch of an ordinary check.
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// The final check behind Restart to update: an unreachable service must
@@ -583,6 +585,7 @@ fn check(
     let setting = AppSettings::saved_update_channel();
     let home = home_channel(method, BUILD_CHANNEL, crate::VERSION);
     let channel = channel(method, setting, &home);
+    let user_agent = transport::user_agent(&home, crate::VERSION);
     *lock(&shared.last) = Some((channel.clone(), std::time::Instant::now()));
     let manifest_url = manifest_url(&channel);
     let timeout = if restarting {
@@ -590,7 +593,7 @@ fn check(
     } else {
         MANIFEST_TIMEOUT
     };
-    let manifest = cache.fetch(&manifest_url, &updates, timeout)?;
+    let manifest = cache.fetch(&manifest_url, &user_agent, &updates, timeout)?;
     let install = Install {
         version: crate::VERSION.into(),
         target: platform::TARGET.into(),
@@ -659,7 +662,7 @@ fn check(
                 *lock(&shared.state) = State::Downloading;
             }
             transport::prune(&updates, Some(&target.sha256));
-            let file = transport::download(&url, &target, &updates)?;
+            let file = transport::download(&url, &user_agent, &target, &updates)?;
             let staged = platform::stage(&file, &version)
                 .wrap_err_with(|| format!("could not stage Hex {version}"))?;
             *lock(&shared.staged) = Some(StagedUpdate {
