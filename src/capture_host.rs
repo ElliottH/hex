@@ -564,6 +564,11 @@ fn shared_engine(
     if let Some(engine) = &*engine {
         return Ok(engine.clone());
     }
+    // The portal remembers the screen Hex was given; the token is Hex's.
+    #[cfg(target_os = "linux")]
+    if let Ok(support) = crate::app_paths::support_dir() {
+        scrawl_capture::linux::set_token_path(support.join("screencast-token"));
+    }
     let (events, received) = mpsc::sync_channel(EVENT_CAPACITY);
     thread::Builder::new()
         .name("capture-events".into())

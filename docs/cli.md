@@ -52,7 +52,7 @@ hex
 │   ├── list [--json]              every term and its "sounds like" spellings
 │   ├── add <term> [--sounds-like a,b]  add a term, or new spellings to an existing one
 │   └── remove <term>              any case
-├── capture                        the `capture` build option + experiment (features/capture.md)
+├── capture                        the `capture` experiment, macOS and Linux (features/capture.md)
 │   ├── start|stop|cancel|status   record a capture, end or discard it, or report
 │   ├── list [--limit N]           the newest captures in the captures folder
 │   ├── show <capture>             one capture's words, files, and where it went
@@ -107,11 +107,11 @@ environment, so Hex passes each `HEX_*` variable to `open --env`. `start`
 takes them from the shell that runs it, `restart` from the running Hex. The
 values are never logged.
 
-`capture` drives the [Captures](features/capture.md) experiment, a build
-option off in every public build; the command exists in debug builds and in
-builds with `--features capture`. A Hex built without the feature refuses
-`scrawl-capture` with `unsupported`; one with it but the experiment off
-refuses it with `feature-off`. `capture stop` replies at once with the bundle
+`capture` drives the [Captures](features/capture.md) experiment, in every
+macOS and Linux build; with the experiment off it refuses with
+`feature-off`. On Linux, `list`, `show`, `route`, and `send` run in the
+`hex` process itself and `start`, `stop`, and `cancel` are handed to the
+running Hex's listener; `status` is macOS-only for now. `capture stop` replies at once with the bundle
 path while the words and files are written in the background; `capture status`
 lists bundles still writing and the last outcome (`last`: `bundle`, `stage`
 of `done`, `failed`, or `cancelled`, and for a written bundle `words`, `gaps`,
@@ -186,7 +186,7 @@ model-list | model-use {model, language?} | model-install {model, language?} | m
 window-show {pane?} | window-hide | window-story {story, variant?, play}
 history-clear | check-for-updates | launch-at-login {enabled?}
 vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
-scrawl-capture {action}                          action: start | stop | cancel | status; `capture` build option
+scrawl-capture {action}                          action: start | stop | cancel | status; `capture` experiment
 scrawl-capture-list {limit?} | scrawl-capture-show {capture}
 scrawl-capture-send {capture, to?, always?} | scrawl-capture-route {capture, ask_jev}
 ```
@@ -326,7 +326,7 @@ settings but do not observe input-source changes or show these controls.
   another channel than the build's offers that channel's current release
   ("Switch to Stable 2.3.1" in the window); Hex installs it only once you
   confirm there. Versions are never compared.
-- With the `capture` build option and experiment, `capture.*` keys appear:
+- With the `capture` experiment, `capture.*` keys appear:
   `capture.enabled`, `capture.hotkey` (default `option+shift+s`),
   `capture.list_hotkey` (the capsule's send-to list, default
   `option+shift+v`), `capture.transcriber`, `capture.folder`,

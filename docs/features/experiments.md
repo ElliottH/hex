@@ -31,16 +31,15 @@ hex experiments                          // experiments.cli; macOS, Windows, Lin
 The known experiments are compiled into
 [experiments.rs](../../src/experiments.rs):
 
-- `capture`: Scrawl's capture engine hosted in Hex (macOS; see
-  [Captures](capture.md)). It is a build option, off in every public build:
-  only a build with `--features capture` (`HEX_CAPTURE=1
-  scripts/build-app.sh` for an app) knows the name. Any other build's `list`
-  omits it, `enable` rejects it, and a source naming it is ignored. The
+- `capture`: Scrawl's capture engine hosted in Hex (macOS and Linux; see
+  [Captures](capture.md)). Every macOS and Linux build knows the name; on
+  Windows `list` omits it, `enable` rejects it, and a source naming it is
+  ignored. The
   gate is where the work starts: the listener builds no capture host, so there
   is no sink, thread, or bundle folder while it is off. On, it adds
   Settings › Experiments › Scrawl, whose own opt-in (`capture.enabled`,
   default off) is the second gate. Check:
-  `capture_exists_only_with_its_build_option` in
+  `capture_exists_only_where_it_has_a_host` in
   [experiments.rs](../../src/experiments.rs).
 - `dot-scope`: the recording HUD (macOS, Linux, and Windows) as Dot scope, a plate of dots lit
   by a braided pair of oscilloscope traces that follow the microphone level
