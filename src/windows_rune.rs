@@ -26,10 +26,6 @@ use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CAPTION_COLOR, DwmSetWindowAttribute};
-use windows_sys::Win32::UI::Controls::{
-    SetWindowThemeAttribute, WTA_NONCLIENT, WTA_OPTIONS, WTNCA_NODRAWCAPTION, WTNCA_NODRAWICON,
-    WTNCA_NOSYSMENU,
-};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GWLP_HINSTANCE, GetSystemMetrics, GetWindowLongPtrW, ICON_BIG, ICON_SMALL, IMAGE_ICON,
     LR_DEFAULTCOLOR, LoadImageW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SendMessageW,
@@ -349,9 +345,8 @@ fn show_update_in_tray(status: DesktopUpdateStatus) {
 }
 
 /// Gives the window the executable's embedded icon (resource 1, see
-/// build.rs) for the taskbar and Alt-Tab, so they match the exe in
-/// Explorer and Task Manager (the caption draws none, see
-/// [`blend_title_bar`]). Windows picks the frame that fits each
+/// build.rs) for the taskbar, Alt-Tab, and the caption, so they match the
+/// exe in Explorer and Task Manager. Windows picks the frame that fits each
 /// size and DPI.
 fn apply_window_icon(hwnd: HWND) {
     const APP_ICON: u16 = 1;
@@ -383,28 +378,10 @@ static TITLED_WINDOW: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 static CAPTION_COLOR: AtomicU32 = AtomicU32::new(NO_CAPTION_COLOR);
 const NO_CAPTION_COLOR: u32 = u32::MAX;
 
-/// Blends the native title bar into the window: the caption draws no icon
-/// and no title (the taskbar and Alt-Tab still show both), and takes the
-/// window's background color once a frame has named it. Windows keeps the
-/// frame, its resize edges, and the caption buttons.
-///
-/// Windows 11 still drew the icon under `WTNCA_NODRAWICON` alone; the
-/// icon is also the system menu's button, which `WTNCA_NOSYSMENU` removes.
-/// The window keeps `WS_SYSMENU`, so the caption buttons stay.
+/// Blends the native title bar into the window: DWM paints the caption the
+/// window's background color once a frame has named it. The caption keeps
+/// its icon and title, the frame, its resize edges, and the caption buttons.
 fn blend_title_bar(hwnd: HWND) {
-    let hidden = WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON | WTNCA_NOSYSMENU;
-    let options = WTA_OPTIONS {
-        dwFlags: hidden,
-        dwMask: hidden,
-    };
-    unsafe {
-        SetWindowThemeAttribute(
-            hwnd,
-            WTA_NONCLIENT,
-            (&raw const options).cast(),
-            size_of::<WTA_OPTIONS>() as u32,
-        );
-    }
     TITLED_WINDOW.store(hwnd, Ordering::Relaxed);
     let color = CAPTION_COLOR.load(Ordering::Relaxed);
     if color != NO_CAPTION_COLOR {

@@ -210,13 +210,11 @@ hex app
   test binary including the two shared modules); on Windows it is only
   type-checked.
 - The window gets the executable's icon from Rune's `App::on_window` hook
-  (its HWND through `WindowHandle::with_raw_handle`) for the taskbar and
-  Alt-Tab. The native title bar stays, blended into the window: it draws no
-  icon or title (`WTNCA_NODRAWICON|WTNCA_NODRAWCAPTION|WTNCA_NOSYSMENU`;
-  Windows 11 still drew the icon without `WTNCA_NOSYSMENU`) and DWM paints
-  the caption the theme's `bg_deep` (`DWMWA_CAPTION_COLOR`, Windows 11; Windows
-  10 keeps its own caption color). The view repaints it when the system
-  theme switches.
+  (its HWND through `WindowHandle::with_raw_handle`) for the taskbar,
+  Alt-Tab, and the caption. The native title bar keeps its icon and title,
+  blended into the window: DWM paints the caption the theme's `bg_deep`
+  (`DWMWA_CAPTION_COLOR`, Windows 11; Windows 10 keeps its own caption
+  color). The view repaints it when the system theme switches.
 - Without a tray (creation failed) closing the window quits Hex.
   See the [single-process plan](plans/single-process.md#windows-under-rune).
 
