@@ -110,4 +110,5 @@ jobs:
             sleep 10
           done
           test "$status" = 200
+          bun scripts/release-data.ts --mode "$MODE"
           bun run check:downloads
