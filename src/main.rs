@@ -1,3 +1,7 @@
+/// The version Hex reports: the release version, or `0.0.0-dev-local-<commit>`
+/// for a build outside the Release workflow (build.rs).
+const VERSION: &str = env!("HEX_BUILD_VERSION");
+
 #[cfg(target_os = "macos")]
 mod accessibility;
 mod app_paths;
@@ -209,7 +213,7 @@ use color_eyre::eyre::eyre;
 #[derive(Parser)]
 #[command(
     name = "hex",
-    version,
+    version = crate::VERSION,
     about = "Local, observable voice control",
     long_about = "Local, observable voice control.\n\n\
         Control commands (status, dictation, meetings record, settings, model, window, …) drive \
