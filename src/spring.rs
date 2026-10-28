@@ -1,5 +1,5 @@
-//! Frame-rate independent spring physics for the native macOS dictation HUD,
-//! and the system's Reduce Motion setting.
+//! Frame-rate independent spring physics for the dictation HUD (and Dot
+//! scope's simulation on every OS), and macOS's Reduce Motion setting.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -156,6 +156,12 @@ fn monotonic_ms() -> u64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
+#[cfg(not(target_os = "macos"))]
+fn query_platform_reduce_motion() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
 fn query_platform_reduce_motion() -> bool {
     unsafe {
         let workspace: *mut objc2::runtime::AnyObject =

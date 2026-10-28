@@ -198,13 +198,13 @@ hex app
 - Models are prepared in-process through `transcription_preparation`; the
   runtime saves the selection when it is ready and restarts the listener.
 - Enable on launch waits until first-run setup has recorded completion.
-- The dictation HUD is a Rune overlay (`windows_rune_hud.rs`): a HUD thread
-  steps the shared indicator model and shades each frame with the CPU port of
-  the macOS shader into `rune::Pixels`; Rune shows it in a topmost tool window
+- The dictation HUD is a Rune overlay (`rune_hud.rs`, shared with Linux): a
+  HUD thread steps the shared indicator model (and Dot scope with its
+  experiment on) and the overlay's compositor draws each frame on the GPU with
+  `rune_hud.wgsl`, the WGSL port of the macOS shaders; Rune shows it in a topmost tool window
   with `WS_EX_NOACTIVATE|WS_EX_TRANSPARENT|WS_EX_LAYERED`, shown with
   `SW_SHOWNOACTIVATE`, 12 pt from the top or 24 pt above the taskbar. The
-  same model, shader, and overlay path ran in a headless sway on apollo (a
-  test binary including the two shared modules); on Windows it is only
+  same model, shaders, and overlay run on Linux; on Windows it is only
   type-checked.
 - The window gets the executable's icon from Rune's `App::on_window` hook
   (its HWND through `WindowHandle::with_raw_handle`) for the taskbar,

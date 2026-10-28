@@ -2,9 +2,9 @@
 //!
 //! The event vocabulary, phase/job bookkeeping, critically-damped springs,
 //! and per-frame uniform assembly live here. macOS submits each frame to its
-//! native Metal renderer, while Windows and the developer HUD Lab feed the
-//! same uniforms into the CPU shader port. Platform modules retain ownership
-//! of their windows, frame clocks, and rendering APIs.
+//! native Metal renderer, while Linux and Windows feed the
+//! same uniforms into `rune_hud.wgsl`. Platform modules retain ownership of
+//! their windows, frame clocks, and rendering APIs.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -13,7 +13,6 @@ pub const WINDOW_WIDTH: f32 = 112.0;
 pub const WINDOW_HEIGHT: f32 = 64.0;
 const CAPSULE_WIDTH: f32 = 56.0;
 pub const CAPSULE_HEIGHT: f32 = 16.0;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub const TOP_OFFSET: f64 = 12.0;
 const ENTRANCE_ANGULAR_FREQUENCY: f32 = 24.0;
 const EXIT_ANGULAR_FREQUENCY: f32 = 24.0;
@@ -22,6 +21,10 @@ const HIDDEN_SCALE: f32 = 0.82;
 const HIDDEN_SOFTNESS: f32 = 4.0;
 const PROCESSING_MORPH_DURATION: Duration = Duration::from_millis(250);
 const RECORDING_FLASH_HALF_LIFE: Duration = Duration::from_millis(280);
+/// Dot scope's loudness before any meter arrives, dBFS.
+const SILENT: f32 = -120.0;
+/// Dot scope's done wipe (0.3 s) and a beat of the plate after it.
+const DOT_SCOPE_COMPLETED_VISIBLE_DURATION: Duration = Duration::from_millis(340);
 
 /// Shader inputs assembled by [`IndicatorModel`]. The layout matches the
 /// Metal `Uniforms` struct exactly, including its trailing alignment slot, so
@@ -86,7 +89,6 @@ impl DictationIndicatorEvent {
     /// `DictationIndicatorSender::meter` on macOS: `average` is the RMS of
     /// the slice and `peak` the maximum absolute sample. Returns `None` for
     /// an empty slice (the macOS sender sends nothing in that case).
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub fn meter(samples: &[f32]) -> Option<Self> {
         if samples.is_empty() {
             return None;
@@ -191,9 +193,6 @@ fn recording_flash_for(phase: Phase, editing: bool, elapsed: Duration) -> f32 {
 /// shell should hide/close the HUD window.
 pub struct IndicatorFrame {
     pub uniforms: IndicatorUniforms,
-    // Linux currently embeds the model in HUD Lab rather than owning a
-    // floating product window, so it has no visibility consumer yet.
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub visible: bool,
 }
 
@@ -209,7 +208,6 @@ pub struct IndicatorModel {
     last_frame: Instant,
     exiting: bool,
     completion_pending: bool,
-    scale: f32,
     target_average: f32,
     target_peak: f32,
     average: Spring,
@@ -222,6 +220,8 @@ pub struct IndicatorModel {
     processing: Spring,
     post_processing: Spring,
     tuning: HudTuning,
+    /// The microphone's loudness for Dot scope, dBFS.
+    loudness: f32,
 }
 
 impl Default for IndicatorModel {
@@ -243,7 +243,6 @@ impl IndicatorModel {
             last_frame: now,
             exiting: true,
             completion_pending: false,
-            scale: 2.0,
             target_average: 0.0,
             target_peak: 0.0,
             average: Spring::new(0.0),
@@ -256,15 +255,8 @@ impl IndicatorModel {
             processing: Spring::new(0.0),
             post_processing: Spring::new(0.0),
             tuning: HudTuning::default(),
+            loudness: SILENT,
         }
-    }
-
-    /// The backing scale factor of the screen the HUD renders on. Stands in
-    /// for the macOS `set_scale`, which also resized the Metal drawable; here
-    /// it only feeds `uniforms.resolution`. Defaults to 2.0 like the macOS
-    /// layer's initial contents scale.
-    pub fn set_backing_scale(&mut self, scale: f32) {
-        self.scale = scale;
     }
 
     pub fn handle(&mut self, event: DictationIndicatorEvent) {
@@ -277,6 +269,7 @@ impl IndicatorModel {
                 self.jobs.clear();
                 self.phase = Phase::Hidden;
                 self.completion_pending = false;
+                self.loudness = SILENT;
                 self.freeze_visual_state();
             }
             DictationIndicatorEvent::Configure(tuning) => {
@@ -302,6 +295,7 @@ impl IndicatorModel {
                 self.softness.reset(HIDDEN_SOFTNESS);
                 self.processing.reset(0.0);
                 self.post_processing.reset(0.0);
+                self.loudness = SILENT;
             }
             DictationIndicatorEvent::PromotedToVoiceAction => {
                 self.editing = true;
@@ -309,6 +303,7 @@ impl IndicatorModel {
             DictationIndicatorEvent::Meter { average, peak } => {
                 self.target_average = (average * 9.0).clamp(0.0, 1.0);
                 self.target_peak = (peak * 3.0).clamp(0.0, 1.0);
+                self.loudness = crate::dot_scope::loudness(average);
             }
             DictationIndicatorEvent::Submitted { job_id } => {
                 self.capturing = false;
@@ -420,6 +415,29 @@ impl IndicatorModel {
         self.post_processing.velocity = 0.0;
     }
 
+    /// What Dot scope shows at `now`, as the macOS HUD decides it: its stage
+    /// (`None` while hidden or cancelled, so the last stage fades out),
+    /// whether it is wanted on screen, and the microphone's loudness. Call
+    /// after [`Self::frame`], which finishes a pending completion.
+    pub fn dot_scope(&self, now: Instant) -> (Option<crate::dot_scope::Stage>, bool, f32) {
+        use crate::dot_scope::Stage;
+        let stage = match self.phase {
+            Phase::Recording => Some(Stage::Recording),
+            Phase::Transcribing => Some(Stage::Processing),
+            Phase::Completed => Some(Stage::Done),
+            Phase::Failed => Some(Stage::Failed),
+            Phase::Hidden | Phase::Cancelled => None,
+        };
+        let visible_duration = match self.phase {
+            Phase::Completed => Some(DOT_SCOPE_COMPLETED_VISIBLE_DURATION),
+            phase => phase.visible_duration(),
+        };
+        let finished = visible_duration
+            .is_some_and(|duration| now.duration_since(self.phase_started) >= duration);
+        let visible = !matches!(self.phase, Phase::Hidden) && !finished;
+        (stage, visible, self.loudness)
+    }
+
     /// Advances every spring by the time since the previous frame and
     /// assembles the shader uniforms — the state-machine half of the macOS
     /// `MetalRenderer::draw`, with the Metal encoding removed.
@@ -506,7 +524,8 @@ impl IndicatorModel {
         self.target_peak *= 0.91_f32.powf(dt * 60.0);
 
         let uniforms = IndicatorUniforms {
-            resolution: [WINDOW_WIDTH * self.scale, WINDOW_HEIGHT * self.scale],
+            // The renderer sets the resolution it draws at.
+            resolution: [WINDOW_WIDTH, WINDOW_HEIGHT],
             time: now.duration_since(self.render_started).as_secs_f32(),
             width: self.width.value,
             height: self.height.value,

@@ -68,7 +68,7 @@ pub struct WindowsDictationConfig {
     pub sound_theme: crate::feedback::SoundTheme,
     pub history: Option<crate::history::History>,
     pub last_dictation: Arc<Mutex<Option<String>>>,
-    pub indicator: Option<crate::windows_rune_hud::WindowsIndicatorSender>,
+    pub indicator: Option<crate::rune_hud::HudSender>,
     pub mode_runtime: Arc<RwLock<crate::dictation_modes::ModeRuntime>>,
     pub transformations: Arc<crate::personal_commands::TransformationClient>,
     pub voice_action_model: Arc<RwLock<Option<crate::dictation_processor::Model>>>,
@@ -368,11 +368,11 @@ pub fn run(
             }
             if let Some(indicator) = &indicator {
                 indicator.send(if submitted {
-                    crate::windows_rune_hud::WindowsIndicatorEvent::Submitted {
+                    crate::rune_hud::HudEvent::Submitted {
                         job_id: next_job_id,
                     }
                 } else {
-                    crate::windows_rune_hud::WindowsIndicatorEvent::Discarded
+                    crate::rune_hud::HudEvent::Discarded
                 });
             }
             emit_current_state(&mut events, recording, pending, &device_label)?;
@@ -420,9 +420,9 @@ pub fn run(
                     }
                     if let Some(indicator) = &indicator {
                         indicator.send(if voice {
-                            crate::windows_rune_hud::WindowsIndicatorEvent::EditingStarted
+                            crate::rune_hud::HudEvent::EditingStarted
                         } else {
-                            crate::windows_rune_hud::WindowsIndicatorEvent::Started
+                            crate::rune_hud::HudEvent::Started
                         });
                     }
                     events.dictation(DictationPhase::Started, "")?;
@@ -457,9 +457,9 @@ pub fn run(
                     )?;
                     if let Some(indicator) = &indicator {
                         indicator.send(if cancelled {
-                            crate::windows_rune_hud::WindowsIndicatorEvent::Cancelled
+                            crate::rune_hud::HudEvent::Cancelled
                         } else {
-                            crate::windows_rune_hud::WindowsIndicatorEvent::Discarded
+                            crate::rune_hud::HudEvent::Discarded
                         });
                     }
                     emit_current_state(&mut events, recording, pending, &device_label)?;
@@ -506,7 +506,7 @@ pub fn run(
                     recording_feedback_started = false;
                     capture.cancel();
                     if let Some(indicator) = &indicator {
-                        indicator.send(crate::windows_rune_hud::WindowsIndicatorEvent::Cancelled);
+                        indicator.send(crate::rune_hud::HudEvent::Cancelled);
                     }
                     events.dictation(DictationPhase::Cancelled, "")?;
                     emit_current_state(&mut events, recording, pending, &device_label)?;
@@ -533,9 +533,9 @@ pub fn run(
             if let (Some(indicator), Some(job_id)) = (&indicator, job_id) {
                 // Repaste ids were never announced, so the HUD ignores them.
                 indicator.send(if result.result.is_ok() {
-                    crate::windows_rune_hud::WindowsIndicatorEvent::JobCompleted { job_id }
+                    crate::rune_hud::HudEvent::JobCompleted { job_id }
                 } else {
-                    crate::windows_rune_hud::WindowsIndicatorEvent::JobFailed { job_id }
+                    crate::rune_hud::HudEvent::JobFailed { job_id }
                 });
             }
             match result.result {
@@ -644,7 +644,7 @@ pub fn run(
                     capture.cancel();
                     events.dictation(DictationPhase::Cancelled, "")?;
                     if let Some(indicator) = &indicator {
-                        indicator.send(crate::windows_rune_hud::WindowsIndicatorEvent::Cancelled);
+                        indicator.send(crate::rune_hud::HudEvent::Cancelled);
                     }
                 }
                 events.dictation(
@@ -674,7 +674,7 @@ pub fn run(
                     "",
                 )?;
                 if let Some(indicator) = &indicator {
-                    indicator.send(crate::windows_rune_hud::WindowsIndicatorEvent::Failed);
+                    indicator.send(crate::rune_hud::HudEvent::Failed);
                 }
                 emit_current_state(&mut events, recording, pending, &device_label)?;
             }
@@ -1045,12 +1045,12 @@ fn emit_state(events: &mut EventLog, state: VoiceState, device: &str) -> Result<
     Ok(())
 }
 
-struct IndicatorGuard(Option<crate::windows_rune_hud::WindowsIndicatorSender>);
+struct IndicatorGuard(Option<crate::rune_hud::HudSender>);
 
 impl Drop for IndicatorGuard {
     fn drop(&mut self) {
         if let Some(indicator) = &self.0 {
-            indicator.send(crate::windows_rune_hud::WindowsIndicatorEvent::Reset);
+            indicator.send(crate::rune_hud::HudEvent::Reset);
         }
     }
 }

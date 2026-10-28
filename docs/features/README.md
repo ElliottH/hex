@@ -976,9 +976,10 @@ Linux beta                               // not macOS feature parity
 │   └── X11 grab conflict / portal refusal -> Warn without stopping dictation
 ├── Voice Action (opt-in) -> Hold its shortcut or `hex voice-action` -> Instruction
 │   └── Selected text from the primary selection -> OpenCode -> Paste the reply
-├── Recording HUD -> "Recording" pill on the top or bottom edge, "Transcribing"
+├── Recording HUD -> The macOS capsule (or Dot scope with `dot-scope` on) on the
+│   │   top or bottom edge, recording with the voice's level, then transcribing
 │   │   until accepted output finishes; Hidden position -> none   // linux.hud
-│   └── Rune overlay in Hex's process (linux_rune_hud)
+│   └── Rune overlay in Hex's process (rune_hud, rune_hud.wgsl on the GPU)
 │       ├── Wayland -> layer-shell overlay layer, no keyboard, empty input region
 │       ├── X11 -> override-redirect window, empty input shape
 │       ├── No layer-shell -> `hex status` reports the HUD limitation
@@ -1060,8 +1061,11 @@ physical keyboard press has not been recorded.
 
 `linux.hud`: [linux_rune_hud.rs](../../src/linux_rune_hud.rs) keeps the
 listener's generation slot (an old listener cannot hide a restarted HUD) and
-accepts reports before the window's app exists. The GTK HUD it replaced is
-deleted. Observed on
+turns its reports into [rune_hud.rs](../../src/rune_hud.rs)'s events;
+reports before the window's app exists are dropped. The shaders render
+offscreen with `cargo test --bin hex rune_hud_frames -- --ignored`
+(2026-10-28 on apollo: capsule and Dot scope frames match the Metal look).
+The GTK HUD it replaced is deleted. The text pill was observed on
 2026-10-22 in a headless sway on apollo (isolated data root, real microphone,
 `hex service`): `hex dictation start` showed the pill at the top edge and it
 was gone after `hex dictation stop` and transcription. The Rune overlay itself

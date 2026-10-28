@@ -192,7 +192,7 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
             tracing::warn!(%error, "Windows system tray is unavailable; closing Hex will quit");
         }
     }
-    let hud = crate::windows_rune_hud::install(&mut app);
+    let hud = crate::rune_hud::install(&mut app);
     let (requests, receiver) = mpsc::channel();
     let shared = Arc::new(Shared::default());
     RUNTIME
@@ -246,7 +246,7 @@ fn run_runtime(
     requests: Receiver<Request>,
     shared: &Shared,
     shutdown: &AtomicBool,
-    hud: crate::windows_rune_hud::HudHandle,
+    hud: crate::rune_hud::HudHandle,
     tray: &rune::AppHandle<Ui>,
 ) {
     let mut tray_update = None;

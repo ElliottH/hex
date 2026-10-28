@@ -233,11 +233,16 @@ substitute for source inspection or a second roadmap.
   socket that forwards `Activate` (with the activation token), shortcut
   commands, `Status`, and `Quit` to the one Hex process, plus the per-user
   systemd lifecycle (`Type=notify` readiness, `session.env`, start/restart).
-- `linux_rune_hud`: the focus-free, click-through recording/processing HUD as
-  a Rune overlay in the Hex process: layer-shell on Wayland, override-redirect
-  on X11, at the top or bottom. The listener reports through `LinuxIndicator`
-  and never waits on it; it shows once the window's app runs, whether or not
-  the window is open.
+- `linux_rune_hud`: the Linux side of `rune_hud`: `LinuxIndicator` turns the
+  listener's capture, meter, and pending-output reports into HUD events and
+  never waits on the HUD; it shows once the window's app runs, whether or not
+  the window is open (layer-shell on Wayland, override-redirect on X11).
+- `rune_hud`: the Linux and Windows dictation HUD: a HUD thread steps
+  `desktop_indicator_model` (and, with `dot-scope` on, Dot scope's
+  simulation) and hands each frame's uniforms to a click-through Rune
+  overlay whose compositor draws `rune_hud.wgsl`, the WGSL port of
+  `dictation_indicator.metal`. Keep the two shaders in lockstep: mirror every
+  Metal change in the WGSL in the same PR.
 - `linux_tray`: the optional tray icon, a StatusNotifierItem with a dbusmenu
   (Show Hex, Quit Hex) on its own thread and private bus connection. It
   registers whenever a tray host (`org.kde.StatusNotifierWatcher`) appears;
@@ -251,16 +256,14 @@ substitute for source inspection or a second roadmap.
   the install method, verify (OS code signature on macOS and Windows), stage,
   and restart into an update.
 - `windows`, `windows_app`, `windows_rune`, `windows_dictation`,
-  `windows_input`, `windows_paste`, `windows_rune_hud`,
-  `desktop_indicator_model`, `desktop_indicator_shader`,
+  `windows_input`, `windows_paste`, `desktop_indicator_model`,
   `windows_context`, `windows_audio_control`, `windows_login_item`: the Windows
   beta CLI, the runtime host (`WindowsDesktopHost`: listener, model
   preparation, OpenCode catalog, transformations, updater) and single-instance
   claim, the tray app on `rune::App` (tray, window icon, and runtime thread;
   `rune_ui/windows_host.rs` is the window's host), the WASAPI dictation loop,
-  low-level keyboard hook, clipboard paste, the HUD (`desktop_indicator_model` springs
-  and `desktop_indicator_shader` CPU fragment shader drawn into a Rune
-  overlay), UI Automation context, audio ducking, and the
+  low-level keyboard hook, clipboard paste, the HUD's springs
+  (`desktop_indicator_model`, drawn by `rune_hud`), UI Automation context, audio ducking, and the
   login item.
 - `dictation_modes`: the mode runtime the Windows and Linux listeners share:
   mode selection by application and website, then global replacements, mode

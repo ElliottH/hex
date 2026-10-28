@@ -516,6 +516,7 @@ pub(crate) fn run(
                 continue;
             }
             pending = pending.saturating_sub(1);
+            indicator.finished(result.is_ok());
             match result {
                 Ok(text) => {
                     feedback::play(Tone::DictationDone);
@@ -560,6 +561,9 @@ pub(crate) fn run(
                     }
                 }
                 capture.ingest(&samples, captured_through);
+                if capture.is_recording() {
+                    indicator.meter(&samples);
+                }
                 if capture.become_intentional(captured_through) && finishing.is_none() {
                     // Ordinary shortcut chords and short taps never mute or pause.
                     suppressor.suppress();

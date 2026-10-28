@@ -34,10 +34,8 @@ mod dashboard;
 mod desktop_activity;
 mod desktop_host;
 mod desktop_i18n;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod desktop_indicator_model;
-#[cfg(target_os = "windows")]
-mod desktop_indicator_shader;
 #[cfg(target_os = "macos")]
 mod developer_control;
 #[cfg_attr(any(target_os = "linux", target_os = "windows"), allow(dead_code))]
@@ -143,13 +141,15 @@ mod process_exit;
 mod recognition;
 #[cfg(target_os = "macos")]
 mod recording_environment;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod rune_hud;
 mod rune_ui;
 #[cfg(target_os = "macos")]
 mod smart_turn;
 mod speech_detector;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod spoken_text;
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod spring;
 #[cfg(target_os = "macos")]
 mod status_item;
@@ -193,8 +193,6 @@ mod windows_login_item;
 mod windows_paste;
 #[cfg(target_os = "windows")]
 mod windows_rune;
-#[cfg(target_os = "windows")]
-mod windows_rune_hud;
 
 #[cfg(target_os = "macos")]
 use std::fs;

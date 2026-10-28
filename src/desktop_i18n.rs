@@ -951,7 +951,6 @@ mod tests {
 
     /// Every source that translates, on every OS.
     const SOURCES: &[&str] = &[
-        include_str!("linux_rune_hud.rs"),
         include_str!("opencode_catalog.rs"),
         include_str!("rune_ui.rs"),
         include_str!("rune_ui/activity.rs"),
