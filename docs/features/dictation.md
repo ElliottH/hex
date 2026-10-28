@@ -1,6 +1,6 @@
 # Dictation
 
-Hold the configured shortcut, speak, and release. HEX transcribes locally and
+Hold the configured shortcut, speak, and release. Hex transcribes locally and
 inserts the result at the current focus. New captures do not cancel accepted
 work; cancellation prevents insertion only before output commits.
 
@@ -553,7 +553,7 @@ noisy rooms, or Linux on a real GPU.
 
 Optional spoken entry requires Commands enabled, its model ready, and recognition
 awake. [Voice Commands](commands.md#spoken-dictation-controls) owns
-`dictate.voice-controls`, its start/stop/Send/cancel phrases, config, and checks;
+`dictate.hexs`, its start/stop/Send/cancel phrases, config, and checks;
 this page owns the resulting capture and output.
 
 ### Ongoing Jobs And Output
@@ -609,14 +609,14 @@ Listening idle                            // dictate.model-memory
 The selected GGUF remains resident by design; Parakeet v3's pinned Q8 artifact is
 739,508,576 bytes before runtime metadata and decoder state. Input-sized scheduler
 scratch must not remain at its high-water mark after a dictation. The pinned
-`transcribe-cpp` 0.1.3 runtime owns that scratch for the session lifetime, so HEX
+`transcribe-cpp` 0.1.3 runtime owns that scratch for the session lifetime, so Hex
 rotates the lightweight session after every offline run while retaining the loaded
 model. A later dictation recreates its session without reloading the weights.
 
 **Observed September 18, 2026, isolated Metal probe on M2 Max:** with the similarly
 sized Parakeet Unified English model, `transcribe-cpp` 0.1.3 grew from a 792 MB loaded
 footprint to 1,195 MB after a 45-second input and retained 1,195 MB after another
-short run. The same 0.1.3 runtime with HEX's session rotation measured 792 MB loaded,
+short run. The same 0.1.3 runtime with Hex's session rotation measured 792 MB loaded,
 801 MB after the long input, and 802 MB after the following short run. The probe used
 generated silence and no live microphone, UI, Commands model, or paste. This
 establishes the backend scratch cause and reclamation on that model and machine, not
@@ -830,7 +830,7 @@ not by a physical keyboard run.
 
 **Fixed in 2.1.21:** through 2.1.20 the worker opened the output at startup
 and kept it open for as long as sounds were On, so `coreaudiod` held a
-`PreventUserIdleSystemSleep` assertion for HEX's PID and an idle Mac never
+`PreventUserIdleSystemSleep` assertion for Hex's PID and an idle Mac never
 slept ([#95](https://github.com/anomalyco/hex/issues/95)). 2.1.18 released the
 stream only when sounds were Off. Startup admission therefore no longer
 reports `could not open the audio output`; a device failure surfaces as a

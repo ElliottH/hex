@@ -1,4 +1,4 @@
-# HEX Agent Guide
+# Hex Agent Guide
 
 ## Private Kit Tool
 
@@ -11,7 +11,7 @@ only by a fast-forward from `dev` when Kit releases; never commit to it.
 There is no `main`.
 
 Any change to what the window draws regenerates the goldens in the same PR:
-run `HEX_UPDATE_GOLDENS=1 cargo test --locked --bin voice-control rune_ui`
+run `HEX_UPDATE_GOLDENS=1 cargo test --locked --bin hex rune_ui`
 on Linux (the golden tests only run there; from a Mac, dispatch
 `check-linux.yml` on the branch and take its `golden-actual` artifact),
 look at every changed image, and commit them with the change.
@@ -22,7 +22,7 @@ branch from and push to `dev`.
 
 ## Purpose
 
-Build HEX as a local, observable macOS voice appliance with explicit Linux
+Build Hex as a local, observable macOS voice appliance with explicit Linux
 X11, wlroots-compatible Wayland, and Windows (x64 and ARM64) beta contracts. Keep the engine native Rust
 and keep consequential behavior explicit. Protected commands and typed captures
 remain compiled Rust; ordinary literal commands live in the explicit TypeScript user config. User-facing
@@ -189,13 +189,12 @@ substitute for source inspection or a second roadmap.
   runtime projection for commands, hotkeys, microphone and transcription
   selection, recording behavior, processing, sound volume, indicator position,
   interface language, and Dock policy. It records one-time changes in
-  `migrations` and migrates the Windows and Linux beta files once.
+  `migrations`.
 - `login_item`: the native `SMAppService.mainAppService` adapter and its worker
   thread. macOS owns registration state; it is deliberately not duplicated in
   `settings.json`.
-- `app_paths`: the Application Support owner for runtime logs and shared state,
-  including the one-time macOS `voice-control` to `hex` folder rename, which runs
-  in `main` before logging, the instance lock, or any file in the folder opens.
+- `app_paths`: the Application Support owner (`hex` on every OS) for runtime
+  logs and shared state.
 - `onboarding`, `permission_guide`: required permission health, the native
   floating System Settings guide, selected dictation-model installation, the
   release startup gate, and opt-in command-model setup.
@@ -203,13 +202,12 @@ substitute for source inspection or a second roadmap.
   microphone (`Hex Microphone`), lock-free capture-to-sink ring buffer,
   real-time voice-filter DSP presets, and the offline WAV renderer behind
   `hex dev voice-filter render`.
-- `linux`, `linux_app`, `linux_dictation`, `linux_paste`, `linux_migration`:
+- `linux`, `linux_app`, `linux_dictation`, `linux_paste`:
   the Linux beta CLI (including the `hex dictation`, `hex voice-action`, and
   `hex paste-last` keybinding commands and launch forwarding), the one Linux
   process (host thread, window on demand through one seam, Quit), the hotkey
   capture-transcribe-paste loop with Paste Last and Voice Action,
-  paste and primary-selection reads, and the one-time `linux-settings.json`
-  migration.
+  and paste and primary-selection reads.
 - `linux_input`: the one shortcut state machine (hold, double-tap lock, toggle,
   double-tap only, Escape, Paste Last, Voice Action, and `hex` commands) and the
   monitor that feeds it from X11 key grabs, the Wayland GlobalShortcuts portal,
@@ -247,15 +245,14 @@ substitute for source inspection or a second roadmap.
   the install method, verify (OS code signature on macOS and Windows), stage,
   and restart into an update.
 - `windows`, `windows_app`, `windows_rune`, `windows_dictation`,
-  `windows_input`, `windows_paste`, `windows_migration`, `windows_rune_hud`,
+  `windows_input`, `windows_paste`, `windows_rune_hud`,
   `desktop_indicator_model`, `desktop_indicator_shader`,
   `windows_context`, `windows_audio_control`, `windows_login_item`: the Windows
   beta CLI, the runtime host (`WindowsDesktopHost`: listener, model
   preparation, OpenCode catalog, transformations, updater) and single-instance
   claim, the tray app on `rune::App` (tray, window icon, and runtime thread;
   `rune_ui/windows_host.rs` is the window's host), the WASAPI dictation loop,
-  low-level keyboard hook, clipboard paste, the one-time
-  `windows-settings.json` migration, the HUD (`desktop_indicator_model` springs
+  low-level keyboard hook, clipboard paste, the HUD (`desktop_indicator_model` springs
   and `desktop_indicator_shader` CPU fragment shader drawn into a Rune
   overlay), UI Automation context, audio ducking, and the
   login item.
@@ -590,11 +587,11 @@ CoreAudio formats, AppleScript details, or event serialization.
 - OpenCode availability checks stay off the UI thread. When the app finds the
   `opencode2` executable, `opencode2 api` discovers or starts the managed service;
   the catalog uses authenticated loopback HTTP to avoid large CLI pipe truncation.
-  HEX never invokes
+  Hex never invokes
   `opencode2 serve --service` or owns that service's lifecycle directly. A
   missing or V1-only install is retried at a coarse interval so installing
   OpenCode V2 while Settings is open refreshes the model catalog without
-  restarting HEX. Catalog failures require an explicit retry rather than
+  restarting Hex. Catalog failures require an explicit retry rather than
   spawning clients in a tight loop.
 - Ordinary resolver commands execute only from completed Moonshine lines.
   Voice-delimited activation and stable control phrases are deliberate exceptions.
@@ -623,9 +620,9 @@ CoreAudio formats, AppleScript details, or event serialization.
   The hard caps are 10,000 entries and 16 MiB of raw + final text (oldest evicted
   first), with existing per-entry metadata and text limits. There is no archive.
 - `hex history` and `hex meetings` are read-only, release-available on macOS,
-  independent of feature opt-ins. Dispatch before folder migration, process
+  independent of feature opt-ins. Dispatch before process
   logging, the instance lock, local API, GUI, permissions, or Hex Microphone.
-  Resolve the existing data folder without renaming it. History reads one open
+  History reads one open
   file through concurrent atomic replacements, applies the saved retention at
   query time, and reports malformed files/settings without repairing them.
   JSON contracts are documented in `docs/transcript-cli.md`; incompatible
@@ -689,7 +686,7 @@ CoreAudio formats, AppleScript details, or event serialization.
 - Apple Intelligence meeting notes run only after final publication, on a
   utility-QoS thread that yields to dictation, within a bounded chunk count and
   total deadline. Failures record `notes_error` and leave the Markdown
-  untouched. Notes never rename the file and rewrite only the heading HEX wrote
+  untouched. Notes never rename the file and rewrite only the heading Hex wrote
   and the `<!-- hex:notes -->` block.
 - Captures (the `capture` experiment) are a build option, off in every
   public build: only a macOS build with `--features capture` (debug, or
@@ -770,7 +767,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   `settings set`, `model use`, `window show`, …) are release-available and
   drive only the one running Hex through the owner-only discovery file and
   bearer-authenticated `POST /control` (64 KiB request, 1 MiB reply, 10 s
-  in-app deadline). They dispatch before folder migration, process logging,
+  in-app deadline). They dispatch before process logging,
   or the instance lock, and never launch Hex; only `hex start` and
   `hex restart` open it. Every command is carried out by the app's own paths
   (the menu bar's meeting request, the window's settings save followed by
@@ -798,7 +795,7 @@ CoreAudio formats, AppleScript details, or event serialization.
   `~/Documents/Hex Meetings`) without overwriting existing files; an export
   failure does not fail the meeting.
 - Meeting paste cursors advance only after successful insertion and reset when
-  HEX restarts. They track, per source, the end of the text already handed
+  Hex restarts. They track, per source, the end of the text already handed
   out, so rewrites near the live edge and the switch to the final transcript
   neither repeat nor drop turns.
 - Deleting a meeting moves its exported Markdown and then its recording folder
@@ -1063,7 +1060,7 @@ with bundle identifier `anomaly.hex` (deliberately not reverse-DNS) and executab
 signed by Kit's team `QC99C9JE59`; macOS treats `anomaly.hex` as a new app (fresh
 permissions, login item, and preferences domain), while the `hex` Application
 Support folder, and with it settings, history, and models, is shared. Signing requires
-an explicit `VOICE_CONTROL_TEAM_ID` and matching `HEX_NOTARY_PROFILE`; the build
+an explicit `HEX_TEAM_ID` and matching `HEX_NOTARY_PROFILE`; the build
 and release scripts verify the selected team rather than assuming an Anomaly team.
 `scripts/validate-app.sh` checks this identity before preparation and publication.
 The move to Anomaly's team (`5NZ4Q7NXJ4`) is planned in
@@ -1146,9 +1143,9 @@ the same version again.
 installer (`packaging/windows/hex.iss`, built by
 `scripts/build-windows-installer.ps1`) that installs exactly the managed
 layout `install-windows.ps1` creates, so self-updates keep working:
-`%APPDATA%\voice-control\versions\<version>\hex.exe`, `current-version`, the
+`%APPDATA%\hex\versions\<version>\hex.exe`, `current-version`, the
 `install.json` direct-install receipt, and a Start Menu shortcut carrying the
-managed mark. Its uninstaller lives in `voice-control\uninstall` because
+managed mark. Its uninstaller lives in `hex\uninstall` because
 updates prune old version directories; it removes every version, the
 receipt, the shortcut, and Launch at login, and keeps settings. It installs
 its version over whatever is installed (versions are never compared). Keep
@@ -1195,10 +1192,9 @@ Tab to cycle, and `q`/Escape to quit.
   tracks, the rolling in-call transcript, and atomically published final
   transcripts.
 
-Older macOS builds used `voice-control`; the first launch of a newer build
-renames it to `hex` and leaves a `voice-control -> hex` symlink. If the rename
-fails, Hex keeps using `voice-control` and logs why. Windows and Linux keep
-`voice-control`.
+Windows uses `%APPDATA%\hex` and Linux `~/.local/share/hex` (or under
+`XDG_DATA_HOME`). Hex keeps no compatibility with earlier `voice-control`
+folders or per-OS settings files.
 
 When diagnosing a missed command, inspect both logs and distinguish microphone
 capture, transcription, command mode/dictation, context matching, command resolution,

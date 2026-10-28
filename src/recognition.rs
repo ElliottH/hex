@@ -2904,7 +2904,7 @@ fn handle_command(
                 _ => unreachable!(),
             };
             let outcome = meeting_requests
-                .ok_or("meeting controls require the HEX app")
+                .ok_or("meeting controls require the Hex app")
                 .and_then(|requests| {
                     requests.try_send(request).map_err(|error| match error {
                         TrySendError::Full(_) => "meeting controller is busy",

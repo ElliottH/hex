@@ -23,7 +23,7 @@ elif [ "${HEX_TEST_BUILD:-}" = 1 ]; then
   app_name="Hex Test"
   bundle_id=anomaly.hex.test
 else
-  team_id=${VOICE_CONTROL_TEAM_ID:?Set VOICE_CONTROL_TEAM_ID to the Apple Developer signing team}
+  team_id=${HEX_TEAM_ID:?Set HEX_TEAM_ID to the Apple Developer signing team}
   identity=$(hex_codesign_identity "$team_id")
   app_name=Hex
   bundle_id=anomaly.hex
@@ -86,13 +86,13 @@ else
 fi
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" "$bundle/Contents/Library" "$frameworks"
-cp "$root/target/release/voice-control" "$executable"
+cp "$root/target/release/hex" "$executable"
 if [ -n "$capture" ]; then
   cp "$root/target/release/scrawl-helper" "$bundle/Contents/MacOS/scrawl-helper"
 fi
 cp "$root/app/Info.plist" "$bundle/Contents/Info.plist"
 cp "$root/LICENSE" "$root/THIRD_PARTY_NOTICES.md" "$bundle/Contents/Resources/"
-HEX_VERSION="$version" HEX_BUILD_NUMBER="$build_number" VOICE_CONTROL_TEAM_ID="$team_id" VOICE_CONTROL_CODESIGN_IDENTITY="${identity#-}" HEX_SKIP_INSTALL_SCRIPT=1 \
+HEX_VERSION="$version" HEX_BUILD_NUMBER="$build_number" HEX_TEAM_ID="$team_id" HEX_CODESIGN_IDENTITY="${identity#-}" HEX_SKIP_INSTALL_SCRIPT=1 \
   "$root/scripts/build-hex-microphone-driver.sh" "$bundle/Contents/Library" >&2
 (cd "$root/sdk/commands" && bun run build)
 mkdir -p "$bundle/Contents/Resources/commands-sdk"

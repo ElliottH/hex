@@ -1537,7 +1537,7 @@ pub(crate) fn find_opencode_install() -> OpenCodeInstall {
 fn discover_opencode(is_v2: impl FnMut(&Path) -> bool) -> OpenCodeInstall {
     let current_directory = std::env::current_dir().ok();
     find_opencode_executable(
-        std::env::var_os("VOICE_CONTROL_OPENCODE_CLI").map(PathBuf::from),
+        std::env::var_os("HEX_OPENCODE_CLI").map(PathBuf::from),
         std::env::var_os("PATH").as_deref(),
         dirs::home_dir().as_deref(),
         current_directory.as_deref(),
@@ -1894,7 +1894,7 @@ mod cli {
         opencode_command_in(&crate::app_paths::opencode_workspace()?)
     }
 
-    /// An `opencode2 api` command scoped to the HEX OpenCode workspace.
+    /// An `opencode2 api` command scoped to the Hex OpenCode workspace.
     fn opencode_command_in(workspace: &Path) -> Result<Command> {
         std::fs::create_dir_all(workspace).wrap_err_with(|| {
             format!(

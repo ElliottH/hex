@@ -48,7 +48,7 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=AVFAudio");
     println!("cargo:rustc-link-lib=framework=Speech");
     // FoundationModels exists only on macOS 26 and later. Weak-link it, and
-    // drop the object's strong autolink entry, so HEX still launches on older
+    // drop the object's strong autolink entry, so Hex still launches on older
     // systems and reports Apple Intelligence as unavailable.
     compile_swift_bridge(
         "apple_intelligence",
@@ -106,7 +106,7 @@ fn test_build_commit() {
     }
 }
 
-/// Gives the executable its icon and the "HEX" name Explorer and Task
+/// Gives the executable its icon and the "Hex" name Explorer and Task
 /// Manager show, whatever the file is called.
 #[cfg(windows)]
 fn embed_windows_resources() {
@@ -136,8 +136,8 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "FileDescription", "HEX"
-      VALUE "ProductName", "HEX"
+      VALUE "FileDescription", "Hex"
+      VALUE "ProductName", "Hex"
       VALUE "FileVersion", "{version}"
       VALUE "ProductVersion", "{version}"
       VALUE "OriginalFilename", "hex.exe"

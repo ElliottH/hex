@@ -14,7 +14,7 @@ or user-defined TypeScript transformations.
 The default shortcut is `Ctrl+Space`. In **Hold** mode, hold both keys while
 speaking and release Space to transcribe and paste. In **Toggle** mode, press
 `Ctrl+Space` to start and again to finish. Only Escape cancels; holding a
-modifier on its own does nothing. HEX consumes the chord while it matches, so
+modifier on its own does nothing. Hex consumes the chord while it matches, so
 applications and input methods no longer see `Ctrl+Space`; rebind it in Settings
 if you rely on that chord elsewhere. In Hold mode, tap the shortcut twice within
 300 ms to lock recording, then press it again to finish. Paste Last defaults to
@@ -46,7 +46,7 @@ explanation when it is missing. **ARM64** decodes on the CPU. Both are
 self-contained: no Visual C++ Redistributable is required. Hex then keeps
 itself current through the signed update feed. Uninstalling removes every
 installed version, the shortcut, and Launch at login, and keeps settings, logs,
-history, and models in `%APPDATA%\voice-control`.
+history, and models in `%APPDATA%\hex`.
 
 The installer and the script below create the same managed layout, so either
 can replace the other. For a scripted install:
@@ -59,7 +59,7 @@ Uninstall a script install with `install-windows.ps1 -Uninstall`.
 
 ## Streaming Dictation
 
-With Parakeet Unified English on a GPU, HEX streams audio into the model while
+With Parakeet Unified English on a GPU, Hex streams audio into the model while
 the shortcut is held, so release only decodes the last one to two seconds. The
 same engine streams on macOS (Metal) and Linux (Vulkan). Each dictation logs
 `source=stream` or `source=fallback` in `logs\process.log`; a stream that fails,
@@ -130,7 +130,7 @@ cargo run -- app
 
 The Settings card reads **Enabled** when the shortcut works system-wide in every
 app and **Disabled** when it does nothing; its button and the tray's
-**Enable / Disable Hex** switch between them. HEX enables itself on launch by
+**Enable / Disable Hex** switch between them. Hex enables itself on launch by
 default (**Enable on launch**). The microphone records only while you dictate.
 Changing the
 transcription model, microphone, dictation shortcut, double-tap behavior, or
@@ -149,7 +149,7 @@ cargo run -- listen --model parakeet_v3 --language pl
 Press Enter once to start, then again to stop. Captures shorter than 300 ms are
 discarded. `--device` accepts a case-insensitive fragment from `devices`.
 
-Runtime data is stored under `%APPDATA%\voice-control`. Observations are in
+Runtime data is stored under `%APPDATA%\hex`. Observations are in
 `logs\live.ndjson`, and native/runtime diagnostics are in `logs\process.log`,
 including every panic with its thread and backtrace. A worker that stops
 unexpectedly leaves its cause there. The app detaches from its console at
@@ -288,9 +288,8 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Local transcription API and public TypeScript SDK host lifecycle on Windows | Missing; see Local Transcription Service |
 | Streaming finish with whole-clip fallback | Implemented on GPU devices with Parakeet Unified English |
 
-Settings live in `%APPDATA%\voice-control\settings.json`, the same file macOS and
-Linux use. On first launch, an existing `windows-settings.json` is migrated once
-and kept as `windows-settings.json.migrated`.
+Settings live in `%APPDATA%\hex\settings.json`, the same file macOS and
+Linux use.
 
 The Windows window uses the shared design system
 ([design-system.md](design-system.md)): the same Rune panes as macOS and

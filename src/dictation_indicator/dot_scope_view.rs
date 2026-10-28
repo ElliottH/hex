@@ -204,7 +204,7 @@ mod tests {
     /// ```sh
     /// HEX_DOT_SCOPE_WAV=tests/fixtures/vocabulary/audio/distractor-14.wav \
     /// HEX_DOT_SCOPE_FRAMES=/tmp/frames HEX_DOT_SCOPE_THEME=light \
-    ///   cargo test --bin voice-control dot_scope_frames -- --ignored
+    ///   cargo test --bin hex dot_scope_frames -- --ignored
     /// ```
     #[test]
     #[ignore = "writes frames for a review clip"]
