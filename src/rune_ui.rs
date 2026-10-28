@@ -40,6 +40,8 @@ pub(crate) mod playground;
 #[cfg(hex_capture)]
 mod scrawl;
 mod settings;
+#[cfg(target_os = "macos")]
+pub(crate) mod story_link;
 mod vocabulary;
 mod voice_action;
 
@@ -169,7 +171,27 @@ pub(crate) fn run_app(
 /// The window as a Rune app whose lifetime the caller chooses, connected to
 /// its host through `connect`, with the playground when its experiment is on.
 pub(crate) fn app(connect: host::Connect) -> rune::App<Ui> {
-    build(connect, playground::enabled())
+    let app = build(connect, playground::enabled());
+    #[cfg(target_os = "macos")]
+    let app = app.on_open_url(on_open_url);
+    app
+}
+
+/// A `hex://` link the system opened with Hex: a story link opens the window
+/// on that playground story; anything else is ignored.
+#[cfg(target_os = "macos")]
+fn on_open_url(_: &mut Ui, link: &str, tx: &mut Tx) {
+    let link = match story_link::parse(link, story_link::scheme()) {
+        Ok(link) => link,
+        Err(why) => {
+            tracing::warn!(%why, "ignored a link opened with Hex");
+            return;
+        }
+    };
+    if let Err(why) = story_link::open(&link, tx) {
+        tracing::warn!(story = %link.story, %why, "a story link opened only the window");
+    }
+    crate::macos_rune::bring_window_forward();
 }
 
 /// `hex app -- --snap …`: a headless render of a fixture scene. With the

@@ -900,6 +900,15 @@ fn window_visible() -> bool {
 /// Opens the window at `destination`, in front of the app that was active.
 fn show(window: &rune::AppHandle<Ui>, destination: Destination) {
     window.update(move |ui, tx| crate::rune_ui::show(ui, destination, tx));
+    bring_forward(window);
+}
+
+/// Opens the window in front, from the main thread.
+pub(crate) fn bring_window_forward() {
+    with_window(bring_forward);
+}
+
+fn bring_forward(window: &rune::AppHandle<Ui>) {
     // An open window always shows the Dock icon: hiding it
     // would deactivate Hex and drop the window behind other apps.
     crate::app_settings::set_dock_icon_visible(true);

@@ -18,6 +18,17 @@
   <string>Hex</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>anomaly.hex</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>hex</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleShortVersionString</key>
   <string>2.0.9</string>
   <key>CFBundleVersion</key>
