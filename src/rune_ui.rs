@@ -212,6 +212,7 @@ fn on_close(ui: &mut Ui, _: &mut Tx) {
     ui.flush_drafts();
     settings::cancel_capture(ui);
     ui.open = None;
+    models::close(ui);
     picker::close(ui);
     explainer::close(ui);
     if let Service::Live(backend) = &mut ui.service {
@@ -539,8 +540,6 @@ enum Menu {
     Microphone,
     Language,
     HistoryRetention,
-    /// The OpenCode model search for Voice Action or the selected mode.
-    Model,
     /// The OpenCode thinking variant.
     Variant,
     /// The selected meeting's overflow menu.
@@ -944,6 +943,7 @@ impl Ui {
         self.flush_drafts();
         settings::cancel_capture(self);
         self.open = None;
+        models::close(self);
         picker::close(self);
         explainer::close(self);
         self.pane = pane;
@@ -1628,14 +1628,14 @@ const SCENES: &[Scene] = &[
         *ui = portal_fixture();
         ui.settings.voice_action.enabled = true;
         ui.pane = Pane::VoiceAction;
-        ui.open = Some(Menu::Model);
+        ui.models.open_picker();
     }),
     ("voice-action-models-long", |ui| {
         *ui = portal_fixture();
         ui.models = models::Models::fixture_long();
         ui.settings.voice_action.enabled = true;
         ui.pane = Pane::VoiceAction;
-        ui.open = Some(Menu::Model);
+        ui.models.open_picker();
     }),
     ("history", |ui| {
         *ui = portal_fixture();
