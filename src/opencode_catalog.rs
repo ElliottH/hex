@@ -133,26 +133,6 @@ pub(crate) struct ModelPresentation {
     pub(crate) is_default: bool,
 }
 
-pub(crate) fn filtered_model_keys(catalog: &ModelCatalog, query: &str) -> Vec<Option<String>> {
-    let mut choices = Vec::new();
-    if query.is_empty() && catalog.default_name.is_some() {
-        choices.push(None);
-    }
-    choices.extend(
-        catalog
-            .models
-            .iter()
-            .filter(|choice| {
-                query.is_empty()
-                    || choice.key.to_lowercase().contains(query)
-                    || choice.name.to_lowercase().contains(query)
-                    || choice.provider.to_lowercase().contains(query)
-            })
-            .map(|choice| Some(choice.key.clone())),
-    );
-    choices
-}
-
 pub(crate) fn model_presentation(
     catalog: &ModelCatalogState,
     selected_key: Option<&str>,
@@ -203,7 +183,7 @@ fn model_id(key: &str) -> &str {
     key.split_once('/').map_or(key, |(_, model)| model)
 }
 
-fn provider_label(provider: &str) -> String {
+pub(crate) fn provider_label(provider: &str) -> String {
     if provider.eq_ignore_ascii_case("opencode") {
         return "OpenCode".into();
     }
@@ -251,26 +231,6 @@ mod tests {
 
         let default = model_presentation(&catalog, None).unwrap();
         assert!(default.is_default);
-    }
-
-    #[test]
-    fn model_search_finds_provider_models_with_nested_ids() {
-        let catalog = ModelCatalog {
-            models: vec![ModelChoice {
-                key: "console-groq/openai/gpt-oss-120b".into(),
-                name: "GPT OSS 120B".into(),
-                provider: "console-groq".into(),
-                variants: Vec::new(),
-            }],
-            default_key: None,
-            default_name: None,
-            default_variant: None,
-        };
-
-        assert_eq!(
-            filtered_model_keys(&catalog, "gpt oss"),
-            [Some("console-groq/openai/gpt-oss-120b".into())]
-        );
     }
 
     #[test]

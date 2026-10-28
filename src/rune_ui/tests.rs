@@ -769,15 +769,15 @@ fn voice_action_saves_its_opt_in_and_refuses_a_taken_shortcut() {
 #[test]
 fn choosing_an_opencode_model_saves_it() {
     let mut rt = runtime("voice-action-models", true, PANE_SIZE);
-    tap(&mut rt, "model1");
+    tap(&mut rt, "model-picker-option-1");
     assert_eq!(
         rt.state.settings.voice_action.model.as_deref(),
         Some("anthropic/claude-sonnet-4-5")
     );
-    assert_eq!(rt.state.open, None);
+    assert!(!rt.state.models.picker.open);
     tap(&mut rt, "model-value");
-    assert_eq!(rt.state.open, Some(Menu::Model));
-    tap(&mut rt, "model0");
+    assert!(rt.state.models.picker.open && rt.state.models.picker.search.focused);
+    tap(&mut rt, "model-picker-option-0");
     assert_eq!(
         rt.state.settings.voice_action.model, None,
         "back to the OpenCode default"
@@ -788,17 +788,17 @@ fn choosing_an_opencode_model_saves_it() {
 fn a_long_model_list_fits_the_window_and_follows_the_highlight() {
     let mut rt = runtime("voice-action-models-long", true, PANE_SIZE);
     settle(&mut rt);
-    let [_, top, _, height] = rt.presented("model-results").unwrap().0;
+    let [_, top, _, height] = rt.presented("viewport").unwrap().0;
     assert!(
         top + height <= PANE_SIZE.1 - 8.0,
         "the list ends inside the window: {top} + {height}"
     );
-    tap(&mut rt, "model-search");
     for _ in 0..40 {
         key(&mut rt, Key::Down, Mods::default());
     }
     settle(&mut rt);
-    let [_, row_top, _, row_height] = rt.presented("model40").unwrap().0;
+    assert_eq!(rt.state.models.picker.active.as_deref(), Some("40"));
+    let [_, row_top, _, row_height] = rt.presented("model-picker-option-40").unwrap().0;
     assert!(
         row_top >= top && row_top + row_height <= top + height,
         "the highlighted row scrolled into view: {row_top} in {top}..{}",
@@ -809,7 +809,6 @@ fn a_long_model_list_fits_the_window_and_follows_the_highlight() {
 #[test]
 fn arrow_keys_move_the_search_highlight_and_enter_picks_it() {
     let mut rt = runtime("voice-action-models", true, PANE_SIZE);
-    tap(&mut rt, "model-search");
     key(&mut rt, Key::Down, Mods::default());
     key(&mut rt, Key::Down, Mods::default());
     key(&mut rt, Key::Up, Mods::default());
@@ -818,7 +817,7 @@ fn arrow_keys_move_the_search_highlight_and_enter_picks_it() {
         rt.state.settings.voice_action.model.as_deref(),
         Some("anthropic/claude-sonnet-4-5")
     );
-    assert_eq!(rt.state.open, None);
+    assert!(!rt.state.models.picker.open);
 
     let mut rt = runtime("modes-picker", true, GOLDEN_SIZE);
     tap(&mut rt, "application-search");
