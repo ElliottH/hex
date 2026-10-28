@@ -163,7 +163,7 @@ fn double_tap_only_shows_only_in_hold_with_double_tap_to_lock() {
     rt.state.settings.double_tap_lock = true;
     rt.invalidate();
     settle(&mut rt);
-    assert!(rt.find("dictation/card/double-tap-only").is_some());
+    assert!(rt.find("double-tap-only").is_some());
     tap(&mut rt, "double-tap-only");
     assert!(rt.state.settings.double_tap_only);
 
