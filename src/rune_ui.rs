@@ -1480,7 +1480,8 @@ const FOOTER_LINE: f32 = 20.0;
 /// Test and local builds also name their commit: main moves past a release without
 /// changing the version.
 fn version_label() -> String {
-    let version = env!("CARGO_PKG_VERSION");
+    // Goldens render a fixed version: a local build's names its commit.
+    let version = if cfg!(test) { "0.0.0" } else { crate::VERSION };
     match option_env!("HEX_COMMIT") {
         Some(commit) => {
             let kind = if crate::app_paths::is_local_build() {
@@ -2334,3 +2335,6 @@ fn fixture(shortcuts: DesktopShortcuts) -> Ui {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+
+#[cfg(test)]
+mod dmg_keycap;

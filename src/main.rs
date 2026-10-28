@@ -1,3 +1,7 @@
+/// The version Hex reports: the release version, or `0.0.0-dev-local-<commit>`
+/// for a build outside the Release workflow (build.rs).
+const VERSION: &str = env!("HEX_BUILD_VERSION");
+
 #[cfg(target_os = "macos")]
 mod accessibility;
 mod app_paths;
@@ -139,6 +143,7 @@ mod recording_environment;
 mod rune_ui;
 #[cfg(target_os = "macos")]
 mod smart_turn;
+mod speech_detector;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod spoken_text;
 #[cfg(target_os = "macos")]
@@ -208,7 +213,7 @@ use color_eyre::eyre::eyre;
 #[derive(Parser)]
 #[command(
     name = "hex",
-    version,
+    version = crate::VERSION,
     about = "Local, observable voice control",
     long_about = "Local, observable voice control.\n\n\
         Control commands (status, dictation, meetings record, settings, model, window, …) drive \
@@ -350,8 +355,11 @@ enum TranscriptionBenchmarkBackend {
 #[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum CommandsCommand {
-    /// Create or refresh ~/.config/hex and install its pinned dependencies.
+    /// Create ~/.config/hex with a starter config, or refresh its typings.
     Init,
+    /// Load ~/.config/hex's config as Hex would and report what it registers
+    /// or why it fails.
+    Check,
     /// Turn voice commands on in the running Hex.
     Enable {
         /// Also turn off release_microphone_while_idle, which commands exclude.
@@ -649,7 +657,7 @@ fn main() -> Result<()> {
                 control::cli::CommandsAction::Retry,
                 output,
             )),
-            CommandsCommand::Init => Cli {
+            CommandsCommand::Init | CommandsCommand::Check => Cli {
                 command: Some(Command::Commands { command }),
             },
         },
@@ -851,6 +859,15 @@ fn main() -> Result<()> {
         } => {
             let workspace = personal_commands::initialize_workspace()?;
             println!("{}", workspace.display());
+            Ok(())
+        }
+        Command::Commands {
+            command: CommandsCommand::Check,
+        } => {
+            println!(
+                "{}",
+                personal_commands::check_workspace(&config::voice_control())?
+            );
             Ok(())
         }
         Command::Dev { command } => {
