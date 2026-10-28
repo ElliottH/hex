@@ -492,7 +492,7 @@ fn application_dialog() -> Dialog {
     };
     let any_file = || Filter {
         label: tr("All files").into(),
-        extensions: &[],
+        extensions: &["*"],
     };
     let (filters, directory) = if cfg!(target_os = "macos") {
         (vec![applications(&["app"])], Some("/Applications".into()))
@@ -503,7 +503,6 @@ fn application_dialog() -> Dialog {
     };
     Dialog {
         title: tr("Add Application").into(),
-        accept: tr("Add").into(),
         target: DialogTarget::File(filters),
         directory,
     }

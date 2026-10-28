@@ -107,19 +107,21 @@ unicode-normalization = "0.1.25"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ctrlc = { version = "3.5.2", features = ["termination"] }
-gio = "0.18.4"
-glib = "0.18.5"
+futures-util = { version = "0.3.34", default-features = false }
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "time"] }
 transcribe-cpp = { version = "=0.4.1", features = ["vulkan"] }
 x11-clipboard = "0.9.3"
 x11rb = { version = "0.14.0", features = ["xtest"] }
+zbus = { version = "6.1.0", default-features = false, features = ["tokio", "proxy"] }
 
 # The desktop UI.
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-rune = { git = "https://github.com/anomalyco/rune.git", rev = "89b96f61d195c90304c507ad733c7390fdea051b" }
-rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "89b96f61d195c90304c507ad733c7390fdea051b" }
+pollster = "1.0.1"
+rune = { git = "https://github.com/anomalyco/rune.git", rev = "07520d007df09a1fa899a6085cd6279d6b6275a5", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune.git", rev = "07520d007df09a1fa899a6085cd6279d6b6275a5" }
 # The capture capsule's motion-lint trace (`capture` only).
-rune-motion = { git = "https://github.com/anomalyco/rune.git", rev = "89b96f61d195c90304c507ad733c7390fdea051b", optional = true }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "89b96f61d195c90304c507ad733c7390fdea051b" }
+rune-motion = { git = "https://github.com/anomalyco/rune.git", rev = "07520d007df09a1fa899a6085cd6279d6b6275a5", optional = true }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune.git", rev = "07520d007df09a1fa899a6085cd6279d6b6275a5" }
 # The welcome hero's own GPU pass (`rune_ui::hero`); Rune's version.
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 
@@ -128,7 +130,6 @@ png = "0.18"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
-tray-icon = { version = "0.24.1", default-features = false }
 winreg = "0.55.0"
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
@@ -147,7 +148,7 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }
-windows = { version = "0.62.2", features = ["Media_Control", "Foundation", "Foundation_Collections", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
+windows = { version = "0.62.2", features = ["Media_Control", "Foundation", "Foundation_Collections", "Win32_Media_Audio", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility"] }
 windows-future = "0.3.2"
 
 # x64 Windows decodes on the GPU through Vulkan. ARM64 Windows stays CPU-only,
