@@ -243,7 +243,10 @@ fn pause_players() -> Vec<String> {
         .await
         .unwrap_or_default();
         let mut paused = Vec::new();
-        for name in names.into_iter().filter(|name| name.starts_with(MPRIS_PREFIX)) {
+        for name in names
+            .into_iter()
+            .filter(|name| name.starts_with(MPRIS_PREFIX))
+        {
             if playback_status(bus, &name).await.as_deref() == Some("Playing")
                 && call::<_, ()>(bus, &name, MPRIS_PATH, MPRIS_PLAYER, "Pause", &())
                     .await

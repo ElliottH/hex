@@ -355,7 +355,10 @@ impl Portal {
                     shortcut.id,
                     HashMap::from([
                         ("description", Variant::from(shortcut.description)),
-                        ("preferred_trigger", Variant::from(shortcut.trigger.as_str())),
+                        (
+                            "preferred_trigger",
+                            Variant::from(shortcut.trigger.as_str()),
+                        ),
                     ]),
                 )
             })
