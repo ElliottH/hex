@@ -21,6 +21,8 @@ pub struct Manifest {
     /// sample 0 sits here.
     pub anchor_ns: u64,
     pub sources: Vec<SourceEntry>,
+    /// The files the recording left on disk. A source whose video failed is still in `sources`,
+    /// with its `error`, but its video is not listed here.
     pub files: Vec<FileEntry>,
     /// Spans of the microphone WAV that are silence because no audio arrived.
     pub audio_gaps: Vec<AudioGap>,
@@ -50,8 +52,8 @@ pub struct SourceEntry {
     pub height: u32,
     /// The captured area in global top-left points when the recording started.
     pub frame: Rect,
-    /// Whether the microphone ([`Mic::Device`](crate::Mic::Device)) and system audio are tracks in
-    /// this video.
+    /// Which of the microphone ([`Mic::Device`](crate::Mic::Device)) and system audio this video
+    /// contains. `ScreenCaptureKit` mixes both into the video's single AAC track.
     pub audio_tracks: Vec<TrackKind>,
     /// Why this source's video is missing or incomplete.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,7 +113,16 @@ impl Manifest {
     ///
     /// Returns an error when the file is missing, malformed, or from a newer version.
     pub fn read(dir: &Path) -> std::io::Result<Self> {
-        let bytes = fs::read(dir.join(MANIFEST_NAME))?;
+        Self::read_file(&dir.join(MANIFEST_NAME))
+    }
+
+    /// Reads a manifest saved under any name (see [`Names::manifest`](crate::Names::manifest)).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file is missing, malformed, or from a newer version.
+    pub fn read_file(path: &Path) -> std::io::Result<Self> {
+        let bytes = fs::read(path)?;
         let manifest: Self = serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
         if manifest.version > MANIFEST_VERSION {
             return Err(std::io::Error::other(format!(
@@ -122,9 +133,9 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// Writes `capture.json` atomically.
-    pub(crate) fn write(&self, dir: &Path) -> std::io::Result<()> {
-        write_json(dir, MANIFEST_NAME, self)
+    /// Writes the manifest to `dir/name` atomically.
+    pub(crate) fn write(&self, dir: &Path, name: &str) -> std::io::Result<()> {
+        write_json(dir, name, self)
     }
 }
 
@@ -194,7 +205,7 @@ mod tests {
     fn manifest_round_trips_through_its_file() {
         let dir = crate::test_dir::tempdir().unwrap();
         let manifest = manifest();
-        manifest.write(dir.path()).unwrap();
+        manifest.write(dir.path(), MANIFEST_NAME).unwrap();
         assert_eq!(Manifest::read(dir.path()).unwrap(), manifest);
         let names = fs::read_dir(dir.path())
             .unwrap()
@@ -228,7 +239,7 @@ mod tests {
         let dir = crate::test_dir::tempdir().unwrap();
         let mut manifest = manifest();
         manifest.version = MANIFEST_VERSION + 1;
-        manifest.write(dir.path()).unwrap();
+        manifest.write(dir.path(), MANIFEST_NAME).unwrap();
         assert!(Manifest::read(dir.path()).is_err());
     }
 }

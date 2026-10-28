@@ -2,7 +2,7 @@ use std::sync::mpsc::Sender;
 
 use super::*;
 use crate::cursor::CursorCollector;
-use crate::plan::{AudioPlan, CursorDrawing, Exclusions, Input, Plan, SourcePlan};
+use crate::plan::{AudioPlan, CursorDrawing, Exclusions, Input, MANIFEST_NAME, Plan, SourcePlan};
 
 /// What the fake stream saw, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,6 +325,16 @@ fn a_hung_stream_stop_is_bounded() {
             "failed to stop recording: ScreenCaptureKit stopped responding while stopping the recording"
         )
     );
+}
+
+#[test]
+fn a_named_manifest_is_written_under_its_name() {
+    let mut fixture = fixture(|_| {});
+    fixture.active.names.manifest = Some("take-1.capture.json".into());
+    let finished = recording(fixture.active).stop().wait().unwrap();
+    assert!(!finished.dir.join(MANIFEST_NAME).exists());
+    let manifest = Manifest::read_file(&finished.dir.join("take-1.capture.json")).unwrap();
+    assert_eq!(manifest, finished.manifest);
 }
 
 #[test]

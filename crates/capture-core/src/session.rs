@@ -29,7 +29,7 @@ use crate::manifest::{
     Clock, FileEntry, FileKind, MANIFEST_VERSION, Manifest, Permission, SourceEntry, TrackKind,
     write_json,
 };
-use crate::plan::{Exclusions, MANIFEST_NAME, Names, Source};
+use crate::plan::{Exclusions, Names, Source};
 use crate::system_audio::SystemAudioWriter;
 use crate::time::{HostTime, MediaTime, host_delta_millis};
 
@@ -506,6 +506,7 @@ impl Active {
         let mut files = sources
             .iter()
             .enumerate()
+            .filter(|(_, source)| self.dir.join(&source.file).is_file())
             .map(|(index, source)| FileEntry {
                 name: source.file.clone(),
                 kind: FileKind::Video { source: index },
@@ -595,7 +596,7 @@ impl Active {
         };
         if discard {
             self.remove_files();
-        } else if let Err(error) = manifest.write(&self.dir) {
+        } else if let Err(error) = manifest.write(&self.dir, self.names.manifest_name()) {
             errors.push(format!("manifest: {error}"));
         }
         for error in &errors {
@@ -627,7 +628,7 @@ impl Active {
                 .flatten(),
             )
             .map(String::as_str)
-            .chain([MANIFEST_NAME])
+            .chain([names.manifest_name()])
         {
             match fs::remove_file(self.dir.join(name)) {
                 Ok(()) => {}
