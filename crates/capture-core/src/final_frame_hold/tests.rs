@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::av_writer::AvWriter;
-use crate::av_writer::fixtures::{cm_time, solid_bgra, tone};
+use crate::av_writer::fixtures::{bgra, cm_time, solid_bgra, tone};
 
 const WIDTH: usize = 64;
 const HEIGHT: usize = 48;
@@ -133,12 +133,411 @@ fn leaves_video_that_already_covers_audio_untouched() {
     assert_no_staging_left(&file.path);
 }
 
+#[test]
+fn holds_reordered_cabac_video_with_a_skipped_picture() {
+    let file = TempMp4::new();
+    write_reordered_x264(&file.path, &[]);
+    assert_holds_reordered(&file.path);
+}
+
+#[test]
+fn holds_reordered_cavlc_video_with_a_skipped_picture() {
+    let file = TempMp4::new();
+    write_reordered_x264(&file.path, &["-coder", "0"]);
+    assert_holds_reordered(&file.path);
+}
+
+#[test]
+fn holds_reordered_video_with_a_leading_movie_header() {
+    let file = TempMp4::new();
+    write_reordered_x264(&file.path, &["-movflags", "+faststart"]);
+    assert_holds_reordered(&file.path);
+}
+
+#[test]
+fn holds_reordered_avfoundation_video_with_a_skipped_picture() {
+    // VideoToolbox chooses its own frame order, so try a few lengths until the final frame
+    // decodes before another.
+    let file = (20..28)
+        .find_map(|frames| {
+            let file = TempMp4::new();
+            write_reordered_avfoundation(&file.path, frames);
+            (!final_packet_is_presented_last(&file.path)).then_some(file)
+        })
+        .expect("AVAssetWriter reorders the final frame");
+    assert_holds_reordered(&file.path);
+}
+
+#[test]
+fn holds_video_whose_edit_list_overruns_its_media() {
+    let file = TempMp4::new();
+    write_video_only_x264(&file.path, "0");
+    overrun_edit_list(&file.path, 3);
+    assert_ends_early(&file.path);
+
+    let hold = assert_holds_final_frame(&file.path, false);
+
+    assert_eq!(
+        hold,
+        FinalFrameHold::Held {
+            video_end: time(1, 1),
+            held_end: time(5, 1)
+        }
+    );
+}
+
+#[test]
+fn holds_reordered_video_whose_edit_list_overruns_past_the_target() {
+    let file = TempMp4::new();
+    write_video_only_x264(&file.path, "2");
+    overrun_edit_list(&file.path, 6);
+    assert_ends_early(&file.path);
+
+    let hold = assert_holds_final_frame(&file.path, true);
+
+    assert_eq!(
+        hold,
+        FinalFrameHold::Held {
+            video_end: time(1, 1),
+            held_end: time(5, 1)
+        }
+    );
+}
+
+#[test]
+fn refuses_reordered_hevc_without_changing_it() {
+    let file = TempMp4::new();
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x48:rate=30:duration=1",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000:duration=5",
+        "-c:v",
+        "libx265",
+        "-x265-params",
+        "bframes=2:log-level=error",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        file.path.to_str().expect("UTF-8 path"),
+    ]);
+    assert!(!final_packet_is_presented_last(&file.path));
+    let bytes = fs::read(&file.path).expect("read fixture");
+
+    let refused = hold_final_video_frame(&file.path, time(5, 1));
+
+    assert!(
+        matches!(refused, Err(FinalFrameHoldError::Unsupported(_))),
+        "{refused:?}"
+    );
+    assert_eq!(fs::read(&file.path).expect("read fixture"), bytes);
+    assert_no_staging_left(&file.path);
+}
+
+#[test]
+fn refuses_reordered_interlaced_video_without_changing_it() {
+    let file = TempMp4::new();
+    write_reordered_x264(&file.path, &["-flags", "+ildct+ilme"]);
+    let bytes = fs::read(&file.path).expect("read fixture");
+
+    let refused = hold_final_video_frame(&file.path, time(5, 1));
+
+    assert!(
+        matches!(
+            refused,
+            Err(FinalFrameHoldError::Unsupported("interlaced video"))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(fs::read(&file.path).expect("read fixture"), bytes);
+    assert_no_staging_left(&file.path);
+}
+
+/// A second of moving `libx264` video with B-frames (decoded out of presentation order) and five
+/// seconds of audio.
+fn write_reordered_x264(path: &Path, extra: &[&str]) {
+    let mut arguments = vec![
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x48:rate=30:duration=1",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000:duration=5",
+        "-c:v",
+        "libx264",
+        "-bf",
+        "2",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+    ];
+    arguments.extend_from_slice(extra);
+    arguments.push(path.to_str().expect("UTF-8 path"));
+    ffmpeg(&arguments);
+}
+
+/// `frames` frames of moving H.264 High video from `AVAssetWriter`, frame reordering allowed, and
+/// five seconds of audio.
+fn write_reordered_avfoundation(path: &Path, frames: u8) {
+    let writer = AvWriter::mp4_reordered(path, WIDTH, HEIGHT, true);
+    for frame in 0..frames {
+        let image = bgra(WIDTH, HEIGHT, |x, y| {
+            let x = u8::try_from(x).expect("x");
+            let y = u8::try_from(y).expect("y");
+            [
+                x.wrapping_mul(4).wrapping_add(frame.wrapping_mul(9)),
+                y.wrapping_mul(5).wrapping_sub(frame.wrapping_mul(3)),
+                (x ^ y).wrapping_mul(frame | 1),
+                255,
+            ]
+        });
+        writer.append_frame(&image, time(i64::from(frame), 30));
+    }
+    let total = 5 * AUDIO_RATE;
+    let mut start = 0;
+    while start < total {
+        let frames = (total - start).min(4_800);
+        writer.append_pcm(&tone(start, frames), start);
+        start += frames;
+    }
+    writer
+        .finish(Some(cm_time(time(5, 1))), Duration::from_secs(30))
+        .expect("finish writer");
+}
+
+/// A second of moving `libx264` video with `bframes` B-frames and no audio.
+fn write_video_only_x264(path: &Path, bframes: &str) {
+    ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x48:rate=30:duration=1",
+        "-c:v",
+        "libx264",
+        "-bf",
+        bframes,
+        "-pix_fmt",
+        "yuv420p",
+        path.to_str().expect("UTF-8 path"),
+    ]);
+}
+
+/// Makes the video's final edit, track and movie claim `seconds` while the media still ends
+/// where it did, like the edit list `SCRecordingOutput` writes for a video-only source.
+fn overrun_edit_list(path: &Path, seconds: u64) {
+    let layout = read_layout(path).expect("read layout");
+    assert!(layout.moov_is_last, "fixture keeps its movie header last");
+    let mut moov = parse_boxes(&layout.moov, false).expect("parse movie header");
+    let header = leaf(&moov[0], &[b"mvhd"]).expect("mvhd");
+    let (timescale, _) = timescale_and_duration(header).expect("movie timescale");
+    let duration = seconds * u64::from(timescale);
+    set_header_duration(leaf_mut(&mut moov[0], &[b"mvhd"]).expect("mvhd"), duration)
+        .expect("mvhd duration");
+    set_tkhd_duration(
+        leaf_mut(&mut moov[0], &[b"trak", b"tkhd"]).expect("tkhd"),
+        duration,
+    )
+    .expect("tkhd duration");
+    set_last_edit_duration(
+        leaf_mut(&mut moov[0], &[b"trak", b"edts", b"elst"]).expect("elst"),
+        duration,
+    )
+    .expect("edit duration");
+    let header = serialize_boxes(&moov).expect("serialize movie header");
+    assert_eq!(header.len(), layout.moov.len());
+    let mut file = OpenOptions::new().write(true).open(path).expect("open");
+    file.seek(SeekFrom::Start(layout.moov_offset))
+        .expect("seek");
+    file.write_all(&header).expect("write movie header");
+}
+
+/// The fixture's frames stop after one second in `ffmpeg`, whatever its edit list claims.
+fn assert_ends_early(path: &Path) {
+    let frames = frames_resampled_at_10_fps(path);
+    assert!(frames <= 11, "ffmpeg resampled {frames} frames");
+}
+
+/// Holds a reordered recording and checks the tail repeats the final frame, pixel for pixel,
+/// while every original frame decodes unchanged.
+fn assert_holds_reordered(path: &Path) {
+    assert_holds_final_frame(path, true);
+}
+
+/// Holds `path` until 5 s and checks the tail repeats the final frame, pixel for pixel, while
+/// every original frame decodes unchanged. A `reordered` fixture decodes its final frame before
+/// another, so the hold appends a picture.
+fn assert_holds_final_frame(path: &Path, reordered: bool) -> FinalFrameHold {
+    assert_eq!(
+        !final_packet_is_presented_last(path),
+        reordered,
+        "fixture decodes its final frame before another"
+    );
+    let frames_before = frame_hashes(path);
+    let final_frame = ffmpeg_frames(path, &["-fps_mode", "passthrough"])
+        .pop()
+        .expect("final frame");
+    let final_time = last_frame_time(path);
+    let final_image = avfoundation_image(path, final_time);
+    let before = probe(path).expect("probe fixture");
+    let audio_before = before.audio().map(|_| audio_packets(path));
+
+    let hold = hold_final_video_frame(path, time(5, 1)).expect("hold final frame");
+
+    assert_eq!(hold.end(), time(5, 1));
+    assert_held(path, 5.0);
+    assert_eq!(before.audio().map(|_| audio_packets(path)), audio_before);
+    assert_eq!(probe(path).expect("probe held").audio(), before.audio());
+    assert_no_staging_left(path);
+
+    let frames_after = frame_hashes(path);
+    assert_eq!(
+        frames_after.len(),
+        frames_before.len() + usize::from(reordered)
+    );
+    assert_eq!(frames_after[..frames_before.len()], frames_before[..]);
+    // Resampled at 10 fps, the last frame is the one shown at 4.9 s.
+    assert!(
+        ffmpeg_frames(path, &["-vf", "fps=10"]).last() == Some(&final_frame),
+        "ffmpeg shows the final frame at the end"
+    );
+    assert!(
+        avfoundation_image(path, Duration::from_millis(4_900)) == final_image,
+        "AVFoundation shows the final frame at the end"
+    );
+    hold
+}
+
+fn final_packet_is_presented_last(path: &Path) -> bool {
+    let times: Vec<i64> = ffprobe(
+        path,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "packet=pts",
+            "-of",
+            "csv=p=0",
+        ],
+    )
+    .lines()
+    .map(|line| line.trim().parse().expect("packet pts"))
+    .collect();
+    times.last() == times.iter().max()
+}
+
+/// A time a few milliseconds into the final video frame, clear of `ffprobe`'s rounding.
+fn last_frame_time(path: &Path) -> Duration {
+    let times = ffprobe(
+        path,
+        &[
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=pts_time",
+            "-of",
+            "csv=p=0",
+        ],
+    );
+    let seconds: f64 = times
+        .lines()
+        .last()
+        .expect("frames")
+        .trim()
+        .parse()
+        .expect("frame time");
+    Duration::from_secs_f64(seconds) + Duration::from_millis(5)
+}
+
+/// The MD5 of each decoded video frame, in presentation order.
+fn frame_hashes(path: &Path) -> Vec<String> {
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args([
+            "-map",
+            "0:v",
+            "-fps_mode",
+            "passthrough",
+            "-f",
+            "framemd5",
+            "-",
+        ])
+        .output()
+        .expect("run ffmpeg");
+    assert!(output.status.success(), "framemd5: {output:?}");
+    String::from_utf8(output.stdout)
+        .expect("UTF-8 framemd5")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| line.rsplit(',').next().expect("hash").trim().to_owned())
+        .collect()
+}
+
+/// Decoded video frames as raw YUV, from `ffmpeg` with `options` choosing which frames.
+fn ffmpeg_frames(path: &Path, options: &[&str]) -> Vec<Vec<u8>> {
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-map", "0:v"])
+        .args(options)
+        .args(["-f", "rawvideo", "-pix_fmt", "yuv420p", "-"])
+        .output()
+        .expect("run ffmpeg");
+    assert!(output.status.success(), "decode: {output:?}");
+    output
+        .stdout
+        .chunks(WIDTH * HEIGHT * 3 / 2)
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// The pixels `AVFoundation` shows exactly at `at`.
+fn avfoundation_image(path: &Path, at: Duration) -> Vec<u8> {
+    use objc2_av_foundation::{AVAssetImageGenerator, AVURLAsset};
+    use objc2_core_graphics::{CGDataProvider, CGImage};
+    use objc2_foundation::{NSString, NSURL};
+
+    let url = NSURL::fileURLWithPath(&NSString::from_str(path.to_str().expect("UTF-8 path")));
+    let micros = i64::try_from(at.as_micros()).expect("micros");
+    // SAFETY: A local file asset and a valid, positive-timescale time.
+    let image = unsafe {
+        let asset = AVURLAsset::URLAssetWithURL_options(&url, None);
+        let generator = AVAssetImageGenerator::assetImageGeneratorWithAsset(&asset);
+        generator.setRequestedTimeToleranceBefore(objc2_core_media::kCMTimeZero);
+        generator.setRequestedTimeToleranceAfter(objc2_core_media::kCMTimeZero);
+        let mut actual = objc2_core_media::kCMTimeZero;
+        #[allow(deprecated)]
+        generator
+            .copyCGImageAtTime_actualTime_error(
+                objc2_core_media::CMTime::new(micros, 1_000_000),
+                &raw mut actual,
+            )
+            .expect("AVFoundation image")
+    };
+    let data =
+        CGDataProvider::data(CGImage::data_provider(Some(&image)).as_deref()).expect("image data");
+    data.to_vec()
+}
+
 fn assert_held(path: &Path, seconds: f64) {
     let probed = probe(path).expect("probe held file");
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let held_end = MediaTime::from_millis((seconds * 1_000.0).round() as u64);
     assert_eq!(
         probed.video_end(),
-        probed.audio().and_then(crate::probe::Track::end),
-        "AVFoundation video ends with audio"
+        probed
+            .audio()
+            .and_then(crate::probe::Track::end)
+            .or(held_end),
+        "AVFoundation video ends with audio, or at the held end"
     );
     assert!(
         decodes_frame_at(path, Duration::from_millis(4_500)),
