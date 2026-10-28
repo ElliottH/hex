@@ -1090,7 +1090,12 @@ check out only `.github/release/`, and run only those scripts and SHA-pinned
 actions on artifacts treated as data (macOS Developer ID signing,
 notarization, and stapling; Azure Authenticode; the release service through
 OIDC; the AUR and Homebrew pushes). Every artifact carries a `SHA256SUMS`
-whose digest its job reports and every consumer checks. Keep that boundary:
+whose digest its job reports and every consumer checks. Site deploy follows
+the same split: its build job has no secret, and its `release` job runs only
+`.github/release/deploy-site.sh`, which deploys the verified Build Output only
+when it names exactly that mode's site Worker, routes, and bindings, with the
+cf CLI locked in `.github/release/cf/`; Legacy appcast checks out only
+`.github/release/` and the appcast. Keep that boundary:
 never add a step that builds, installs dependencies, or runs repository code
 to a job that holds a secret or an OIDC token, and pin every action by SHA.
 `.github/` changes need Dax (CODEOWNERS and the "release boundary" ruleset).
