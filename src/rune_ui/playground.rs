@@ -70,7 +70,7 @@ fn group(ui: &Ui) -> (usize, &'static str) {
     if ui.tour.is_some() {
         return (100, "Onboarding");
     }
-    if ui.picker.language.is_some() {
+    if ui.picker.open {
         return (1, "Transcription picker");
     }
     if ui.explainer.open {

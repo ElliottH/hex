@@ -838,26 +838,18 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             )
         }),
     ));
-    let selection = &settings.transcription;
-    let model = transcription_models::definition(selection.model);
-    let label = format!(
-        "{} · {}",
-        transcription_models::language_name(&selection.language),
-        model.name
-    );
-    let language = selection.language.clone();
+    let model = transcription_models::definition(settings.transcription.model);
     rows.push(
         described_row(
             p,
             "transcription",
             tr("Speech model"),
             transcription_status(ui, p),
-            sheet_button(p, "transcription-control", &label, move |ui: &mut Ui| {
-                super::picker::open(ui, language.clone())
-            }),
+            sheet_button(p, "transcription-control", model.name, super::picker::open),
         )
         .into(),
     );
+    rows.push(super::picker::language_row(ui, p, layer).into());
     let listed = ui.microphones.as_ref().ok();
     let default_name = listed.and_then(|devices| devices.system_default.as_deref());
     // Only a list that names inputs can tell a saved microphone is missing.

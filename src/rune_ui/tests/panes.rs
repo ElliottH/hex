@@ -865,21 +865,18 @@ fn the_explainer_picker_and_shortcut_recording_never_share_the_window() {
     assert!(matches!(rt.state.capture, settings::Capture::Idle));
     assert!(sent(&rt).contains(&Request::CancelShortcut));
 
-    picker::open(&mut rt.state, "en".into());
+    picker::open(&mut rt.state);
     assert!(!rt.state.explainer.open, "the picker closes the explainer");
     explainer::open(&mut rt.state);
-    assert!(
-        rt.state.picker.language.is_none(),
-        "and the explainer the picker"
-    );
+    assert!(!rt.state.picker.open, "and the explainer the picker");
 
     rt.state
         .select_pane(Pane::History, &mut rune::Tx::default());
     assert!(!rt.state.explainer.open);
-    picker::open(&mut rt.state, "en".into());
+    picker::open(&mut rt.state);
     rt.state
         .select_pane(Pane::General, &mut rune::Tx::default());
-    assert!(rt.state.picker.language.is_none());
+    assert!(!rt.state.picker.open);
 }
 
 #[test]

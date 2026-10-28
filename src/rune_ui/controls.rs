@@ -439,6 +439,17 @@ pub(super) fn select(
     )
 }
 
+/// A [`select`]'s field showing its one choice, disabled.
+pub(super) fn fixed_select(p: Paint, key: &str, label: &str) -> El {
+    Select::new::<&str>(format!("{key}-field"), &[])
+        .appearance(SelectAppearance::Field)
+        .width(SELECT_WIDTH)
+        .current(Some(label))
+        .disabled(true)
+        .trigger(p.k)
+        .key(key)
+}
+
 /// A [`select`] `width` points wide, for labels such as device names that
 /// would truncate at the usual width. A `detail` follows the field's label
 /// in faint text.

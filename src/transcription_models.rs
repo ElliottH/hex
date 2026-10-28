@@ -207,6 +207,36 @@ impl ModelDefinition {
             .then(|| self.runtime_language(language))
     }
 
+    /// The languages Settings offers for this model, in [`LANGUAGES`] order,
+    /// Auto first when the model detects the language.
+    pub fn language_choices(&self) -> Vec<&'static str> {
+        LANGUAGES
+            .iter()
+            .map(|(code, _)| *code)
+            .filter(|code| self.supports_language(code))
+            .collect()
+    }
+
+    /// The language a switch to this model falls back to when it does not
+    /// support the selected one: English when it can, else its first.
+    pub fn default_language(&self) -> &'static str {
+        if self.supports_language("en") {
+            "en"
+        } else {
+            self.languages[0]
+        }
+    }
+
+    /// `language` when this model supports it, else its default language, so
+    /// a model switch always yields a valid selection.
+    pub fn language_for<'a>(&self, language: &'a str) -> &'a str {
+        if self.supports_language(language) {
+            language
+        } else {
+            self.default_language()
+        }
+    }
+
     #[cfg(target_os = "macos")]
     pub fn presentation_languages(&self) -> Vec<&'static str> {
         self.languages
@@ -563,22 +593,28 @@ pub(crate) fn choices_for_runtime(language: &str) -> Vec<ModelChoice> {
         .collect()
 }
 
-/// Models that are no longer recommended for `language` but that the user
-/// still has: the saved selection or an installed download. The picker keeps
-/// them selectable and deletable, without a recommendation badge.
-pub(crate) fn retained_models(
+/// Every available model in the picker's order for `language`: its
+/// recommendations first, each with its badge, then the other models that
+/// support it, then those that would change the language.
+pub(crate) fn picker_models(
     language: &str,
-    selection: &TranscriptionSelection,
-    installed: impl Fn(&ModelDefinition) -> bool,
-) -> Vec<&'static ModelDefinition> {
+) -> Vec<(&'static ModelDefinition, Option<Recommendation>)> {
     let recommended = choices_for_runtime(language);
-    MODELS
+    let others = MODELS
         .iter()
-        .filter(|model| model.available() && model.supports_language(language))
-        .filter(|model| recommended.iter().all(|choice| choice.model.id != model.id))
-        .filter(|model| {
-            installed(model) || (selection.model == model.id && selection.language == language)
-        })
+        .filter(|model| model.available())
+        .filter(|model| recommended.iter().all(|choice| choice.model.id != model.id));
+    let (supporting, switching): (Vec<_>, Vec<_>) =
+        others.partition(|model| model.supports_language(language));
+    recommended
+        .iter()
+        .map(|choice| (choice.model, Some(choice.recommendation)))
+        .chain(
+            supporting
+                .into_iter()
+                .chain(switching)
+                .map(|model| (model, None)),
+        )
         .collect()
 }
 
@@ -1415,27 +1451,89 @@ mod tests {
     }
 
     #[test]
-    fn saved_models_no_longer_recommended_stay_valid_and_visible() {
-        let saved = TranscriptionSelection {
-            model: TranscriptionModelId::ParakeetV3,
-            language: "el".into(),
-            recognition_hints: String::new(),
+    fn the_picker_lists_every_model_with_the_language_s_recommendations_first() {
+        let ids = |language| {
+            picker_models(language)
+                .into_iter()
+                .map(|(model, recommendation)| (model.id, recommendation))
+                .collect::<Vec<_>>()
         };
-        assert!(validate(&saved).is_ok());
-        assert!(
-            retained_models("el", &saved, |_| false)
-                .iter()
-                .any(|model| model.id == TranscriptionModelId::ParakeetV3)
-        );
-        assert!(retained_models("de", &saved, |_| false).is_empty());
-        let installed = retained_models("tr", &TranscriptionSelection::default(), |model| {
-            model.id == TranscriptionModelId::Qwen3Asr06B
-        });
+        let available = MODELS.iter().filter(|model| model.available()).count();
+        for (language, _) in LANGUAGES {
+            assert_eq!(ids(language).len(), available, "{language}");
+        }
+        let greek = ids("el");
         assert_eq!(
-            installed.iter().map(|model| model.id).collect::<Vec<_>>(),
-            [TranscriptionModelId::Qwen3Asr06B]
+            greek[..2],
+            [
+                (
+                    TranscriptionModelId::CohereTranscribe,
+                    Some(Recommendation::Recommended)
+                ),
+                (
+                    TranscriptionModelId::WhisperLargeV3Turbo,
+                    Some(Recommendation::RecognitionHints)
+                ),
+            ]
         );
-        assert!(retained_models("tr", &TranscriptionSelection::default(), |_| false).is_empty());
+        // Then Parakeet v3, which supports Greek, before every model that
+        // would change the language.
+        assert_eq!(greek[2], (TranscriptionModelId::ParakeetV3, None));
+        let supports = greek
+            .iter()
+            .map(|(id, _)| definition(*id).supports_language("el"))
+            .collect::<Vec<_>>();
+        assert!(supports.windows(2).all(|pair| pair[0] || !pair[1]));
+        assert!(!supports[supports.len() - 1]);
+    }
+
+    #[test]
+    fn a_model_switch_keeps_a_supported_language_or_falls_back_to_the_model_s_default() {
+        let unified = definition(TranscriptionModelId::ParakeetUnifiedEnglish);
+        let whisper = definition(TranscriptionModelId::WhisperLargeV3Turbo);
+        let qwen = definition(TranscriptionModelId::Qwen3Asr06B);
+        let cohere = definition(TranscriptionModelId::CohereTranscribe);
+        assert_eq!(unified.language_for("ja"), "en");
+        assert_eq!(unified.language_for("auto"), "en");
+        assert_eq!(whisper.language_for("ja"), "ja");
+        assert_eq!(whisper.language_for("auto"), "auto");
+        assert_eq!(qwen.language_for("auto"), "auto");
+        assert_eq!(cohere.language_for("auto"), "en");
+        for model in MODELS.iter().filter(|model| model.available()) {
+            for (language, _) in LANGUAGES {
+                let selection = TranscriptionSelection {
+                    model: model.id,
+                    language: model.language_for(language).into(),
+                    recognition_hints: String::new(),
+                };
+                assert!(validate(&selection).is_ok(), "{} {language}", model.name);
+            }
+        }
+    }
+
+    #[test]
+    fn each_model_offers_exactly_the_languages_it_supports() {
+        let unified = definition(TranscriptionModelId::ParakeetUnifiedEnglish);
+        assert_eq!(unified.language_choices(), ["en"]);
+        let whisper = definition(TranscriptionModelId::WhisperLargeV3Turbo);
+        assert_eq!(whisper.language_choices().len(), LANGUAGES.len());
+        assert_eq!(whisper.language_choices()[0], AUTO_LANGUAGE);
+        let sensevoice = definition(TranscriptionModelId::SenseVoiceSmall);
+        assert_eq!(
+            sensevoice.language_choices(),
+            ["auto", "en", "zh", "yue", "ja", "ko"]
+        );
+        for model in MODELS.iter().filter(|model| model.available()) {
+            assert!(model.language_choices().contains(&model.default_language()));
+            let declared = model.languages.iter().filter(|code| **code != "*");
+            for code in declared {
+                assert!(
+                    model.language_choices().contains(code),
+                    "{} lists {code} outside LANGUAGES",
+                    model.name
+                );
+            }
+        }
     }
 
     #[test]

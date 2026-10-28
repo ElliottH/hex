@@ -154,7 +154,7 @@ Launch Hex, setup incomplete              // setup.tour; full-window, own column
 └── Done -> paste last, Voice Action, Modes tips -> Start using Hex
     // Windows and Linux: Welcome -> Setup (the model row only) -> Done
 
-General > Speech model
+General > Speech model or Language
   -> Prepare candidate
      ├── Success -> Save selection
      └── Failure -> Preserve previous selection and show error
@@ -168,6 +168,38 @@ Apple silicon, macOS 15+. Choices come from the compiled model/language catalog;
 Apple Speech is currently excluded from the desktop picker.
 
 ```ts
+General > Dictation > Speech model, then Language below it   // setup.language-select; every desktop root
+├── Speech model -> Picker lists every available model; never changes the language
+│   ├── Saved language's recommendations first with their tags, then the
+│   │   models that support it, then those that do not
+│   ├── Model without the saved language -> Card: "Doesn't support Japanese;
+│   │   switches the language to English"
+│   └── Choose it -> ChooseModel(model, model's default: English, else its first)
+│       └── Saved -> Language row: "<Model> doesn't support Japanese, so the
+│           language changed to English" until the next choice
+├── Language -> Select of the saved model's languages (catalog order, Auto first
+│   when it detects); one language -> the field shows it, disabled
+│   └── Choose -> ChooseModel(same model, language): the same preparation as a
+│       model choice, so per-language assets (Apple Speech locales) install
+└── The saved TranscriptionSelection is always a pair the model supports
+```
+
+Sources: [shared picker](../../src/rune_ui/picker.rs) (`choose`,
+`choose_language`, `language_row`) and `picker_models`, `language_choices`,
+`language_for` in [transcription_models.rs](../../src/transcription_models.rs).
+Checks: `the_picker_lists_every_model_with_the_language_s_recommendations_first`,
+`a_model_switch_keeps_a_supported_language_or_falls_back_to_the_model_s_default`,
+`each_model_offers_exactly_the_languages_it_supports`, and the Rune tests
+`a_model_without_the_saved_language_falls_back_to_its_own_visibly`,
+`browsing_the_picker_never_changes_the_language`,
+`changing_only_the_language_prepares_the_same_model_again`, and
+`settings_opens_the_picker_and_names_the_model_and_language_apart`. Scenes:
+`picker-japanese`, `language-fallback`, `language-menu`. Fixture renders and
+recorded requests only; a live model switch with a fallback has not been
+observed. Apple Speech stays excluded, so its per-locale install through the
+Language row is unexercised.
+
+```ts
 Choose a supported language              // setup.language-conditioning; macOS + Linux picker
 ├── Parakeet v3 -> Detect language from audio; selected language does not constrain output
 └── Whisper -> Use selected language to guide decoding; accuracy is not guaranteed
@@ -176,10 +208,11 @@ Choose a supported language              // setup.language-conditioning; macOS +
 ```ts
 Settings picker or setup > model card     // setup.model-card; shared by every desktop root
 ├── Title row -> Name, recommendation tag, "Streams" tag    // at most two tags
-│   ├── Recommendation -> Per language from the catalog (English: Unified English first)
+│   ├── Recommendation -> For the saved language from the catalog (English: Unified English first)
 │   └── Streams -> Catalog `streams` (pinned artifact advertises streaming)
 ├── Detail line -> "Transcribes while you speak" (non-macOS: "… on a GPU"),
-│                  coverage when it differs, benchmark, timestamps, Installed
+│                  coverage, benchmark, timestamps, Installed
+├── Saved language unsupported -> Warning line naming the language it switches to
 ├── Trailing edge -> Active as dot + label; Cancel while preparing; else Use/Download
 ├── Preparing -> Progress bar with its "Downloading 37%" / "Loading model" label
 └── Speed · Size · Accuracy -> 100% minus the benchmark word error rate
@@ -190,7 +223,7 @@ Only Parakeet Unified English is marked `streams`
 the artifact; dictation still streams only after the load probe succeeds on a GPU
 device ([Streaming Finish](dictation.md#streaming-finish)). The menu bar lists
 names only and shows no tags. Scenes: `hex app -- --snap OUT --scene picker`
-(also `picker-downloading`).
+(also `picker-downloading`, `picker-japanese`).
 
 Parakeet v3 remains available for Portuguese and its other existing language
 choices. Its card explains the limitation and suggests Whisper for
@@ -263,14 +296,14 @@ Menu bar > Transcription Model            // setup.quick-model-switch; macOS
 │   ├── Success -> Checkmark moves; Settings reflects the saved selection
 │   └── Failure -> Previous selection remains; open Settings for the error
 ├── Preparing -> Cancel Model Switch      // never cancels dictation/output jobs
-└── Manage Models… -> Settings picker      // downloads and language changes
+└── Manage Models… -> Settings picker      // downloads; languages in the Language row
 ```
 
 The menu does not open Settings merely to switch models, download a missing model,
 or replace a corrupt artifact. Each model retains one last-used language/hints
 selection in `transcription_recents`; the current selection takes precedence.
 Older settings start with no remembered alternatives. Select an alternative's
-language in Settings once to establish it. No additional model is loaded at startup
+language in Settings' Language row once to establish it. No additional model is loaded at startup
 just to populate the menu, and the checkmark means selected, not live-worker readiness.
 
 [transcription_preparation.rs](../../src/transcription_preparation.rs) is shared
@@ -307,7 +340,7 @@ Settings picker > Downloaded model card   // setup.delete-model; macOS
 │   └── Download in progress -> Nothing removed; "Model could not be deleted." with reason
 ├── Selected dictation model (any language) -> No Delete
 ├── Preparing or Apple Speech model -> No Delete
-└── Language change, model choice, or closing the picker -> Confirmation cleared
+└── Model choice or closing the picker -> Confirmation cleared
 ```
 
 Deletion takes the shared model-directory download lock without waiting, so it
@@ -394,7 +427,7 @@ latency measurement.
 
 ```ts
 General                                  // settings
-├── Dictation card -> Shortcut, Shortcut mode, Double-tap to lock, Speech model
+├── Dictation card -> Shortcut, Shortcut mode, Double-tap to lock, Speech model, Language
 │   ├── Shortcut mode > How it works -> Hold/Toggle explainer modal (dictation.md)
 │   └── A row that hides or shows (Double-tap to lock, Advanced, a microphone error)
 │       -> Folds under a clip as the rows below slide over it; no fade in place
