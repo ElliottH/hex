@@ -1221,7 +1221,11 @@ fn the_sound_sets_sheet_plays_and_chooses_sets() {
     tap(&mut rt, "set-click/top/play");
     assert_eq!(playing(&rt), None);
 
-    tap(&mut rt, "stage/cues/Stop");
+    // A single sound plays for under a second, so look before settling.
+    let (x, y) = rt.find("stage/cues/Stop").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(1.0 / 60.0);
     assert_eq!(
         playing(&rt),
         Some((SoundSet::Signature, Audition::Cue(Cue::Stop)))
