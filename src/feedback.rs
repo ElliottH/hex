@@ -345,6 +345,8 @@ struct BundledSet {
     stop: &'static [u8],
     done: Option<&'static [u8]>,
     cancel: &'static [u8],
+    /// Windows and Linux failures stay silent.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     error: Option<&'static [u8]>,
     success: Option<&'static [u8]>,
 }
