@@ -9,15 +9,19 @@ the release service itself: Hex never publishes to it or reads from it. Builds
 are tested before stable on the production service's `dev` channel.
 
 Like OpenCode's release, building is split from everything that holds a
-secret. `.github/workflows/release.yml` and `.github/release/` are the
-security boundary:
+secret. `.github/workflows/` (Release, Site deploy, Legacy appcast) and
+`.github/release/` are the security boundary:
 
 - **Build jobs** run repository code (cargo, build.rs, bun, makepkg, brew)
   with no environment, no secret, and no id-token, and make unsigned files.
 - **Sign and publish jobs** run in the `release` environment, check out only
   `.github/release/` (sparse checkout), and run only those scripts and
   SHA-pinned actions, on artifacts they treat as data. They never build,
-  install dependencies, or run repository code or the artifacts.
+  install dependencies, or run repository code or the artifacts. The one
+  installed tool is the cf CLI that deploys the site, pinned with its
+  integrity hashes in `.github/release/cf/package-lock.json` and installed
+  with `npm ci --ignore-scripts` before the token is in the step's
+  environment.
 - **Artifacts** each carry a `SHA256SUMS`; the job that made one reports that
   manifest's digest as a job output, and every job that downloads it checks
   the digest and every file (`.github/release/verify-artifacts.sh`), so
@@ -239,9 +243,30 @@ forbids, so until the freeze lifts the link works only on dev
 (`https://dev.anoma.ly/hex/download/dev`, which reads the dev service).
 
 Deploys run only from CI (`.github/workflows/site.yml` and `site-deploy.yml`):
-a push to `dev` that touches `site/` deploys dev; a stable Release deploys
-production after publishing, and Site can be dispatched with `mode:
-production` from `production` only. `bun run check:downloads` runs after each deploy.
+a push to `dev` that touches `site/` deploys dev, and Site can be dispatched
+with `mode: production` from `production` only (after a stable release).
+Site deploy is split like Release:
+
+```ts
+Site deploy (mode dev | production)
+├─ build    bun install + site/scripts/build.ts --mode <mode>, no environment or secret;   [build]
+│           uploads site/.cloudflare/output (Build Output) with its SHA256SUMS digest
+├─ deploy   sparse checkout of .github/release/; npm ci the pinned cf CLI; verify the     [release]
+│           artifact's digest; deploy-site.sh <mode>
+└─ verify   the live site answers 200 and bun run check:downloads, no secret               [build]
+```
+
+The site's Worker code and assets come from repository code anyone with push
+access can merge, so `.github/release/deploy-site.sh` treats the artifact as
+untrusted: it deploys only the Build Output files, and only if the root config
+is a non-preview build of that mode and the Worker config is exactly that
+mode's Worker (`hex-dev-site` or `hex-production-site`), its two `anoma.ly`
+routes, `workersDev`/`previewUrls` off, and the bindings `ASSETS`, `FILES`
+(that mode's bucket), and `CANONICAL_HOST`. Any other Worker name, route,
+binding, key, Worker, or Container is refused: a binding would give the
+Worker access to another resource, and the token can write every Worker. A
+change to those parts of `site/cloudflare.config.ts` therefore needs the
+matching change in `deploy-site.sh` (Dax).
 
 Set once by hand on the anomaly account, because the config only binds them:
 the two buckets (`cf deploy` provisions only unnamed bindings; a missing named
@@ -250,11 +275,21 @@ bucket fails the deploy), the `expire-staging` lifecycle rule on
 Browser Integrity Check for `/hex/files/` on both hosts (it returned 403 to
 Python's default user agent).
 
-One account token, `github-actions-hex`, holds Workers Scripts Write (account),
-Workers Routes Write (anoma.ly), and object read/write on the two Hex buckets.
-It is the `release` environment's `CLOUDFLARE_API_TOKEN` (site deploys); the
-same token's S3 credentials (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) are
-used only for the one-time legacy appcast below (`scripts/r2-put.sh`).
+Two account tokens, each used by one locked step only:
+
+- `hex-site-deploy` (`release` secret `CLOUDFLARE_API_TOKEN`): Workers Scripts
+  Write (account) and Workers Routes Write (zone `anoma.ly`), used only by
+  `deploy-site.sh`. It has no R2 access: deploying a binding needs none.
+  Cloudflare supports per-Worker roles (Individual Workers Editor) that would
+  limit it to the two site Workers, but they can be granted only from the
+  dashboard or by an API token, not by the `cf` OAuth login; until it is
+  recreated that way, `deploy-site.sh`'s Worker-name check is the limit.
+  Routes are always written on deploy, and `cf` then needs Routes Write on the
+  zone. Recreate rather than edit a token's policies: an edited policy did not
+  take effect on the routes API in testing.
+- `hex-r2-production-files` (`release` secret `R2_SECRET_ACCESS_KEY`, variable
+  `R2_ACCESS_KEY_ID` = its id): object write on `hex-production-files` only,
+  used only by the Legacy appcast workflow (`.github/release/r2-put.sh`).
 
 ## Old clients (2.3.1 and earlier)
 
@@ -312,8 +347,8 @@ it. No reviewer is required.
 | Name | Use |
 | --- | --- |
 | (none) | publishing to the release service: the job's GitHub OIDC token |
-| `CLOUDFLARE_API_TOKEN`, var `CLOUDFLARE_ACCOUNT_ID` | site deploys (`github-actions-hex`) |
-| `R2_SECRET_ACCESS_KEY`, var `R2_ACCESS_KEY_ID` | the one-time legacy appcast upload (same token) |
+| `CLOUDFLARE_API_TOKEN`, var `CLOUDFLARE_ACCOUNT_ID` | site deploys (`hex-site-deploy`, used only by `deploy-site.sh`) |
+| `R2_SECRET_ACCESS_KEY`, var `R2_ACCESS_KEY_ID` | the one-time legacy appcast upload (`hex-r2-production-files`) |
 | `AUR_SSH_PRIVATE_KEY` | pushes `hex-bin` (key `github-actions-hex-aur`) |
 | `HOMEBREW_TAP_DEPLOY_KEY` | pushes `Casks/hex.rb` (deploy key `github-actions-hex-homebrew`, write access on `anomalyco/homebrew-tap` only) |
 | `AZURE_*` | Authenticode (docs/windows-signing.md) |
