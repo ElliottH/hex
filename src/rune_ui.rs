@@ -1480,7 +1480,7 @@ const FOOTER_LINE: f32 = 20.0;
 /// Test and local builds also name their commit: main moves past a release without
 /// changing the version.
 fn version_label() -> String {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::VERSION;
     match option_env!("HEX_COMMIT") {
         Some(commit) => {
             let kind = if crate::app_paths::is_local_build() {
