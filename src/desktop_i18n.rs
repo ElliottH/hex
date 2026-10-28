@@ -339,7 +339,6 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Experiments", ["Eksperymenty", "实验", "実験", "Experimente", "Experimentos"]),
     ("Voice Filter", ["Filtr głosu", "声音滤镜", "ボイスフィルター", "Stimmfilter", "Filtro de voz"]),
     ("Recordings", ["Nagrania", "录音", "録音", "Aufnahmen", "Grabaciones"]),
-    ("Advanced", ["Zaawansowane", "高级", "詳細", "Erweitert", "Avanzado"]),
     ("Output", ["Wyjście", "输出", "出力", "Ausgabe", "Salida"]),
     ("Dictation HUD", ["Wskaźnik dyktowania", "听写指示器", "音声入力インジケーター", "Diktatanzeige", "Indicador de dictado"]),
     ("Call recording", ["Nagrywanie rozmów", "通话录音", "通話の録音", "Anrufaufzeichnung", "Grabación de llamadas"]),

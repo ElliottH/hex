@@ -9,8 +9,8 @@ use rune::{Edge, El, Key, KeyEvent, Transition, Tx, col, row, spacer, text};
 use super::controls::{
     ButtonKind, CardRow, Choice, DESCRIPTION, DEVICE_SELECT_WIDTH, KEY_GAP, KeySize, METRICS,
     Paint, button, described_row, folding, icon_button, key_tray, keycap, keycaps, link_row, note,
-    page, pulsing_dot, section, section_with, segmented, select, select_sized, setting_row,
-    sheet_button, status_dot, text_field, toggle_row, tray_roll,
+    page, pulsing_dot, section, segmented, select, select_sized, setting_row, sheet_button,
+    status_dot, text_field, toggle_row, tray_roll,
 };
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use super::{explainer, host};
@@ -838,6 +838,22 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             )
         }),
     ));
+    rows.push(folding(
+        "double-tap-only-fold",
+        double_tap_only_applies(settings).then(|| {
+            toggle_row(
+                p,
+                "double-tap-only",
+                tr("Double-tap only"),
+                tr("Wait for two complete shortcut taps before recording"),
+                settings.double_tap_only,
+                |ui: &mut Ui| {
+                    let enabled = !ui.settings.double_tap_only;
+                    ui.update(|settings| settings.double_tap_only = enabled);
+                },
+            )
+        }),
+    ));
     let selection = &settings.transcription;
     let model = transcription_models::definition(selection.model);
     let label = format!(
@@ -966,6 +982,11 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             _ => None,
         },
     ));
+    rows.push(microphone_mode_row(ui, p).into());
+    rows.push(folding(
+        "release-confirmation-fold",
+        ui.confirm_release.then(|| release_confirmation(ui, p)),
+    ));
     if model.supports_recognition_hints {
         rows.push(
             setting_row(
@@ -988,23 +1009,7 @@ fn dictation_section(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
             .into(),
         );
     }
-    let pinned = advanced_in_use(settings);
-    rows.push(folding(
-        "advanced-fold",
-        if ui.advanced.unwrap_or(pinned) {
-            advanced_rows(ui, p)
-        } else {
-            Vec::new()
-        },
-    ));
-    // The toggle's word ends on the box's edge, its hover reaching past it.
-    section_with(
-        p,
-        "dictation",
-        tr("Dictation"),
-        advanced_toggle(ui, p, pinned).mr(-6.0),
-        rows,
-    )
+    section(p, "dictation", tr("Dictation"), rows)
 }
 
 /// The speech model row's description: preparation progress or its error.
@@ -1328,129 +1333,49 @@ fn output_section(ui: &Ui, p: Paint) -> El {
     section(p, "output", tr("Output"), rows)
 }
 
-/// An advanced setting is off its default, so Advanced stays open to show
-/// it: the microphone released while idle, or Double-tap only where its row
-/// shows.
-fn advanced_in_use(settings: &AppSettings) -> bool {
-    settings.release_microphone_while_idle
-        || (double_tap_only_applies(settings) && settings.double_tap_only)
-}
-
+/// Double-tap only needs Hold, Double-tap to lock, and a key chord.
 fn double_tap_only_applies(settings: &AppSettings) -> bool {
     settings.shortcut_mode == ShortcutMode::Hold
         && settings.double_tap_lock
         && settings.dictation_hotkey.key.is_some()
 }
 
-/// The Dictation header's disclosure for the options most people never
-/// change, which show at the end of the card. It starts open while one is in
-/// use, and always closes when pressed. (A row above them at the card's end would Tab straight into them,
-/// but costs the 37 px that keeps General from scrolling at 760.)
-fn advanced_toggle(ui: &Ui, p: Paint, pinned: bool) -> El {
-    let c = &p.k.c;
-    let open = ui.advanced.unwrap_or(pinned);
-    let toggle = row()
-        .key("advanced-toggle")
-        .label(tr("Advanced"))
-        .h(18.0)
-        .px(6.0)
-        .gap(2.0)
-        .center_y()
-        .radius(p.k.radius.md)
-        .child(
-            text(tr("Advanced"))
-                .key("title")
-                .font(p.k.ty.ui.lh(16.0))
-                .color(c.text_muted),
-        )
-        .child(
-            rune::icon(
-                if open {
-                    p.k.glyph.triangle_down
-                } else {
-                    p.k.glyph.triangle_right
-                },
-                14.0,
-            )
-            .key("arrow")
-            .color(c.icon_weaker),
-        );
-    toggle
-        .role("button")
-        .hover(c.hover)
-        .press(c.pressed)
-        .focusable(true)
-        .focus_ring(2.0, 0.0, c.border_focus)
-        .on_press(move |ui: &mut Ui| {
-            ui.advanced = Some(!open);
-            if open {
-                ui.confirm_release = false;
-            }
-        })
-}
-
-/// Advanced dictation rows, shown at the end of the Dictation card: the
-/// microphone's idle release and Double-tap only.
-fn advanced_rows(ui: &Ui, p: Paint) -> Vec<CardRow> {
-    let settings = &ui.settings;
-    vec![
-        setting_row(
+/// Keep the microphone open for pre-roll, or release it while idle; the
+/// release asks first, below this row.
+fn microphone_mode_row(ui: &Ui, p: Paint) -> El {
+    setting_row(
+        p,
+        "microphone-mode",
+        tr("Microphone mode"),
+        Some(if ui.settings.release_microphone_while_idle {
+            tr("Opens only while holding the shortcut. Disables pre-roll and commands.")
+        } else {
+            tr("Keeps the microphone open for instant start and pre-roll")
+        }),
+        segmented(
             p,
-            "microphone-mode",
-            tr("Microphone mode"),
-            Some(if settings.release_microphone_while_idle {
-                tr("Opens only while holding the shortcut. Disables pre-roll and commands.")
-            } else {
-                tr("Keeps the microphone open for instant start and pre-roll")
-            }),
-            segmented(
-                p,
-                "microphone-mode-control",
-                &[tr("Keep ready (fast)"), tr("Release when idle")],
-                usize::from(settings.release_microphone_while_idle),
-                |ui, index| {
-                    ui.advanced = Some(true);
-                    let release = index == 1;
-                    if release && !ui.settings.release_microphone_while_idle {
-                        ui.confirm_release = true;
-                        return;
-                    }
-                    ui.confirm_release = false;
-                    if ui.settings.release_microphone_while_idle != release {
-                        let mut candidate = ui.drafted();
-                        match candidate.set_release_microphone_while_idle(release) {
-                            Ok(()) => {
-                                ui.commit(candidate);
-                            }
-                            Err(error) => ui.error = Some(format!("{error:#}")),
+            "microphone-mode-control",
+            &[tr("Keep ready (fast)"), tr("Release when idle")],
+            usize::from(ui.settings.release_microphone_while_idle),
+            |ui, index| {
+                let release = index == 1;
+                if release && !ui.settings.release_microphone_while_idle {
+                    ui.confirm_release = true;
+                    return;
+                }
+                ui.confirm_release = false;
+                if ui.settings.release_microphone_while_idle != release {
+                    let mut candidate = ui.drafted();
+                    match candidate.set_release_microphone_while_idle(release) {
+                        Ok(()) => {
+                            ui.commit(candidate);
                         }
+                        Err(error) => ui.error = Some(format!("{error:#}")),
                     }
-                },
-            ),
-        )
-        .into(),
-        folding(
-            "release-confirmation-fold",
-            ui.confirm_release.then(|| release_confirmation(ui, p)),
+                }
+            },
         ),
-        folding(
-            "double-tap-only-fold",
-            double_tap_only_applies(settings).then(|| {
-                toggle_row(
-                    p,
-                    "double-tap-only",
-                    tr("Double-tap only"),
-                    tr("Wait for two complete shortcut taps before recording"),
-                    settings.double_tap_only,
-                    |ui: &mut Ui| {
-                        ui.advanced = Some(true);
-                        let enabled = !ui.settings.double_tap_only;
-                        ui.update(|settings| settings.double_tap_only = enabled);
-                    },
-                )
-            }),
-        ),
-    ]
+    )
 }
 
 fn release_confirmation(ui: &Ui, p: Paint) -> El {

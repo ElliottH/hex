@@ -326,18 +326,15 @@ fn reduce_motion_swaps_allow_for_allowed_at_once() {
 }
 
 #[test]
-fn general_hides_advanced_options_until_asked() {
-    let mut rt = runtime("mac-settings", true, PANE_SIZE);
-    assert!(rt.find("microphone-mode").is_none());
-    tap(&mut rt, "advanced-toggle");
-    assert!(rt.find("microphone-mode").is_some());
+fn general_shows_every_dictation_option_without_a_disclosure() {
+    let rt = runtime("mac-settings", true, PANE_SIZE);
+    assert!(rt.find("advanced-toggle").is_none());
+    assert!(rt.find("dictation/card/microphone-mode").is_some());
     assert_eq!(
         rt.find("double-tap-only").is_some(),
         rt.state.settings.dictation_hotkey.key.is_some(),
         "double-tap only needs a key chord"
     );
-    tap(&mut rt, "advanced-toggle");
-    assert!(rt.find("microphone-mode").is_none());
 }
 
 #[test]
@@ -1375,7 +1372,6 @@ fn platform_goldens() {
     }
     check_golden("shortcut-explainer-chord", false, PANE_SIZE);
     check_golden("mac-settings-permissions", true, PANE_SIZE);
-    check_golden("mac-settings-advanced", false, PANE_SIZE);
     check_golden("meetings-calendar-denied", true, PANE_SIZE);
     check_golden("mac-commands-unavailable", true, PANE_SIZE);
     check_golden("windows-settings", false, GOLDEN_SIZE);

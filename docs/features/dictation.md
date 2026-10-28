@@ -271,7 +271,7 @@ General > Double-tap to lock                          // dictate.lock; Hold only
     ├── Second press AND release <300 ms after first release -> LOCKED
     └── Slow second release -> No lock
 
-General > Advanced > Double-tap only                  // dictate.double-tap-only
+General > Double-tap only                             // dictate.double-tap-only
   Requires a key binding AND locking enabled
   Single press/hold -> No capture                     // disables hold, not a toggle
   Same two qualifying complete taps -> LOCKED         // same lock, not a third mode

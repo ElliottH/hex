@@ -589,9 +589,6 @@ pub(crate) struct Ui {
     microphones_listing:
         Option<std::sync::mpsc::Receiver<Result<crate::audio::InputDevices, String>>>,
     confirm_release: bool,
-    /// General's Advanced disclosure, once pressed: open or closed. Until
-    /// then it is open only while an advanced setting is in use.
-    advanced: Option<bool>,
     /// A scene previewing the badge of a build kind this binary is not.
     build_preview: Option<BuildKind>,
     capture: Capture,
@@ -682,7 +679,6 @@ impl Ui {
             microphones_listed_at: 0.0,
             microphones_listing: None,
             confirm_release: false,
-            advanced: None,
             build_preview: None,
             capture: Capture::Idle,
             hints,
@@ -1871,10 +1867,6 @@ const SCENES: &[Scene] = &[
             .push(crate::onboarding::PermissionKind::Accessibility);
         ui.platform.login_item = Some(crate::login_item::LoginItemStatus::RequiresApproval);
         ui.platform.accessibility_renamed = true;
-    }),
-    ("mac-settings-advanced", |ui| {
-        *ui = mac_fixture();
-        ui.advanced = Some(true);
     }),
     ("mac-settings-dev-channel", |ui| {
         *ui = mac_fixture();

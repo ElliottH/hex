@@ -156,41 +156,30 @@ fn a_shortcut_without_a_key_says_so() {
 }
 
 #[test]
-fn advanced_opens_while_in_use_and_always_closes() {
+fn double_tap_only_shows_only_in_hold_with_double_tap_to_lock() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    assert!(rt.find("microphone-mode").is_none());
-    tap(&mut rt, "advanced-toggle");
-    tap(&mut rt, "microphone-mode-control/segment1");
-    assert!(rt.state.confirm_release);
-    tap(&mut rt, "advanced-toggle");
-    assert!(!rt.state.confirm_release, "collapsing drops the question");
-    assert!(rt.find("microphone-mode").is_none());
-
-    rt.state.advanced = None;
-    rt.state.settings.release_microphone_while_idle = true;
-    rt.invalidate();
-    settle(&mut rt);
-    assert!(rt.find("microphone-mode").is_some(), "in use opens it");
-    tap(&mut rt, "advanced-toggle");
-    assert!(rt.find("microphone-mode").is_none(), "but it still closes");
-    tap(&mut rt, "advanced-toggle");
     assert!(rt.find("microphone-mode").is_some());
-
-    rt.state.advanced = None;
-
-    rt.state.settings.release_microphone_while_idle = false;
+    rt.state.settings.shortcut_mode = crate::dictation::ShortcutMode::Hold;
     rt.state.settings.double_tap_lock = true;
-    rt.state.settings.double_tap_only = true;
     rt.invalidate();
     settle(&mut rt);
-    assert!(
-        rt.find("double-tap-only").is_some(),
-        "so does Double-tap only"
-    );
+    assert!(rt.find("dictation/card/double-tap-only").is_some());
+    tap(&mut rt, "double-tap-only");
+    assert!(rt.state.settings.double_tap_only);
+
+    rt.state.settings.double_tap_lock = false;
+    rt.invalidate();
+    settle(&mut rt);
+    assert!(rt.find("double-tap-only").is_none(), "not without the lock");
+    rt.state.settings.double_tap_lock = true;
     rt.state.settings.shortcut_mode = crate::dictation::ShortcutMode::Toggle;
     rt.invalidate();
     settle(&mut rt);
-    assert!(rt.find("microphone-mode").is_none(), "but not in Toggle");
+    assert!(rt.find("double-tap-only").is_none(), "nor in Toggle");
+    assert!(
+        rt.find("microphone-mode").is_some(),
+        "Microphone mode stays"
+    );
 }
 
 #[test]
@@ -284,7 +273,6 @@ fn enabling_sends_the_listener_action() {
 #[test]
 fn releasing_the_microphone_asks_first() {
     let mut rt = runtime("portal", true, GOLDEN_SIZE);
-    tap(&mut rt, "advanced-toggle");
     tap(&mut rt, "microphone-mode-control/segment1");
     assert!(rt.state.confirm_release);
     assert!(!rt.state.settings.release_microphone_while_idle);

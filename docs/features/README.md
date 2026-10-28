@@ -335,7 +335,7 @@ Saved shortcut                           // dictation; Option by default
     ├── Capture active -> Cancel that capture
     └── Otherwise -> Cancel newest cancellable job
 
-General > Advanced > Double-tap only     // optional for key bindings
+General > Double-tap only                // optional for key bindings
   -> Disable single-hold activation
   -> Keep the double-tap hands-free path
 ```
@@ -396,7 +396,7 @@ latency measurement.
 General                                  // settings
 ├── Dictation card -> Shortcut, Shortcut mode, Double-tap to lock, Speech model
 │   ├── Shortcut mode > How it works -> Hold/Toggle explainer modal (dictation.md)
-│   └── A row that hides or shows (Double-tap to lock, Advanced, a microphone error)
+│   └── A row that hides or shows (Double-tap to lock, Double-tap only, a microphone error)
 │       -> Folds under a clip as the rows below slide over it; no fade in place
 ├── Microphone -> Field always names the input in use            // settings.microphone
 │   ├── "System default" + faint "KIT PODS", or a saved device
@@ -410,10 +410,8 @@ General                                  // settings
 │   │   └── Device returns -> Switch back once idle; the setting never changes
 │   ├── Menu lists real inputs only                                // never Hex Microphone
 │   └── Open menu covers the controls beneath it; click elsewhere dismisses
-├── Advanced ▸ (Dictation header) -> rows at the end of the Dictation card
-│   ├── Open while Release when idle or Double-tap only (Hold) is on
-│   └── Collapse -> drops a pending release confirmation
-├── Microphone mode (Advanced)
+├── Double-tap only -> under Double-tap to lock, only in Hold with the lock on and a key chord
+├── Microphone mode -> under Microphone, always shown (no Advanced disclosure)
 │   ├── Keep ready (fast) -> Open while idle; pre-roll available
 │   └── Release when idle -> Open on press; no pre-roll; startup delay
 │       └── Commands enabled? -> Confirm turning Commands off
@@ -1198,7 +1196,7 @@ best-effort deletion is not guaranteed deletion.
 
 `dev.rune-ui` lives in [rune_ui.rs](../../src/rune_ui.rs) and its pane modules;
 its tests drive the Rune runtime headlessly (navigation; General rows per
-shortcut source, fitting the default window with Advanced collapsed, Double-tap to lock folding under the rows below, saves through the host, Quit Hex, microphone-release
+shortcut source, every Dictation option shown without a disclosure, Double-tap to lock folding under the rows below, saves through the host, Quit Hex, microphone-release
 confirmation, shortcut recording and Escape, conflicts; Voice Action opt-in
 and its conflict refusal, model choice; History select, delete, two-step
 clear, copy; Modes add/delete, corrections, transformations (drag reorder saves once
