@@ -35,14 +35,15 @@ if [ -n "$(git -C "$root" status --porcelain)" ]; then
   exit 1
 fi
 
-"$script_root/scripts/test-install-linux-release.sh"
-"$script_root/scripts/set-crate-version.sh" "$root" "$version"
+# Only the executable's path goes to stdout.
+"$script_root/scripts/test-install-linux-release.sh" >&2
+"$script_root/scripts/set-crate-version.sh" "$root" "$version" >&2
 mkdir -p "$dist"
 # Portable native code: ggml otherwise tunes its CPU kernels to the build
 # machine (for example AVX-512 or SVE), and the release would crash on older
 # CPUs.
 (cd "$root" && TRANSCRIBE_CMAKE_ARGS="-DGGML_NATIVE=OFF${TRANSCRIBE_CMAKE_ARGS:+ $TRANSCRIBE_CMAKE_ARGS}" \
-  cargo build --locked --release)
+  cargo build --locked --release) >&2
 executable="$dist/hex-$version-linux-$label"
 install -m755 "$target_dir/release/voice-control" "$executable"
 file "$executable" | grep -E "ELF 64-bit.*$elf" >/dev/null
