@@ -30,17 +30,18 @@ setting sounds as loud whichever set is chosen. The targets match the sounds
 Hex first shipped: start -25.5 LUFS like the classic start clicks, stop like
 the classic swish, error like macOS Basso. A mono sound plays in both
 speakers, so the stereo classic sounds are measured per channel, which puts
-their start 3 dB and stop 4 dB under the targets their summed loudness once
+their start 2.5 dB and stop 3 dB under the targets their summed loudness once
 set. They are raised to the targets like every other sound (the limiter
 touches 0.1% of the start's samples, the peaks of its clicks), and the
-classic cancel, about 18 dB louder than the rest, comes down to its target.
+classic cancel, about 15 dB louder than the rest, comes down to its target.
 """
 import subprocess
+from math import gcd
 from pathlib import Path
 
 import numpy as np
 from scipy.io import wavfile
-from scipy.signal import butter, lfilter, sosfilt
+from scipy.signal import butter, lfilter, resample_poly, sosfilt
 
 SR = 48000
 CEILING = 10 ** (-1.5 / 20)  # sample peak
@@ -397,8 +398,7 @@ def max_momentary_lufs(x, sr=SR):
     first."""
     channels = x.T if x.ndim == 2 else x[None, :]
     if sr != SR:
-        at = np.arange(int(channels.shape[1] * SR / sr)) * sr / SR
-        channels = np.array([np.interp(at, np.arange(channels.shape[1]), c) for c in channels])
+        channels = resample_poly(channels, SR // gcd(SR, sr), sr // gcd(SR, sr), axis=1)
     pad = np.zeros(int(0.4 * SR))
     power = np.mean([lfilter(*_K2, lfilter(*_K1, np.concatenate([pad, c, pad]))) ** 2
                      for c in channels], axis=0)
