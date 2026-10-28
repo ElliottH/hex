@@ -227,7 +227,11 @@ substitute for source inspection or a second roadmap.
   a Rune overlay in the Hex process: layer-shell on Wayland, override-redirect
   on X11, at the top or bottom. The listener reports through `LinuxIndicator`
   and never waits on it; it shows once the window's app runs, whether or not
-  the window is open. Linux has no tray icon.
+  the window is open.
+- `linux_tray`: the optional tray icon, a StatusNotifierItem with a dbusmenu
+  (Show Hex, Quit Hex) on its own thread and private bus connection. It
+  registers whenever a tray host (`org.kde.StatusNotifierWatcher`) appears;
+  without one Hex runs unchanged.
 - `updater`: the in-app updater on every OS, a client of the Anomaly release
   service (`docs/plans/release-service.md`). `updater/protocol` is the
   protocol's strict SemVer, lenient manifest parsing, and client rules (the
