@@ -1359,6 +1359,7 @@ fn platform_goldens() {
         check_golden("meetings-calendar", dark, (980.0, 1800.0));
         for scene in [
             "mac-settings",
+            "mac-input-source-models",
             "mac-commands",
             "meetings",
             "meetings-settings",

@@ -226,8 +226,7 @@ impl Pump {
                         ),
                     ));
                 }
-                background(reply, move || use_model(&runtime, selection));
-                None
+                start_model_use(runtime, selection, reply)
             }
             ControlCommand::ModelInstall { model, language } => {
                 let selection = match load().and_then(|settings| {
@@ -238,8 +237,7 @@ impl Pump {
                 };
                 let definition = crate::transcription_models::definition(selection.model);
                 if crate::transcription_models::is_installed(definition, &selection.language) {
-                    background(reply, move || use_model(&runtime, selection));
-                    return None;
+                    return start_model_use(runtime, selection, reply);
                 }
                 Some(reply_with(
                     runtime
@@ -646,15 +644,28 @@ fn use_request(selection: crate::transcription_models::TranscriptionSelection) -
     Request::UseInstalledSelection(selection)
 }
 
-/// Switches to an installed model and waits until it's loaded.
-fn use_model(
+/// Admit on the main thread, even for an unchanged selection, before spawning
+/// the waiter. An idempotent manual choice still cancels automatic work.
+fn start_model_use(
+    runtime: RuntimeHandle,
+    selection: crate::transcription_models::TranscriptionSelection,
+    reply: &SyncSender<ControlResponse>,
+) -> Option<ControlReply> {
+    if let Err(error) = runtime.send(use_request(selection.clone())) {
+        return Some(ControlReply::error("unavailable", error.to_string()));
+    }
+    background(reply, move || wait_for_model(&runtime, selection));
+    None
+}
+
+/// Waits for an already-admitted installed-model choice without blocking AppKit.
+fn wait_for_model(
     runtime: &RuntimeHandle,
     selection: crate::transcription_models::TranscriptionSelection,
 ) -> Result<ControlReply, ControlError> {
     let name = crate::transcription_models::definition(selection.model).name;
     let matches = |settings: &AppSettings| {
-        settings.transcription.model == selection.model
-            && settings.transcription.language == selection.language
+        super::same_model_and_language(&settings.transcription, &selection)
     };
     if load().is_ok_and(|settings| matches(&settings)) {
         return Ok(ControlReply::unchanged(format!(
@@ -662,9 +673,6 @@ fn use_model(
             selection.language
         )));
     }
-    runtime
-        .send(use_request(selection.clone()))
-        .map_err(|error| ControlError::new("unavailable", error.to_string()))?;
     let started = Instant::now();
     let mut seen_preparing = false;
     while started.elapsed() < CONFIRM_WAIT {
@@ -848,6 +856,11 @@ mod tests {
         ));
         let mut runtime = super::super::Runtime {
             settings: Default::default(),
+            keyboard_switcher: crate::keyboard_model_switching::Switcher::new(
+                Default::default(),
+                None,
+            ),
+            automatic_preparation: false,
             preparation,
             recognition_start: None,
         };
