@@ -43,7 +43,7 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           case "$MODE" in dev|production) ;; *) exit 1 ;; esac
-          bun scripts/build.ts --mode "$MODE"
+          bun run build --mode "$MODE"
       - id: upload
         uses: ./.github/release/upload
         with:
