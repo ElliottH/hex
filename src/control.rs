@@ -16,7 +16,7 @@ use crate::vocabulary::{self, VocabularyEntry};
 
 /// The wire version of [`ControlRequest`] and [`ControlResponse`]. A change
 /// that breaks either shape increments it.
-pub const CONTROL_VERSION: u32 = 1;
+pub const CONTROL_VERSION: u32 = 2;
 
 /// What a capture command does. Commands are idempotent: starting while
 /// recording or stopping while idle changes nothing and succeeds.
@@ -504,7 +504,6 @@ pub struct PermissionReport {
     pub ready: bool,
     /// ready, needs-request, needs-settings, or needs-restart.
     pub microphone: String,
-    pub input_monitoring: String,
     pub accessibility: String,
     pub transcription_model: bool,
 }
@@ -771,7 +770,7 @@ mod tests {
             round_trip_request(command);
         }
         let request: ControlRequest =
-            serde_json::from_str(r#"{"version":1,"command":"vocabulary-add","term":"Rune"}"#)
+            serde_json::from_str(r#"{"version":2,"command":"vocabulary-add","term":"Rune"}"#)
                 .unwrap();
         assert_eq!(
             request.command,
@@ -826,15 +825,15 @@ mod tests {
         .unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"version": 1, "command": "meeting-record", "title": "Standup"})
+            serde_json::json!({"version": 2, "command": "meeting-record", "title": "Standup"})
         );
         // Optional fields may be left out.
         let request: ControlRequest =
-            serde_json::from_str(r#"{"version":1,"command":"quit"}"#).unwrap();
+            serde_json::from_str(r#"{"version":2,"command":"quit"}"#).unwrap();
         assert_eq!(request.command, ControlCommand::Quit { force: false });
-        assert!(serde_json::from_str::<ControlRequest>(r#"{"version":1,"command":"x"}"#).is_err());
+        assert!(serde_json::from_str::<ControlRequest>(r#"{"version":2,"command":"x"}"#).is_err());
         let capture: ControlRequest =
-            serde_json::from_str(r#"{"version":1,"command":"scrawl-capture","action":"stop"}"#)
+            serde_json::from_str(r#"{"version":2,"command":"scrawl-capture","action":"stop"}"#)
                 .unwrap();
         assert_eq!(
             capture.command,
@@ -843,7 +842,7 @@ mod tests {
             }
         );
         let send: ControlRequest = serde_json::from_str(
-            r#"{"version":1,"command":"scrawl-capture-send","capture":"latest"}"#,
+            r#"{"version":2,"command":"scrawl-capture-send","capture":"latest"}"#,
         )
         .unwrap();
         assert_eq!(
@@ -929,7 +928,7 @@ mod tests {
             serde_json::to_value(ControlResponse::from(ControlReply::error("busy", "x"))).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"version": 1, "status": "error", "code": "busy", "message": "x"})
+            serde_json::json!({"version": 2, "status": "error", "code": "busy", "message": "x"})
         );
     }
 

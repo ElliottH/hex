@@ -302,7 +302,7 @@ pub(super) enum ScrawlRequest {
 pub(super) struct PlatformState {
     pub(super) caps: Capabilities,
     pub(super) input_sources: Vec<crate::keyboard_model_switching::InputSource>,
-    /// Microphone, Input Monitoring, Accessibility, and whether the selected
+    /// Microphone, Accessibility, and whether the selected
     /// speech model is installed. Every permission is ready where the OS has
     /// none.
     pub(super) permissions: SetupStatus,
@@ -559,7 +559,6 @@ impl PlatformState {
         let ready = PermissionState::Ready;
         state.permissions = SetupStatus {
             microphone: ready,
-            input_monitoring: ready,
             accessibility: ready,
             transcription_model: true,
         };

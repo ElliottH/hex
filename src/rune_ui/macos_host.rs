@@ -791,9 +791,6 @@ impl NativeHost for MacHost {
         let asked_len = state.permissions_asked.len();
         state.permissions_asked.retain(|kind| match kind {
             PermissionKind::Microphone => permissions.microphone != PermissionState::Ready,
-            PermissionKind::InputMonitoring => {
-                permissions.input_monitoring != PermissionState::Ready
-            }
             PermissionKind::Accessibility => permissions.accessibility != PermissionState::Ready,
             PermissionKind::SystemAudio => !system_audio,
             PermissionKind::ScreenRecording => !crate::meeting::screen_recording_permitted(),
