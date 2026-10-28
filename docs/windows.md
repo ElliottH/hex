@@ -150,7 +150,10 @@ Press Enter once to start, then again to stop. Captures shorter than 300 ms are
 discarded. `--device` accepts a case-insensitive fragment from `devices`.
 
 Runtime data is stored under `%APPDATA%\voice-control`. Observations are in
-`logs\live.ndjson`, and native/runtime diagnostics are in `logs\process.log`.
+`logs\live.ndjson`, and native/runtime diagnostics are in `logs\process.log`,
+including every panic with its thread and backtrace. A worker that stops
+unexpectedly leaves its cause there. The app detaches from its console at
+launch, so it has no stdout or stderr.
 Successful pasted dictations are retained, subject to the selected retention
 window and hard size limits, in `history.json`. Captured audio is never retained
 by default.
