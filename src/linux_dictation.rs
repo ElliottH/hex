@@ -94,6 +94,8 @@ fn shortcuts(settings: &AppSettings) -> (LinuxHotkey, HotkeyOptions) {
             .voice_action
             .enabled
             .then(|| LinuxHotkey::from(&settings.edit_hotkey)),
+        capture: (crate::app_settings::capture_available() && settings.capture.enabled)
+            .then(|| LinuxHotkey::from(&settings.capture.hotkey)),
     };
     (LinuxHotkey::from(&settings.dictation_hotkey), options)
 }
@@ -190,7 +192,8 @@ pub(crate) fn run(
         transcriber.map_or_else(|| LocalTranscriber::load(&settings.transcription), Ok)?;
     crate::speech_detector::prewarm();
     // The engine outlives the output worker, which waits on its transcripts.
-    let mut engine = TranscriptionEngine::start(transcriber)?;
+    // Captures transcribe on it too, holding it weakly.
+    let mut engine = Arc::new(TranscriptionEngine::start(transcriber)?);
     // Drop audio/hotkeys and close the job queue before joining slow output on
     // every exit, including failures during startup or recording.
     let mut output = OutputWorker {
@@ -281,6 +284,16 @@ pub(crate) fn run(
             }
         }
     }));
+
+    // The `capture` experiment: its host, the audio it copies from this
+    // listener's microphone, and the capsule's commands.
+    let timeline = crate::capture_host::ListenerTimeline::default();
+    let environment = crate::capture_host::Environment;
+    let mut capture_host =
+        crate::capture_host::CaptureHost::start(Some(engine.clone()), &environment);
+    let capture_controls = crate::capture_host::listen_for_controls();
+    // The microphone stays open for a capture even while released when idle.
+    let mut capture_holds_microphone = false;
 
     let mut events = EventLog::create(event_path)?;
     let mut audio_ready = input.is_open();
@@ -380,7 +393,52 @@ pub(crate) fn run(
             if pending == 0
                 && let Some(next) = model.take_ready()
             {
-                std::mem::replace(&mut engine, TranscriptionEngine::start(next)?).retire();
+                let old =
+                    std::mem::replace(&mut engine, Arc::new(TranscriptionEngine::start(next)?));
+                crate::capture_host::use_engine(&engine);
+                // A capture still transcribing holds the old engine a moment.
+                if let Ok(old) = Arc::try_unwrap(old) {
+                    old.retire();
+                }
+            }
+        }
+        crate::capture_host::CaptureHost::reconcile(
+            &mut capture_host,
+            Some(&engine),
+            &environment,
+            &timeline,
+        );
+        while let Ok(control) = capture_controls.try_recv() {
+            let reply = match (&mut capture_host, control) {
+                (Some(host), crate::capture_host::CaptureControl::Scrawl(action)) => {
+                    host.control(action, &timeline)
+                }
+                (Some(host), crate::capture_host::CaptureControl::Command(command)) => {
+                    host.command(command, &timeline)
+                }
+                (None, _) => crate::control::ControlReply::error("feature-off", "captures are off"),
+            };
+            if let crate::control::ControlReply::Error { message, .. } = reply {
+                tracing::warn!(message, "a capture command did nothing");
+            }
+        }
+        // A capture copies this microphone: a released one opens for it,
+        // and closes again once nothing records.
+        if release_while_idle {
+            let wants = timeline.wants_audio();
+            if wants && !input.is_active() {
+                input.request_open();
+            }
+            if wants {
+                capture_holds_microphone = true;
+            } else if capture_holds_microphone
+                && !capture.is_recording()
+                && !start_pending
+                && finishing.is_none()
+            {
+                capture_holds_microphone = false;
+                input.close();
+                audio_ready = false;
             }
         }
         if let Some(hotkey) = &hotkey
@@ -412,7 +470,7 @@ pub(crate) fn run(
                 voice,
             )?;
             suppressor.restore();
-            if release_while_idle {
+            if release_while_idle && !timeline.wants_audio() {
                 input.close();
                 audio_ready = false;
             }
@@ -456,8 +514,10 @@ pub(crate) fn run(
                     // nothing was captured.
                     start_pending = false;
                     suppressor.restore();
-                    input.close();
-                    audio_ready = false;
+                    if !timeline.wants_audio() {
+                        input.close();
+                        audio_ready = false;
+                    }
                     events.dictation(
                         if action == HotkeyEvent::Cancel {
                             DictationPhase::Cancelled
@@ -479,6 +539,13 @@ pub(crate) fn run(
                         || suppressor.restore_then(|| feedback::play(Tone::DictationStop)),
                     ));
                 }
+                HotkeyEvent::Capture => {
+                    if let Some(host) = &mut capture_host {
+                        let activity =
+                            host.shortcut_activity(crate::audio::CaptureInstant::now(), &timeline);
+                        host.shortcut(activity.on_press(), &timeline);
+                    }
+                }
                 HotkeyEvent::PasteLast if !capture.is_recording() => {
                     match jobs.try_send(OutputJob::PasteLast) {
                         Ok(()) | Err(TrySendError::Full(_)) => {}
@@ -493,7 +560,7 @@ pub(crate) fn run(
                     feedback::retract_start();
                     feedback::play(Tone::Cancel);
                     suppressor.restore();
-                    if release_while_idle {
+                    if release_while_idle && !timeline.wants_audio() {
                         input.close();
                         audio_ready = false;
                     }
@@ -540,7 +607,11 @@ pub(crate) fn run(
         indicator.update(capture.is_recording() || start_pending, pending);
         match input.recv_timeout(
             UPDATE_INTERVAL,
-            crate::audio::capture_idle(capture.is_recording(), start_pending, finishing.is_some()),
+            crate::audio::capture_idle(
+                capture.is_recording() || timeline.wants_audio(),
+                start_pending,
+                finishing.is_some(),
+            ),
         ) {
             RecoveringAudioInputEvent::Chunk {
                 samples,
@@ -560,6 +631,7 @@ pub(crate) fn run(
                         });
                     }
                 }
+                timeline.feed(&samples, input.sample_rate(), captured_through);
                 capture.ingest(&samples, captured_through);
                 if capture.is_recording() {
                     indicator.meter(&samples);
@@ -572,6 +644,7 @@ pub(crate) fn run(
             }
             RecoveringAudioInputEvent::Timeout => {}
             RecoveringAudioInputEvent::Interrupted => {
+                timeline.restart();
                 // A release still in its tail finishes with the audio it has.
                 if let Some(release) = &mut finishing {
                     release.deadline = Instant::now();
@@ -596,6 +669,7 @@ pub(crate) fn run(
                 )?;
             }
             RecoveringAudioInputEvent::Reopened => {
+                timeline.restart();
                 audio_ready = false;
                 device_label = input.device_name().to_string();
                 emit_state(
@@ -624,6 +698,9 @@ pub(crate) fn run(
     if capture.is_recording() {
         capture.cancel();
         events.dictation(DictationPhase::Cancelled, "")?;
+    }
+    if let Some(mut host) = capture_host.take() {
+        host.shutdown(&timeline);
     }
     indicator.update(false, pending);
     suppressor.restore();

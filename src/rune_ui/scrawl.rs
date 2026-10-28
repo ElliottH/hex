@@ -1,5 +1,5 @@
-//! The Scrawl pane (the `capture` experiment, in builds with the `capture`
-//! build option): captures inside Hex. The opt-in, the capture shortcut,
+//! The Scrawl pane (the `capture` experiment, macOS and Linux): captures
+//! inside Hex. The opt-in, the capture shortcut,
 //! the send-to list's shortcut, Screen Recording, the transcriber, the captures folder and how long
 //! captures are kept, and Scrawl's own app, which keeps the shortcut while
 //! it runs until "Use Hex for captures" asks it to quit.
@@ -176,7 +176,9 @@ fn shortcut_rows(ui: &Ui, p: Paint, view: &ScrawlView) -> Vec<El> {
         Some((list_purpose.to_string(), p.muted())),
         shortcut_control(ui, p, ShortcutTarget::CaptureList),
     ));
-    if enabled {
+    // Linux asks through the desktop's screen-cast portal when a capture
+    // starts, and Wayland can't keep an overlay out of a recording.
+    if enabled && cfg!(target_os = "macos") {
         rows.push(setting_row(
             p,
             "screen-recording",
@@ -363,13 +365,16 @@ pub(super) fn pane(ui: &Ui, p: Paint, layer: &mut Vec<El>) -> El {
         tr("Capture"),
         shortcut_rows(ui, p, &view),
     ));
-    if enabled {
+    // Apple's speech recognizer is macOS's; Linux transcribes with Hex's model.
+    if enabled && cfg!(target_os = "macos") {
         content = content.child(section(
             p,
             "transcription",
             tr("Transcription"),
             vec![transcriber_row(ui, p)],
         ));
+    }
+    if enabled {
         content = content.child(section(
             p,
             "storage",

@@ -52,6 +52,8 @@ impl Mode {
     pub(crate) fn chips(phone: bool) -> impl Iterator<Item = Mode> {
         [Mode::Area, Mode::Window, Mode::Screen]
             .into_iter()
+            // Wayland gives Hex no pointer to aim an area with yet.
+            .filter(|mode| cfg!(not(target_os = "linux")) || *mode != Mode::Area)
             .chain(phone.then_some(Mode::Iphone))
     }
 

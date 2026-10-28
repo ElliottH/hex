@@ -138,6 +138,9 @@ pub(crate) fn run_app(
         .windowless()
         .window_options(fixed_window());
     crate::linux_rune_hud::install(&mut app);
+    // The capture capsule, picker, and ink, with the `capture` experiment on.
+    let _capture_overlays = crate::app_settings::capture_available()
+        .then(|| crate::rune_ui::capture_capsule::feed::CaptureOverlays::install(&mut app));
     let handle = app.handle();
     host.set_window_visible({
         let handle = handle.clone();

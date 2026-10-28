@@ -289,12 +289,11 @@ enum Command {
         #[command(subcommand)]
         command: DevCommand,
     },
-    #[cfg(any(debug_assertions, hex_capture))]
     /// Record, list, and send Scrawl captures in the running Hex (the
-    /// `capture` experiment, a build option).
+    /// `capture` experiment).
     Capture {
         #[command(subcommand)]
-        command: CaptureCommand,
+        command: control::cli::CaptureCommand,
     },
     /// The Scrawl capture capsule in a window of its own, driven by a fake
     /// host, with live tuning. Records and sends nothing.
@@ -374,75 +373,6 @@ enum CommandsCommand {
     },
     /// Load the command model again after it failed.
     Retry {
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-}
-
-#[cfg(all(target_os = "macos", any(debug_assertions, hex_capture)))]
-#[derive(Subcommand)]
-enum CaptureCommand {
-    /// Start recording a capture.
-    Start {
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// End the capture and write it in the background.
-    Stop {
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// End the capture and discard it.
-    Cancel {
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// What records, what is being written, and the last capture.
-    Status {
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// The newest captures, newest first.
-    List {
-        /// How many to show (20 unless given).
-        #[arg(long)]
-        limit: Option<usize>,
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// One capture's words, files, and where it went.
-    Show {
-        /// A bundle name, path, or `latest`.
-        capture: String,
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// Send a capture to an OpenCode session.
-    Send {
-        /// A bundle name, path, or `latest`.
-        capture: String,
-        /// A session ID, or for the newest capture a session its route
-        /// lists by name. Without it, where its route or last send says.
-        #[arg(long)]
-        to: Option<String>,
-        /// Also save a rule that always sends this capture's site or app
-        /// there (the newest routed capture only).
-        #[arg(long)]
-        always: bool,
-        #[command(flatten)]
-        output: control::cli::Output,
-    },
-    /// What routing sees for a capture and what it decides (Scrawl's
-    /// `route --explain`). Sends nothing.
-    Route {
-        /// A bundle name, path, or `latest`.
-        capture: String,
-        /// Accepted for Scrawl's spelling; `route` only ever explains.
-        #[arg(long, hide = true)]
-        explain: bool,
-        /// Ask Jev again now (one call).
-        #[arg(long)]
-        ask_jev: bool,
         #[command(flatten)]
         output: control::cli::Output,
     },
@@ -603,44 +533,7 @@ fn main() -> Result<()> {
             action: Some(transcript_cli::HistoryAction::Clear { yes, output }),
             ..
         })) => control::cli::finish(control::cli::clear_history(yes, output)),
-        #[cfg(any(debug_assertions, hex_capture))]
-        Some(Command::Capture { command }) => {
-            use control::{ControlCommand as C, ScrawlCaptureAction as A};
-            let (command, output) = match command {
-                CaptureCommand::Start { output } => (C::ScrawlCapture { action: A::Start }, output),
-                CaptureCommand::Stop { output } => (C::ScrawlCapture { action: A::Stop }, output),
-                CaptureCommand::Cancel { output } => {
-                    (C::ScrawlCapture { action: A::Cancel }, output)
-                }
-                CaptureCommand::Status { output } => {
-                    (C::ScrawlCapture { action: A::Status }, output)
-                }
-                CaptureCommand::List { limit, output } => (C::ScrawlCaptureList { limit }, output),
-                CaptureCommand::Show { capture, output } => {
-                    (C::ScrawlCaptureShow { capture }, output)
-                }
-                CaptureCommand::Send {
-                    capture,
-                    to,
-                    always,
-                    output,
-                } => (
-                    C::ScrawlCaptureSend {
-                        capture,
-                        to,
-                        always,
-                    },
-                    output,
-                ),
-                CaptureCommand::Route {
-                    capture,
-                    explain: _,
-                    ask_jev,
-                    output,
-                } => (C::ScrawlCaptureRoute { capture, ask_jev }, output),
-            };
-            control::cli::finish(control::cli::send(command, output))
-        }
+        Some(Command::Capture { command }) => control::cli::finish(control::cli::capture(command)),
         Some(Command::Commands { command }) => match command {
             CommandsCommand::Enable { yes, output } => {
                 control::cli::finish(control::cli::commands(
@@ -1183,18 +1076,18 @@ mod tests {
         {
             assert!(matches!(
                 parse(&["hex", "capture", "stop", "--json"]),
-                Ok(Some(Command::Capture { command: super::CaptureCommand::Stop { output } })) if output.json
+                Ok(Some(Command::Capture { command: control::cli::CaptureCommand::Stop { output } })) if output.json
             ));
             assert!(matches!(
                 parse(&["hex", "capture", "send", "latest", "--to", "ses_1"]),
                 Ok(Some(Command::Capture {
-                    command: super::CaptureCommand::Send { capture, to: Some(to), .. }
+                    command: control::cli::CaptureCommand::Send { capture, to: Some(to), .. }
                 })) if capture == "latest" && to == "ses_1"
             ));
             assert!(matches!(
                 parse(&["hex", "capture", "send", "latest", "--always"]),
                 Ok(Some(Command::Capture {
-                    command: super::CaptureCommand::Send {
+                    command: control::cli::CaptureCommand::Send {
                         to: None,
                         always: true,
                         ..

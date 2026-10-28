@@ -34,7 +34,7 @@ pub enum CaptureAction {
     Toggle,
 }
 
-/// What `hex capture` does (the `capture` experiment, a build option).
+/// What `hex capture` does (the `capture` experiment).
 /// Idempotent like [`CaptureAction`].
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -140,7 +140,7 @@ pub enum ControlCommand {
     VocabularyRemove {
         term: String,
     },
-    /// A Scrawl capture (the `capture` experiment, a build option).
+    /// A Scrawl capture (the `capture` experiment).
     ScrawlCapture {
         action: ScrawlCaptureAction,
     },

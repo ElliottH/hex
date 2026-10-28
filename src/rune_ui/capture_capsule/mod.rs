@@ -19,6 +19,7 @@ pub(crate) mod flow;
 pub(crate) mod ink;
 pub(crate) mod notch;
 pub(crate) mod picker;
+#[cfg(target_os = "macos")]
 pub(crate) mod playground;
 pub(crate) mod surface;
 pub(crate) mod tuning;
@@ -353,6 +354,7 @@ pub(crate) struct CapsuleState {
     /// Plays the flow's cues; none in stills and tests, which stay silent.
     sound: Option<Arc<dyn Fn(Cue) + Send + Sync>>,
     /// The playground's controls and fake host (`hex capsule-playground`).
+    #[cfg(target_os = "macos")]
     playground: Option<Box<playground::Playground>>,
 }
 
@@ -381,6 +383,7 @@ impl CapsuleState {
             still: false,
             backdrop: false,
             sound: None,
+            #[cfg(target_os = "macos")]
             playground: None,
         }
     }
@@ -752,6 +755,7 @@ impl CaptureCapsule {
         });
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     /// Lets screen recordings see the capsule, or keeps it out.
     pub(crate) fn show_in_recordings(&self, shown: bool) {
         self.overlay.set_exclude_from_capture(!shown);
@@ -790,6 +794,7 @@ fn tone(cue: Cue) -> crate::feedback::Tone {
 }
 
 fn view(s: &CapsuleState, cx: &mut Cx<CapsuleState>) -> El {
+    #[cfg(target_os = "macos")]
     if s.playground.is_some() {
         return playground::view(s, cx);
     }
