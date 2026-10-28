@@ -2334,3 +2334,6 @@ fn fixture(shortcuts: DesktopShortcuts) -> Ui {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+
+#[cfg(test)]
+mod dmg_keycap;
