@@ -1,3 +1,6 @@
+// Linux and Windows draw the same HUD from `rune_hud.wgsl`, a line-for-line
+// WGSL port of this file: mirror every change here there in the same PR.
+
 #include <metal_stdlib>
 using namespace metal;
 

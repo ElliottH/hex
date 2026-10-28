@@ -69,7 +69,7 @@ pub(crate) struct WindowsDesktopHost {
     settings: AppSettings,
     history: Option<History>,
     last_dictation: Arc<Mutex<Option<String>>>,
-    indicator: crate::windows_rune_hud::WindowsIndicatorSender,
+    indicator: crate::rune_hud::HudSender,
     mode_runtime: Arc<RwLock<crate::dictation_modes::ModeRuntime>>,
     transformations: Arc<crate::personal_commands::TransformationClient>,
     personal_commands: Option<crate::personal_commands::PersonalCommands>,
@@ -152,7 +152,7 @@ impl WindowsDesktopHost {
         settings: AppSettings,
         settings_error: Option<String>,
         history: Option<History>,
-        indicator: crate::windows_rune_hud::WindowsIndicatorSender,
+        indicator: crate::rune_hud::HudSender,
     ) -> Self {
         crate::desktop_i18n::apply(settings.ui_language.as_deref());
         let mut event_reader = EventReader::open(&event_path);

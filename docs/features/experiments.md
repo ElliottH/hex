@@ -42,7 +42,7 @@ The known experiments are compiled into
   default off) is the second gate. Check:
   `capture_exists_only_with_its_build_option` in
   [experiments.rs](../../src/experiments.rs).
-- `dot-scope`: the macOS recording HUD as Dot scope, a plate of dots lit
+- `dot-scope`: the recording HUD (macOS, Linux, and Windows) as Dot scope, a plate of dots lit
   by a braided pair of oscilloscope traces that follow the microphone level
   (auto-levelled), with a choice of processing looks and of placement below
   the menu bar, in it, or out of the notch (see

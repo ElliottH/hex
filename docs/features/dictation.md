@@ -918,10 +918,14 @@ fullscreen app on a notched Mac is not yet observed.
 
 ### Dot scope (experiment `dot-scope`)
 
-With the `dot-scope` experiment on, the macOS HUD draws Dot scope instead of
+With the `dot-scope` experiment on, the HUD draws Dot scope instead of
 the capsule ([dot_scope.rs](../../src/dot_scope.rs),
-`dot_scope_fragment` in [dictation_indicator.metal](../../src/dictation_indicator.metal)).
-It is the t422 prototype's look A with its values.
+`dot_scope_fragment` in [dictation_indicator.metal](../../src/dictation_indicator.metal)
+on macOS and its WGSL port in [rune_hud.wgsl](../../src/rune_hud.wgsl) on Linux
+and Windows). It is the t422 prototype's look A with its values. Linux and
+Windows draw it in a 176×80 pt window at the HUD's edge (no menu-bar or notch
+placement), take dark or light from the overlay's system appearance, load
+`dot-scope.json` at each capture start, and ignore Reduce Motion.
 
 ```ts
 Dot scope                                    // dot_scope

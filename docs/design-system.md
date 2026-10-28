@@ -19,10 +19,8 @@ copy; the look comes from the kit.
 
 The macOS dictation HUD ([`dictation_indicator.rs`](../src/dictation_indicator.rs))
 is outside the system: its glossy Metal capsule is hand-tuned in HUD Lab. The
-Windows HUD draws the same capsule from a CPU port of its shader
-(`desktop_indicator_shader.rs`), and the Linux HUD
-([`linux_rune_hud.rs`](../src/linux_rune_hud.rs)) is a fixed dark pill in
-either appearance.
+Linux and Windows HUD ([`rune_hud.rs`](../src/rune_hud.rs)) draws the same
+capsule, and Dot scope, from `rune_hud.wgsl`, a WGSL port of its shaders.
 
 ## Rules
 
