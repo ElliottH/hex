@@ -118,10 +118,29 @@ struct LinuxDesktopHost {
 
 enum UpdateState {
     Unmanaged,
-    Checking(Receiver<Result<Option<InstalledUpdate>, String>>),
+    /// A staged update stays the baseline, so a newer release replaces it
+    /// before the restart. `restart` relaunches once the check finishes.
+    Checking {
+        receiver: Receiver<Result<Option<InstalledUpdate>, String>>,
+        staged: Option<InstalledUpdate>,
+        restart: bool,
+    },
     Failed(Instant),
     Waiting(Instant),
-    Ready(InstalledUpdate),
+    Ready {
+        update: InstalledUpdate,
+        next_check: Instant,
+    },
+}
+
+impl UpdateState {
+    fn checking(staged: Option<InstalledUpdate>, restart: bool) -> Self {
+        Self::Checking {
+            receiver: start_update_check(staged.as_ref().map(|update| update.version.clone())),
+            staged,
+            restart,
+        }
+    }
 }
 
 fn service_snapshot(host: &LinuxDesktopHost, owns_editor: bool) -> ServiceSnapshot {
@@ -159,7 +178,7 @@ pub fn run_service(event_path: PathBuf, shutdown: &'static AtomicBool) -> Result
     };
     crate::linux_dictation::initialize_feedback(&settings);
     let update = if crate::linux_updater::managed_install() {
-        UpdateState::Checking(start_update_check())
+        UpdateState::checking(None, false)
     } else {
         UpdateState::Unmanaged
     };
@@ -451,30 +470,7 @@ impl LinuxDesktopHost {
             self.personal_commands_checked_at = Instant::now();
             self.refresh_personal_commands();
         }
-        if matches!(&self.update, UpdateState::Waiting(at) | UpdateState::Failed(at) if Instant::now() >= *at)
-        {
-            self.update = UpdateState::Checking(start_update_check());
-        }
-        let update_result = match &self.update {
-            UpdateState::Checking(receiver) => match receiver.try_recv() {
-                Ok(result) => Some(result),
-                Err(TryRecvError::Disconnected) => {
-                    Some(Err("update worker stopped unexpectedly".into()))
-                }
-                Err(TryRecvError::Empty) => None,
-            },
-            _ => None,
-        };
-        if let Some(result) = update_result {
-            self.update = match result {
-                Ok(Some(executable)) => UpdateState::Ready(executable),
-                Ok(None) => UpdateState::Waiting(Instant::now() + UPDATE_INTERVAL),
-                Err(error) => {
-                    tracing::warn!(%error, "Linux update check failed");
-                    UpdateState::Failed(Instant::now() + UPDATE_INTERVAL)
-                }
-            };
-        }
+        self.refresh_update();
 
         let mut start_listener = false;
         if let Some(preparation) = self
@@ -750,8 +746,83 @@ impl LinuxDesktopHost {
         }
     }
 
+    fn refresh_update(&mut self) {
+        let now = Instant::now();
+        let due = match &self.update {
+            UpdateState::Waiting(at) | UpdateState::Failed(at) => now >= *at,
+            UpdateState::Ready { next_check, .. } => now >= *next_check,
+            UpdateState::Unmanaged | UpdateState::Checking { .. } => false,
+        };
+        if due {
+            let staged = match std::mem::replace(&mut self.update, UpdateState::Unmanaged) {
+                UpdateState::Ready { update, .. } => Some(update),
+                _ => None,
+            };
+            self.update = UpdateState::checking(staged, false);
+        }
+        let UpdateState::Checking { receiver, .. } = &self.update else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Disconnected) => Err("update worker stopped unexpectedly".into()),
+            Err(TryRecvError::Empty) => return,
+        };
+        let UpdateState::Checking {
+            staged, restart, ..
+        } = std::mem::replace(&mut self.update, UpdateState::Unmanaged)
+        else {
+            unreachable!("the update state was just matched as Checking");
+        };
+        let failed = result.is_err();
+        let staged = match result {
+            Ok(Some(update)) => Some(update),
+            Ok(None) => staged,
+            Err(error) => {
+                tracing::warn!(%error, "Linux update check failed");
+                staged
+            }
+        };
+        let next_check = now + UPDATE_INTERVAL;
+        self.update = match staged {
+            Some(update) => UpdateState::Ready { update, next_check },
+            None if failed => UpdateState::Failed(next_check),
+            None => UpdateState::Waiting(next_check),
+        };
+        if restart && let Err(error) = self.restart_into_update() {
+            self.error = Some(format!("Could not restart Hex: {error:#}"));
+        }
+    }
+
+    /// Checks the feed once more so the restart lands on the newest release;
+    /// [`Self::refresh_update`] restarts when that check finishes.
+    fn request_update_restart(&mut self) -> Result<()> {
+        match std::mem::replace(&mut self.update, UpdateState::Unmanaged) {
+            UpdateState::Ready { update, .. } => {
+                self.update = UpdateState::checking(Some(update), true);
+                Ok(())
+            }
+            UpdateState::Checking {
+                receiver,
+                staged: Some(staged),
+                ..
+            } => {
+                self.update = UpdateState::Checking {
+                    receiver,
+                    staged: Some(staged),
+                    restart: true,
+                };
+                Ok(())
+            }
+            state => {
+                self.update = state;
+                Err(color_eyre::eyre::eyre!("no installed update is ready"))
+            }
+        }
+    }
+
     fn restart_into_update(&self) -> Result<()> {
-        let UpdateState::Ready(update) = &self.update else {
+        let UpdateState::Ready { update, .. } = &self.update else {
             return Err(color_eyre::eyre::eyre!("no installed update is ready"));
         };
         crate::linux_updater::relaunch(update)
@@ -850,10 +921,13 @@ fn save_with(change: impl FnOnce(&mut AppSettings)) -> Result<AppSettings> {
     Ok(settings)
 }
 
-fn start_update_check() -> Receiver<Result<Option<InstalledUpdate>, String>> {
+fn start_update_check(
+    staged: Option<semver::Version>,
+) -> Receiver<Result<Option<InstalledUpdate>, String>> {
     let (sender, receiver) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let result = crate::linux_updater::install_latest().map_err(|error| format!("{error:#}"));
+        let result = crate::linux_updater::install_latest(staged.as_ref())
+            .map_err(|error| format!("{error:#}"));
         let _ = sender.send(result);
     });
     receiver
@@ -887,10 +961,17 @@ impl LinuxDesktopHost {
     fn snapshot(&self) -> DesktopSnapshot {
         let update_status = match &self.update {
             UpdateState::Unmanaged => DesktopUpdateStatus::Unavailable,
-            UpdateState::Checking(_) => DesktopUpdateStatus::Checking,
+            // A background check keeps the staged update restartable; the
+            // final check before a restart shows as Checking.
+            UpdateState::Checking {
+                staged: Some(_),
+                restart: false,
+                ..
+            }
+            | UpdateState::Ready { .. } => DesktopUpdateStatus::ReadyToRestart,
+            UpdateState::Checking { .. } => DesktopUpdateStatus::Checking,
             UpdateState::Failed(_) => DesktopUpdateStatus::Failed,
             UpdateState::Waiting(_) => DesktopUpdateStatus::Current,
-            UpdateState::Ready(_) => DesktopUpdateStatus::ReadyToRestart,
         };
         DesktopSnapshot {
             activity: self.activity.clone(),
@@ -942,7 +1023,7 @@ impl LinuxDesktopHost {
                 self.dismissed_failure_at = self.activity.last_failure.as_ref().map(|(at, _)| *at);
             }
             DesktopAction::RestartIntoUpdate => {
-                if let Err(error) = self.restart_into_update() {
+                if let Err(error) = self.request_update_restart() {
                     self.error = Some(format!("Could not restart Hex: {error:#}"));
                     return Err(error);
                 }

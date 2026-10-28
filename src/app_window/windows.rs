@@ -67,7 +67,6 @@ pub(super) struct Platform {
     listen_after_setup: bool,
     /// What the window last showed of the host, to redraw only on change.
     shown: HostView,
-    restart_scheduled: bool,
 }
 
 #[derive(PartialEq)]
@@ -92,7 +91,6 @@ impl Platform {
             host: args.host,
             listen_after_setup: args.listen_after_setup,
             shown,
-            restart_scheduled: false,
         }
     }
 }
@@ -391,6 +389,7 @@ impl AppWindow {
             UpdateCheck::ReadyToRestart { version, .. } => SoftwareUpdate::ReadyToRestart {
                 version: Some(version),
             },
+            UpdateCheck::Restarting { .. } => SoftwareUpdate::Restarting,
         })
     }
 
@@ -402,19 +401,15 @@ impl AppWindow {
         let state = self.platform.host.borrow().update_state();
         match state {
             UpdateCheck::Available { url, .. } => cx.open_url(&url),
+            // The lifecycle relaunches and quits after the final check; the
+            // updater accepts one request, so a second click is ignored.
             UpdateCheck::ReadyToRestart { .. } => {
-                // One relaunch only; a second click while the quit drains
-                // would start a second instance.
-                if self.platform.restart_scheduled {
-                    return;
-                }
-                let restarted = self.platform.host.borrow_mut().restart_into_update();
-                if restarted.is_ok() {
-                    self.platform.restart_scheduled = true;
-                    cx.quit();
-                }
+                self.platform.host.borrow_mut().restart_into_update()
             }
-            UpdateCheck::Checking | UpdateCheck::Current | UpdateCheck::Failed => {}
+            UpdateCheck::Checking
+            | UpdateCheck::Current
+            | UpdateCheck::Failed
+            | UpdateCheck::Restarting { .. } => {}
         }
     }
 }

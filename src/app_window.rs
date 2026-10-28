@@ -771,8 +771,14 @@ enum SoftwareUpdate {
     Checking,
     Current,
     Failed,
-    Available { version: Option<String> },
-    ReadyToRestart { version: Option<String> },
+    Available {
+        version: Option<String>,
+    },
+    ReadyToRestart {
+        version: Option<String>,
+    },
+    /// A last check for a newer release runs before the relaunch.
+    Restarting,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3154,6 +3160,7 @@ impl AppWindow {
     fn render_software_update_control(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let control = match self.platform_software_update()? {
             SoftwareUpdate::Checking => busy_label(tr("Checking")).into_any_element(),
+            SoftwareUpdate::Restarting => busy_label(tr("Restarting")).into_any_element(),
             SoftwareUpdate::Available { version } => self.render_update_button(
                 version.map_or_else(|| tr("Update").into(), |v| tr_fill("Update to {}", &v)),
                 cx,

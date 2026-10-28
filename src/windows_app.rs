@@ -215,6 +215,10 @@ pub fn open(event_path: PathBuf, shutdown: &'static AtomicBool, start_hidden: bo
                     let _ = cx.update(|cx| cx.quit());
                     return;
                 }
+                if lifecycle_host.borrow_mut().finish_update_restart() {
+                    let _ = cx.update(|cx| cx.quit());
+                    return;
+                }
                 lifecycle_host.borrow_mut().refresh();
             }
         })
@@ -542,18 +546,25 @@ impl WindowsDesktopHost {
         self.updater.request_check();
     }
 
-    /// Starts the installed update; the caller quits Hex afterwards.
-    pub(crate) fn restart_into_update(&mut self) -> Result<()> {
-        let crate::windows_updater::UpdateCheck::ReadyToRestart { executable, .. } =
-            self.updater.state()
-        else {
-            return Err(eyre!("no installed Windows update is ready"));
+    /// Asks the updater for a last feed check; [`Self::finish_update_restart`]
+    /// then relaunches into the newest staged version.
+    pub(crate) fn restart_into_update(&mut self) {
+        self.updater.request_restart();
+    }
+
+    /// Starts the staged update once the final check has finished. Returns
+    /// true when the caller must quit Hex.
+    pub(crate) fn finish_update_restart(&mut self) -> bool {
+        let Some(executable) = self.updater.take_restart() else {
+            return false;
         };
-        crate::windows_updater::relaunch_at(&executable).inspect_err(|error| {
+        if let Err(error) = crate::windows_updater::relaunch_at(&executable) {
             self.error = Some(tr_fill("Could not restart Hex: {}", &format!("{error:#}")));
-        })?;
+            self.updater.cancel_restart();
+            return false;
+        }
         self.stop();
-        Ok(())
+        true
     }
 
     pub(crate) fn listener_state(&self) -> ListenerState {

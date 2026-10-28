@@ -689,6 +689,24 @@ Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
 └── Modes, Voice Action, History, Activity, transformations -> as on macOS
 ```
 
+```ts
+Signed self-update (Windows, Linux)      // maintain.desktop-updates
+├── Interval check -> Newer than running and staged -> Download, verify, activate
+│   └── Update already staged -> Still checks; newer release replaces it
+├── Check failed -> Keep any staged update restartable
+└── Restart -> Final feed check (20 s bound) -> Newest staged version -> Relaunch
+    └── Release published after the relaunch -> Next startup check
+```
+
+Both platforms use [self_update.rs](../../src/self_update.rs) `needs_install`,
+covered by `a_staged_update_is_replaced_only_by_a_newer_release`. No automated
+check exercises the worker or restart handoff in
+[windows_updater.rs](../../src/windows_updater.rs) or
+[linux_app.rs](../../src/linux_app.rs), and no signed cross-version update with a
+second newer release has run. macOS uses Sparkle, which does not recheck the feed
+once it has downloaded an update
+([Sparkle #2469](https://github.com/sparkle-project/Sparkle/issues/2469)).
+
 No Windows Commands, Meetings, or local transcription API. See the
 [Windows guide](../windows.md) for the parity table, streaming notes, and
 release flow; [check-windows](../../.github/workflows/check-windows.yml) builds,

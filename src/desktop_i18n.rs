@@ -316,6 +316,7 @@ const TRANSLATIONS: &[(&str, [&str; 5])] = &[
     ("Restart into {}", ["Uruchom ponownie do {}", "重启进入 {}", "再起動して {} へ", "Neu starten in {}", "Reiniciar a {}"]),
     ("Check now", ["Sprawdź teraz", "立即检查", "今すぐ確認", "Jetzt prüfen", "Comprobar ahora"]),
     ("Checking", ["Sprawdzanie", "检查中", "確認中", "Wird geprüft", "Comprobando"]),
+    ("Restarting", ["Ponowne uruchamianie", "正在重启", "再起動中", "Neustart läuft", "Reiniciando"]),
     ("Launch at login", ["Uruchamiaj przy logowaniu", "登录时启动", "ログイン時に起動", "Beim Anmelden starten", "Iniciar al iniciar sesión"]),
     ("Start Hex hidden in the Windows system tray after sign-in", ["Uruchamia Hex ukryty w zasobniku systemowym po zalogowaniu", "登录后在系统托盘中隐藏启动 Hex", "サインイン後、Hex をシステムトレイに隠して起動", "Startet Hex nach der Anmeldung versteckt im Infobereich", "Inicia Hex oculto en la bandeja del sistema tras iniciar sesión"]),
     ("Listen on launch", ["Nasłuchuj po uruchomieniu", "启动时监听", "起動時にリッスン", "Beim Start zuhören", "Escuchar al iniciar"]),

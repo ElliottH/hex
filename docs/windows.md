@@ -203,7 +203,7 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Recognition hints for Whisper-family models | Implemented |
 | Release microphone while idle | Implemented; mutually exclusive with audio pre-roll, as documented in Settings |
 | While-dictating audio control (mute other apps or pause media) | Implemented via WASAPI session volumes and GSMTC |
-| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `downloads.hex.kitlangton.dev` origin as Linux, one feed per architecture, activating into a user-local versions directory with a restart button. Source builds keep the GitHub release link |
+| Signed automatic self-update for managed installs | Implemented for x64 and ARM64; the same ed25519 key and `downloads.hex.kitlangton.dev` origin as Linux, one feed per architecture, activating into a user-local versions directory with a restart button. A staged update keeps checking and is replaced by a newer release, and Restart runs one last check first. Source builds keep the GitHub release link |
 | Web-domain mode rules and browser context via UI Automation | Implemented; the page URL comes from the browser's UIA document element, bounded so a hung provider degrades to application-only context |
 | Opt-in voice Commands | Missing; blocked on a Windows streaming command model |
 | Managed installer with Start Menu integration and clean uninstall | Implemented as `scripts/install-windows.ps1`; it creates the self-updating versions layout, and updates retarget the managed shortcut and Launch-at-login entry |

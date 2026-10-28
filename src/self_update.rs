@@ -8,6 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use base64::Engine;
 use color_eyre::eyre::{Result, WrapErr, bail, eyre};
@@ -21,6 +22,9 @@ use serde::Deserialize;
 pub const RELEASE_BASE: &str = "https://downloads.hex.kitlangton.dev";
 pub const MAX_FEED_BYTES: u64 = 64 * 1024;
 pub const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
+/// The feed is tiny; a stalled fetch must not hold a restart for minutes.
+pub const FEED_TIMEOUT: Duration = Duration::from_secs(20);
+pub const ARTIFACT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The HEX release signing key; releases for every platform are signed
 /// with it and `scripts/release-*.sh` refuse a mismatched private key.
@@ -106,9 +110,23 @@ pub fn validate_manifest(manifest: &Manifest, target: &UpdateTarget) -> Result<V
     Ok(version)
 }
 
+/// Whether the verified feed version needs installing. An update already
+/// staged for the next restart is the baseline, so a newer release
+/// replaces it before the restart instead of after.
+pub fn needs_install(
+    available: &Version,
+    running: &Version,
+    staged: Option<&Version>,
+) -> Result<bool> {
+    if available < running {
+        bail!("the update feed attempted a downgrade");
+    }
+    Ok(available > running && staged.is_none_or(|staged| available > staged))
+}
+
 /// Download through the platform curl with HTTPS pinned, refusing bytes
 /// past the signed limit. The destination is removed on any failure.
-pub fn download(url: &str, path: &Path, max_bytes: u64) -> Result<()> {
+pub fn download(url: &str, path: &Path, max_bytes: u64, timeout: Duration) -> Result<()> {
     let _ = fs::remove_file(path);
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -131,7 +149,7 @@ pub fn download(url: &str, path: &Path, max_bytes: u64) -> Result<()> {
             "--connect-timeout",
             "10",
             "--max-time",
-            "600",
+            &timeout.as_secs().max(1).to_string(),
         ]);
         #[cfg(windows)]
         {
@@ -308,6 +326,21 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_staged_update_is_replaced_only_by_a_newer_release() {
+        let version = |text| Version::parse(text).unwrap();
+        let running = version("2.1.0");
+        let staged = version("2.2.0");
+        assert!(!needs_install(&running, &running, None).unwrap());
+        assert!(needs_install(&staged, &running, None).unwrap());
+        assert!(!needs_install(&staged, &running, Some(&staged)).unwrap());
+        assert!(needs_install(&version("2.3.0"), &running, Some(&staged)).unwrap());
+        // A feed that falls back between the running and staged versions
+        // keeps the staged update.
+        assert!(!needs_install(&version("2.1.5"), &running, Some(&staged)).unwrap());
+        assert!(needs_install(&version("2.0.0"), &running, Some(&staged)).is_err());
     }
 
     #[test]

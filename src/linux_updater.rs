@@ -8,8 +8,8 @@ use fs2::FileExt;
 use semver::Version;
 
 use crate::self_update::{
-    MAX_FEED_BYTES, PUBLIC_KEY, UpdateTarget, download, read_bounded, validate_manifest,
-    verify_artifact, verify_feed,
+    ARTIFACT_TIMEOUT, FEED_TIMEOUT, MAX_FEED_BYTES, PUBLIC_KEY, UpdateTarget, download,
+    needs_install, read_bounded, validate_manifest, verify_artifact, verify_feed,
 };
 
 const UPDATE_URL: &str = "https://downloads.hex.kitlangton.dev/linux-update.json";
@@ -20,7 +20,10 @@ const TARGET: UpdateTarget = UpdateTarget {
 };
 
 #[derive(Clone)]
-pub struct InstalledUpdate(PathBuf);
+pub struct InstalledUpdate {
+    pub version: Version,
+    executable: PathBuf,
+}
 
 pub fn managed_install() -> bool {
     // geteuid has no preconditions and does not mutate process state.
@@ -49,7 +52,9 @@ pub fn managed_install() -> bool {
             .all(|path| safe_owned_directory(path, user))
 }
 
-pub fn install_latest() -> Result<Option<InstalledUpdate>> {
+/// Installs the feed's release when it is newer than both this build and
+/// any update already staged for the next restart.
+pub fn install_latest(staged: Option<&Version>) -> Result<Option<InstalledUpdate>> {
     if !managed_install() {
         return Ok(None);
     }
@@ -67,22 +72,19 @@ pub fn install_latest() -> Result<Option<InstalledUpdate>> {
     lock.try_lock_exclusive()
         .wrap_err("another Linux update is already in progress")?;
     let feed_path = updates.join("linux-update.json.partial");
-    download(UPDATE_URL, &feed_path, MAX_FEED_BYTES)?;
+    download(UPDATE_URL, &feed_path, MAX_FEED_BYTES, FEED_TIMEOUT)?;
     let feed = read_bounded(&feed_path, MAX_FEED_BYTES)?;
     let _ = fs::remove_file(&feed_path);
     let manifest = verify_feed(&feed, &PUBLIC_KEY)?;
     let available = validate_manifest(&manifest, &TARGET)?;
-    let installed = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    if available < installed {
-        bail!("Linux update feed attempted a downgrade");
-    }
-    if available == installed {
+    let running = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    if !needs_install(&available, &running, staged)? {
         return Ok(None);
     }
 
     let artifact_url = format!("{RELEASE_ORIGIN}{}", manifest.artifact);
     let partial = updates.join("update.download");
-    download(&artifact_url, &partial, manifest.bytes)?;
+    download(&artifact_url, &partial, manifest.bytes, ARTIFACT_TIMEOUT)?;
     let activation = (|| {
         verify_artifact(&partial, &manifest)?;
         validate_executable(&partial, &manifest.version)?;
@@ -92,11 +94,14 @@ pub fn install_latest() -> Result<Option<InstalledUpdate>> {
         let _ = fs::remove_file(&partial);
     }
     let executable = activation?;
-    Ok(Some(InstalledUpdate(executable)))
+    Ok(Some(InstalledUpdate {
+        version: available,
+        executable,
+    }))
 }
 
 pub fn relaunch(update: &InstalledUpdate) -> Result<()> {
-    if !update.0.is_file() {
+    if !update.executable.is_file() {
         bail!("the prepared HEX update is no longer installed");
     }
     crate::linux_service::schedule_restart()

@@ -19,8 +19,8 @@ use fs2::FileExt;
 use semver::Version;
 
 use crate::self_update::{
-    MAX_FEED_BYTES, PUBLIC_KEY, RELEASE_BASE, UpdateTarget, download, read_bounded,
-    validate_manifest, verify_artifact, verify_feed,
+    ARTIFACT_TIMEOUT, FEED_TIMEOUT, MAX_FEED_BYTES, PUBLIC_KEY, RELEASE_BASE, UpdateTarget,
+    download, needs_install, read_bounded, validate_manifest, verify_artifact, verify_feed,
 };
 
 const RELEASES_API: &str = "https://api.github.com/repos/anomalyco/hex/releases/latest";
@@ -58,92 +58,172 @@ pub enum UpdateCheck {
         version: String,
         executable: PathBuf,
     },
+    /// A last feed check runs, so the restart lands on the newest release.
+    Restarting {
+        version: String,
+        executable: PathBuf,
+    },
     Failed,
 }
 
 #[derive(Clone)]
 pub struct WindowsUpdater {
-    state: Arc<Mutex<UpdateCheck>>,
+    shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
     check_now: Arc<AtomicBool>,
 }
 
+struct Shared {
+    check: UpdateCheck,
+    restart: Restart,
+}
+
+enum Restart {
+    Idle,
+    /// The worker owes one more check before handing off.
+    Requested,
+    /// The check finished; the lifecycle relaunches this executable.
+    Ready(PathBuf),
+}
+
 impl WindowsUpdater {
     pub fn start() -> Self {
-        let state = Arc::new(Mutex::new(UpdateCheck::Checking));
+        let shared = Arc::new(Mutex::new(Shared {
+            check: UpdateCheck::Checking,
+            restart: Restart::Idle,
+        }));
         let stop = Arc::new(AtomicBool::new(false));
         let check_now = Arc::new(AtomicBool::new(false));
         if std::env::var_os("HEX_MOCK_UPDATE").is_some() {
-            *state.lock().unwrap_or_else(|error| error.into_inner()) = UpdateCheck::Available {
+            lock(&shared).check = UpdateCheck::Available {
                 version: "9.9.9".into(),
                 url: RELEASES_PAGE.into(),
             };
             return Self {
-                state,
+                shared,
                 stop,
                 check_now,
             };
         }
-        let worker_state = state.clone();
+        let worker_shared = shared.clone();
         let worker_stop = stop.clone();
         let worker_check_now = check_now.clone();
         let managed = managed_install();
         let _ = thread::Builder::new()
             .name("windows-update-check".into())
             .spawn(move || {
+                // A staged update stays the baseline for later checks, so a
+                // newer release replaces it before the restart, not after.
+                let mut staged: Option<InstalledUpdate> = None;
                 wait_for_next_check(&worker_stop, &worker_check_now, STARTUP_DELAY);
                 while !worker_stop.load(Ordering::Relaxed) {
                     worker_check_now.store(false, Ordering::Relaxed);
-                    // A staged update stays ready until the restart; there
-                    // is nothing further to check.
-                    let ready = matches!(
-                        &*worker_state
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner()),
-                        UpdateCheck::ReadyToRestart { .. }
-                    );
-                    if !ready {
-                        let next = if managed {
-                            self_update_check()
+                    staged = staged.filter(|update| update.executable.is_file());
+                    let next = if managed {
+                        self_update_check(&mut staged)
+                    } else {
+                        check_latest_release()
+                    };
+                    let mut shared = lock(&worker_shared);
+                    if matches!(shared.restart, Restart::Requested) {
+                        if let Some(update) = &staged {
+                            shared.check = UpdateCheck::Restarting {
+                                version: update.version.to_string(),
+                                executable: update.executable.clone(),
+                            };
+                            shared.restart = Restart::Ready(update.executable.clone());
                         } else {
-                            check_latest_release()
-                        };
-                        *worker_state
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner()) = next;
+                            shared.check = next;
+                            shared.restart = Restart::Idle;
+                        }
+                    } else {
+                        shared.check = next;
                     }
+                    drop(shared);
                     wait_for_next_check(&worker_stop, &worker_check_now, CHECK_INTERVAL);
                 }
             });
         Self {
-            state,
+            shared,
             stop,
             check_now,
         }
     }
 
     /// Run a check immediately instead of waiting out the interval. A
-    /// staged update stays ready; only a restart consumes it.
+    /// staged update stays visible while the check looks for a newer one.
     pub fn request_check(&self) {
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        if matches!(&*state, UpdateCheck::ReadyToRestart { .. }) {
-            return;
+        let mut shared = lock(&self.shared);
+        if !matches!(
+            shared.check,
+            UpdateCheck::ReadyToRestart { .. } | UpdateCheck::Restarting { .. }
+        ) {
+            shared.check = UpdateCheck::Checking;
         }
-        *state = UpdateCheck::Checking;
-        drop(state);
+        drop(shared);
         self.check_now.store(true, Ordering::Relaxed);
     }
 
+    /// Check the feed once more, then hand the newest staged update to
+    /// [`Self::take_restart`]. Returns false when nothing is staged.
+    pub fn request_restart(&self) -> bool {
+        let mut shared = lock(&self.shared);
+        let UpdateCheck::ReadyToRestart {
+            version,
+            executable,
+        } = &shared.check
+        else {
+            return false;
+        };
+        shared.check = UpdateCheck::Restarting {
+            version: version.clone(),
+            executable: executable.clone(),
+        };
+        shared.restart = Restart::Requested;
+        drop(shared);
+        self.check_now.store(true, Ordering::Relaxed);
+        true
+    }
+
+    /// The executable to relaunch once the final check has finished.
+    pub fn take_restart(&self) -> Option<PathBuf> {
+        let mut shared = lock(&self.shared);
+        match std::mem::replace(&mut shared.restart, Restart::Idle) {
+            Restart::Ready(executable) => Some(executable),
+            pending => {
+                shared.restart = pending;
+                None
+            }
+        }
+    }
+
+    /// Offer the staged update again after a failed relaunch.
+    pub fn cancel_restart(&self) {
+        let mut shared = lock(&self.shared);
+        shared.restart = Restart::Idle;
+        if let UpdateCheck::Restarting {
+            version,
+            executable,
+        } = &shared.check
+        {
+            shared.check = UpdateCheck::ReadyToRestart {
+                version: version.clone(),
+                executable: executable.clone(),
+            };
+        }
+    }
+
     pub fn state(&self) -> UpdateCheck {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone()
+        lock(&self.shared).check.clone()
     }
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
+}
+
+fn lock(shared: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
+    shared.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 /// A managed install runs from `<support>\versions\<version>\hex.exe`
@@ -172,26 +252,32 @@ pub fn managed_install() -> bool {
     support.starts_with(&profile) && executable.starts_with(&versions)
 }
 
-fn self_update_check() -> UpdateCheck {
-    match install_latest() {
-        Ok(Some(update)) => UpdateCheck::ReadyToRestart {
-            version: update.version,
-            executable: update.executable,
-        },
-        Ok(None) => UpdateCheck::Current,
+/// A failed check keeps an already staged update ready to restart.
+fn self_update_check(staged: &mut Option<InstalledUpdate>) -> UpdateCheck {
+    match install_latest(staged.as_ref().map(|update| &update.version)) {
+        Ok(Some(update)) => *staged = Some(update),
+        Ok(None) => {}
         Err(error) => {
             tracing::warn!(%error, "Windows self-update failed");
-            UpdateCheck::Failed
+            if staged.is_none() {
+                return UpdateCheck::Failed;
+            }
         }
     }
+    staged
+        .as_ref()
+        .map_or(UpdateCheck::Current, |update| UpdateCheck::ReadyToRestart {
+            version: update.version.to_string(),
+            executable: update.executable.clone(),
+        })
 }
 
 struct InstalledUpdate {
-    version: String,
+    version: Version,
     executable: PathBuf,
 }
 
-fn install_latest() -> Result<Option<InstalledUpdate>> {
+fn install_latest(staged: Option<&Version>) -> Result<Option<InstalledUpdate>> {
     let support = crate::app_paths::support_dir()?;
     let updates = support.join("updates");
     fs::create_dir_all(&updates)?;
@@ -208,22 +294,20 @@ fn install_latest() -> Result<Option<InstalledUpdate>> {
         &format!("{RELEASE_BASE}/{FEED}"),
         &feed_path,
         MAX_FEED_BYTES,
+        FEED_TIMEOUT,
     )?;
     let feed = read_bounded(&feed_path, MAX_FEED_BYTES)?;
     let _ = fs::remove_file(&feed_path);
     let manifest = verify_feed(&feed, &PUBLIC_KEY)?;
     let available = validate_manifest(&manifest, &TARGET)?;
-    let installed = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    if available < installed {
-        bail!("the Windows update feed attempted a downgrade");
-    }
-    if available == installed {
+    let running = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    if !needs_install(&available, &running, staged)? {
         return Ok(None);
     }
 
     let artifact_url = format!("{RELEASE_BASE}/releases/{}", manifest.artifact);
     let partial = updates.join("update.download");
-    download(&artifact_url, &partial, manifest.bytes)?;
+    download(&artifact_url, &partial, manifest.bytes, ARTIFACT_TIMEOUT)?;
     let activation = (|| {
         verify_artifact(&partial, &manifest)?;
         validate_executable(&partial, &manifest.version)?;
@@ -243,7 +327,7 @@ fn install_latest() -> Result<Option<InstalledUpdate>> {
         tracing::warn!(%error, "could not update the Apps & Features version");
     }
     Ok(Some(InstalledUpdate {
-        version: manifest.version,
+        version: available,
         executable,
     }))
 }
