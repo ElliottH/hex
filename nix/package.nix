@@ -137,7 +137,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
   '';
 
   postInstall = ''
-    mv $out/bin/voice-control $out/bin/hex
     install -Dm644 ${../packaging/hex.desktop} $out/share/applications/hex.desktop
     substituteInPlace $out/share/applications/hex.desktop \
       --replace-fail '@HEX_BIN@' "$out/bin/hex"

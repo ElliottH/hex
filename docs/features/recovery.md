@@ -15,7 +15,6 @@ platforms, and dependencies.
 - [Fence late capture notifications](#fence-late-capture-notifications).
 - [Degrade only the failing dependency](#degrade-only-the-failing-dependency).
 - [Keep Linux listeners managed](#keep-linux-listeners-managed).
-- [Move the macOS data folder once](#move-the-macos-data-folder-once).
 
 ## How To Get To It
 
@@ -257,7 +256,7 @@ Checks in [dictation_audio.rs](../../src/dictation_audio.rs):
 first hold after minutes of idle failed with the error tone. The reporter's logs
 show the cold stream reporting "A buffer underrun or overrun occurred" 20–76 ms
 after opening. cpal 0.18 reports that as `ErrorKind::Xrun` from CoreAudio's
-`kAudioDeviceProcessorOverload` listener; the stream keeps running, but HEX
+`kAudioDeviceProcessorOverload` listener; the stream keeps running, but Hex
 treated every error callback as fatal. In release-when-idle mode the owner then
 closed the device without retrying, and recognition suspended the held gesture.
 Overloads and refused real-time promotion are now logged and ignored; actual
@@ -623,24 +622,3 @@ Do not reset settings or loosen shortcut matching to make a recovery check pass.
 Keep automatic recovery, explicit retry, and defects that prevent recovery
 distinct. Test cleanup must preserve failure evidence.
 
-### Move The macOS Data Folder Once
-
-`recover.data-folder`: an upgrade renames `~/Library/Application Support/voice-control`
-to `hex` before logging, the instance lock, or any file there opens.
-
-```ts
-launch (not `hex mcp`, no HEX_APPLICATION_SUPPORT_DIR)
-  ├── no voice-control (fresh, or already a symlink to hex) -> use hex
-  │   └── hex exists, symlink missing -> re-create voice-control -> hex
-  ├── voice-control only -> renamex_np(RENAME_EXCL) to hex
-  │   ├── ok -> symlink voice-control -> hex; settings `migrations` +macos-data-folder-hex
-  │   └── fails (busy, cross-volume) -> keep voice-control, log, retry next launch
-  ├── both real folders -> touch neither, log, keep voice-control
-  └── concurrent launch renamed first -> use hex
-`hex mcp` -> resolves the folder read-only, never renames
-Windows (%APPDATA%\voice-control) and Linux -> unchanged
-```
-Checks in [app_paths.rs](../../src/app_paths.rs) `data_folder::tests`: fresh,
-legacy only, both, symlink present, symlink missing, rename failure, concurrent rename, and
-no-clobber rename. Proof limit: temp folders; the Studio upgrade is recorded in
-the change that introduced it.

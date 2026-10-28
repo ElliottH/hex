@@ -291,7 +291,7 @@ impl LocalApi {
         let Some(worker) = self.worker.take() else {
             return;
         };
-        // Retract discovery before draining so a replacement HEX can publish
+        // Retract discovery before draining so a replacement Hex can publish
         // while this listener is still bound and finishing in-flight requests.
         if let Some(discovery) = &self.discovery {
             discovery.remove_if_owned();
@@ -1913,11 +1913,11 @@ pub fn call_developer(
     let (status, body) = post_json("/dev/control", &body, DEVELOPER_CONTROL_TIMEOUT, 64 * 1024)?;
     if status != 200 {
         bail!(
-            "HEX developer control failed: {}",
+            "Hex developer control failed: {}",
             error_code(status, &body)
         );
     }
-    serde_json::from_slice(&body).wrap_err("HEX developer response is invalid")
+    serde_json::from_slice(&body).wrap_err("Hex developer response is invalid")
 }
 
 /// Sends one `hex` control request to the running app.

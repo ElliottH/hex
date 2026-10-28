@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-HEX's own source is covered by the root `LICENSE`. The following notices cover
+Hex's own source is covered by the root `LICENSE`. The following notices cover
 vendored icon assets. Dependencies retain their respective upstream licenses.
 
 ## Lucide And Feather

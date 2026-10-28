@@ -1,4 +1,4 @@
-# HEX Feature Map
+# Hex Feature Map
 
 What can the user do, how do they reach it, and what would prove it works?
 This maps existing behavior. [ROADMAP.md](../../ROADMAP.md) owns future work;
@@ -13,7 +13,7 @@ locators unless an executed result is explicitly recorded, as in the
 ## Product Map
 
 ```ts
-HEX                                      // macOS release
+Hex                                      // macOS release
 ├── Get ready                            // install, permissions, local model
 ├── Dictate                              // hold OR double-tap lock
 ├── Use the result                       // paste, Send, paste-last, History
@@ -594,7 +594,7 @@ rewrites already persisted activations on load, checked by
 **Fixed in 2.1.14:** through 2.1.13, a mode saved with that Finder
 preference enabled never activates and every dictation falls back to Global.
 Update to repair saved selections automatically. For older builds, the workaround
-is to quit HEX, remove the `.app` suffix from
+is to quit Hex, remove the `.app` suffix from
 `dictation_processing.modes[].applications` in `settings.json`, then relaunch.
 
 ## Use Voice Action
@@ -700,7 +700,7 @@ Launch Hex                               // maintain.startup
 Menu-bar installation fails -> Show Dock icon and open the window // recovery access
 
 Show Dock icon off                       // maintain.dock-policy
-├── Settings window open -> Dock icon stays // hiding it would deactivate HEX
+├── Settings window open -> Dock icon stays // hiding it would deactivate Hex
 └── Settings window closes -> Menu-bar only
 ```
 
@@ -753,7 +753,7 @@ not an input-to-frame latency measurement or a signed-release smoke test.
 
 Closing Settings left the app process alive with zero `login-item` threads;
 reopening produced one new worker. An earlier apparent surviving worker came
-from computer-use observation reopening the window. Cmd+Q and Quit HEX each
+from computer-use observation reopening the window. Cmd+Q and Quit Hex each
 terminated the process. Local profiles are `/tmp/hex-login-worker-current.sample.txt`
 and `/tmp/hex-login-cycle-{before,closed-no-observe,reobserved}.sample.txt`.
 The tested temporary executable's SHA-256 is
@@ -912,7 +912,7 @@ Linux beta                               // not macOS feature parity
 ```ts
 Windows beta                             // x64 (Vulkan GPU) and ARM64 (CPU)
 ├── Install -> Setup.exe or install-windows.ps1 -> hex.exe + install.json receipt
-├── HEX app -> General, tray, HUD; Enabled = shortcut works in every app
+├── Hex app -> General, tray, HUD; Enabled = shortcut works in every app
 ├── Launch again -> Running app shows its window; hidden (login) launch -> no-op
 ├── Ctrl+Space -> Hold or Toggle -> Capture -> Stream (GPU) -> Paste
 ├── Escape -> Cancel; a held modifier alone never ends or cancels a capture
@@ -992,7 +992,7 @@ See the [Linux guide](../linux.md), [linux_app.rs](../../src/linux_app.rs),
 The [direct installer/updater](../../src/updater/linux.rs) and
 [installer tests](../../scripts/test-install-linux-release.sh) do not establish
 a published, supported-host-validated signed release. [Nix](../nix.md) owns its
-package updates; HEX updates only managed direct installs.
+package updates; Hex updates only managed direct installs.
 
 ```ts
 Linux process                            // maintain.linux-service
@@ -1112,11 +1112,7 @@ during a release tail. Until 2026-10-22 the service muted at the press. This
 ordering is checked by reading the loop, not by a test or a muted device.
 
 Checks: `bundled_sounds_decode_without_an_audio_device` and
-`feedback_admission_never_waits_for_playback` in the player, plus
-`files_that_predate_a_setting_keep_the_beta_defaults` and
-`a_muted_beta_keeps_the_remembered_volume` in
-[linux_migration.rs](../../src/linux_migration.rs) for settings that predate
-`settings.json`.
+`feedback_admission_never_waits_for_playback` in the player.
 `start_sound_precedes_audio_and_does_not_change_short_tap_discard` in
 [linux_dictation.rs](../../src/linux_dictation.rs) exercises the production start
 path with a sound spy: immediate feedback without any audio, while a 100 ms tap

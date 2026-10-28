@@ -1,8 +1,8 @@
 [package]
-name = "voice-control"
+name = "hex"
 version = "2.3.1"
 edition = "2024"
-default-run = "voice-control"
+default-run = "hex"
 license = "MIT"
 repository = "https://github.com/anomalyco/hex"
 

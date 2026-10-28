@@ -440,7 +440,7 @@ fn workspace_effect_update(workspace: &Path, sdk: &Path) -> Result<Option<Vec<u8
                     }
                     if targets_effect && (location != section || selector != "effect") {
                         return Err(eyre!(
-                            "{} has unsupported Effect selector {location}[{selector:?}]; remove this selector and set dependencies.effect to \"{required}\", the version required by the HEX SDK, then retry",
+                            "{} has unsupported Effect selector {location}[{selector:?}]; remove this selector and set dependencies.effect to \"{required}\", the version required by the Hex SDK, then retry",
                             path.display()
                         ));
                     }
@@ -465,7 +465,7 @@ fn workspace_effect_update(workspace: &Path, sdk: &Path) -> Result<Option<Vec<u8
             }
             _ => {
                 return Err(eyre!(
-                    "{} has incompatible {section}.effect ({effect}); set it to \"{required}\", the version required by the HEX SDK, then retry",
+                    "{} has incompatible {section}.effect ({effect}); set it to \"{required}\", the version required by the Hex SDK, then retry",
                     path.display()
                 ));
             }
