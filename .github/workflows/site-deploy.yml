@@ -44,6 +44,8 @@ jobs:
         run: |
           case "$MODE" in dev|production) ;; *) exit 1 ;; esac
           bun run build --mode "$MODE"
+          # Vite's build manifest is not deployed, and artifacts drop hidden files.
+          rm -r .cloudflare/output/v0/workers/default/bundle/.vite
       - id: upload
         uses: ./.github/release/upload
         with:
