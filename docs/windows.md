@@ -181,7 +181,7 @@ hex app
 ├── named event already held -> signal it (the running app shows its window) -> exit
 └── becomes the app                                   // windows_rune::open
     ├── runtime thread: WindowsDesktopHost (listener, model preparation, OpenCode, transformations, updater), publishes every 250 ms
-    ├── main thread: rune::App's winit loop, the window, the tray (rides winit's message pump)
+    ├── main thread: rune::App's winit loop and the window; rune::Tray runs on its own thread
     ├── --hidden -> windowless start; close -> hide (keep_running)
     ├── tray Show or a relaunch -> AppHandle::open (shows and focuses)
     └── tray Quit / Ctrl-C / restart into an update -> AppHandle::quit -> runtime stops the listener
@@ -267,7 +267,7 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Recording tones and click-through recording/processing HUD | Implemented; a CPU port of the macOS Metal shader drawn in a Rune overlay, never run on Windows |
 | History retention, list, detail, search, copy, delete, and clear | Implemented |
 | Text replacements | Implemented in the Windows Modes pane using the shared phrase-boundary replacement engine |
-| Application picker in Modes | Implemented; lists Start menu shortcuts, App Paths, and apps with an open window, with each executable's icon; "Choose a file…" opens `IFileOpenDialog` |
+| Application picker in Modes | Implemented; lists Start menu shortcuts, App Paths, and apps with an open window, with each executable's icon; "Choose a file…" opens the native dialog through `rune::FileDialogs` |
 | Interface language | Implemented on every OS; English, Polish, Chinese, Japanese, German, and Spanish |
 | Resident tray and Launch at login | Implemented |
 | Application modes with per-mode corrections, OpenCode rewriting, and transformations | Implemented on the shared ordered processing policy; global and contextual profiles persist their own corrections, model, reasoning variant, deadline, and ordered built-in/TypeScript transformations, while modes match by application name — physical end-to-end paste/UI validation remains |

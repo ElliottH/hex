@@ -9,7 +9,6 @@
   vulkan-loader,
   spirv-headers,
   openblas,
-  glib,
   alsa-lib,
   alsa-plugins,
   pipewire,
@@ -21,7 +20,7 @@
   curl,
   wl-clipboard,
   wtype,
-  wrapGAppsHook3,
+  makeWrapper,
   autoAddDriverRunpath,
   symlinkJoin,
   libx11,
@@ -99,7 +98,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     cmake
     python3
     shaderc
-    wrapGAppsHook3
+    makeWrapper
     autoAddDriverRunpath
   ];
   buildInputs = [
@@ -107,7 +106,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
     vulkan-loader
     spirv-headers
     openblas
-    glib
     alsa-lib
     openssl
     libxkbcommon
@@ -139,12 +137,11 @@ rustPlatform.buildRustPackage (finalAttrs: {
       --replace-fail '@HEX_BIN@' "$out/bin/hex"
   '';
 
-  preFixup = ''
-    gappsWrapperArgs+=(
-      --prefix PATH : ${lib.makeBinPath runtimePackages}
-      --prefix LD_LIBRARY_PATH : ${runtimeEnv.LD_LIBRARY_PATH}
+  postFixup = ''
+    wrapProgram $out/bin/hex \
+      --prefix PATH : ${lib.makeBinPath runtimePackages} \
+      --prefix LD_LIBRARY_PATH : ${runtimeEnv.LD_LIBRARY_PATH} \
       --set ALSA_PLUGIN_DIR ${runtimeEnv.ALSA_PLUGIN_DIR}
-    )
   '';
 
   passthru.devShell = mkShell {
