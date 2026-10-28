@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    build_version();
     test_build_commit();
     // `hex_capture`: the `capture` experiment's code, only in macOS builds
     // with the `capture` feature (which brings in `scrawl-capture`), a build
@@ -48,7 +49,7 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=AVFAudio");
     println!("cargo:rustc-link-lib=framework=Speech");
     // FoundationModels exists only on macOS 26 and later. Weak-link it, and
-    // drop the object's strong autolink entry, so HEX still launches on older
+    // drop the object's strong autolink entry, so Hex still launches on older
     // systems and reports Apple Intelligence as unavailable.
     compile_swift_bridge(
         "apple_intelligence",
@@ -70,11 +71,58 @@ fn main() {
     }
 }
 
-/// A test build carries its commit (`HEX_COMMIT`), which the sidebar shows
+/// The version Hex reports (`HEX_BUILD_VERSION`): the crate version, which
+/// the Release workflow stamps (scripts/set-crate-version.sh), else, for any
+/// other build of the unstamped `0.0.0`, `0.0.0-dev-local-<commit>` with
+/// `-dirty` for uncommitted changes (`0.0.0-dev-local` without git, as in Nix).
+/// It counts as a dev build, so it follows the dev channel's current release.
+fn build_version() {
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap();
+    if version != "0.0.0" {
+        println!("cargo:rustc-env=HEX_BUILD_VERSION={version}");
+        return;
+    }
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    let mut version = "0.0.0-dev-local".to_owned();
+    if let Some(commit) =
+        git(&["rev-parse", "--short=7", "HEAD"]).filter(|commit| !commit.is_empty())
+    {
+        version = format!("{version}-{commit}");
+        if git(&["status", "--porcelain", "--untracked-files=no"])
+            .is_some_and(|status| !status.is_empty())
+        {
+            version.push_str("-dirty");
+        }
+        let reference = git(&["symbolic-ref", "-q", "HEAD"]);
+        for name in ["HEAD", "packed-refs", "index"]
+            .into_iter()
+            .chain(reference.as_deref())
+        {
+            if let Some(path) = git(&["rev-parse", "--path-format=absolute", "--git-path", name])
+                .filter(|path| std::path::Path::new(path).exists())
+            {
+                println!("cargo:rerun-if-changed={path}");
+            }
+        }
+    }
+    println!("cargo:rustc-env=HEX_BUILD_VERSION={version}");
+}
+
+/// A test or local build carries its commit (`HEX_COMMIT`), which the sidebar shows
 /// beside the version.
 fn test_build_commit() {
     println!("cargo:rerun-if-env-changed=HEX_TEST_BUILD");
-    if std::env::var("HEX_TEST_BUILD").as_deref() != Ok("1") {
+    println!("cargo:rerun-if-env-changed=HEX_LOCAL_BUILD");
+    if std::env::var("HEX_TEST_BUILD").as_deref() != Ok("1")
+        && std::env::var("HEX_LOCAL_BUILD").as_deref() != Ok("1")
+    {
         return;
     }
     let git = |args: &[&str]| {
@@ -103,7 +151,7 @@ fn test_build_commit() {
     }
 }
 
-/// Gives the executable its icon and the "HEX" name Explorer and Task
+/// Gives the executable its icon and the "Hex" name Explorer and Task
 /// Manager show, whatever the file is called.
 #[cfg(windows)]
 fn embed_windows_resources() {
@@ -133,8 +181,8 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "FileDescription", "HEX"
-      VALUE "ProductName", "HEX"
+      VALUE "FileDescription", "Hex"
+      VALUE "ProductName", "Hex"
       VALUE "FileVersion", "{version}"
       VALUE "ProductVersion", "{version}"
       VALUE "OriginalFilename", "hex.exe"

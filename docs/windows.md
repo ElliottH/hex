@@ -14,7 +14,7 @@ or user-defined TypeScript transformations.
 The default shortcut is `Ctrl+Space`. In **Hold** mode, hold both keys while
 speaking and release Space to transcribe and paste. In **Toggle** mode, press
 `Ctrl+Space` to start and again to finish. Only Escape cancels; holding a
-modifier on its own does nothing. HEX consumes the chord while it matches, so
+modifier on its own does nothing. Hex consumes the chord while it matches, so
 applications and input methods no longer see `Ctrl+Space`; rebind it in Settings
 if you rely on that chord elsewhere. In Hold mode, tap the shortcut twice within
 300 ms to lock recording, then press it again to finish. Paste Last defaults to
@@ -46,7 +46,7 @@ explanation when it is missing. **ARM64** decodes on the CPU. Both are
 self-contained: no Visual C++ Redistributable is required. Hex then keeps
 itself current through the signed update feed. Uninstalling removes every
 installed version, the shortcut, and Launch at login, and keeps settings, logs,
-history, and models in `%APPDATA%\voice-control`.
+history, and models in `%APPDATA%\hex`.
 
 The installer and the script below create the same managed layout, so either
 can replace the other. For a scripted install:
@@ -59,7 +59,7 @@ Uninstall a script install with `install-windows.ps1 -Uninstall`.
 
 ## Streaming Dictation
 
-With Parakeet Unified English on a GPU, HEX streams audio into the model while
+With Parakeet Unified English on a GPU, Hex streams audio into the model while
 the shortcut is held, so release only decodes the last one to two seconds. The
 same engine streams on macOS (Metal) and Linux (Vulkan). Each dictation logs
 `source=stream` or `source=fallback` in `logs\process.log`; a stream that fails,
@@ -79,9 +79,6 @@ whole clip. CPU devices (including ARM64) always use the whole-clip path. Set
   MSVC. Build with `CC=clang-cl`, `CXX=clang-cl`, `CMAKE_GENERATOR=Ninja`, and
   `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF -DGGML_OPENMP=OFF`, as
   `.github/workflows/check-windows.yml` does.
-- Bun is optional. It is required only for user-defined TypeScript
-  transformations; the built-in Lowercase and SpongeBob case transformations
-  run without it.
 
 `.cargo/config.toml` links the C and C++ runtimes statically. Distributed builds
 also set `TRANSCRIBE_CMAKE_ARGS=-DGGML_NATIVE=OFF`; without it ggml tunes its
@@ -130,7 +127,7 @@ cargo run -- app
 
 The Settings card reads **Enabled** when the shortcut works system-wide in every
 app and **Disabled** when it does nothing; its button and the tray's
-**Enable / Disable Hex** switch between them. HEX enables itself on launch by
+**Enable / Disable Hex** switch between them. Hex enables itself on launch by
 default (**Enable on launch**). The microphone records only while you dictate.
 Changing the
 transcription model, microphone, dictation shortcut, double-tap behavior, or
@@ -149,8 +146,11 @@ cargo run -- listen --model parakeet_v3 --language pl
 Press Enter once to start, then again to stop. Captures shorter than 300 ms are
 discarded. `--device` accepts a case-insensitive fragment from `devices`.
 
-Runtime data is stored under `%APPDATA%\voice-control`. Observations are in
-`logs\live.ndjson`, and native/runtime diagnostics are in `logs\process.log`.
+Runtime data is stored under `%APPDATA%\hex`. Observations are in
+`logs\live.ndjson`, and native/runtime diagnostics are in `logs\process.log`,
+including every panic with its thread and backtrace. A worker that stops
+unexpectedly leaves its cause there. The app detaches from its console at
+launch, so it has no stdout or stderr.
 Successful pasted dictations are retained, subject to the selected retention
 window and hard size limits, in `history.json`. Captured audio is never retained
 by default.
@@ -158,18 +158,18 @@ by default.
 ## Custom Transformations
 
 The Transformations card in Modes always offers the built-in transformations.
-Choose **Set up** there to create `~/.config/hex/hex.config.ts`, install the
-managed `@hex/commands` SDK with Bun, and load any transformations registered by
-that config. The Windows release executable embeds the checked-in SDK source,
-so a managed single-executable install does not depend on a repository checkout.
+Choose **Set up** there to create `~/.config/hex/hex.config.ts` and load any
+transformations registered by that config. Hex runs the config in its embedded
+JavaScript engine (QuickJS), so nothing else needs installing.
 
 Transformations run in the displayed order after mode corrections and the
 optional OpenCode rewrite. Reordering, adding, or removing them persists in the
-global or contextual mode and applies to the next output job. Host startup,
-registration, IPC, execution time, and status files are bounded; a failed step
-preserves the previous pipeline output. Use **Retry** in the card after fixing a
-Bun, dependency, or config error. Literal voice commands in the same config
-remain unavailable on Windows until a real streaming command recognizer lands.
+global or contextual mode and applies to the next output job. Each
+transformation call is limited to one second and the engine to 64 MiB; a
+failed step preserves the previous pipeline output. Saving the config reloads
+it; a config that fails to load keeps the previous one and shows its error in
+the card. Literal voice commands in the same config remain unavailable on
+Windows until a real streaming command recognizer lands.
 
 ## The App
 
@@ -207,8 +207,11 @@ hex app
   test binary including the two shared modules); on Windows it is only
   type-checked.
 - The window gets the executable's icon from Rune's `App::on_window` hook
-  (its HWND through `WindowHandle::with_raw_handle`).
-- Not yet: the custom caption (native title bar for now).
+  (its HWND through `WindowHandle::with_raw_handle`) for the taskbar,
+  Alt-Tab, and the caption. The native title bar keeps its icon and title,
+  blended into the window: DWM paints the caption the theme's `bg_deep`
+  (`DWMWA_CAPTION_COLOR`, Windows 11; Windows 10 keeps its own caption
+  color). The view repaints it when the system theme switches.
 - Without a tray (creation failed) closing the window quits Hex.
   See the [single-process plan](plans/single-process.md#windows-under-rune).
 
@@ -282,9 +285,8 @@ current-user startup registry, UI Automation, and Windows capture APIs.
 | Local transcription API and public TypeScript SDK host lifecycle on Windows | Missing; see Local Transcription Service |
 | Streaming finish with whole-clip fallback | Implemented on GPU devices with Parakeet Unified English |
 
-Settings live in `%APPDATA%\voice-control\settings.json`, the same file macOS and
-Linux use. On first launch, an existing `windows-settings.json` is migrated once
-and kept as `windows-settings.json.migrated`.
+Settings live in `%APPDATA%\hex\settings.json`, the same file macOS and
+Linux use.
 
 The Windows window uses the shared design system
 ([design-system.md](design-system.md)): the same Rune panes as macOS and
@@ -308,7 +310,7 @@ is green; opt-in Commands wait on a Windows streaming command model. Shared
 first-run onboarding, complete OpenCode mode rewriting controls, and the bounded
 TypeScript transformation host already ship. Windows releases are built for
 x64 and ARM64 by
-[`release-desktop.yml`](../.github/workflows/release-desktop.yml) with
+[`release.yml`](../.github/workflows/release.yml) with
 [`scripts/build-windows.sh`](../scripts/build-windows.sh), Authenticode-signed,
 and published to the Anomaly release service with the other platforms
 (`docs/releasing.md`); [`scripts/install-windows.ps1`](../scripts/install-windows.ps1)

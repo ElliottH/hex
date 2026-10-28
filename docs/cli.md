@@ -45,7 +45,8 @@ hex
 │   └── init                       create ~/.config/hex (local, no running Hex needed)
 ├── window
 │   ├── show [settings|models|modes|voice-action|history|commands|meetings]
-│   └── hide                       close the window; Hex stays in the menu bar
+│   ├── hide                       close the window; Hex stays in the menu bar
+│   └── story <story> [--variant V] [--play]  the `playground` experiment: open a story
 ├── history clear --yes            delete every retained dictation
 ├── vocabulary                     needs the `vocabulary` experiment (marked so in --help)
 │   ├── list [--json]              every term and its "sounds like" spellings
@@ -169,9 +170,9 @@ offer it.
 Requests are flat objects tagged by `command` (kebab-case):
 
 ```json
-{"version": 1, "command": "meeting-record", "title": "Design sync"}
-{"version": 1, "command": "settings-set", "key": "sound_effects", "value": "off", "confirm": false}
-{"version": 1, "command": "dictation", "action": "start"}
+{"version": 2, "command": "meeting-record", "title": "Design sync"}
+{"version": 2, "command": "settings-set", "key": "sound_effects", "value": "off", "confirm": false}
+{"version": 2, "command": "dictation", "action": "start"}
 ```
 
 ```ts
@@ -182,7 +183,7 @@ meeting-record {title?} | meeting-stop | meeting-copy-last
 settings-get {key?} | settings-set {key, value, confirm}
 commands-retry
 model-list | model-use {model, language?} | model-install {model, language?} | model-cancel
-window-show {pane?} | window-hide
+window-show {pane?} | window-hide | window-story {story, variant?, play}
 history-clear | check-for-updates | launch-at-login {enabled?}
 vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
 scrawl-capture {action}                          action: start | stop | cancel | status; `capture` build option
@@ -197,27 +198,27 @@ no wire form. `history-clear` has no confirmation field: the CLI asks for
 Replies are tagged by `status`:
 
 ```json
-{"version": 1, "status": "done", "message": "Recording “Design sync”; …", "changed": true}
-{"version": 1, "status": "error", "code": "feature-off", "message": "Meetings are off; …"}
-{"version": 1, "status": "settings", "settings": [{"key": "sound_effects", "value": true,
+{"version": 2, "status": "done", "message": "Recording “Design sync”; …", "changed": true}
+{"version": 2, "status": "error", "code": "feature-off", "message": "Meetings are off; …"}
+{"version": 2, "status": "settings", "settings": [{"key": "sound_effects", "value": true,
   "kind": "bool", "writable": true, "about": "Play recording, cancellation, and error tones"}]}
-{"version": 1, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
+{"version": 2, "status": "models", "models": [{"id": "parakeet_v3", "name": "…",
   "languages": ["en", "…"], "size": "…", "installed": true, "selected": true,
   "streams": true, "supports_recognition_hints": false}]}
-{"version": 1, "status": "vocabulary", "entries": [{"term": "OpenCode",
+{"version": 2, "status": "vocabulary", "entries": [{"term": "OpenCode",
   "sounds_like": ["open code"]}, {"term": "Rune"}]}
-{"version": 1, "status": "scrawl-capture", "changed": true, "state": "idle",
+{"version": 2, "status": "scrawl-capture", "changed": true, "state": "idle",
   "bundle": "…/captures/1792933491953.scrawl", "elapsed_ms": null,
   "finishing": ["…/captures/1792933491953.scrawl"], "last": null}
-{"version": 1, "status": "scrawl-captures", "captures": [{"id": "1792933491953.scrawl",
+{"version": 2, "status": "scrawl-captures", "captures": [{"id": "1792933491953.scrawl",
   "bundle": "…", "created_at_ms": 1792933491953, "duration_ms": 4000, "mode": "window",
   "app": "Brave", "words": 12, "sent_to": {"session": "ses_…", "title": "Hex"},
   "queued": false}]}
-{"version": 1, "status": "scrawl-capture-detail", "id": "…", "…": "the list's fields",
+{"version": 2, "status": "scrawl-capture-detail", "id": "…", "…": "the list's fields",
   "window_title": "…", "transcript": "…", "note": null, "missing_transcript": null,
   "marks": 2, "keyframes": 3, "video": "…/video.mp4", "audio": null,
   "contact_sheet": "…/contact-sheet.jpg"}
-{"version": 1, "status": "scrawl-capture-route", "explanation": "Capture   …"}
+{"version": 2, "status": "scrawl-capture-route", "explanation": "Capture   …"}
 ```
 
 `done.changed` is `false` when the command found things already so ("Already
@@ -229,7 +230,7 @@ recording", "The window isn't open"). Setting `kind` is one of `bool`,
 
 ```json
 {
-  "version": 1, "status": "status",
+  "version": 2, "status": "status",
   "app_version": "2.3.1", "pid": 31708, "memory_footprint_bytes": 412000000,
   "listener": {"running": true, "status": "Listening"},
   "capture": {"state": "idle", "recording": null, "pending_jobs": 0},
@@ -239,8 +240,8 @@ recording", "The window isn't open"). Setting `kind` is one of `bool`,
   "features": {"commands": false, "command_model": "disabled", "voice_action": true,
                "meetings": true, "release_microphone_while_idle": false,
                "history_retention": "week"},
-  "permissions": {"ready": true, "microphone": "ready", "input_monitoring": "ready",
-                  "accessibility": "ready", "transcription_model": true},
+  "permissions": {"ready": true, "microphone": "ready", "accessibility": "ready",
+                  "transcription_model": true},
   "window": {"open": false, "pane": null},
   "update": "current",
   "experiments": []
@@ -296,8 +297,20 @@ Changes go through the same rules as the window and are saved by the app,
 which then reloads them live; an open window adopts the change unless it has
 an unsaved edit.
 
+On macOS, `keyboard_model_switching.enabled` opts into switching the shared
+speech-model picker on keyboard input-source changes. The JSON setting
+`keyboard_model_switching.mappings` maps enabled input-source IDs to a model and
+a language it supports, for example
+`{"com.apple.keylayout.Spanish":{"model":"parakeet_v3","language":"es"}}`. Omit a
+source for "Don't switch"; Apple Speech can't be mapped. Automatic switches load
+installed models only; they never download them. Enabling or editing the active
+mapping applies it; launching Hex does not reapply it. Other platforms keep the
+settings but do not observe input-source changes or show these controls.
+
 - Booleans take `on`/`off`, `true`/`false`, `yes`/`no`, or `1`/`0`.
 - Optional settings take `none` to clear them.
+- `microphone` takes a device name exactly as Settings lists it, or
+  `system-default` (or `none`) to follow the OS default input.
 - Shortcuts take text such as `option`, `right-command`, `option+shift+v`,
   `control+space`, `fn`, or `f5`. Key names resolve on the active keyboard
   layout, the OS's rules for Settings' recorder apply, and a binding another
@@ -308,11 +321,20 @@ an unsaved edit.
 - `commands_enabled on` while `release_microphone_while_idle` is on, and the
   reverse, need `--yes`, because each turns the other off.
 - `voice_action.enabled on` needs a free Voice Action shortcut.
+- `updates.channel` takes `stable`, `dev`, or `none` (follow the build: the
+  channel it was published on), and checks for updates at once. Choosing
+  another channel than the build's offers that channel's current release
+  ("Switch to Stable 2.3.1" in the window); Hex installs it only once you
+  confirm there. Versions are never compared.
 - With the `capture` build option and experiment, `capture.*` keys appear:
   `capture.enabled`, `capture.hotkey` (default `option+shift+s`),
   `capture.list_hotkey` (the capsule's send-to list, default
   `option+shift+v`), `capture.transcriber`, `capture.folder`,
-  `capture.media_days`, `capture.bundle_days`, and `capture.routing`. Both
+  `capture.media_days`, `capture.bundle_days`, `capture.routing`,
+  `capture.show_overlays_in_recordings` (default off; on lets screen
+  recordings, Hex's captures included, show its overlays), and
+  `capture.capsule_flow` (`list`, the default, `toast`, `menu_bar`, `cursor`
+  or `notch`: the capsule's flow after a capture, prototypes to compare). Both
   capture shortcuts need a key, and `capture.enabled on` needs both free; on
   a Mac whose Paste Last is still ⌥⇧V, rebind one of the two first.
 - `transcription.model` and `transcription.language` are read-only here: use
@@ -320,7 +342,7 @@ an unsaved edit.
   are read-only (connecting a calendar asks macOS for access from Settings).
 
 Writable keys: `commands_enabled`, `release_microphone_while_idle`,
-`sound_effects`, `sound_effect_volume`, `microphone`,
+`sound_effects`, `sound_effect_volume`, `sound_theme`, `microphone`,
 `recording_audio_behavior`, `double_tap_lock`, `double_tap_only`,
 `shortcut_mode`, `dictation_hotkey`, `edit_hotkey`, `paste_last_hotkey`,
 `show_dock_icon`, `transcription.recognition_hints`,
@@ -334,14 +356,15 @@ Writable keys: `commands_enabled`, `release_microphone_while_idle`,
 `experimental.hex_microphone`, `experimental.hex_microphone_mode`,
 `experimental.hex_microphone_comfort_noise`,
 `experimental.hex_microphone_strength`, `enable_on_launch`,
-`paste_with_shift`, `ui_language`, `indicator_position`.
+`paste_with_shift`, `ui_language`, `indicator_position`, `updates.channel`.
 
 A test (`control::settings::tests::every_persisted_setting_has_a_cli_key`)
 fails when a new persisted setting has no key here.
 
 ## Compatibility
 
-`CONTROL_VERSION` is 1. A change that breaks a request or reply shape
+`CONTROL_VERSION` is 2. A change that breaks a request or reply shape
 increments it; adding a command, an optional request field, or a reply field
 does not. A `hex` from a different version gets `version-mismatch`; use the
-`hex` inside the running Hex.app, or restart Hex after updating.
+`hex` inside the running Hex.app, or restart Hex after updating. Version 2
+removed `permissions.input_monitoring` from the status reply.
