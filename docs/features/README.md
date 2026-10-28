@@ -414,7 +414,7 @@ General                                  // settings
 │   ├── Open while Release when idle or Double-tap only (Hold) is on
 │   └── Collapse -> drops a pending release confirmation
 ├── Microphone mode (Advanced)
-│   ├── Keep ready (fast) -> Open while idle; pre-roll available
+│   ├── Keep ready [Fast] -> Open while idle; pre-roll available
 │   └── Release when idle -> Open on press; no pre-roll; startup delay
 │       └── Commands enabled? -> Confirm turning Commands off
 ├── Output card -> Paste last shortcut, While dictating, Dictation HUD

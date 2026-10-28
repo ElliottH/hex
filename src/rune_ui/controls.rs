@@ -390,6 +390,24 @@ pub(super) fn segmented(
     })
 }
 
+/// A [`segmented`] whose choice `badge.0` carries a short tag after its
+/// label ("Fast"), instead of a parenthetical in the label.
+pub(super) fn segmented_badged(
+    p: Paint,
+    key: &str,
+    labels: &[&str],
+    badge: (usize, &str),
+    selected: usize,
+    pick: impl Fn(&mut Ui, usize) + Clone + 'static,
+) -> El {
+    segmented_control(
+        p,
+        key,
+        SegmentedControl::new(labels, Some(selected)).badge(badge.0, badge.1),
+        move |ui, index, _| pick(ui, index),
+    )
+}
+
 /// A [`segmented`] whose pick also gets the transaction, to swap views
 /// without animating.
 pub(super) fn segmented_tx(
@@ -399,7 +417,16 @@ pub(super) fn segmented_tx(
     selected: usize,
     pick: impl Fn(&mut Ui, usize, &mut Tx) + Clone + 'static,
 ) -> El {
-    SegmentedControl::new(labels, Some(selected))
+    segmented_control(p, key, SegmentedControl::new(labels, Some(selected)), pick)
+}
+
+fn segmented_control(
+    p: Paint,
+    key: &str,
+    control: SegmentedControl,
+    pick: impl Fn(&mut Ui, usize, &mut Tx) + Clone + 'static,
+) -> El {
+    control
         .fit()
         .on_pick(pick)
         .build(p.k)

@@ -9,8 +9,8 @@ use rune::{Edge, El, Key, KeyEvent, Transition, Tx, col, row, spacer, text};
 use super::controls::{
     ButtonKind, CardRow, Choice, DESCRIPTION, DEVICE_SELECT_WIDTH, KEY_GAP, KeySize, METRICS,
     Paint, button, described_row, folding, icon_button, key_tray, keycap, keycaps, link_row, note,
-    page, pulsing_dot, section, section_with, segmented, select, select_sized, setting_row,
-    sheet_button, status_dot, text_field, toggle_row, tray_roll,
+    page, pulsing_dot, section, section_with, segmented, segmented_badged, select, select_sized,
+    setting_row, sheet_button, status_dot, text_field, toggle_row, tray_roll,
 };
 use super::{Menu, Request, Service, ShortcutTarget, Ui};
 use super::{explainer, host};
@@ -1404,10 +1404,11 @@ fn advanced_rows(ui: &Ui, p: Paint) -> Vec<CardRow> {
             } else {
                 tr("Keeps the microphone open for instant start and pre-roll")
             }),
-            segmented(
+            segmented_badged(
                 p,
                 "microphone-mode-control",
-                &[tr("Keep ready (fast)"), tr("Release when idle")],
+                &[tr("Keep ready"), tr("Release when idle")],
+                (0, tr("Fast")),
                 usize::from(settings.release_microphone_while_idle),
                 |ui, index| {
                     ui.advanced = Some(true);
