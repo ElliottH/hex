@@ -1415,16 +1415,9 @@ impl AppSettings {
             return selection.clone();
         }
         let model = crate::transcription_models::definition(id);
-        let language = if model.supports_language(&self.transcription.language) {
-            self.transcription.language.clone()
-        } else if model.supports_language("en") {
-            "en".into()
-        } else {
-            model.languages[0].into()
-        };
         TranscriptionSelection {
             model: id,
-            language,
+            language: model.language_for(&self.transcription.language).into(),
             recognition_hints: String::new(),
         }
     }

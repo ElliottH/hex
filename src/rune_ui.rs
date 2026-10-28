@@ -261,10 +261,7 @@ pub(crate) fn show(ui: &mut Ui, destination: Destination, tx: &mut Tx) {
         ui.select_pane(pane, tx);
     }
     match destination {
-        Destination::Models => {
-            let language = ui.settings.transcription.language.clone();
-            picker::open(ui, language);
-        }
+        Destination::Models => picker::open(ui),
         Destination::Meetings(Some(id)) => {
             ui.meetings.view = meetings::View::Recordings;
             ui.meetings.select(id);
@@ -550,6 +547,8 @@ impl Pane {
 enum Menu {
     Microphone,
     Language,
+    /// The speech model's language.
+    TranscriptionLanguage,
     HistoryRetention,
     /// The OpenCode thinking variant.
     Variant,
@@ -991,7 +990,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     }
     if let rune::Key::Command(digit @ '1'..='9') = event.key
         && !event.mods.alt
-        && ui.picker.language.is_none()
+        && !ui.picker.open
         && !ui.explainer.open
         && ui.tour.is_none()
     {
@@ -1012,7 +1011,7 @@ fn on_key(ui: &mut Ui, event: &rune::KeyEvent, tx: &mut Tx) -> bool {
     if ui.explainer.open {
         explainer::close(ui);
         true
-    } else if ui.picker.language.is_some() {
+    } else if ui.picker.open {
         picker::close(ui);
         true
     } else if ui.open.is_some() {
@@ -1760,6 +1759,29 @@ const SCENES: &[Scene] = &[
     ("picker-downloading", |ui| {
         *ui = portal_fixture();
         picker::fixture(ui, Some(TranscriptionModelId::CohereTranscribe));
+    }),
+    // Japanese saved: the English-only models say they switch the language.
+    ("picker-japanese", |ui| {
+        *ui = portal_fixture();
+        ui.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
+        ui.settings.transcription.language = "ja".into();
+        ui.picker.installed = Some(vec![TranscriptionModelId::WhisperLargeV3Turbo]);
+        picker::fixture(ui, None);
+    }),
+    // Parakeet chosen over Japanese: Settings names the language change.
+    ("language-fallback", |ui| {
+        *ui = portal_fixture();
+        ui.picker.fallback = Some(picker::LanguageFallback {
+            model: TranscriptionModelId::ParakeetUnifiedEnglish,
+            from: "ja".into(),
+        });
+    }),
+    // Whisper's languages open below the model.
+    ("language-menu", |ui| {
+        *ui = portal_fixture();
+        ui.settings.transcription.model = TranscriptionModelId::WhisperLargeV3Turbo;
+        ui.picker.installed = Some(vec![TranscriptionModelId::WhisperLargeV3Turbo]);
+        ui.open = Some(Menu::TranscriptionLanguage);
     }),
     ("shortcut-explainer", |ui| {
         *ui = mac_fixture();
