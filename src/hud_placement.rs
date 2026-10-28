@@ -17,6 +17,8 @@ pub const BAR_INSET: f64 = 3.0;
 const NOTCH_GAP: f64 = 10.0;
 /// The island's room around the plate below the notch.
 pub const ISLAND_PAD: f64 = 7.0;
+/// The island's room either side of the plate, about its corner radius.
+pub const ISLAND_INSET: f64 = 16.0;
 /// "Pretend notch" on a flat screen: a 14-inch MacBook Pro's notch width.
 const PRETEND_NOTCH_WIDTH: f64 = 185.0;
 
@@ -121,12 +123,20 @@ impl Default for Layout {
     }
 }
 
-/// A black island grown out of the notch: the notch's size and the screen's
-/// top edge, from the window's middle, y down.
+/// A black island grown out of the notch: the notch's size, the island's
+/// open width, and the screen's top edge, from the window's middle, y down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Island {
     pub notch: [f32; 2],
+    pub width: f32,
     pub top: f32,
+}
+
+impl Island {
+    /// The plate's width when it fills the open island.
+    pub fn plate_width(&self) -> f32 {
+        self.width - 2.0 * ISLAND_INSET as f32
+    }
 }
 
 /// Where the window goes and how its content sits in it.
@@ -139,11 +149,13 @@ pub struct Placed {
     pub over_menu_bar: bool,
 }
 
-/// What is being placed: the window's size and the plate's widest size.
+/// What is being placed: the window's size, the plate's widest size, and
+/// how far an island reaches past the notch on each side.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Content {
     pub window: (f64, f64),
     pub plate: (f64, f64),
+    pub island_spread: f64,
 }
 
 /// Places `content` on `screen`. `bottom` puts Below above the Dock; the
@@ -220,6 +232,8 @@ pub fn place(placement: Placement, screen: &Screen, content: Content, bottom: bo
                 Layout {
                     island: Some(Island {
                         notch: [notch.width as f32, notch.height as f32],
+                        width: (notch.width + 2.0 * content.island_spread.max(0.0))
+                            .min(window_width - 2.0) as f32,
                         top: -(window_height / 2.0) as f32,
                     }),
                     ..Layout::default()
@@ -236,6 +250,7 @@ mod tests {
     const CONTENT: Content = Content {
         window: (320.0, 128.0),
         plate: (112.0, 26.0),
+        island_spread: 28.0,
     };
 
     /// A 1512 × 982 point 14-inch MacBook Pro: a 32 pt notch 185 pt wide.
@@ -338,6 +353,16 @@ mod tests {
         let island = placed.layout.island.expect("an island");
         assert_eq!(island.notch, [185.0, 32.0]);
         assert_eq!(island.top, -64.0, "the window hangs from the top edge");
+        assert_eq!(island.width, 241.0, "28 pt past the notch each side");
+        assert_eq!(island.plate_width(), 209.0);
+        let wide = Content {
+            island_spread: 500.0,
+            ..CONTENT
+        };
+        let island = place(Placement::Notch, &notched(), wide, false)
+            .layout
+            .island;
+        assert_eq!(island.unwrap().width, 318.0, "never wider than the window");
         assert_eq!(plate(&placed), (756.0, 982.0 - 32.0 - ISLAND_PAD - 13.0));
         assert_eq!(
             place(Placement::Notch, &flat(), CONTENT, false),

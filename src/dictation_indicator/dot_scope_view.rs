@@ -10,7 +10,7 @@ use metal::{
 };
 
 use crate::dot_scope::{Frame, MAX_DOTS, Pose, Scope, Stage, Tuning, palette};
-use crate::hud_placement::{ISLAND_PAD, Island, Layout};
+use crate::hud_placement::{ISLAND_INSET, ISLAND_PAD, Island, Layout};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -53,6 +53,8 @@ const ISLAND_RADIUS: f32 = 18.0;
 pub(super) struct DotScopeView {
     pipeline: RenderPipelineState,
     scope: Scope,
+    /// The tuning as set, before [`fill_island`].
+    tuning: Tuning,
     stage: Stage,
     dark: bool,
     layout: Layout,
@@ -85,6 +87,7 @@ impl DotScopeView {
         Ok(Self {
             pipeline,
             scope: Scope::new(tuning),
+            tuning,
             stage: Stage::Recording,
             dark: true,
             layout: Layout::default(),
@@ -98,7 +101,8 @@ impl DotScopeView {
     }
 
     pub(super) fn tune(&mut self, tuning: Tuning) {
-        self.scope.tune(tuning);
+        self.tuning = tuning;
+        self.scope.tune(fill_island(tuning, self.layout.island));
     }
 
     pub(super) fn set_dark(&mut self, dark: bool) {
@@ -106,7 +110,11 @@ impl DotScopeView {
     }
 
     pub(super) fn set_layout(&mut self, layout: Layout) {
+        let island = self.layout.island;
         self.layout = layout;
+        if layout.island != island {
+            self.scope.tune(fill_island(self.tuning, layout.island));
+        }
     }
 
     /// Advances the scope. `stage` is `None` while the HUD hides or a
@@ -213,6 +221,22 @@ impl DotScopeView {
     }
 }
 
+/// The tuning that fills an island: the field as wide as the island minus
+/// its corners, recording and processing alike, with as many more columns
+/// as keep the dot spacing.
+fn fill_island(tuning: Tuning, island: Option<Island>) -> Tuning {
+    let Some(island) = island else {
+        return tuning;
+    };
+    let width = island.plate_width();
+    Tuning {
+        columns: (tuning.columns * width / tuning.width).round(),
+        width,
+        processing_width: width,
+        ..tuning
+    }
+}
+
 /// The island for this pose: the notch itself while hidden, grown to hold
 /// the plate as it shows, bouncing with it.
 fn island_shape(island: Island, pose: &Pose) -> [f32; 4] {
@@ -220,7 +244,7 @@ fn island_shape(island: Island, pose: &Pose) -> [f32; 4] {
     let pad = ISLAND_PAD as f32;
     let grow = pose.reveal;
     let half_width = notch_width / 2.0;
-    let open_half_width = (pose.width / 2.0 + pad).max(half_width) + 6.0;
+    let open_half_width = (pose.width / 2.0 + ISLAND_INSET as f32).max(half_width);
     let open_height = notch_height + 2.0 * pad + pose.height;
     let height = notch_height + (open_height - notch_height) * grow;
     [
@@ -251,6 +275,30 @@ mod tests {
         assert_eq!(std::mem::offset_of!(DotUniforms, shadow), 128);
         assert_eq!(std::mem::offset_of!(DotUniforms, layout), 144);
         assert_eq!(std::mem::offset_of!(DotUniforms, island), 160);
+    }
+
+    #[test]
+    fn an_island_spreads_the_field_across_it_at_the_same_spacing() {
+        let tuning = Tuning::default();
+        assert_eq!(fill_island(tuning, None), tuning);
+        let island = Island {
+            notch: [185.0, 32.0],
+            width: 241.0,
+            top: -64.0,
+        };
+        let filled = fill_island(tuning, Some(island)).clamped();
+        assert_eq!((filled.width, filled.processing_width), (209.0, 209.0));
+        assert_eq!((filled.columns, filled.rows), (80.0, tuning.rows));
+        let pose = Pose {
+            width: filled.width,
+            reveal: 1.0,
+            ..Scope::new(filled).pose()
+        };
+        assert_eq!(
+            island_shape(island, &pose)[0],
+            120.5,
+            "open, it is the island"
+        );
     }
 
     #[test]
@@ -355,6 +403,7 @@ mod tests {
                     f64::from(geometry.width) - 24.0,
                     f64::from(geometry.capsule_height),
                 ),
+                island_spread: f64::from(tuning.island_spread),
             },
             false,
         );

@@ -365,9 +365,10 @@ struct MetalIndicator {
     display_link_retry_delay: Duration,
     display_link_next_retry: Instant,
     ordered: bool,
-    /// Dot scope's placement and whether to pretend the screen has a
-    /// notch; `None` for the capsule, which always sits below.
-    placement: Option<(dot_scope::Placement, bool)>,
+    /// Dot scope's placement, whether to pretend the screen has a notch,
+    /// and how far its island reaches past the notch; `None` for the
+    /// capsule, which always sits below.
+    placement: Option<(dot_scope::Placement, bool, f32)>,
     placed: Option<hud_placement::Placed>,
 }
 
@@ -424,7 +425,7 @@ impl MetalIndicator {
             ordered: false,
             placement: (geometry == Geometry::DOT_SCOPE).then(|| {
                 let tuning = dot_scope::Tuning::load();
-                (tuning.placement, tuning.pretend_notch)
+                (tuning.placement, tuning.pretend_notch, tuning.island_spread)
             }),
             placed: None,
         };
@@ -470,7 +471,7 @@ impl MetalIndicator {
         if let DictationIndicatorEvent::ConfigureDotScope(tuning) = event
             && self.placement.is_some()
         {
-            self.placement = Some((tuning.placement, tuning.pretend_notch));
+            self.placement = Some((tuning.placement, tuning.pretend_notch, tuning.island_spread));
             if self.ordered {
                 self.position_on_pointer_screen();
             }
@@ -560,7 +561,7 @@ impl MetalIndicator {
             aux_right: screen.auxiliaryTopRightArea().size.width,
             bar: NSStatusBar::systemStatusBar().thickness(),
         };
-        let (placement, pretend_notch) = self.placement.unwrap_or_default();
+        let (placement, pretend_notch, island_spread) = self.placement.unwrap_or_default();
         if pretend_notch {
             metrics = metrics.pretending_notch();
         }
@@ -574,6 +575,7 @@ impl MetalIndicator {
                     f64::from(geometry.width) - 24.0,
                     f64::from(geometry.capsule_height),
                 ),
+                island_spread: f64::from(island_spread),
             },
             crate::app_settings::indicator_position() == IndicatorPosition::Bottom,
         );
