@@ -40,7 +40,7 @@ The other capabilities stay here until they need their own verification recipe.
 Install the signed macOS app with `brew install --cask anomalyco/tap/hex` or the
 [manual DMG](../../README.md#install-hex). The cask uses a versioned, checksum-pinned
 DMG, requires Apple silicon/macOS 15+, and leaves updates to Hex's own updater. It does
-not require Bun or OpenCode, launch the app automatically, migrate the legacy
+not require OpenCode, launch the app automatically, migrate the legacy
 Swift app, or forcibly replace an existing app destination. Homebrew uninstall
 leaves runtime settings, models, and retained data intact.
 
@@ -207,7 +207,20 @@ Language row is unexercised.
 Choose a supported language              // setup.language-conditioning; macOS + Linux picker
 ├── Parakeet v3 -> Detect language from audio; selected language does not constrain output
 └── Whisper -> Use selected language to guide decoding; accuracy is not guaranteed
+    └── Recognition hints -> initial prompt; output that only repeats them is dropped
 ```
+
+Whisper reads the recognition hints as its initial prompt and, on silence or
+noise, often returns them verbatim. A segment whose text equals the hints after
+normalization (case, ASCII punctuation, spelled-out digits; commas, semicolons
+and line breaks separate words) is removed, in dictation, meetings, and the
+local API alike. The filter needs at least two hints, so dictating the one
+listed name still pastes it; speech that contains a hint among other words is
+kept, and so is a repeat of only some hints. Checks: `prompt_echo_is_dropped`,
+`speech_containing_the_hints_is_kept`, `only_the_echo_segment_is_removed`,
+`single_hint_dictation_is_kept`, and
+`hints_without_spaces_after_commas_are_matched` in
+[gguf_session.rs](../../src/gguf_session.rs).
 
 ```ts
 Settings picker or setup > model card     // setup.model-card; shared by every desktop root
@@ -459,6 +472,7 @@ General                                  // settings
 │   ├── Intentional capture only, not ordinary shortcut chords
 │   └── Pause/resume only players already reported running by macOS
 ├── Application card -> Sound volume: immediate feedback; zero suppresses tones
+├── Application card -> Sounds: Signature (default) / Classic; previews start
 └── Voice Action shortcut -> Voice Action pane; Meetings -> Meetings › Settings
 
 Intentional recording                    // recording.environment
@@ -523,7 +537,7 @@ Experiment `modes` off (the default)     // experiments.md; modes.experiment
 ├── `window show --pane modes` -> Stays on the current pane
 ├── Processing -> Global replacements only    // literal, cheap, still applied
 │   └── No per-app mode, corrections, OpenCode rewrite, or transformations
-├── Transformations host -> Not started for modes; a hex.config.ts workspace still starts it
+├── Custom transformations -> Not loaded for modes; a hex.config.ts still loads them
 ├── Voice Action and the OpenCode catalog -> Unchanged // the catalog is Voice Action's too
 ├── History -> No processing profile, since nothing processed
 └── Saved modes, `hex settings dictation_processing.*` -> Untouched and working
@@ -545,8 +559,9 @@ Selected mode                            // replaces Global, does not layer over
 Stage fails -> Preserve its input        // failed chain discards partial results
 ```
 
-Built-in text transformations run natively. Custom transformations require the
-managed Bun workspace, not Commands enabled. OpenCode rewriting sends documented
+Built-in text transformations run natively. Custom transformations come from
+`~/.config/hex/hex.config.ts`, run in Hex's embedded script engine with a 1 s
+limit per call; they need neither Commands enabled nor anything installed. OpenCode rewriting sends documented
 context to the configured provider; speech transcription stays local.
 
 The built-ins are Lowercase, SpongeBob case, and No trailing punctuation. The
@@ -556,7 +571,9 @@ closing quotes/brackets. Punctuation inside a final closing quote is preserved.
 Select it after Lowercase for lowercase messages without the final period.
 The `no_trailing_punctuation_*` and `built_in_transformations_chain_in_selected_order`
 tests in [personal_commands.rs](../../src/personal_commands.rs) cover text behavior
-and native dispatch, not a live custom-host or target-app paste.
+and native dispatch; `transformations_chain_with_built_ins_and_failures_keep_nothing`
+and `runaway_scripts_stop_at_the_time_limit_and_the_config_keeps_working` run
+real scripts. None is a live target-app paste.
 
 Selection and stage checks start in
 [dictation_processor.rs](../../src/dictation_processor.rs),
@@ -1088,13 +1105,16 @@ Linux General > Sound volume              // dictate.feedback.linux; X11 + Wayla
 ├── Default / older settings -> 50%
 ├── Off -> No recording tones
 └── 25% / 50% / 75% / 100% -> Save and apply live; preview the start sound
+Linux General > Sounds                    // dictate.sound-theme
+└── Signature / Classic -> Save and apply live; preview the start sound
 
 Capture                                  // hex app and hex dictate
 ├── Shortcut starts capture -> Queue start sound immediately, before audio arrives
 ├── Hold passes 300 ms -> While dictating mute/pause begins, never at the press
 ├── Finish retained recording -> Stop sound at the release, while the 200 ms
 │   tail is still captured; a muted output unmutes first   // dictate.stop-tone
-│   └── Clip turns out near-silent -> Stop sound already played, nothing pasted
+│   └── Clip turns out near-silent or speechless -> Stop sound already played,
+│       nothing pasted
 ├── Brief discarded tap -> Start sound, but no stop sound or transcription
 ├── Dictation or Voice Action pasted -> Done sound; failures stay silent
 └── Cancel active capture -> Cancel sound; idle Escape stays silent
@@ -1139,7 +1159,8 @@ TypeScript SDK + macOS local service
 ├── Caller streams audio -> Running app's /streams -> Partials, segments, final
 │   └── Dictation first; uses the loaded model only (docs/streams.md)
 ├── Running desktop capture API -> Separate microphone ownership protocol
-│   └── No silence gate                  // raw model output, unlike hotkey dictation
+│   └── No silence gate                  // model output, unlike hotkey dictation;
+│                                         // only Whisper hint echoes are dropped
 └── Distribution
     ├── SDK 0.3.0 -> Published
     └── Turnkey signed helper -> Unfinished
