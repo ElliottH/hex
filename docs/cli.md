@@ -45,7 +45,8 @@ hex
 │   └── init                       create ~/.config/hex (local, no running Hex needed)
 ├── window
 │   ├── show [settings|models|modes|voice-action|history|commands|meetings]
-│   └── hide                       close the window; Hex stays in the menu bar
+│   ├── hide                       close the window; Hex stays in the menu bar
+│   └── story <story> [--variant V] [--play]  the `playground` experiment: open a story
 ├── history clear --yes            delete every retained dictation
 ├── vocabulary                     needs the `vocabulary` experiment (marked so in --help)
 │   ├── list [--json]              every term and its "sounds like" spellings
@@ -182,7 +183,7 @@ meeting-record {title?} | meeting-stop | meeting-copy-last
 settings-get {key?} | settings-set {key, value, confirm}
 commands-retry
 model-list | model-use {model, language?} | model-install {model, language?} | model-cancel
-window-show {pane?} | window-hide
+window-show {pane?} | window-hide | window-story {story, variant?, play}
 history-clear | check-for-updates | launch-at-login {enabled?}
 vocabulary-list | vocabulary-add {term, sounds_like} | vocabulary-remove {term}
 scrawl-capture {action}                          action: start | stop | cancel | status; `capture` build option

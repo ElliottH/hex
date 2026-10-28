@@ -33,6 +33,7 @@ plist_value() {
 [ "$(plist_value CFBundleShortVersionString)" = "$version" ] || fail "wrong version"
 [ "$(plist_value CFBundleVersion)" = "$build_number" ] || fail "wrong build number"
 [ "$(plist_value LSMinimumSystemVersion)" = 15.0 ] || fail "wrong minimum macOS"
+[ "$(plist_value CFBundleURLTypes:0:CFBundleURLSchemes:0)" = hex ] || fail "wrong URL scheme"
 # Hex updates itself through the Anomaly release service; Sparkle is gone.
 ! plist_value SUFeedURL >/dev/null 2>&1 || fail "a Sparkle feed is still configured"
 [ ! -e "$bundle/Contents/Frameworks/Sparkle.framework" ] || fail "Sparkle.framework is still bundled"

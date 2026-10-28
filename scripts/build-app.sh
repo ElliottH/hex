@@ -105,6 +105,12 @@ cp "$root/sdk/commands/package.json" "$bundle/Contents/Resources/commands-sdk/"
 /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable $executable_name" "$bundle/Contents/Info.plist"
 plutil -replace CFBundleName -string "$app_name" "$bundle/Contents/Info.plist"
 plutil -replace CFBundleDisplayName -string "$app_name" "$bundle/Contents/Info.plist"
+# Links into the playground (src/rune_ui/story_link.rs); a test build's own
+# scheme never opens the installed Hex.
+url_scheme=hex
+[ "${HEX_TEST_BUILD:-}" = 1 ] && url_scheme=hex-test
+/usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLName $bundle_id" "$bundle/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleURLTypes:0:CFBundleURLSchemes:0 $url_scheme" "$bundle/Contents/Info.plist"
 if [ -n "$capture" ]; then
   # The helper mirrors a cabled iPhone as a camera; macOS asks on Hex's behalf.
   plutil -replace NSCameraUsageDescription -string "Hex mirrors and records a cabled iPhone's screen for a capture." "$bundle/Contents/Info.plist"

@@ -18,9 +18,10 @@ use crate::meeting::MeetingRequest;
 use crate::meeting_watcher::{ControllerEvent, MeetingMenuState};
 use crate::onboarding::PermissionState;
 use crate::recognition::{CommandModelStatus, RecognitionControl};
+use crate::rune_ui::story_link::{self, StoryLink};
 use crate::rune_ui::{Destination, Ui};
 
-use super::{Pump, Request, RuntimeHandle, show, window_visible};
+use super::{Pump, Request, RuntimeHandle, bring_window_forward, show, window_visible};
 
 /// How long a command waits for the listener's answer.
 const LISTENER_TIMEOUT: Duration = Duration::from_secs(3);
@@ -280,6 +281,11 @@ impl Pump {
             } else {
                 ControlReply::unchanged("The window isn't open")
             }),
+            ControlCommand::WindowStory {
+                story,
+                variant,
+                play,
+            } => Some(self.show_story(StoryLink::new(&story, variant, play))),
             ControlCommand::HistoryClear => Some(reply_with(clear_history(&runtime))),
             ControlCommand::LaunchAtLogin { enabled } => {
                 background(reply, move || launch_at_login(enabled));
@@ -473,6 +479,32 @@ impl Pump {
         };
         show(&self.window, destination);
         Ok(ControlReply::done("Opened the window"))
+    }
+
+    /// `hex window story`: what a `hex://story/…` link does.
+    fn show_story(&mut self, link: StoryLink) -> ControlReply {
+        let enabled = crate::rune_ui::playground::enabled();
+        let mut message = format!("Opened the playground at {}", link.story);
+        if let Some(variant) = &link.variant {
+            message.push_str(&format!(", variant {variant}"));
+        }
+        if link.play {
+            message.push_str(", and played it");
+        }
+        self.window.update(move |_, tx| {
+            if let Err(why) = story_link::open(&link, tx) {
+                tracing::warn!(story = %link.story, %why, "hex window story opened only the window");
+            }
+        });
+        bring_window_forward();
+        if enabled {
+            ControlReply::done(message)
+        } else {
+            ControlReply::error(
+                "feature-off",
+                format!("{}; opened the window", story_link::PLAYGROUND_OFF),
+            )
+        }
     }
 }
 

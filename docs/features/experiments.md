@@ -82,6 +82,22 @@ The known experiments are compiled into
   `HEX_EXPERIMENTS=playground hex app -- --snap out.png --playground
   "General/mac-settings"`. Check: `every_scene_but_live_lists_under_its_pane`
   in [playground.rs](../../src/rune_ui/playground.rs).
+  On macOS a story opens from a link or the CLI:
+
+  ```ts
+  open 'hex://story/hud/recording-your-voice?play=1'   // hex-test:// in Hex Test.app
+  hex window story HUD/Processing [--variant 2] [--play]
+  ├── the window opens on the story: its path, name, or slug, `/` or `-` between group and name
+  ├── variant=<n|name> → that variant
+  ├── play=1 → its `r` trigger runs, as pressing R does
+  ├── experiment off → only the window opens; process.log says why, the CLI answers feature-off
+  └── another link, or longer than 2 KiB → ignored and logged
+  ```
+
+  An unknown story opens the list and an unknown variant the story; Rune
+  logs which to stderr. Checks: `reads_story_links`, `ignores_other_links`
+  in [story_link.rs](../../src/rune_ui/story_link.rs); the URL handler and
+  the replay have no automated end-to-end check.
 - `smart-turn`: finish hands-free dictation when Pipecat's Smart Turn model
   hears the end of a turn (macOS; see
   [Smart Turn](dictation.md#smart-turn-auto-stop-experiment-smart-turn)). The

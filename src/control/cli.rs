@@ -207,6 +207,20 @@ pub enum WindowCommand {
         #[command(flatten)]
         output: Output,
     },
+    /// Experiment: open the window on a playground story by its path, name,
+    /// or slug (`HUD/Processing`, `hud-processing`; `hex experiments enable
+    /// playground`).
+    Story {
+        story: String,
+        /// The variant, by number from 1 or by name.
+        #[arg(long)]
+        variant: Option<String>,
+        /// Run the story's `r` trigger once it's open, as pressing R does.
+        #[arg(long)]
+        play: bool,
+        #[command(flatten)]
+        output: Output,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -293,6 +307,19 @@ pub fn run(command: ControlCli) -> u8 {
                 send(ControlCommand::WindowShow { pane }, output)
             }
             WindowCommand::Hide { output } => send(ControlCommand::WindowHide, output),
+            WindowCommand::Story {
+                story,
+                variant,
+                play,
+                output,
+            } => send(
+                ControlCommand::WindowStory {
+                    story,
+                    variant,
+                    play,
+                },
+                output,
+            ),
         },
         ControlCli::CheckForUpdates { output } => send(ControlCommand::CheckForUpdates, output),
         ControlCli::LaunchAtLogin { state, output } => send(

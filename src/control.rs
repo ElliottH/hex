@@ -115,6 +115,14 @@ pub enum ControlCommand {
         pane: Option<Pane>,
     },
     WindowHide,
+    /// Open the window on a playground story (the `playground` experiment).
+    WindowStory {
+        story: String,
+        #[serde(default)]
+        variant: Option<String>,
+        #[serde(default)]
+        play: bool,
+    },
     HistoryClear,
     CheckForUpdates,
     /// Report Launch at Login, or turn it on or off.
@@ -741,6 +749,11 @@ mod tests {
                 pane: Some(Pane::VoiceAction),
             },
             ControlCommand::WindowHide,
+            ControlCommand::WindowStory {
+                story: "HUD/Processing".into(),
+                variant: Some("2".into()),
+                play: true,
+            },
             ControlCommand::HistoryClear,
             ControlCommand::CheckForUpdates,
             ControlCommand::LaunchAtLogin {
