@@ -296,7 +296,7 @@ pub(super) enum ScrawlRequest {
 #[derive(Clone, Debug)]
 pub(super) struct PlatformState {
     pub(super) caps: Capabilities,
-    /// Microphone, Input Monitoring, Accessibility, and whether the selected
+    /// Microphone, Accessibility, and whether the selected
     /// speech model is installed. Every permission is ready where the OS has
     /// none.
     pub(super) permissions: SetupStatus,
@@ -552,7 +552,6 @@ impl PlatformState {
         let ready = PermissionState::Ready;
         state.permissions = SetupStatus {
             microphone: ready,
-            input_monitoring: ready,
             accessibility: ready,
             transcription_model: true,
         };

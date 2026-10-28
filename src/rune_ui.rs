@@ -1888,7 +1888,7 @@ const SCENES: &[Scene] = &[
     ("mac-settings-permissions", |ui| {
         *ui = mac_fixture();
         use crate::onboarding::PermissionState;
-        ui.platform.permissions.input_monitoring = PermissionState::NeedsSettings;
+        ui.platform.permissions.microphone = PermissionState::NeedsSettings;
         ui.platform.permissions.accessibility = PermissionState::NeedsSettings;
         ui.platform
             .permissions_asked

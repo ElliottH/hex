@@ -2293,7 +2293,7 @@ mod tests {
             post_to(
                 port,
                 &client_token,
-                r#"{"version":1,"command":"meeting-record","title":"Standup"}"#,
+                r#"{"version":2,"command":"meeting-record","title":"Standup"}"#,
             )
         });
         let call = controls.recv_timeout(Duration::from_secs(2)).unwrap();
@@ -2315,14 +2315,14 @@ mod tests {
             ControlReply::done("Started recording")
         );
 
-        let unauthorized = post("hex_wrong", r#"{"version":1,"command":"status"}"#);
+        let unauthorized = post("hex_wrong", r#"{"version":2,"command":"status"}"#);
         assert!(unauthorized.starts_with("HTTP/1.1 401"));
-        let unknown = post(&token, r#"{"version":1,"command":"explode"}"#);
+        let unknown = post(&token, r#"{"version":2,"command":"explode"}"#);
         assert!(unknown.starts_with("HTTP/1.1 400"));
         // Another protocol version is answered without reaching the app.
         for body in [
-            r#"{"version":2,"command":"status"}"#,
-            r#"{"version":2,"command":"explode"}"#,
+            r#"{"version":1,"command":"status"}"#,
+            r#"{"version":1,"command":"explode"}"#,
         ] {
             let mismatch = post(&token, body);
             let reply = serde_json::from_str::<ControlResponse>(response_body(&mismatch))

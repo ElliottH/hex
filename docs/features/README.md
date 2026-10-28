@@ -127,12 +127,13 @@ Launch Hex, setup incomplete              // setup.tour; full-window, own column
 │   │   then the lamp breathes. Light theme: ink rings over a pale blue glow
 │   └── Reduce Motion -> the settled frame, lamp at rest
 ├── Setup: one screen, every permission   // setup.checklist; skipped when granted
-│   ├── Each row leads with its glyph: mic, keyboard, text cursor, sparkle (model)
+│   ├── Each row leads with its glyph: mic, text cursor, sparkle (model)
+│   ├── No Input Monitoring row: Accessibility also lets the shortcut taps listen
 │   ├── Every row -> Allow; asked -> pulse + Allow; granted -> Allowed  // setup.permission-control
 │   │   └── Grant: the pill narrows into the green label, the dot shrinks into
 │   │       the check as it draws on (0.3 s, no bounce; Reduce Motion: no travel)
 │   ├── Microphone -> macOS prompt; refused -> Privacy pane + "switch Hex on" guide
-│   ├── Input Monitoring / Accessibility -> Privacy pane + drag guide
+│   ├── Accessibility -> Privacy pane + drag guide
 │   │   ├── The app tile lifts out of the row and flies, blurred, into the guide
 │   │   └── macOS 27 names the list "Device Control and Data Access"; row and guide follow
 │   ├── Rows re-read every 400 ms and flip to a check as macOS grants

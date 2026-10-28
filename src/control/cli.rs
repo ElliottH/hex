@@ -918,9 +918,8 @@ fn human_status(report: &StatusReport) -> String {
         "ready".to_string()
     } else {
         format!(
-            "microphone {}, input monitoring {}, accessibility {}, model {}",
+            "microphone {}, accessibility {}, model {}",
             permissions.microphone,
-            permissions.input_monitoring,
             permissions.accessibility,
             if permissions.transcription_model {
                 "ready"

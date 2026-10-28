@@ -400,8 +400,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   executor unless the persisted command opt-in is enabled. Enabling commands
   loads Moonshine off the audio-consumption loop; disabling them unloads the
   recognizer and executor.
-- On a new Mac, release dictation starts only after Microphone, Input Monitoring,
-  Accessibility, and the selected dictation model are ready. Opt-in command
+- On a new Mac, release dictation starts only after Microphone, Accessibility,
+  and the selected dictation model are ready. Hex never asks for Input
+  Monitoring: Accessibility also grants the listen-event access its shortcut
+  taps need (measured on macOS 26 and 27). Opt-in command
   recognition additionally requires Moonshine, but its background preparation or
   failure must never block hotkey dictation. Failed preparation exposes explicit
   retry and disable actions without silently changing the command opt-in.

@@ -800,7 +800,6 @@ fn status(
         permissions: PermissionReport {
             ready: setup.ready(),
             microphone: permission(setup.microphone),
-            input_monitoring: permission(setup.input_monitoring),
             accessibility: permission(setup.accessibility),
             transcription_model: setup.transcription_model,
         },

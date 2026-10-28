@@ -77,8 +77,7 @@ Or install manually:
 3. Complete the permission and model steps in setup.
 
 - **Microphone** lets Hex record while you dictate.
-- **Input Monitoring** lets Hex detect its shortcut globally. Drag the Hex tile into the list.
-- **Accessibility** lets Hex paste into the foreground app. Drag the Hex tile into the list.
+- **Accessibility** lets Hex notice its shortcut in every app and paste into the foreground app. Drag the Hex tile into the list. Hex does not need Input Monitoring.
 - **Transcription model** downloads the speech model that runs locally.
 
 Hex checks for signed updates automatically. Use **Hex > Check for Updates…**
@@ -218,7 +217,7 @@ Review and redact diagnostics before sharing them.
 | Symptom | Check |
 | --- | --- |
 | Hex appears to disappear | Open Hex from its menu-bar hexagon. If the status item could not start, Hex keeps its Dock icon visible. |
-| The shortcut does nothing | Open Hex and verify Microphone and Input Monitoring access. |
+| The shortcut does nothing | Open Hex and verify Microphone and Accessibility access. |
 | Recording works but text does not paste | Verify Accessibility access. |
 | Transcription does not start | Confirm that the selected local model is installed. |
 | OpenCode features fail | Verify the separate OpenCode installation and model provider. |

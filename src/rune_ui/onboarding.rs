@@ -560,18 +560,6 @@ fn setup_row(ui: &Ui, p: Paint, row: Row) -> El {
                 _ => tr("Hears you only while you hold the shortcut").into(),
             },
         ),
-        SetupItem::InputMonitoring => (
-            "setup-input-monitoring",
-            &glyphs::KEYBOARD,
-            tr("Input Monitoring"),
-            if row.status == ItemStatus::Restart {
-                tr("Turns on when Hex restarts").into()
-            } else if waiting {
-                tr("Drag Hex into the list, or switch it on if it is there").into()
-            } else {
-                tr("Notices the shortcut in every app").into()
-            },
-        ),
         SetupItem::Accessibility => (
             "setup-accessibility",
             &glyphs::CURSOR_TEXT,
@@ -581,7 +569,7 @@ fn setup_row(ui: &Ui, p: Paint, row: Row) -> El {
             } else if waiting {
                 tr("Drag Hex into the list, or switch it on if it is there").into()
             } else {
-                tr("Pastes your words into the app you are using").into()
+                tr("Notices the shortcut and pastes your words in any app").into()
             },
         ),
         SetupItem::Model => (
@@ -1034,7 +1022,7 @@ pub(super) enum MacStep {
     Setup,
     SetupProgress,
     SetupDenied,
-    /// Every permission on, Input Monitoring waiting for a restart.
+    /// Every permission on, Accessibility waiting for a restart.
     SetupRestart,
     SetupDownloadFailed,
     TryIt,
@@ -1050,7 +1038,6 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
     use PermissionState::{NeedsRequest, NeedsRestart, NeedsSettings, Ready};
     let fresh = crate::onboarding::SetupStatus {
         microphone: NeedsRequest,
-        input_monitoring: NeedsSettings,
         accessibility: NeedsSettings,
         transcription_model: false,
     };
@@ -1066,7 +1053,6 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
         MacStep::Welcome | MacStep::Setup | MacStep::SetupDownloadFailed => fresh,
         MacStep::SetupProgress => crate::onboarding::SetupStatus {
             microphone: Ready,
-            input_monitoring: Ready,
             ..fresh
         },
         MacStep::SetupDenied => crate::onboarding::SetupStatus {
@@ -1075,13 +1061,11 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
         },
         MacStep::SetupRestart => crate::onboarding::SetupStatus {
             microphone: Ready,
-            input_monitoring: NeedsRestart,
-            accessibility: Ready,
+            accessibility: NeedsRestart,
             ..fresh
         },
         _ => crate::onboarding::SetupStatus {
             microphone: Ready,
-            input_monitoring: Ready,
             accessibility: Ready,
             transcription_model: true,
         },
@@ -1098,11 +1082,7 @@ pub(super) fn mac_fixture(ui: &mut Ui, state: MacStep) {
         input(ui, Input::Continue);
     }
     if state == MacStep::SetupProgress {
-        for item in [
-            SetupItem::Microphone,
-            SetupItem::InputMonitoring,
-            SetupItem::Accessibility,
-        ] {
+        for item in [SetupItem::Microphone, SetupItem::Accessibility] {
             input(ui, Input::Grant(item));
         }
     }
@@ -1168,7 +1148,6 @@ mod tests {
     fn try_it_focuses_the_practice_field_until_the_dictation_lands() {
         let ready = crate::onboarding::SetupStatus {
             microphone: PermissionState::Ready,
-            input_monitoring: PermissionState::Ready,
             accessibility: PermissionState::Ready,
             transcription_model: true,
         };
