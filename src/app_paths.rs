@@ -34,7 +34,12 @@ pub fn support_dir() -> Result<PathBuf> {
     }
     let data =
         dirs::data_dir().ok_or_else(|| eyre!("application data directory is unavailable"))?;
-    Ok(data.join(if is_macos_test_build() { "hex-test" } else { "hex" }))
+    let folder = if is_macos_test_build() {
+        "hex-test"
+    } else {
+        "hex"
+    };
+    Ok(data.join(folder))
 }
 
 pub fn logs_dir() -> Result<PathBuf> {

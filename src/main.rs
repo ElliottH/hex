@@ -1291,19 +1291,8 @@ mod tests {
         assert!(opens(&["hex"]));
         assert!(opens(&["/Applications/Hex.app/Contents/MacOS/hex"]));
         assert!(opens(&["hex", "app"]));
-        assert!(opens(&[
-            "hex",
-            "app",
-            "--device",
-            "MacBook Pro Microphone"
-        ]));
-        assert!(!opens(&[
-            "hex",
-            "app",
-            "--",
-            "--snap",
-            "/tmp/a.png"
-        ]));
+        assert!(opens(&["hex", "app", "--device", "MacBook Pro Microphone"]));
+        assert!(!opens(&["hex", "app", "--", "--snap", "/tmp/a.png"]));
         assert!(!opens(&["hex-service"]));
         assert!(!opens(&["hex-meetings-mcp"]));
         for command in [

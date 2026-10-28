@@ -295,11 +295,7 @@ fn meeting_lock_reports_liveness_across_file_descriptors() {
 }
 
 fn finished_meeting(name: &str, title: &str) -> (PathBuf, PathBuf) {
-    let base = std::env::temp_dir().join(format!(
-        "hex-{name}-{}-{}",
-        std::process::id(),
-        now_ms()
-    ));
+    let base = std::env::temp_dir().join(format!("hex-{name}-{}-{}", std::process::id(), now_ms()));
     let directory = base.join("1760000000000-1");
     fs::create_dir_all(&directory).unwrap();
     let export = base.join("2026-10-15 1418 Meeting.md");
