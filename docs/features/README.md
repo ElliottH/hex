@@ -856,6 +856,8 @@ failed; no visual or installed-app startup verification is claimed.
 ```ts
 Hex checks the release service            // maintain.updates
 ├── 10 s after launch, hourly (Dev channel: every 10 min and on window focus), and Check for updates -> anoma.ly/release/hex/desktop/<channel>.json
+│   ├── User-Agent: hex/<build channel>/<version> (hex/dev/0.0.0-dev-171, hex/stable/2.3.1); nothing else about the install
+│   ├── Failed check -> backs off, never past hourly
 │   └── <channel> -> updates.channel (General › Application › Update channel: Stable | Dev,
 │       or `hex settings set updates.channel`), else the channel the build was published on
 │       (HEX_BUILD_CHANNEL; older builds: dev for a dev version, else the receipt's);
