@@ -218,15 +218,13 @@ substitute for source inspection or a second roadmap.
   double-tap only, Escape, Paste Last, Voice Action, and `hex` commands) and the
   monitor that feeds it from X11 key grabs, the Wayland GlobalShortcuts portal,
   or, without the portal, the `hex` commands alone.
-- `linux_portal`: the GlobalShortcuts portal client on a private bus
+- `linux_portal`: the GlobalShortcuts portal client on a private zbus
   connection: `Register("hex")`, one session for Hex's shortcuts, a second
   session binding Escape only while recording, granted-trigger descriptions,
   and session-closed reporting.
-- `linux_file_chooser`: one blocking `OpenFile` call on the FileChooser
-  portal over a private bus connection: `file_dialog`'s Linux adapter.
 - `linux_context`: the frontmost X11 application for modes; Wayland has none.
 - `linux_audio_control`: While-dictating mute through `wpctl`/`pactl` and
-  MPRIS pause over D-Bus, restoring only what it changed.
+  MPRIS pause over D-Bus (zbus), restoring only what it changed.
 - `linux_session`: display-backend selection matching winit's (Rune's)
   nonempty `WAYLAND_DISPLAY` rule, independent of persisted preferences.
 - `linux_service`: the single-instance lock and owner-only, same-user Unix
@@ -243,10 +241,9 @@ substitute for source inspection or a second roadmap.
   overlay whose compositor draws `rune_hud.wgsl`, the WGSL port of
   `dictation_indicator.metal`. Keep the two shaders in lockstep: mirror every
   Metal change in the WGSL in the same PR.
-- `linux_tray`: the optional tray icon, a StatusNotifierItem with a dbusmenu
-  (Show Hex, Quit Hex) on its own thread and private bus connection. It
-  registers whenever a tray host (`org.kde.StatusNotifierWatcher`) appears;
-  without one Hex runs unchanged.
+- `linux_tray`: the optional tray icon, a `rune::Tray` (StatusNotifierItem
+  with a dbusmenu: Show Hex, Quit Hex). It registers whenever a tray host
+  (`org.kde.StatusNotifierWatcher`) appears; without one Hex runs unchanged.
 - `updater`: the in-app updater on every OS, a client of the Anomaly release
   service (`docs/plans/release-service.md`). `updater/protocol` is the
   protocol's strict SemVer, lenient manifest parsing, and client rules (the
@@ -358,8 +355,7 @@ substitute for source inspection or a second roadmap.
   menu-bar meeting state. The capsules that show its events are
   `rune_ui::meeting_capsules`.
 - `file_dialog`: the one native open dialog for a file or folder (Modes'
-  "Choose a file…", the macOS meetings folder): `NSOpenPanel` modeless on
-  AppKit's main thread, `IFileOpenDialog` on its own STA thread, the portal on
+  "Choose a file…", the macOS meetings folder) through `rune::FileDialogs` on
   its own thread. Answers on a channel; cancel and a dialog that never opened
   read as nothing chosen.
 - `experiments`: the compiled list of unsupported experiments and the
@@ -1038,7 +1034,7 @@ native build dependencies with:
 
 ```sh
 sudo pacman -S --needed base-devel git rustup python alsa-lib curl jq openssl xxd \
-  util-linux glib2 libxkbcommon libxkbcommon-x11 libx11 libxcb openblas \
+  util-linux libxkbcommon libxkbcommon-x11 libx11 libxcb openblas \
   vulkan-headers vulkan-icd-loader \
   shaderc spirv-headers clang cmake pkgconf wl-clipboard wtype
 rustup default stable

@@ -337,9 +337,7 @@ pub(crate) fn run(
     run_window(&host, requests, first, shutdown);
     shutdown.store(true, Ordering::Release);
     let _ = worker.join();
-    if let Some(tray) = tray {
-        let _ = tray.join();
-    }
+    drop(tray);
     Ok(())
 }
 

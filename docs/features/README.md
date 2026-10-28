@@ -986,7 +986,7 @@ Linux beta                               // not macOS feature parity
 │       ├── X11 -> override-redirect window, empty input shape
 │       ├── No layer-shell -> `hex status` reports the HUD limitation
 │       └── No window loop (no GPU or display, `hex dictate`) -> no HUD
-├── Tray host (StatusNotifierWatcher) -> Tray icon: click opens the window; menu has Show Hex, Quit Hex (linux_tray)
+├── Tray host (StatusNotifierWatcher) -> Tray icon: click opens the window; menu has Show Hex, Quit Hex (linux_tray, rune::Tray)
 │   └── No tray host -> No icon; status and sounds remain available
 ├── Microphone -> System default or a saved device; `--device` overrides
 │   └── System default -> ALSA's default, resolved at each stream open // no live follow
@@ -1292,8 +1292,8 @@ macOS `hex app` -> one menu-bar process, Rune window // dev.rune-ui-macos
 ├── macos_host: AppKit event monitor records chords (Option, Fn); NativeHost does permissions,
 │   login item, Hex Microphone, meeting start/stop/rename/trash/reveal, commands workspace, relaunch
 ├── Meetings pane lists the store through meeting::query (1 s rescan, sent only when changed);
-│   a controller failure shows in the pane; NSOpenPanel (file_dialog) chooses the meetings
-│   folder and Modes' "Choose a file…" .app, modeless on the main thread
+│   a controller failure shows in the pane; rune::FileDialogs (file_dialog) chooses the
+│   meetings folder and Modes' "Choose a file…" .app
 ├── Tour: practice dictations from the listener's event log; a listener that failed to start
 ├── Sidebar and pane header move the window (Rune El::window_drag; the title bar is transparent)
 ├── While the window shows, its poll re-checks timed state every 250 ms (Rune Tx::wake_after); close hides it (Dock policy restored)
@@ -1308,7 +1308,7 @@ Windows `hex app` -> one tray process, Rune window // dev.rune-ui-windows
 ├── rune::App: --hidden starts windowless, close hides (keep_running); Quit or no tray ends it
 ├── General adds Launch at login; no terminal paste; chord capture polls
 ├── HUD: shared indicator model + CPU shader in a Rune overlay
-├── Modes: "Choose a file…" opens IFileOpenDialog (file_dialog) on its own STA thread, no owner window
+├── Modes: "Choose a file…" opens rune::FileDialogs (file_dialog) on its own thread
 ├── Modes app icons: the executable's first icon (PrivateExtractIconsW)
 └── Not yet: custom caption
 iOS prototype -> Record/transcribe/copy and keyboard handoff

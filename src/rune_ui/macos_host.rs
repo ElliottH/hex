@@ -1304,7 +1304,6 @@ fn choose_folder() -> crate::file_dialog::Pending {
     crate::file_dialog::open(
         Dialog {
             title: tr("Transcript folder").into(),
-            accept: tr("Use Folder").into(),
             target: Target::Folder,
             directory: Some(crate::app_settings::meeting_output_folder()),
         },
@@ -1345,7 +1344,6 @@ impl ScrawlHost {
                     self.folder_choice = Some(crate::file_dialog::open(
                         Dialog {
                             title: tr("Captures folder").into(),
-                            accept: tr("Use Folder").into(),
                             target: Target::Folder,
                             directory: Some(crate::app_settings::capture_settings().captures_dir()),
                         },

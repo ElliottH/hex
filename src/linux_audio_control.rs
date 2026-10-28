@@ -6,15 +6,16 @@
 
 use std::process::Command;
 use std::sync::mpsc::{self, Sender};
+use std::time::Duration;
 
-use glib::ToVariant;
+use zbus::{Connection, OwnedVariant};
 
 use crate::app_settings::RecordingAudioBehavior;
 
 const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
 const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2.Player";
-const DBUS_TIMEOUT_MS: i32 = 500;
+const DBUS_TIMEOUT: Duration = Duration::from_millis(500);
 
 enum Request {
     Suppress,
@@ -184,80 +185,102 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn session_bus() -> Option<gio::DBusConnection> {
-    gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
-        .inspect_err(|error| tracing::warn!(%error, "cannot reach the session D-Bus"))
-        .ok()
+/// Runs MPRIS calls on the worker thread, which blocks on them anyway.
+fn with_session_bus<T: Default>(work: impl AsyncFnOnce(&Connection) -> T) -> T {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::warn!(%error, "cannot start the D-Bus runtime");
+            return T::default();
+        }
+    };
+    runtime.block_on(async {
+        match tokio::time::timeout(DBUS_TIMEOUT, Connection::session()).await {
+            Ok(Ok(bus)) => work(&bus).await,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "cannot reach the session D-Bus");
+                T::default()
+            }
+            Err(_) => {
+                tracing::warn!("the session D-Bus did not answer");
+                T::default()
+            }
+        }
+    })
 }
 
-fn call(
-    bus: &gio::DBusConnection,
+async fn call<B, R>(
+    bus: &Connection,
     destination: &str,
     path: &str,
     interface: &str,
     method: &str,
-    parameters: Option<&glib::Variant>,
-) -> Option<glib::Variant> {
-    bus.call_sync(
-        Some(destination),
-        path,
-        interface,
-        method,
-        parameters,
-        None,
-        gio::DBusCallFlags::NONE,
-        DBUS_TIMEOUT_MS,
-        gio::Cancellable::NONE,
-    )
-    .ok()
+    body: &B,
+) -> Option<R>
+where
+    B: serde::Serialize + zbus::Type,
+    R: for<'d> serde::Deserialize<'d> + zbus::Type,
+{
+    let call = bus.call_method(Some(destination), path, Some(interface), method, body);
+    let reply = tokio::time::timeout(DBUS_TIMEOUT, call).await.ok()?.ok()?;
+    reply.body().deserialize().ok()
 }
 
 /// Pauses every MPRIS player that is playing, and returns their bus names.
 fn pause_players() -> Vec<String> {
-    let Some(bus) = session_bus() else {
-        return Vec::new();
-    };
-    let Some(names) = call(
-        &bus,
-        "org.freedesktop.DBus",
-        "/org/freedesktop/DBus",
-        "org.freedesktop.DBus",
-        "ListNames",
-        None,
-    )
-    .and_then(|reply| reply.child_value(0).get::<Vec<String>>()) else {
-        return Vec::new();
-    };
-    names
-        .into_iter()
-        .filter(|name| name.starts_with(MPRIS_PREFIX))
-        .filter(|name| playback_status(&bus, name).as_deref() == Some("Playing"))
-        .filter(|name| call(&bus, name, MPRIS_PATH, MPRIS_PLAYER, "Pause", None).is_some())
-        .collect()
+    with_session_bus(async |bus| {
+        let names: Vec<String> = call(
+            bus,
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "ListNames",
+            &(),
+        )
+        .await
+        .unwrap_or_default();
+        let mut paused = Vec::new();
+        for name in names
+            .into_iter()
+            .filter(|name| name.starts_with(MPRIS_PREFIX))
+        {
+            if playback_status(bus, &name).await.as_deref() == Some("Playing")
+                && call::<_, ()>(bus, &name, MPRIS_PATH, MPRIS_PLAYER, "Pause", &())
+                    .await
+                    .is_some()
+            {
+                paused.push(name);
+            }
+        }
+        paused
+    })
 }
 
-fn playback_status(bus: &gio::DBusConnection, name: &str) -> Option<String> {
-    let reply = call(
+async fn playback_status(bus: &Connection, name: &str) -> Option<String> {
+    let status: OwnedVariant = call(
         bus,
         name,
         MPRIS_PATH,
         "org.freedesktop.DBus.Properties",
         "Get",
-        Some(&(MPRIS_PLAYER, "PlaybackStatus").to_variant()),
-    )?;
-    reply.child_value(0).as_variant()?.get::<String>()
+        &(MPRIS_PLAYER, "PlaybackStatus"),
+    )
+    .await?;
+    <&str>::try_from(&status).ok().map(str::to_owned)
 }
 
 fn resume_players(players: &[String]) {
     if players.is_empty() {
         return;
     }
-    let Some(bus) = session_bus() else {
-        return;
-    };
-    for name in players {
-        let _ = call(&bus, name, MPRIS_PATH, MPRIS_PLAYER, "Play", None);
-    }
+    with_session_bus(async |bus| {
+        for name in players {
+            let _ = call::<_, ()>(bus, name, MPRIS_PATH, MPRIS_PLAYER, "Play", &()).await;
+        }
+    });
 }
 
 #[cfg(test)]
