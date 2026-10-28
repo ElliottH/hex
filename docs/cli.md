@@ -296,6 +296,16 @@ Changes go through the same rules as the window and are saved by the app,
 which then reloads them live; an open window adopts the change unless it has
 an unsaved edit.
 
+On macOS, `keyboard_model_switching.enabled` opts into switching the shared
+speech-model picker on keyboard input-source changes. The JSON setting
+`keyboard_model_switching.mappings` maps enabled input-source IDs to a model and
+a language it supports, for example
+`{"com.apple.keylayout.Spanish":{"model":"parakeet_v3","language":"es"}}`. Omit a
+source for "Don't switch"; Apple Speech can't be mapped. Automatic switches load
+installed models only; they never download them. Enabling or editing the active
+mapping applies it; launching Hex does not reapply it. Other platforms keep the
+settings but do not observe input-source changes or show these controls.
+
 - Booleans take `on`/`off`, `true`/`false`, `yes`/`no`, or `1`/`0`.
 - Optional settings take `none` to clear them.
 - `microphone` takes a device name exactly as Settings lists it, or

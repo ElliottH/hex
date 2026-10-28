@@ -70,6 +70,9 @@ mod hud_placement;
 mod instance;
 #[cfg(target_os = "macos")]
 mod keyboard;
+#[cfg(target_os = "macos")]
+mod keyboard_input_sources;
+mod keyboard_model_switching;
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 mod keys;
 #[cfg(target_os = "linux")]

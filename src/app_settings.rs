@@ -1299,6 +1299,7 @@ pub struct AppSettings {
     pub show_dock_icon: bool,
     pub transcription: TranscriptionSelection,
     pub transcription_recents: Vec<TranscriptionSelection>,
+    pub keyboard_model_switching: KeyboardModelSwitching,
     pub dictation_processing: DictationProcessingSettings,
     pub voice_action: VoiceActionSettings,
     pub history_retention: crate::history::HistoryRetention,
@@ -1372,6 +1373,7 @@ impl Default for AppSettings {
             show_dock_icon: true,
             transcription: default_transcription(),
             transcription_recents: Vec::new(),
+            keyboard_model_switching: KeyboardModelSwitching::default(),
             dictation_processing: DictationProcessingSettings::default(),
             voice_action: VoiceActionSettings::default(),
             history_retention: crate::history::HistoryRetention::default(),
@@ -1389,6 +1391,40 @@ impl Default for AppSettings {
             vocabulary: Vec::new(),
             migrations: MIGRATIONS.iter().map(|id| id.to_string()).collect(),
             text_replacements: Vec::new(),
+        }
+    }
+}
+
+/// macOS input-source IDs mapped to the model and language they select. An
+/// absent entry means "Don't switch"; this never changes the model merely
+/// because dictation starts.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct KeyboardModelSwitching {
+    pub enabled: bool,
+    pub mappings: std::collections::BTreeMap<String, KeyboardModelChoice>,
+}
+
+/// What one input source selects: a model and a language it supports.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KeyboardModelChoice {
+    pub model: TranscriptionModelId,
+    pub language: String,
+}
+
+impl KeyboardModelChoice {
+    /// The picker's downloadable models only; Apple Speech is never mapped.
+    pub fn validate(&self) -> Result<()> {
+        let model = crate::transcription_models::validate(&TranscriptionSelection {
+            model: self.model,
+            language: self.language.clone(),
+            recognition_hints: String::new(),
+        })?;
+        match model.runtime {
+            crate::transcription_models::ModelRuntime::Gguf(_) => Ok(()),
+            crate::transcription_models::ModelRuntime::AppleSpeech => {
+                Err(eyre!("{} can't be switched to by input source", model.name))
+            }
         }
     }
 }
@@ -1643,6 +1679,11 @@ impl AppSettings {
                 settings.migrate_disabled_transcription_model();
                 settings.apply_one_time_migrations();
                 settings.normalize_transcription_recents();
+                // A model that is gone, or a language it lost, maps to nothing.
+                settings
+                    .keyboard_model_switching
+                    .mappings
+                    .retain(|_, choice| choice.validate().is_ok());
                 crate::transcription_models::validate(&settings.transcription)?;
                 settings.repair_hotkey_conflict();
                 if serde_json::to_value(&settings)? != loaded
@@ -2449,6 +2490,54 @@ mod tests {
         assert!(settings.hotkey_in_use(HotkeySlot::Capture, &list));
         // The others don't see them while off.
         assert!(!settings.hotkey_in_use(HotkeySlot::VoiceAction, &capture));
+    }
+
+    #[test]
+    fn keyboard_model_switching_is_opt_in_and_source_mappings_round_trip() {
+        let mut settings: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.keyboard_model_switching.enabled);
+        assert!(settings.keyboard_model_switching.mappings.is_empty());
+        settings.keyboard_model_switching.enabled = true;
+        settings.keyboard_model_switching.mappings.insert(
+            "com.apple.keylayout.Spanish".into(),
+            KeyboardModelChoice {
+                model: TranscriptionModelId::ParakeetV3,
+                language: "es".into(),
+            },
+        );
+        let restored: AppSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            restored.keyboard_model_switching,
+            settings.keyboard_model_switching
+        );
+    }
+
+    #[test]
+    fn loading_drops_keyboard_mappings_to_a_language_the_model_lacks() {
+        let dir = TestSettingsDir::new("keyboard-mappings");
+        let mut settings = AppSettings::default();
+        let russian = KeyboardModelChoice {
+            model: TranscriptionModelId::ParakeetV3,
+            language: "ru".into(),
+        };
+        settings
+            .keyboard_model_switching
+            .mappings
+            .insert("Russian".into(), russian.clone());
+        settings.keyboard_model_switching.mappings.insert(
+            "Japanese".into(),
+            KeyboardModelChoice {
+                model: TranscriptionModelId::ParakeetUnifiedEnglish,
+                language: "ja".into(),
+            },
+        );
+        settings.write_to(&dir.path).unwrap();
+        let loaded = AppSettings::load_from(&dir.path).unwrap();
+        assert_eq!(
+            loaded.keyboard_model_switching.mappings,
+            [("Russian".to_owned(), russian)].into()
+        );
     }
 
     #[test]
