@@ -52,7 +52,7 @@ const PRESENCE_BLUR: f32 = 1.5;
 /// seconds.
 const HIDE_AFTER_S: f64 = 0.5;
 /// The list's corners, and its rows'.
-const LIST_RADIUS: f32 = 14.0;
+const LIST_RADIUS: f32 = surface::SHELL_RADIUS;
 const ROW_RADIUS: f32 = 8.0;
 const ROW_PX: f32 = 10.0;
 const NUMBER_W: f32 = 10.0;
@@ -897,7 +897,7 @@ fn capsule(p: Paint, surface: &Surface, live: &Animated, cx: &mut Cx<CapsuleStat
         inner = inner.child(
             placed(el(), highlight)
                 .trace_name("highlight")
-                .radius(CHIP_H * 0.5)
+                .radius(surface::CHIP_RADIUS)
                 .fill(p.k.c.layer_02)
                 .box_shadow(rune::Shadow {
                     spread: p.hair,
@@ -1008,7 +1008,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         Id::Mode(mode) => {
             let fg = if shown.active { p.text() } else { p.muted() };
             let mut chip = base
-                .radius(CHIP_H * 0.5)
+                .radius(surface::CHIP_RADIUS)
                 .gap(SEG_ICON_GAP)
                 .child(canvas(icon(id, SEG_ICON * 2.5 / 24.0, fg)).size(SEG_ICON, SEG_ICON))
                 .child(label(mode.label(), MEDIUM, fg))
@@ -1023,7 +1023,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         }
         Id::Record | Id::Finish => {
             let name = if id == Id::Record { "Record" } else { "Finish" };
-            base.radius(CHIP_H * 0.5)
+            base.radius(surface::CHIP_RADIUS)
                 .fill(c.bg_contrast)
                 .hover(c.contrast_hover)
                 .press(c.contrast_pressed)
@@ -1039,7 +1039,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             } else {
                 surface::KEEP_LABEL
             };
-            base.radius(CHIP_H * 0.5)
+            base.radius(surface::CHIP_RADIUS)
                 .hover(c.hover)
                 .press(c.pressed)
                 .child(label(name, MEDIUM, p.muted()))
@@ -1051,7 +1051,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
         // Destructive, so the danger ink on the neutral chip, never the
         // accent.
         Id::Discard => base
-            .radius(CHIP_H * 0.5)
+            .radius(surface::CHIP_RADIUS)
             .fill(c.layer_02)
             .hover(c.hover)
             .press(c.pressed)
@@ -1064,7 +1064,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             row()
                 .center()
                 .size(28.0, 28.0)
-                .radius(14.0)
+                .radius(ICON_BUTTON_RADIUS)
                 .hover(c.hover)
                 .press(c.pressed)
                 .child(canvas(icon(id, 12.0 * 2.4 / 24.0, p.muted())).size(12.0, 12.0))
@@ -1107,7 +1107,7 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
             let sends = matches!(&surface.pres, Pres::Done(done) if done.sends);
             if sends {
                 return done
-                    .radius(CHIP_H * 0.5)
+                    .radius(surface::CHIP_RADIUS)
                     .hover(c.hover)
                     .press(c.pressed)
                     .role("button")
@@ -1158,10 +1158,10 @@ fn item(p: Paint, surface: &Surface, live: &Animated, shown: &Shown) -> El {
                 row()
                     .center()
                     .size(28.0, 28.0)
-                    .radius(14.0)
+                    .radius(ICON_BUTTON_RADIUS)
                     .hover(c.hover)
                     .press(c.pressed)
-                    .child(canvas(icon(id, 16.0 * 2.0 / 24.0, p.muted())).size(16.0, 16.0))
+                    .child(canvas(icon(id, 16.0 * 1.75 / 24.0, p.muted())).size(16.0, 16.0))
                     .role("button")
                     .label(name)
                     .help(help)
@@ -1212,7 +1212,7 @@ fn pick_row(p: Paint, base: El, shown: &Shown, row: usize) -> El {
 /// A chip's label, then its shortcut as one quiet word ("Send to… ⌥⇧V").
 fn keyed(p: Paint, base: El, keys: &[&str], name: &str, style: rune::TextStyle) -> El {
     let mut chip = base
-        .radius(CHIP_H * 0.5)
+        .radius(surface::CHIP_RADIUS)
         .gap(HINT_GAP)
         .hover(p.k.c.hover)
         .press(p.k.c.pressed)
@@ -1299,7 +1299,7 @@ fn field(p: Paint, base: El, typed: &str) -> El {
     };
     base.trace_name("field")
         .px(CHIP_PX)
-        .radius(CHIP_H * 0.5)
+        .radius(surface::CHIP_RADIUS)
         .fill(p.k.c.layer_01)
         .child(inner.grow(1.0))
         .role("textbox")
@@ -1320,6 +1320,8 @@ fn glyph(p: Paint, lead: Lead, thumb: Option<&rune::Pixels>) -> El {
 }
 
 const CHECK: f32 = 16.0;
+/// A 28 pt icon button's corners, concentric with the shell's.
+const ICON_BUTTON_RADIUS: f32 = surface::CHIP_RADIUS - 2.0;
 const THUMB_RADIUS: f32 = 4.0;
 
 /// The capture's first frame, cropped to fill a small rounded card, with a
@@ -1830,22 +1832,33 @@ fn icon(id: Id, width: f32, color: Color) -> Shape {
             paths.push(line([12.0, 4.0], [12.0, 14.0]));
             paths.push(line([12.0, 19.5], [12.0, 19.6]));
         }
-        // A clipboard, its clip, and two lines of what's on it.
+        // A clipboard: its board open where the clip sits on it.
         Id::Paste => {
-            paths.push(rounded(5.0, 4.5, 14.0, 16.5, 2.5));
-            paths.push(rounded(9.0, 2.5, 6.0, 4.0, 1.5));
-            paths.push(line([9.0, 11.5], [15.0, 11.5]));
-            paths.push(line([9.0, 15.5], [13.0, 15.5]));
+            paths.push(
+                Path::new()
+                    .move_to([16.0, 4.0])
+                    .line_to([17.5, 4.0])
+                    .quad_to([20.0, 4.0], [20.0, 6.5])
+                    .line_to([20.0, 19.5])
+                    .quad_to([20.0, 22.0], [17.5, 22.0])
+                    .line_to([6.5, 22.0])
+                    .quad_to([4.0, 22.0], [4.0, 19.5])
+                    .line_to([4.0, 6.5])
+                    .quad_to([4.0, 4.0], [6.5, 4.0])
+                    .line_to([8.0, 4.0]),
+            );
+            paths.push(rounded(8.0, 2.0, 8.0, 4.0, 1.0));
         }
-        // An eye: look at the capture.
+        // An eye, two circular arcs meeting at its corners, and its pupil:
+        // look at the capture.
         Id::Inspect => {
             paths.push(
                 Path::new()
-                    .move_to([2.5, 12.0])
-                    .cubic_to([5.0, 7.5], [8.5, 5.5], [12.0, 5.5])
-                    .cubic_to([15.5, 5.5], [19.0, 7.5], [21.5, 12.0])
-                    .cubic_to([19.0, 16.5], [15.5, 18.5], [12.0, 18.5])
-                    .cubic_to([8.5, 18.5], [5.0, 16.5], [2.5, 12.0])
+                    .move_to([2.06, 12.0])
+                    .cubic_to([3.7, 7.97], [7.65, 5.3], [12.0, 5.3])
+                    .cubic_to([16.35, 5.3], [20.3, 7.97], [21.94, 12.0])
+                    .cubic_to([20.3, 16.03], [16.35, 18.7], [12.0, 18.7])
+                    .cubic_to([7.65, 18.7], [3.7, 16.03], [2.06, 12.0])
                     .close(),
             );
             paths.push(rounded(9.0, 9.0, 6.0, 6.0, 3.0));

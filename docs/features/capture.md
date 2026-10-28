@@ -259,7 +259,9 @@ The capsule                              // capture.capsule (rune_ui/capture_cap
 │   │   icons (tooltips "Paste the capture", "Open the capture") for a written
 │   │   capture. Where to send it is only ever the list
 │   │   under the capsule, which is never narrower than LIST_W; the capsule
-│   │   widens with it. Two looks while Kit picks (tuning `top_line`):
+│   │   widens with it. The capsule is a rounded rect with the list's 14 pt
+│   │   corners (`SHELL_RADIUS`), not a pill, and its chips and icon buttons
+│   │   round concentrically inside it. Two looks while Kit picks (tuning `top_line`):
 │   │   TopLine::Quiet (default) says the label in quiet MEDIUM ink;
 │   │   TopLine::Icons says it in STRONG. A capture that only copied has no
 │   │   label, the lead alone

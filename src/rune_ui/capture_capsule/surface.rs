@@ -76,10 +76,15 @@ pub(crate) const CARD_W: f32 = 280.0;
 pub(crate) const PICK_H: f32 = 32.0;
 /// The card's hint line under its guesses.
 pub(crate) const CARD_HINTS_H: f32 = 28.0;
-/// The walls' corners never round more than the one-line capsule's, so a
-/// pill grows into a card without its corners changing.
+/// The capsule is a rounded rect, its corners the list's, so the two
+/// match and the square thumbnail sits in a corner that follows it.
+pub(crate) const SHELL_RADIUS: f32 = 14.0;
+/// A chip's corners, concentric with the shell's.
+pub(crate) const CHIP_RADIUS: f32 = SHELL_RADIUS - ISLAND_INSET;
+/// The walls' corners never round more than the one-line capsule's, so
+/// the line grows into a card without its corners changing.
 pub(crate) fn corner(h: f32) -> f32 {
-    (h * 0.5).min(ISLAND_H * 0.5)
+    (h * 0.5).min(SHELL_RADIUS)
 }
 /// Where the cursor's card rests in the panel, its top-left: the app moves
 /// the panel so the pointer sits just above and left of it.
