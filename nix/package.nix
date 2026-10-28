@@ -72,6 +72,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     fileset = lib.fileset.unions [
       ../Cargo.toml
       ../Cargo.lock
+      ../.cargo
       ../build.rs
       ../crates
       ../src
@@ -92,6 +93,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
     outputHashes = {
       "transcribe-rs-0.3.11" = "sha256-MJJiug3LfbKsuHcL2+LJk95+j5kk/MWzb5ihdBlHLmE=";
       "rune-0.0.1" = "sha256-+Cb4S7pSqvkLUz2PjQ21m9UpCyLuTdF0jpXsJbraeSY=";
+      "transcribe-cpp-sys-0.4.1" = "sha256-lb6Q4e/hq8S84ZtFuPGpL+eEoneBVb2bVIr6yriVLaQ=";
     };
   };
 

@@ -1127,7 +1127,12 @@ default; Vulkan SDK required) or `aarch64` (clang-cl and Ninja; best on an
 ARM64 host). Builds use `-DGGML_NATIVE=OFF` so the CPU kernels stay portable,
 and the static runtime in `.cargo/config.toml` keeps the Visual C++
 Redistributable unnecessary; the release workflow asserts neither Windows
-executable imports it. `scripts/install-linux-release.sh` and
+executable imports it. Every build embeds Vulkan shaders only for f32, f16,
+and q8_0 tensors and no MUL_MAT_ID (`CMAKE_ARGS` in `.cargo/config.toml`,
+through the patched `transcribe-cpp-sys` in `Cargo.toml`): about 7 MB of
+SPIR-V instead of 44 MB. ggml aborts a Vulkan run whose weights use another
+type, so widen `GGML_VULKAN_SHADER_TYPES` before the catalog gains a non-Q8_0
+model. Release executables are stripped (`[profile.release]`). `scripts/install-linux-release.sh` and
 `scripts/install-windows.ps1` (served at `https://anoma.ly/hex/`) install from
 the service's stable manifest and check each file's size and SHA-256;
 `scripts/test-install-linux-release.sh` exercises the Linux one against a

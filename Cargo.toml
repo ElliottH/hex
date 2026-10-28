@@ -33,6 +33,17 @@ onnx-benchmark = ["dep:transcribe-rs"]
 # every public build, which never compile it or its Swift helper.
 capture = ["dep:scrawl-capture", "dep:anyhow", "dep:rune-motion"]
 
+# Shipped executables carry no symbol table (about 11 MB on Linux). Panic
+# backtraces lose function names; debug builds keep them.
+[profile.release]
+strip = true
+
+# transcribe-cpp-sys 0.4.1 plus one ggml patch that builds only the Vulkan
+# shaders Hex's models use (see `CMAKE_ARGS` in .cargo/config.toml). Drop this
+# once a transcribe.cpp release carries the patch.
+[patch.crates-io]
+transcribe-cpp-sys = { git = "https://github.com/anomalyco/transcribe.cpp", rev = "caf6b22b4ff64d8f5fe521c23d7061b057148c5e" }
+
 [profile.moonshine-lab]
 inherits = "release"
 debug-assertions = true
@@ -49,7 +60,7 @@ hound = "3.5.1"
 libc = "0.2.189"
 libloading = "0.9.0"
 regex = "1.13.1"
-rodio = { version = "0.22.2", default-features = false, features = ["playback", "mp3"] }
+rodio = { version = "0.23.0", default-features = false, features = ["playback", "mp3"] }
 rubato = "5.0.1"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
