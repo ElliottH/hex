@@ -139,6 +139,7 @@ mod recording_environment;
 mod rune_ui;
 #[cfg(target_os = "macos")]
 mod smart_turn;
+mod speech_detector;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod spoken_text;
 #[cfg(target_os = "macos")]
