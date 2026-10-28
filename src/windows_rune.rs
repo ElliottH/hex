@@ -28,6 +28,7 @@ use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CAPTION_COLOR, DwmSetWindowAttribute};
 use windows_sys::Win32::UI::Controls::{
     SetWindowThemeAttribute, WTA_NONCLIENT, WTA_OPTIONS, WTNCA_NODRAWCAPTION, WTNCA_NODRAWICON,
+    WTNCA_NOSYSMENU,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GWLP_HINSTANCE, GetSystemMetrics, GetWindowLongPtrW, ICON_BIG, ICON_SMALL, IMAGE_ICON,
@@ -386,10 +387,15 @@ const NO_CAPTION_COLOR: u32 = u32::MAX;
 /// and no title (the taskbar and Alt-Tab still show both), and takes the
 /// window's background color once a frame has named it. Windows keeps the
 /// frame, its resize edges, and the caption buttons.
+///
+/// Windows 11 still drew the icon under `WTNCA_NODRAWICON` alone; the
+/// icon is also the system menu's button, which `WTNCA_NOSYSMENU` removes.
+/// The window keeps `WS_SYSMENU`, so the caption buttons stay.
 fn blend_title_bar(hwnd: HWND) {
+    let hidden = WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON | WTNCA_NOSYSMENU;
     let options = WTA_OPTIONS {
-        dwFlags: WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON,
-        dwMask: WTNCA_NODRAWCAPTION | WTNCA_NODRAWICON,
+        dwFlags: hidden,
+        dwMask: hidden,
     };
     unsafe {
         SetWindowThemeAttribute(
