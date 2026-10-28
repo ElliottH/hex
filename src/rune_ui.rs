@@ -1114,6 +1114,10 @@ fn poll(ui: &mut Ui, clock: f64, tx: &mut Tx) -> bool {
 
 fn view(ui: &Ui, cx: &mut Cx<Ui>) -> El {
     let p = Paint::new(cx.system_dark(), cx.env().scale);
+    // The native title bar takes the window's background, so it follows a
+    // system theme switch along with the rest of the window.
+    #[cfg(target_os = "windows")]
+    crate::windows_rune::match_title_bar(p.k.c.bg_deep);
     // Menus and popovers mount above the page (rune-kit overlays).
     let mut layer = Vec::new();
     let (actions, body) = match ui.pane {
