@@ -137,6 +137,7 @@ Launch Hex, setup incomplete              // setup.tour; full-window, own column
 │   │   ├── The app tile lifts out of the row and flies, blurred, into the guide
 │   │   └── macOS 27 names the list "Device Control and Data Access"; row and guide follow
 │   ├── Rows re-read every 400 ms and flip to a check as macOS grants
+│   │   └── Accessibility flips live (`AXIsProcessTrusted`); its stale preflight never asks for a restart
 │   ├── On in System Settings, unusable until relaunch -> "Turns on when Hex restarts"
 │   │   └── Every permission on -> primary "Restart Hex" -> relaunch at setup  // setup.restart
 │   ├── The first unfinished row carries the screen's one accent
@@ -289,7 +290,9 @@ model waiting for practice, the auto-advance beat, live row flips, a refused
 microphone, platforms without permissions or practice, practice hints, resume,
 the relaunch guard and resume marker, grants waiting for a restart
 (`a_grant_the_process_cannot_use_yet_waits_for_a_restart`,
-`setup_offers_a_restart_once_every_permission_is_on`), and the saved step
+`setup_offers_a_restart_once_every_permission_is_on`), an Accessibility grant
+advancing setup without one (`an_accessibility_grant_applies_without_a_restart`),
+and the saved step
 (`the_tour_step_is_saved_for_the_next_launch`). Rune tests drive the tour
 (`the_mac_tour_asks_each_permission_then_practices`,
 `a_listener_that_will_not_start_relaunches_once_then_asks_to_reopen`,
