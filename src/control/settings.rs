@@ -327,7 +327,7 @@ const KEYS: &[Key] = &[
     ),
     optional(
         "ui_language",
-        Kind::Choice(&["en", "pl", "zh", "ja", "de", "es"]),
+        Kind::Choice(&["en", "pl", "zh", "ja", "de", "es", "uk"]),
         "Interface language; none follows the system",
     ),
     key(
