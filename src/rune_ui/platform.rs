@@ -255,8 +255,7 @@ pub(super) enum Workspace {
     Error,
 }
 
-/// What the Scrawl pane shows (the `capture` experiment, in builds with the
-/// `capture` build option).
+/// What the Scrawl pane shows (the `capture` experiment).
 #[cfg(hex_capture)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct ScrawlView {
@@ -736,6 +735,14 @@ pub(super) enum PlatformHost {
 impl PlatformHost {
     pub(super) fn send(&mut self, request: PlatformRequest) -> Result<(), String> {
         match self {
+            #[cfg(target_os = "linux")]
+            Self::None => {
+                if let PlatformRequest::Scrawl(request) = request {
+                    linux_scrawl_request(request);
+                }
+                Ok(())
+            }
+            #[cfg(not(target_os = "linux"))]
             Self::None => Ok(()),
             Self::Fixture(sent) => {
                 sent.push(request);
@@ -748,6 +755,8 @@ impl PlatformHost {
     pub(super) fn poll(&mut self, state: &mut PlatformState) -> bool {
         match self {
             Self::Native(host) => host.poll(state),
+            #[cfg(target_os = "linux")]
+            Self::None => linux_scrawl_poll(state),
             _ => false,
         }
     }
@@ -775,5 +784,37 @@ impl PlatformHost {
 
     pub(super) fn is_fixture(&self) -> bool {
         matches!(self, Self::Fixture(_))
+    }
+}
+
+/// The Scrawl pane on Linux: it shows while the `capture` experiment is on.
+/// The desktop's portal asks for the screen at each capture, so nothing is
+/// granted ahead of time, and Scrawl's own app is macOS's.
+#[cfg(target_os = "linux")]
+fn linux_scrawl_poll(state: &mut PlatformState) -> bool {
+    if !crate::app_settings::capture_available() {
+        return state.scrawl.take().is_some();
+    }
+    if state.scrawl.is_some() {
+        return false;
+    }
+    state.scrawl = Some(ScrawlView::preview());
+    true
+}
+
+/// Reveals the captures folder; choosing another is set in `settings.json`
+/// (`capture.folder`) for now.
+#[cfg(target_os = "linux")]
+fn linux_scrawl_request(request: ScrawlRequest) {
+    if request == ScrawlRequest::RevealFolder {
+        let folder = crate::app_settings::capture_settings().captures_dir();
+        if std::fs::create_dir_all(&folder).is_ok()
+            && let Err(error) = scrawl_capture::handoff::open_path(&folder)
+        {
+            tracing::warn!(
+                error = format!("{error:#}"),
+                "could not reveal the captures folder"
+            );
+        }
     }
 }

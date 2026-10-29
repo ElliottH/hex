@@ -397,10 +397,12 @@ impl HotkeyBinding {
         binding
     }
 
-    /// Option-Shift-S, Scrawl's capture shortcut.
+    /// Option-Shift-S, Scrawl's capture shortcut; Ctrl+Alt+S on Linux, beside
+    /// its other Ctrl+Alt defaults.
     #[cfg(hex_capture)]
     pub fn capture_default() -> Self {
-        Self {
+        #[cfg(target_os = "macos")]
+        let binding = Self {
             modifiers: HotkeyModifiers {
                 option: Some(ModifierSide::Either),
                 shift: Some(ModifierSide::Either),
@@ -410,13 +412,18 @@ impl HotkeyBinding {
                 code: layout_key_code('s').unwrap_or(1),
                 label: "S".into(),
             }),
-        }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let binding = Self::chord(HotkeyModifiers::control_option(), "s");
+        binding
     }
 
-    /// Option-Shift-V, Scrawl's key for the send-to list.
+    /// Option-Shift-V, Scrawl's key for the send-to list; Ctrl+Alt+Shift+V on
+    /// Linux.
     #[cfg(hex_capture)]
     pub fn capture_list_default() -> Self {
-        Self {
+        #[cfg(target_os = "macos")]
+        let binding = Self {
             modifiers: HotkeyModifiers {
                 option: Some(ModifierSide::Either),
                 shift: Some(ModifierSide::Either),
@@ -426,7 +433,16 @@ impl HotkeyBinding {
                 code: paste_key_code(),
                 label: "V".into(),
             }),
-        }
+        };
+        #[cfg(not(target_os = "macos"))]
+        let binding = Self::chord(
+            HotkeyModifiers {
+                shift: Some(ModifierSide::Either),
+                ..HotkeyModifiers::control_option()
+            },
+            "v",
+        );
+        binding
     }
 
     pub fn paste_meeting_default() -> Self {
@@ -1086,9 +1102,8 @@ impl Default for VoiceActionSettings {
     }
 }
 
-/// Scrawl captures inside Hex: the `capture` experiment, in builds with the
-/// `capture` build option (`capture_host`). Off by default; off means no
-/// capture work at all.
+/// Scrawl captures inside Hex: the `capture` experiment on macOS and Linux
+/// (`capture_host`). Off by default; off means no capture work at all.
 #[cfg(hex_capture)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
@@ -2348,8 +2363,7 @@ pub fn capture_on() -> bool {
     CAPTURE_ON.load(Ordering::Acquire)
 }
 
-/// Whether this build can capture at all: it has the build option and the
-/// `capture` experiment is on.
+/// Whether this build can capture at all: the `capture` experiment is on.
 #[cfg(hex_capture)]
 pub fn capture_available() -> bool {
     crate::experiments::enabled(crate::experiments::Experiment::Capture)
@@ -2422,6 +2436,7 @@ pub fn exists() -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "macos")]
     /// The capsule's ask chip and footer hint show the send-to list's own shortcut,
     /// ⌥⇧V unless rebound, and no keys while the list has none.
     #[cfg(hex_capture)]
@@ -2458,6 +2473,7 @@ mod tests {
         *HOTKEYS.get().unwrap().write().unwrap() = RuntimeHotkeys::default();
     }
 
+    #[cfg(target_os = "macos")]
     /// The list's ⌥⇧V never shares a key with another shortcut: Paste Last
     /// left on its own ⌥⇧V default keeps it, and the list gets another.
     #[cfg(hex_capture)]

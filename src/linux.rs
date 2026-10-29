@@ -88,6 +88,11 @@ enum Command {
         #[command(subcommand)]
         command: crate::experiments::ExperimentsCommand,
     },
+    /// Record, list, and send Scrawl captures (the `capture` experiment).
+    Capture {
+        #[command(subcommand)]
+        command: crate::control::cli::CaptureCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -136,6 +141,9 @@ pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
     // Like a read command: no log, lock, or running Hex.
     if let Command::Experiments { command } = &command {
         return crate::experiments::run(command);
+    }
+    if let Command::Capture { command } = command {
+        crate::control::cli::finish(crate::control::cli::capture(command));
     }
     let log_dir = crate::app_paths::init_process_logging(shutdown)?;
 
@@ -246,7 +254,9 @@ pub(crate) fn run(shutdown: &'static AtomicBool) -> Result<()> {
         Command::Settings { command } => {
             crate::control::cli::finish(crate::control::cli::settings(command))
         }
-        Command::Experiments { .. } => unreachable!("handled before logging"),
+        Command::Experiments { .. } | Command::Capture { .. } => {
+            unreachable!("handled before logging")
+        }
     })();
     match result {
         // A keybinding or script wants one line, not a report.

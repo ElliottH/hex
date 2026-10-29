@@ -359,15 +359,30 @@ substitute for source inspection or a second roadmap.
 - `experiments`: the compiled list of unsupported experiments and the
   launch snapshot of `HEX_EXPERIMENTS` and `~/.config/hex/experiments`
   behind `experiments::enabled` and `hex experiments`. `capture` exists
-  only in builds with its build option.
+  on macOS and Linux, not Windows.
 - `capture_host`: Scrawl's capture engine (the `scrawl-capture` crate in
   `crates/capture`, copied from Scrawl's `engine/split` at `e351ddb` and
-  kept out of the workspace so only `--features capture` on macOS builds it;
-  `scripts/check` names it there) hosted in Hex for the `capture` experiment
-  (`docs/plans/capture-in-hex.md`), compiled only as `cfg(hex_capture)`: a
-  macOS build with the `capture` Cargo feature, a build option off in every
-  public build (`HEX_CAPTURE=1 scripts/build-app.sh` bundles and signs
-  `scrawl-helper` beside `hex`). Hex's `Host`,
+  kept out of the workspace; `scripts/check` names it on macOS) hosted in
+  Hex for the `capture` experiment (`docs/plans/capture-in-hex.md`),
+  compiled as `cfg(hex_capture)` into every macOS and Linux build
+  (`scripts/build-app.sh` bundles and signs `scrawl-helper` beside `hex`).
+  Everything here is shared by both OSes; the engine's own platform
+  adapter (`crates/capture/src/capture/{macos,linux}.rs`) is the seam for
+  the screen, window and area source, cursor, permission flow, and encoder.
+  The Linux adapter (`crates/capture/src/linux/`) asks the ScreenCast
+  portal over `zbus` (a screen keeps the portal's restore token at
+  `<support>/screencast-token`; a window is picked each time), reads the
+  PipeWire stream with `libpipewire-0.3` loaded at run time, imports each
+  frame as a linear DMA-BUF into VA-API (`libva`, also loaded at run time),
+  scales and encodes H.264 on the GPU with Hex-written SPS/PPS/slice
+  headers, and muxes and reads movies with the `ffmpeg`/`ffprobe`
+  executables; without VA-API it copies frames and encodes with x264.
+  Host-side, Linux differs only in where the audio comes from
+  (`capture_host::ListenerTimeline`, fed by `linux_dictation`'s
+  microphone), "While dictating" (`Environment`: an `AudioSuppressor` per
+  capture), words (`LocalTranscriber::transcribe_words` as one foreground
+  job on the listener's engine), the clipboard and paste (`linux_paste`),
+  and the shortcut (`linux_input`'s `Shortcut::Capture`). Hex's `Host`,
   `ConfigSource`, and Parakeet or Apple `Transcriber` for the engine, the
   listener-owned `CaptureHost` behind `hex capture` and the capture shortcut,
   its 16 kHz gap-padded timeline handed to the engine as `AudioIn::External`,
@@ -383,7 +398,10 @@ substitute for source inspection or a second roadmap.
   and changes what a recording leaves out with `Recording::set_exclusions`.
   `capture_host::library` reads the captures
   folder for `hex capture list|show|send|route`. `rune_ui/scrawl.rs` is its pane
-  (Experiments › Scrawl) and `CaptureSettings` its `capture.*` settings.
+  (Experiments › Scrawl) and `CaptureSettings` its `capture.*` settings;
+  `hex capture` is `control::cli::capture` (macOS through the running app;
+  Linux reads the folder itself and hands start/stop/cancel to the
+  listener over `linux_service`).
 - `instance`: the exclusive Application Support lock that prevents concurrent
   command listeners.
 - `process_exit`: how the macOS app ends. Every quit path (menu, `hex quit`
@@ -708,14 +726,13 @@ CoreAudio formats, AppleScript details, or event serialization.
   total deadline. Failures record `notes_error` and leave the Markdown
   untouched. Notes never rename the file and rewrite only the heading Hex wrote
   and the `<!-- hex:notes -->` block.
-- Captures (the `capture` experiment) are a build option, off in every
-  public build: only a macOS build with `--features capture` (debug, or
-  release through `HEX_CAPTURE=1 scripts/build-app.sh`) has them. Any other
-  build does not know the experiment, never compiles `scrawl-capture`, and
-  refuses `scrawl-capture` with `unsupported`; Linux, Windows, and Nix never
-  compile it. The Release and test-build workflows never pass the feature;
-  `release-app.sh` refuses `HEX_CAPTURE` and `validate-app.sh` refuses a
-  bundle with `scrawl-helper` or the capture engine. With the experiment
+- Captures (the `capture` experiment) are compiled into every macOS and
+  Linux build and dormant by default; Windows does not know the experiment
+  and never compiles `scrawl-capture`. `validate-app.sh` requires
+  `scrawl-helper` and the camera description in a macOS bundle. Linux
+  never links PipeWire, VA-API, or FFmpeg: the first two load when a
+  capture starts and `ffmpeg` runs as a child, so a missing one fails that
+  capture with a reason and nothing else. With the experiment
   off, the listener builds no capture host: no engine, sink, thread, bundle
   folder, or work, and the same holds with the experiment on while
   `capture.enabled` (the Scrawl pane's opt-in, default off) is off. Scrawl's engine
@@ -730,11 +747,12 @@ CoreAudio formats, AppleScript details, or event serialization.
   Undo, guesses sent only when picked. Queued sends retry only while neither
   Scrawl.app runs nor anything serves the ingest port, and never in tests.
   `capture.routing` never holds a Jev key. A cabled iPhone records through
-  `scrawl-helper mirror --no-microphone`, narrated by the dictation timeline;
-  only `HEX_CAPTURE=1` bundles carry `NSCameraUsageDescription`, and
-  `validate-app.sh` refuses a release bundle with it. Hex's capture
-  shortcut (default ⌥⇧S, a key required, never overlapping another binding)
-  is a fresh press: idle, it starts once one of its modifiers comes up (Esc
+  `scrawl-helper mirror --no-microphone`, narrated by the dictation timeline
+  (macOS only: Linux lists no phone, so it never shows). Hex's capture
+  shortcut (default ⌥⇧S, Ctrl+Alt+S on Linux, a key required, never
+  overlapping another binding) is, on Linux, a press from the portal or an
+  X11 grab: idle it starts, recording it stops (debounced). On macOS it is
+  a fresh press: idle, it starts once one of its modifiers comes up (Esc
   before then records nothing); recording, it stops; with the capsule's
   picker open, the picker records. A switch chip discards the recording
   (no outcome) rather than retargeting it; while Scrawl.app
