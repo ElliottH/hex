@@ -193,16 +193,37 @@ fn variant<'a>(value: impl Into<Variant<'a>>) -> Variant<'a> {
 /// Asks the desktop for `source` and starts casting it. Blocks while the picker shows, until
 /// `stop` is set.
 pub fn start(source: Source, stop: &AtomicBool) -> Result<Cast> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("could not start the screen-cast portal runtime")?;
     let token_file = (source == Source::Screen).then(token_path).flatten();
     let restore = token_file
         .as_ref()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty());
+    match start_with(source, stop, token_file.clone(), restore.clone()) {
+        // A revoked or stale choice: forget it and ask again.
+        Err(error) if restore.is_some() && !stop.load(Ordering::Acquire) => {
+            crate::log::scrawl_log(format!(
+                "the remembered screen was refused ({error:#}); asking again"
+            ));
+            if let Some(path) = &token_file {
+                let _ = std::fs::remove_file(path);
+            }
+            start_with(source, stop, token_file, None)
+        }
+        result => result,
+    }
+}
+
+fn start_with(
+    source: Source,
+    stop: &AtomicBool,
+    token_file: Option<PathBuf>,
+    restore: Option<String>,
+) -> Result<Cast> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("could not start the screen-cast portal runtime")?;
     let started = runtime.block_on(async {
         let mut portal = Portal::connect().await?;
         let session_token = portal.token();

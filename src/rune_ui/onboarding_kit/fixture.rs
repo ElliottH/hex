@@ -61,12 +61,6 @@ impl Download {
     pub(crate) fn done(self) -> bool {
         self.downloaded >= self.total
     }
-
-    /// "312 of 731 MB".
-    pub(crate) fn megabytes(self) -> String {
-        let mb = |bytes: u64| (bytes as f64 / 1_000_000.0).round() as u64;
-        format!("{} of {} MB", mb(self.downloaded), mb(self.total))
-    }
 }
 
 /// The bytes a download `elapsed` seconds in has, when the whole takes
@@ -134,6 +128,20 @@ pub(crate) const ANSWER_JAY: Take = Take {
         (2.8, "Hey Jay, can we move our sync to Thursday afternoon?"),
     ],
     release: 3.2,
+};
+
+/// Saying anything on the try screen.
+pub(crate) const ANSWER_TRY: Take = Take {
+    updates: &[
+        (0.4, "Okay"),
+        (0.7, "Okay this"),
+        (0.88, "Okay this is"),
+        (1.2, "Okay this is actually"),
+        (1.45, "Okay this is actually kind"),
+        (1.6, "Okay this is actually kind of"),
+        (2.0, "Okay, this is actually kind of magic."),
+    ],
+    release: 2.4,
 };
 
 /// The examples that type themselves into the demo cards.

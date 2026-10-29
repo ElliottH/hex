@@ -576,6 +576,7 @@ pub fn listen(
                         let _ = reply.send(CaptureSnapshot {
                             recording,
                             pending_jobs: dictation_worker.pending_count(),
+                            microphone_unavailable: input.is_recovering(),
                         });
                     }
                     RecognitionControl::Capture {

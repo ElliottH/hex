@@ -550,11 +550,16 @@ fn captures_on() -> Result<(), ControlError> {
 }
 
 fn listener_ready(runtime: &RuntimeHandle) -> Result<(), ControlError> {
-    if runtime
-        .published()
-        .is_some_and(|published| published.listener.running)
-    {
+    let published = runtime.published();
+    let listener = published.as_ref().map(|published| &published.listener);
+    if listener.is_some_and(|listener| listener.running) {
         return Ok(());
+    }
+    if let Some(failure) = listener.and_then(|listener| listener.warning.as_ref()) {
+        return Err(ControlError::new(
+            "listener-stopped",
+            format!("the listener stopped ({failure}); restart Hex"),
+        ));
     }
     Err(ControlError::new(
         "not-ready",
@@ -786,7 +791,15 @@ fn status(
     let published = runtime
         .published()
         .ok_or_else(|| ControlError::new("not-ready", "Hex is still starting; try again"))?;
-    let capture = match capture_snapshot(runtime) {
+    // A stopped listener cannot say what it was doing.
+    let snapshot = match &published.listener.warning {
+        Some(failure) => Err(ControlError::new("listener-stopped", failure.clone())),
+        None => capture_snapshot(runtime),
+    };
+    let microphone_unavailable = snapshot
+        .as_ref()
+        .is_ok_and(|snapshot| snapshot.microphone_unavailable);
+    let capture = match snapshot {
         Ok(snapshot) => CaptureReport::from(snapshot),
         Err(_) => CaptureReport {
             state: CaptureState::Unknown,
@@ -804,7 +817,11 @@ fn status(
         memory_footprint_bytes: control::memory_footprint(),
         listener: ListenerReport {
             running: published.listener.running,
-            status: published.listener.status.clone(),
+            status: if microphone_unavailable {
+                "No microphone".into()
+            } else {
+                published.listener.status.clone()
+            },
         },
         capture,
         meeting,
@@ -895,6 +912,7 @@ mod tests {
             automatic_preparation: false,
             preparation,
             recognition_start: None,
+            listener_failure: Default::default(),
         };
         let selection = TranscriptionSelection {
             model: TranscriptionModelId::WhisperLargeV3Turbo,

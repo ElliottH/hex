@@ -449,6 +449,8 @@ pub struct CaptureReport {
 pub struct CaptureSnapshot {
     pub recording: Option<CaptureKind>,
     pub pending_jobs: usize,
+    /// No microphone is open: none was found, or the stream is reopening.
+    pub microphone_unavailable: bool,
 }
 
 impl From<CaptureSnapshot> for CaptureReport {
@@ -963,6 +965,7 @@ mod tests {
         let busy = CaptureSnapshot {
             recording: None,
             pending_jobs: 1,
+            microphone_unavailable: false,
         };
         assert_eq!(check_quit(&idle, Ok(busy), false).unwrap_err().code, "busy");
         // A listener that can't answer may be recording: only --force quits.
@@ -1031,11 +1034,13 @@ mod tests {
         let report = CaptureReport::from(CaptureSnapshot {
             recording: Some(CaptureKind::Dictation),
             pending_jobs: 2,
+            microphone_unavailable: false,
         });
         assert_eq!(report.state, CaptureState::Recording);
         let report = CaptureReport::from(CaptureSnapshot {
             recording: None,
             pending_jobs: 2,
+            microphone_unavailable: true,
         });
         assert_eq!(report.state, CaptureState::Transcribing);
     }
