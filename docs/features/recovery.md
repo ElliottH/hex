@@ -178,6 +178,11 @@ initial open fails OR stream interrupts
   -> bounded backoff -> reopen the resolved input     // warm microphone retries
   -> replacement delivers new audio
   -> fresh capture -> release -> expected output
+no input device at all (macOS)
+  -> devices whose name can't be read are skipped     // audio::device_name, never Display
+  -> bounded recovery; `hex status` listener: "No microphone"
+listener worker returns an error or panics (macOS)
+  -> status: running false, "Stopped", capture unknown // never "Enabled"
 saved microphone missing or will not open
   -> system default stands in, setting unchanged      // audio::Selection
   ├── listed but will not open -> look again with bounded backoff
@@ -200,6 +205,7 @@ programmatic dictation (local API) when the stream interrupts or gaps
         -> /finish answers 409 microphone-lost
 ```
 Checks in [audio.rs](../../src/audio.rs):
+`an_unreadable_device_name_is_skipped_instead_of_panicking`,
 `microphone_recovery_retries_with_bounded_backoff_and_resets`,
 `startup_retry_recovers_metadata_and_audio_without_restarting`,
 `a_missing_selection_uses_the_default_until_it_returns`,

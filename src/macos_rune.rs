@@ -252,6 +252,15 @@ pub(crate) fn window_closed() {
     ));
 }
 
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown cause");
+    format!("the listener panicked: {detail}")
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
@@ -337,6 +346,8 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
     let recognition_indicator = indicator.clone();
     let recognition_meetings = meeting_requests.clone();
     let recognition_history = history.clone();
+    let listener_failure = Arc::new(Mutex::new(None::<String>));
+    let recognition_failure = listener_failure.clone();
     let recognition = thread::Builder::new()
         .name("hex-listener".into())
         .spawn(move || {
@@ -352,23 +363,34 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
                     }
                 }
             }
-            if let Err(error) = crate::recognition::listen(
-                &listener.project_root,
-                event_log,
-                listener.device.as_deref(),
-                crate::config::voice_control(),
-                shutdown,
-                Some(recognition_indicator.clone()),
-                Some(recognition_meetings),
-                recognition_history,
-                Some(recognition_control_receiver),
-            ) {
-                tracing::error!(%error, "desktop recognition stopped");
-                if format!("{error:#}").contains("event tap") {
-                    crate::onboarding::note_listener_failure();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::recognition::listen(
+                    &listener.project_root,
+                    event_log,
+                    listener.device.as_deref(),
+                    crate::config::voice_control(),
+                    shutdown,
+                    Some(recognition_indicator.clone()),
+                    Some(recognition_meetings),
+                    recognition_history,
+                    Some(recognition_control_receiver),
+                )
+            }));
+            let failure = match result {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "desktop recognition stopped");
+                    let message = format!("{error:#}");
+                    if message.contains("event tap") {
+                        crate::onboarding::note_listener_failure();
+                    }
+                    message
                 }
-                recognition_indicator.send(DictationIndicatorEvent::Failed);
-            }
+                // The panic hook has already logged it.
+                Err(payload) => panic_message(payload.as_ref()),
+            };
+            *lock(&recognition_failure) = Some(failure);
+            recognition_indicator.send(DictationIndicatorEvent::Failed);
         })?;
 
     let (requests, request_receiver) = mpsc::channel();
@@ -396,6 +418,7 @@ pub fn run(shutdown: &'static AtomicBool, listener: ListenerConfig) -> Result<()
                 &shared,
                 shutdown,
                 (!setup_ready).then_some(recognition_start),
+                listener_failure,
             )
         })?;
     let mut app = crate::rune_ui::app(Default::default())
@@ -541,6 +564,7 @@ fn run_runtime(
     shared: &Shared,
     shutdown: &AtomicBool,
     recognition_start: Option<SyncSender<()>>,
+    listener_failure: Arc<Mutex<Option<String>>>,
 ) {
     let mut runtime = Runtime {
         keyboard_switcher: crate::keyboard_model_switching::Switcher::new(
@@ -551,6 +575,7 @@ fn run_runtime(
         settings,
         preparation: TranscriptionPreparation::default(),
         recognition_start,
+        listener_failure,
     };
     loop {
         let mut next = match requests.recv_timeout(RUNTIME_TICK) {
@@ -596,6 +621,8 @@ struct Runtime {
     automatic_preparation: bool,
     /// Starts the listener once setup is ready; `None` once started.
     recognition_start: Option<SyncSender<()>>,
+    /// Why the listener stopped, once it has.
+    listener_failure: Arc<Mutex<Option<String>>>,
 }
 
 impl Runtime {
@@ -731,17 +758,20 @@ impl Runtime {
 
     fn publish(&self) -> Published {
         let preparation = self.preparation.status();
-        let running = self.recognition_start.is_none();
+        let failure = lock(&self.listener_failure).clone();
+        let running = self.recognition_start.is_none() && failure.is_none();
         Published {
             listener: DesktopListenerSnapshot {
                 running,
-                status: if running {
+                status: if failure.is_some() {
+                    "Stopped"
+                } else if running {
                     "Enabled"
                 } else {
                     "Waiting for setup"
                 }
                 .into(),
-                warning: None,
+                warning: failure,
                 shortcuts: DesktopShortcuts::Registered,
             },
             transcription: DesktopTranscriptionSnapshot {

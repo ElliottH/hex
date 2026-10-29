@@ -249,7 +249,8 @@ recording", "The window isn't open"). Setting `kind` is one of `bool`,
 ```
 
 ```ts
-capture.state       idle | recording | transcribing | unknown (the listener didn't answer)
+listener.status     Enabled | Waiting for setup | No microphone | Stopped (running false)
+capture.state       idle | recording | transcribing | unknown (the listener didn't answer or stopped)
 capture.recording   dictation | voice-action | service | voice | null
 meeting.state       idle | starting | recording | transcribing
 command_model       disabled | loading | ready | failed
