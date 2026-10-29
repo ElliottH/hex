@@ -527,7 +527,8 @@ General                                  // settings
 ├── Output card -> Paste last shortcut, While dictating, Dictation HUD
 ├── While dictating -> Mute / Pause media / Do nothing
 │   ├── Intentional capture only, not ordinary shortcut chords
-│   └── Pause/resume only players already reported running by macOS
+│   ├── Pause/resume only players already reported running by macOS
+│   └── Linux restore -> Waits 300 ms; a new capture keeps it suppressed // double-tap lock
 ├── Application card -> Sound volume: immediate feedback; zero suppresses tones
 ├── Application card -> Sounds: Signature (default) / Classic; previews start
 └── Voice Action shortcut -> Voice Action pane; Meetings -> Meetings › Settings

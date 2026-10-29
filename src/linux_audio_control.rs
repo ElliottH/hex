@@ -5,7 +5,7 @@
 //! waits on a slow player.
 
 use std::process::Command;
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 use zbus::{Connection, OwnedVariant};
@@ -16,6 +16,7 @@ const MPRIS_PREFIX: &str = "org.mpris.MediaPlayer2.";
 const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2.Player";
 const DBUS_TIMEOUT: Duration = Duration::from_millis(500);
+const RESTORE_GRACE: Duration = Duration::from_millis(300);
 
 enum Request {
     Suppress,
@@ -36,26 +37,7 @@ impl AudioSuppressor {
         let (requests, receiver) = mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("linux-audio-control".into())
-            .spawn(move || {
-                let mut suppressed: Option<Suppressed> = None;
-                while let Ok(request) = receiver.recv() {
-                    match request {
-                        Request::Suppress if suppressed.is_none() => {
-                            suppressed = Some(suppress(behavior));
-                        }
-                        Request::Restore => {
-                            if let Some(suppressed) = suppressed.take() {
-                                restore(suppressed);
-                            }
-                        }
-                        Request::RestoreThen(then) => restore_then(suppressed.take(), then),
-                        Request::Suppress => {}
-                    }
-                }
-                if let Some(suppressed) = suppressed {
-                    restore(suppressed);
-                }
-            });
+            .spawn(move || serve(receiver, || suppress(behavior), restore, restore_then));
         if let Err(error) = &spawned {
             tracing::warn!(%error, "could not start Linux audio control");
         }
@@ -88,6 +70,47 @@ impl AudioSuppressor {
         {
             then();
         }
+    }
+}
+
+/// Applies requests in order. A double-tap restores and suppresses back to
+/// back, before wpctl or the player reports the restored state, so a plain
+/// restore waits briefly and is dropped when another recording starts.
+fn serve<S>(
+    receiver: Receiver<Request>,
+    mut suppress: impl FnMut() -> S,
+    mut restore: impl FnMut(S),
+    mut restore_then: impl FnMut(Option<S>, Box<dyn FnOnce() + Send>),
+) {
+    let mut suppressed: Option<S> = None;
+    let mut next = None;
+    loop {
+        let request = match next.take() {
+            Some(request) => request,
+            None => match receiver.recv() {
+                Ok(request) => request,
+                Err(_) => break,
+            },
+        };
+        match request {
+            Request::Suppress if suppressed.is_none() => suppressed = Some(suppress()),
+            Request::Suppress => {}
+            Request::Restore if suppressed.is_some() => {
+                match receiver.recv_timeout(RESTORE_GRACE) {
+                    Ok(Request::Suppress) => {}
+                    Ok(request @ Request::RestoreThen(_)) => next = Some(request),
+                    Ok(Request::Restore) | Err(RecvTimeoutError::Timeout) => {
+                        restore(suppressed.take().unwrap());
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            Request::Restore => {}
+            Request::RestoreThen(then) => restore_then(suppressed.take(), then),
+        }
+    }
+    if let Some(suppressed) = suppressed {
+        restore(suppressed);
     }
 }
 
@@ -308,5 +331,39 @@ mod tests {
         );
         restore_then(None, Box::new(move || order.send("idle").unwrap()));
         assert_eq!(events.try_iter().collect::<Vec<_>>(), ["then", "idle"]);
+    }
+
+    #[test]
+    fn back_to_back_restore_and_suppress_stay_suppressed() {
+        use std::sync::{Arc, Mutex};
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (requests, receiver) = mpsc::channel();
+        let (suppress_log, restore_log) = (log.clone(), log.clone());
+        let worker = std::thread::spawn(move || {
+            serve(
+                receiver,
+                move || suppress_log.lock().unwrap().push("suppress"),
+                move |()| restore_log.lock().unwrap().push("restore"),
+                |_, then: Box<dyn FnOnce() + Send>| then(),
+            )
+        });
+        // Double-tap: the first tap's restore is followed at once by a start.
+        for request in [Request::Suppress, Request::Restore, Request::Suppress] {
+            requests.send(request).unwrap();
+        }
+        std::thread::sleep(RESTORE_GRACE * 2);
+        assert_eq!(*log.lock().unwrap(), ["suppress"]);
+        // A lone restore applies once the grace period passes.
+        requests.send(Request::Restore).unwrap();
+        std::thread::sleep(RESTORE_GRACE * 2);
+        assert_eq!(*log.lock().unwrap(), ["suppress", "restore"]);
+        // A later recording suppresses again.
+        requests.send(Request::Suppress).unwrap();
+        drop(requests);
+        worker.join().unwrap();
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["suppress", "restore", "suppress", "restore"]
+        );
     }
 }
