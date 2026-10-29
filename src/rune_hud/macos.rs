@@ -85,9 +85,10 @@ impl Hud {
             bar: NSStatusBar::systemStatusBar().thickness(),
         };
         let tuning = self.model.dot_scope_tuning();
-        let (placement, pretend_notch) = tuning.map_or_else(Default::default, |tuning| {
-            (tuning.placement, tuning.pretend_notch)
-        });
+        let (placement, pretend_notch, island_spread) = tuning
+            .map_or_else(Default::default, |tuning| {
+                (tuning.placement, tuning.pretend_notch, tuning.island_spread)
+            });
         if pretend_notch {
             metrics = metrics.pretending_notch();
         }
@@ -103,6 +104,7 @@ impl Hud {
             hud_placement::Content {
                 window: (f64::from(width), f64::from(height)),
                 plate: (f64::from(width) - 24.0, plate_height),
+                island_spread: f64::from(island_spread),
             },
             self.position == IndicatorPosition::Bottom,
         );
@@ -115,6 +117,7 @@ impl Hud {
         }
         self.placed = Some(placed);
         self.layout = placed.layout;
+        self.model.set_island(placed.layout.island);
         // Rune's global rect: points from the primary screen's top-left, y down.
         let primary_top = primary.frame().origin.y + primary.frame().size.height;
         let (x, top) = placed.top_left;

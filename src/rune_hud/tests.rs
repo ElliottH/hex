@@ -90,6 +90,7 @@ fn macbook_layout(tuning: Tuning) -> Layout {
         crate::hud_placement::Content {
             window: (f64::from(width), f64::from(height)),
             plate: (f64::from(width) - 24.0, f64::from(dot_scope::PLATE_HEIGHT)),
+            island_spread: f64::from(tuning.island_spread),
         },
         false,
     )

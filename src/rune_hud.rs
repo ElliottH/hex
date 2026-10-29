@@ -25,7 +25,7 @@ use crate::dictation_indicator::{
     WINDOW_WIDTH, dot_scope_enabled,
 };
 use crate::dot_scope::{self, MAX_DOTS};
-use crate::hud_placement::{ISLAND_PAD, Island, Layout};
+use crate::hud_placement::{ISLAND_INSET, ISLAND_PAD, Island, Layout};
 
 #[cfg(target_os = "macos")]
 pub(crate) use macos::DictationIndicatorUi;
@@ -41,7 +41,7 @@ const BOTTOM_OFFSET: f32 = 24.0;
 #[cfg(target_os = "macos")]
 const DOT_SCOPE_WINDOW: (f32, f32) = (320.0, 128.0);
 #[cfg(not(target_os = "macos"))]
-const DOT_SCOPE_WINDOW: (f32, f32) = (176.0, 80.0);
+const DOT_SCOPE_WINDOW: (f32, f32) = (304.0, 80.0);
 /// The notch's own bottom corner radius, which the island starts from.
 const NOTCH_RADIUS: f32 = 8.0;
 /// The open island's bottom corner radius.
@@ -308,7 +308,7 @@ fn island_shape(island: Island, pose: &dot_scope::Pose) -> [f32; 4] {
     let pad = ISLAND_PAD as f32;
     let grow = pose.reveal;
     let half_width = notch_width / 2.0;
-    let open_half_width = (pose.width / 2.0 + pad).max(half_width) + 6.0;
+    let open_half_width = (pose.width / 2.0 + ISLAND_INSET as f32).max(half_width);
     let open_height = notch_height + 2.0 * pad + pose.height;
     let height = notch_height + (open_height - notch_height) * grow;
     [
