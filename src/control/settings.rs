@@ -855,7 +855,7 @@ pub fn parse_hotkey(
         if modifiers.function {
             return Err("fn can't be combined with a key".into());
         }
-        if modifiers.is_empty() && !is_function_key(&key.label) {
+        if modifiers.is_empty() && !is_function_key(&key.label) && !key.is_mouse() {
             return Err("add a modifier, such as option+".to_string() + &key.label.to_lowercase());
         }
     } else if modifiers.is_empty() {

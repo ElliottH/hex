@@ -444,7 +444,7 @@ worker readiness; a later worker-load failure does not roll back saved selection
 ## Dictate
 
 ```ts
-Saved shortcut                           // dictation; Option by default
+Saved shortcut                           // dictation; Option by default; macOS, Windows and X11 also accept mouse buttons
 ├── Hold -> Speak -> Release
 ├── Tap, tap -> Speak hands-free -> Press again   // Double-tap to lock enabled
 └── Escape

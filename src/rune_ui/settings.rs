@@ -645,7 +645,11 @@ pub(super) fn refused_note(ui: &Ui, p: Paint, target: ShortcutTarget) -> Option<
         .then(|| {
             note(
                 "refused",
-                tr("Your desktop kept a shortcut for itself. Record another one, or free it in your desktop's keyboard settings (on niri, remove its bind from config.kdl)."),
+                if binding(&ui.settings, target).is_some_and(|binding| binding.key.as_ref().is_some_and(HotkeyKey::is_mouse)) {
+                    tr("Configure mouse shortcuts in your Wayland desktop using the hex commands")
+                } else {
+                    tr("Your desktop kept a shortcut for itself. Record another one, or free it in your desktop's keyboard settings (on niri, remove its bind from config.kdl).")
+                },
                 p.danger(),
             )
         })

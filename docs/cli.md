@@ -312,7 +312,8 @@ settings but do not observe input-source changes or show these controls.
 - `microphone` takes a device name exactly as Settings lists it, or
   `system-default` (or `none`) to follow the OS default input.
 - Shortcuts take text such as `option`, `right-command`, `option+shift+v`,
-  `control+space`, `fn`, or `f5`. Key names resolve on the active keyboard
+  `control+space`, `fn`, or `f5`. On macOS, Windows and X11, `mouse4` and `option+mouse4`
+  also work (Mouse 1/2/3 are left/right/middle). Key names resolve on the active keyboard
   layout, the OS's rules for Settings' recorder apply, and a binding another
   Hex shortcut uses is refused with `shortcut-in-use`. `double_tap_only`
   needs a key chord, as in Settings.

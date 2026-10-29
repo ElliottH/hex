@@ -296,10 +296,42 @@ pub struct HotkeyKey {
     pub label: String,
 }
 
+/// Reserved input codes for the 32 mouse buttons CoreGraphics can report.
+const MOUSE_INPUT_CODES: std::ops::Range<u16> = 0x8000..0x8020;
+
 impl HotkeyKey {
+    /// macOS mouse buttons occupy a separate input-code range, beyond every
+    /// native keyboard code used by macOS. A shared trigger code lets keyboard
+    /// and mouse bindings use the same hold, toggle, conflict and persistence
+    /// rules. UI labels are one-based (Mouse 1 = left, Mouse 2 = right, Mouse 3 = middle).
+    pub fn mouse(button: u16) -> Option<Self> {
+        Self::mouse_code(button).map(|code| Self {
+            code,
+            label: format!("Mouse {}", button + 1),
+        })
+    }
+
+    /// Allocation-free encoding for the event tap.
+    pub fn mouse_code(button: u16) -> Option<u16> {
+        (button < 32).then(|| MOUSE_INPUT_CODES.start + button)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn mouse_button(code: u16) -> Option<u16> {
+        code.checked_sub(MOUSE_INPUT_CODES.start)
+            .filter(|button| *button < 32)
+    }
+
+    pub fn is_mouse(&self) -> bool {
+        MOUSE_INPUT_CODES.contains(&self.code)
+    }
+
     /// A key identified by name on Windows and Linux.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn named(name: &str) -> Self {
+        if let Some(button) = Self::mouse_number(name) {
+            return Self::mouse(button - 1).expect("validated mouse number");
+        }
         Self {
             code: 0,
             label: key_label(name),
@@ -309,7 +341,21 @@ impl HotkeyKey {
     /// The lowercase key name Windows and Linux input layers resolve.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn name(&self) -> String {
+        if self.is_mouse() {
+            return format!("mouse{}", self.code - MOUSE_INPUT_CODES.start + 1);
+        }
         self.label.to_ascii_lowercase()
+    }
+
+    /// One-based logical button number shared by every platform.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub fn mouse_number(name: &str) -> Option<u16> {
+        name.to_ascii_lowercase()
+            .strip_prefix("mouse")?
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|number| (1..=32).contains(number))
     }
 
     fn same_key(&self, other: &Self) -> bool {
@@ -2618,6 +2664,21 @@ mod tests {
         for value in [0.0, 0.2, 1.0] {
             settings.recording_duck_volume = value;
             assert!(settings.validate_recording_duck_volume().is_ok());
+        }
+    }
+
+    #[test]
+    fn mouse_names_have_one_portable_representation() {
+        for number in 1..=32 {
+            let label = format!("Mouse {number}");
+            let key = HotkeyKey::named(&label);
+            assert!(key.is_mouse());
+            assert_eq!(key.name(), format!("mouse{number}"));
+            assert_eq!(key, HotkeyKey::mouse(number - 1).unwrap());
+            assert_eq!(HotkeyKey::named(&key.name()), key);
+        }
+        for invalid in ["mouse0", "mouse33", "mouse", "mouse-1"] {
+            assert_eq!(HotkeyKey::mouse_number(invalid), None);
         }
     }
 

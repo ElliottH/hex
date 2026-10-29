@@ -1686,6 +1686,20 @@ const SCENES: &[Scene] = &[
         poll(ui, 0.0, &mut Tx::default());
     }),
     ("portal", |ui| *ui = portal_fixture()),
+    ("portal-mouse", |ui| {
+        *ui = portal_fixture();
+        ui.settings.dictation_hotkey = HotkeyBinding {
+            modifiers: Default::default(),
+            key: crate::app_settings::HotkeyKey::mouse(3),
+        };
+        if let Some(view) = &mut ui.view {
+            view.listener.shortcuts =
+                DesktopShortcuts::Portal(vec![crate::desktop_host::DesktopGrantedShortcut {
+                    name: "Dictation".into(),
+                    trigger: None,
+                }]);
+        }
+    }),
     ("commands", |ui| *ui = fixture(DesktopShortcuts::Commands)),
     ("disabled", |ui| {
         *ui = portal_fixture();
