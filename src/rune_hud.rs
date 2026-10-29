@@ -69,6 +69,7 @@ impl HudSender {
         self.overlay.update(move |hud, _| hud.handle(event));
     }
 
+    #[cfg(not(target_os = "macos"))]
     pub(crate) fn meter(&self, samples: &[f32]) {
         if let Some(event) = DictationIndicatorEvent::meter(samples) {
             self.send(event);
