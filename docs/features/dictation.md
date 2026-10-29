@@ -920,12 +920,11 @@ fullscreen app on a notched Mac is not yet observed.
 
 With the `dot-scope` experiment on, the HUD draws Dot scope instead of
 the capsule ([dot_scope.rs](../../src/dot_scope.rs),
-`dot_scope_fragment` in [dictation_indicator.metal](../../src/dictation_indicator.metal)
-on macOS and its WGSL port in [rune_hud.wgsl](../../src/rune_hud.wgsl) on Linux
-and Windows). It is the t422 prototype's look A with its values. Linux and
-Windows draw it in a 176×80 pt window at the HUD's edge (no menu-bar or notch
-placement), take dark or light from the overlay's system appearance, load
-`dot-scope.json` at each capture start, and ignore Reduce Motion.
+`dot_scope_fragment` in [rune_hud.wgsl](../../src/rune_hud.wgsl), drawn by
+a Rune overlay on every OS). It is the t422 prototype's look A with its
+values. Linux and Windows draw it in a 176×80 pt window at the HUD's edge
+(no menu-bar or notch placement). Every OS takes dark or light and Reduce
+Motion from Rune, and loads `dot-scope.json` at launch.
 
 ```ts
 Dot scope                                    // dot_scope
@@ -987,7 +986,7 @@ The playground (⇧⌘D, experiment `playground`) lists HUD stories while
 `dot-scope` is on ([hud_stories.rs](../../src/rune_ui/hud_stories.rs)):
 Whole flow, Recording with a canned voice or your own (hold the shortcut),
 Processing, Done, and Cancel, each with a variant per placement. The HUD is
-a Metal panel, not a Rune view, so a story drives the real HUD at the top
+its own Rune overlay, not a view in the window, so a story drives the real HUD at the top
 of the screen and its stage only says what it shows. Stories and HUD Lab
 edit one tuning (`dot_scope::lab`).
 
@@ -997,9 +996,12 @@ every component.
 Check: `scripts/check dot_scope` (defaults, knobs, frame-rate independence,
 Reduce Motion, the stages, auto level, each processing look settling dark),
 `scripts/check hud_placement` (each placement on flat and notched screens),
-and `dot_scope_view::tests::dot_scope_frames` (ignored; renders the real
-shader offscreen from a WAV into PNG frames, with `HEX_DOT_SCOPE_TUNING`
-for the look and placement over a pretend 14-inch MacBook Pro's menu bar).
+and `rune_hud::tests::rune_hud_frames` (ignored; renders a fixed
+dictation through the real shaders offscreen into PNG frames, with
+`HEX_HUD_TUNING` for the look and placement over a pretend 14-inch MacBook
+Pro's menu bar). On 2026-10-28 its capsule, Dot scope, and notch frames
+matched the retired Metal HUD's render of the same inputs on hailmary to
+within 3/255 per channel.
 Not yet observed on a real notched display, over a fullscreen app, or with
 a hidden menu bar.
 

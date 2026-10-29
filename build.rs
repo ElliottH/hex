@@ -59,7 +59,6 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-weak_framework,FoundationModels");
     compile_swift_bridge("calendar", "HEXCalendarBridge", &[]);
     println!("cargo:rustc-link-lib=framework=EventKit");
-    compile_indicator_shader();
     compile_permission_guide();
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     for runtime in ["swift-5.5/macosx", "swift/macosx"] {
@@ -265,31 +264,4 @@ fn compile_swift_bridge(name: &str, module: &str, without_autolink: &[&str]) {
         .expect("xcrun swiftc is required to compile Swift bridges");
     assert!(status.success(), "{module} compilation failed");
     println!("cargo:rustc-link-arg={}", object.display());
-}
-
-fn compile_indicator_shader() {
-    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let output_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let source = manifest_dir.join("src/dictation_indicator.metal");
-    let air = output_dir.join("dictation_indicator.air");
-    let library = output_dir.join("dictation_indicator.metallib");
-    println!("cargo:rerun-if-changed={}", source.display());
-
-    let metal = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metal", "-c"])
-        .arg(&source)
-        .arg("-o")
-        .arg(&air)
-        .status()
-        .expect("xcrun metal is required to build the dictation indicator");
-    assert!(metal.success(), "Metal shader compilation failed");
-
-    let metallib = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metallib"])
-        .arg(&air)
-        .arg("-o")
-        .arg(&library)
-        .status()
-        .expect("xcrun metallib is required to build the dictation indicator");
-    assert!(metallib.success(), "Metal library creation failed");
 }

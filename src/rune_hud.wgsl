@@ -1,17 +1,12 @@
-// The dictation HUD on Linux and Windows: a line-for-line WGSL port of
-// `dictation_indicator.metal`, drawn by `rune_hud.rs` through the HUD
-// overlay's Rune compositor. Keep it in lockstep with the Metal source: any
-// change there is mirrored here, function by function and in the same order.
+// The dictation HUD on every OS, drawn by `rune_hud.rs` through the HUD
+// overlay's Rune compositor: the capsule (`indicator_fragment`) and Dot scope
+// (`dot_scope_fragment`). Positions are in points from the window's middle,
+// y down; colours are sRGB-encoded, premultiplied.
 //
-// Differences from Metal, all mechanical:
-// - `uv` comes from the fragment position over the resolution, which equals
-//   Metal's interpolated `uv` at every pixel centre.
-// - `smoothstep` is spelled out (`sstep`): Metal's handles descending edges
-//   (`coverage`), which WGSL leaves to the backend.
-// - The dots arrive packed two u16 to a u32, four to a vec4, in a uniform
-//   buffer instead of Metal's `ushort2` bytes.
-// - The notch island and the plate's menu-bar layout are macOS placements and
-//   are left out: the plate sits in the window's middle.
+// It began as a line-for-line port of the Metal HUD it replaced, and
+// `rune_hud_frames` renders it against those frames. `smoothstep` is spelled
+// out (`sstep`) because `coverage` relies on descending edges, which WGSL
+// leaves to the backend.
 
 struct Uniforms {
     resolution: vec2f,
@@ -348,6 +343,29 @@ struct DotUniforms {
     plate: vec4f,
     rim: vec4f,
     shadow: vec4f,
+    // The plate's middle from the window's (pt, y down), its fit, and 1 in
+    // an island.
+    plate_layout: vec4f,
+    // The island's half width, height, top edge, and bottom radius, pt.
+    island: vec4f,
+}
+
+// The island grown out of the notch: a box hanging from the screen's top
+// edge, rounded below, with concave fillets where it meets the top edge.
+fn island_distance(point: vec2f, island: vec4f) -> f32 {
+    let half_width = island.x;
+    let height = island.y;
+    let top = island.z;
+    let radius = max(island.w, 0.0);
+    let fillet = clamp(height * 0.25, 0.0, 6.0);
+    // Reaches `radius` above the top so only the lower corners round.
+    let body_center = vec2f(0.0, top + (height - radius) * 0.5);
+    let body = rounded_box(point - body_center, vec2f(half_width, (height + radius) * 0.5), radius);
+    let q = vec2f(abs(point.x), point.y);
+    let square_center = vec2f(half_width + fillet * 0.5, top + fillet * 0.5);
+    let square = rounded_box(q - square_center, vec2f(fillet * 0.5 + 0.5, fillet * 0.5), 0.0);
+    let hollow = fillet - length(q - vec2f(half_width + fillet, top + fillet));
+    return min(body, max(square, hollow));
 }
 
 @group(0) @binding(1) var<uniform> u: DotUniforms;
@@ -362,9 +380,9 @@ fn dot_value(index: i32) -> vec2f {
 @fragment
 fn dot_scope_fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let uv = position.xy / u.resolution;
-    let scale = max(u.scale, 0.001);
+    let scale = max(u.scale, 0.001) * max(u.plate_layout.z, 0.01);
     let window_point = (uv * u.resolution - u.resolution * 0.5) / u.backing_scale;
-    let point = window_point / scale;
+    let point = (window_point - u.plate_layout.xy) / scale;
     let pixel = 1.0 / (u.backing_scale * scale);
     let softness = max(u.softness, 0.0);
     let aa = pixel * 0.75 + softness * 0.72;
@@ -373,12 +391,18 @@ fn dot_scope_fragment(@builtin(position) position: vec4f) -> @location(0) vec4f 
     let distance = rounded_box(point, half_size, radius);
     let dark = u.dark > 0.5;
     var result = vec4f(0.0);
+    let in_island = u.plate_layout.w > 0.5;
+    var island_shape = 1.0;
+    if (in_island) {
+        let island_aa = 0.75 / u.backing_scale;
+        island_shape = coverage(island_distance(window_point, u.island), island_aa);
+    }
 
     // A soft drop shadow 3 pt below, as the prototype's 16 pt canvas blur.
     let shadow_distance = rounded_box(point - vec2f(0.0, 3.0), half_size, radius);
     composite(&result, u.shadow.rgb, u.shadow.a * (0.5 - 0.5 * tanh(shadow_distance / 6.5)));
 
-    let shape = coverage(distance, aa);
+    let shape = coverage(distance, aa) * island_shape;
     composite(&result, u.plate.rgb, u.plate.a * shape);
     composite(&result, u.rim.rgb, u.rim.a * coverage(abs(distance) - 0.3, aa));
 
@@ -435,5 +459,11 @@ fn dot_scope_fragment(@builtin(position) position: vec4f) -> @location(0) vec4f 
         }
     }
 
-    return dithered(result * u.opacity, position.xy);
+    result *= u.opacity;
+    // The island is part of the notch, solid black however faded the
+    // plate's contents are.
+    if (in_island) {
+        result.a += island_shape * (1.0 - result.a);
+    }
+    return dithered(result, position.xy);
 }

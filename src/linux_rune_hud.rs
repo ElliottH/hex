@@ -1,5 +1,5 @@
-//! The Linux recording HUD: the shared Rune HUD (`rune_hud`), the macOS
-//! capsule or Dot scope drawn on the GPU, as an overlay in the Hex process.
+//! The Linux recording HUD: the shared Rune HUD (`rune_hud`), the capsule or
+//! Dot scope drawn on the GPU, as an overlay in the Hex process.
 //! Rune makes it a layer-shell surface on Wayland (overlay layer, no
 //! keyboard, empty input region) and an override-redirect window with an
 //! empty input shape on X11, so it never takes focus or a click.
@@ -12,16 +12,16 @@
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
-use rune::{Availability, OverlayHandle};
+use rune::Availability;
 
 use crate::app_settings::IndicatorPosition;
-use crate::rune_hud::{Hud, HudEvent, HudSender};
+use crate::rune_hud::{HudEvent, HudSender};
 
 /// The newest listener's generation: an older listener's reports stop counting.
 static GENERATION: Mutex<u64> = Mutex::new(0);
 /// Where the newest listener wants the HUD, for an `install` after it starts.
 static POSITION: Mutex<IndicatorPosition> = Mutex::new(IndicatorPosition::Top);
-static HUD: OnceLock<(HudSender, OverlayHandle<Hud>)> = OnceLock::new();
+static HUD: OnceLock<HudSender> = OnceLock::new();
 
 /// A listener's handle on the HUD; dropping it hides what it reported.
 pub(crate) struct LinuxIndicator {
@@ -35,7 +35,7 @@ pub(crate) struct LinuxIndicator {
 impl LinuxIndicator {
     pub(crate) fn new(position: IndicatorPosition) -> Self {
         *POSITION.lock().unwrap_or_else(|error| error.into_inner()) = position;
-        if let Some((sender, _)) = HUD.get() {
+        if let Some(sender) = HUD.get() {
             sender.set_position(position);
         }
         let generation = (position != IndicatorPosition::Hidden).then(|| {
@@ -56,9 +56,7 @@ impl LinuxIndicator {
     fn sender(&self) -> Option<&'static HudSender> {
         let generation = self.generation?;
         let current = *GENERATION.lock().unwrap_or_else(|error| error.into_inner());
-        (generation == current)
-            .then(|| HUD.get().map(|(sender, _)| sender))
-            .flatten()
+        (generation == current).then(|| HUD.get()).flatten()
     }
 
     fn send(&self, event: HudEvent) {
@@ -118,18 +116,16 @@ impl Drop for LinuxIndicator {
     }
 }
 
-/// Adds the HUD overlay to the window's app and starts its thread.
+/// Adds the HUD overlay to the window's app.
 pub(crate) fn install<S: 'static>(app: &mut rune::App<S>) {
-    let handle = crate::rune_hud::install(app);
-    let overlay = handle.overlay();
-    let position = *POSITION.lock().unwrap_or_else(|error| error.into_inner());
-    let _ = HUD.set((handle.start(position), overlay));
+    let sender = crate::rune_hud::install(app);
+    sender.set_position(*POSITION.lock().unwrap_or_else(|error| error.into_inner()));
+    let _ = HUD.set(sender);
 }
 
 /// Why the HUD can't show, once Rune has tried.
 pub(crate) fn limitation() -> Option<String> {
-    let (_, overlay) = HUD.get()?;
-    (overlay.availability() == Availability::Unavailable).then(|| {
+    (HUD.get()?.availability() == Availability::Unavailable).then(|| {
         "Recording HUD unavailable: this compositor does not support Wayland layer-shell. Dictation still works.".into()
     })
 }

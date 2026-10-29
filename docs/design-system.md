@@ -17,10 +17,9 @@ The window follows OpenCode Desktop's layout: a deep-background sidebar and a
 raised, rounded content panel. Hex keeps its own information, sections, and
 copy; the look comes from the kit.
 
-The macOS dictation HUD ([`dictation_indicator.rs`](../src/dictation_indicator.rs))
-is outside the system: its glossy Metal capsule is hand-tuned in HUD Lab. The
-Linux and Windows HUD ([`rune_hud.rs`](../src/rune_hud.rs)) draws the same
-capsule, and Dot scope, from `rune_hud.wgsl`, a WGSL port of its shaders.
+The dictation HUD ([`rune_hud.rs`](../src/rune_hud.rs)) is outside the
+system: its glossy capsule and Dot scope are shaders (`rune_hud.wgsl`) drawn
+by a Rune overlay's compositor on every OS, hand-tuned in HUD Lab.
 
 ## Rules
 

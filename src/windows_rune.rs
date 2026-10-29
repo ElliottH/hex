@@ -244,11 +244,11 @@ fn run_runtime(
     requests: Receiver<Request>,
     shared: &Shared,
     shutdown: &AtomicBool,
-    hud: crate::rune_hud::HudHandle,
+    indicator: crate::rune_hud::HudSender,
     tray: Option<&rune::Tray>,
 ) {
     let mut tray_update = None;
-    let indicator = hud.start(settings.indicator_position);
+    indicator.set_position(settings.indicator_position);
     let mut host =
         WindowsDesktopHost::new(event_path, settings, settings_error, history, indicator);
     loop {

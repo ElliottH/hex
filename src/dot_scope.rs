@@ -6,8 +6,7 @@
 //! [`Tuning`] is what HUD Lab edits; it is saved as `dot-scope.json` in Hex's
 //! Application Support folder. [`Scope`] steps the simulation at a fixed
 //! 240 Hz, so any frame rate draws the same picture, and yields one
-//! brightness pair per dot for `dictation_indicator.metal` (and its WGSL
-//! port, `rune_hud.wgsl`) to draw.
+//! brightness pair per dot for `rune_hud.wgsl` to draw.
 
 use std::path::PathBuf;
 

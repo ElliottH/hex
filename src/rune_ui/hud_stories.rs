@@ -1,6 +1,6 @@
 //! Dot scope's HUD as playground stories (the `playground` experiment, ⇧⌘D,
-//! group HUD, while `dot-scope` is on). The HUD is a Metal panel of its
-//! own, not a Rune view, so a story can't draw it: each one drives the real
+//! group HUD, while `dot-scope` is on). The HUD is a Rune overlay of its
+//! own, not a view in the window, so a story can't draw it: each one drives the real
 //! HUD at the top of the screen through the same events dictation sends,
 //! and its stage says what it's showing. Every story starts from HUD Lab's
 //! tuning ([`dot_scope::lab`]); its placement variants and look triggers

@@ -235,12 +235,13 @@ substitute for source inspection or a second roadmap.
   listener's capture, meter, and pending-output reports into HUD events and
   never waits on the HUD; it shows once the window's app runs, whether or not
   the window is open (layer-shell on Wayland, override-redirect on X11).
-- `rune_hud`: the Linux and Windows dictation HUD: a HUD thread steps
-  `desktop_indicator_model` (and, with `dot-scope` on, Dot scope's
-  simulation) and hands each frame's uniforms to a click-through Rune
-  overlay whose compositor draws `rune_hud.wgsl`, the WGSL port of
-  `dictation_indicator.metal`. Keep the two shaders in lockstep: mirror every
-  Metal change in the WGSL in the same PR.
+- `rune_hud`: the dictation HUD on every OS: a click-through Rune overlay
+  whose compositor steps `dictation_indicator`'s model on Rune's frame clock
+  (the display's refresh) and draws the capsule or Dot scope on the GPU with
+  `rune_hud.wgsl`. `rune_hud/macos` places it on the pointer's screen
+  through `hud_placement` (below the menu bar, in it, or out of the notch);
+  Linux and Windows place it at the top or bottom edge.
+  `rune_hud_frames` renders a fixed dictation through the shaders offscreen.
 - `linux_tray`: the optional tray icon, a `rune::Tray` (StatusNotifierItem
   with a dbusmenu: Show Hex, Quit Hex). It registers whenever a tray host
   (`org.kde.StatusNotifierWatcher`) appears; without one Hex runs unchanged.
@@ -253,14 +254,12 @@ substitute for source inspection or a second roadmap.
   the install method, verify (OS code signature on macOS and Windows), stage,
   and restart into an update.
 - `windows`, `windows_app`, `windows_rune`, `windows_dictation`,
-  `windows_input`, `windows_paste`, `desktop_indicator_model`,
-  `windows_context`, `windows_audio_control`, `windows_login_item`: the Windows
+  `windows_input`, `windows_paste`, `windows_context`, `windows_audio_control`, `windows_login_item`: the Windows
   beta CLI, the runtime host (`WindowsDesktopHost`: listener, model
   preparation, OpenCode catalog, transformations, updater) and single-instance
   claim, the tray app on `rune::App` (tray, window icon, and runtime thread;
   `rune_ui/windows_host.rs` is the window's host), the WASAPI dictation loop,
-  low-level keyboard hook, clipboard paste, the HUD's springs
-  (`desktop_indicator_model`, drawn by `rune_hud`), UI Automation context, audio ducking, and the
+  low-level keyboard hook, clipboard paste, UI Automation context, audio ducking, and the
   login item.
 - `dictation_modes`: the mode runtime the Windows and Linux listeners share:
   mode selection by application and website, then global replacements, mode
@@ -309,10 +308,9 @@ substitute for source inspection or a second roadmap.
 - `hud_placement`: pure geometry for where a HUD sits on its screen (below
   the menu bar, in it, or as an island grown out of the notch), shared by
   the dictation HUD and, later, the capture capsule.
-- `dictation_indicator`, `spring`: the click-through native Metal/AppKit
-  capture and processing HUD (an `NSPanel` driven from `macos_rune`'s main-loop
-  timer), with `spring` for its frame-rate-independent springs and Reduce
-  Motion.
+- `dictation_indicator`, `spring`: the HUD's events, phases, jobs, springs,
+  and Dot scope stepping, the same on every OS and drawn by `rune_hud`;
+  `spring` holds the frame-rate-independent springs.
 - `meeting`: explicit capture through `meeting_capture`, owner-only WAV and transcript
   artifacts, Screen Recording permission checks, final local-model publication,
   the user-facing Markdown copy, and recovery.
