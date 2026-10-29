@@ -87,7 +87,7 @@ impl Experiment {
                 "Scrawl's capture engine (`hex capture`; macOS, the `capture` build option)."
             }
             Self::DotScope => {
-                "Dot scope: the recording indicator as a braided dot oscilloscope, tuned in HUD Lab (macOS)."
+                "Dot scope: the recording indicator as a braided dot oscilloscope (macOS, Linux, Windows; tuned in HUD Lab)."
             }
             Self::LiveChapters => "Chapter a meeting's transcript live while it records.",
             Self::Modes => {
