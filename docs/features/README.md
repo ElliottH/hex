@@ -527,8 +527,10 @@ General                                  // settings
 │   ├── Menu lists real inputs only                                // never Hex Microphone
 │   └── Open menu covers the controls beneath it; click elsewhere dismisses
 ├── Advanced ▸ (Dictation header) -> rows at the end of the Dictation card
-│   ├── Open while Release when idle or Double-tap only (Hold) is on
+│   ├── Open while Release when idle, Double-tap only (Hold), or sharing is on
 │   └── Collapse -> drops a pending release confirmation
+├── Share dictation shortcut with other apps (Advanced, Windows, off)
+│   └── On -> the hook passes the shortcut's key-down/up on instead of consuming it
 ├── Microphone mode (Advanced)
 │   ├── Keep ready (fast) -> Open while idle; pre-roll available
 │   └── Release when idle -> Open on press; no pre-roll; startup delay

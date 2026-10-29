@@ -325,6 +325,11 @@ const KEYS: &[Key] = &[
         Kind::Bool,
         "Paste with Ctrl-Shift-V for terminals (Linux)",
     ),
+    key(
+        "share_dictation_shortcut",
+        Kind::Bool,
+        "Let other apps see the dictation shortcut too (Windows)",
+    ),
     optional(
         "ui_language",
         Kind::Choice(&["en", "pl", "zh", "ja", "de", "es", "uk"]),

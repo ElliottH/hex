@@ -1332,6 +1332,9 @@ pub struct AppSettings {
     pub enable_on_launch: bool,
     /// Paste with Ctrl-Shift-V for terminals (Linux).
     pub paste_with_shift: bool,
+    /// Let other apps see the dictation shortcut's key presses too
+    /// (Windows), so a push-to-talk key can drive both.
+    pub share_dictation_shortcut: bool,
     /// The interface language code; `None` follows the system language.
     pub ui_language: Option<String>,
     pub indicator_position: IndicatorPosition,
@@ -1400,6 +1403,7 @@ impl Default for AppSettings {
             experimental: ExperimentalSettings::default(),
             enable_on_launch: true,
             paste_with_shift: false,
+            share_dictation_shortcut: false,
             ui_language: None,
             indicator_position: IndicatorPosition::default(),
             updates: UpdateSettings::default(),

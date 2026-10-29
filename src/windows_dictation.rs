@@ -62,6 +62,7 @@ pub struct WindowsDictationConfig {
     pub double_tap_lock: bool,
     pub double_tap_only: bool,
     pub shortcut_mode: crate::dictation::ShortcutMode,
+    pub share_dictation_shortcut: bool,
     pub while_dictating: crate::app_settings::RecordingAudioBehavior,
     pub release_microphone_while_idle: bool,
     pub feedback_volume: u8,
@@ -92,6 +93,7 @@ impl WindowsDictationConfig {
             double_tap_lock: settings.double_tap_lock,
             double_tap_only: settings.double_tap_only,
             shortcut_mode: settings.shortcut_mode,
+            share_dictation_shortcut: settings.share_dictation_shortcut,
             while_dictating: settings.recording_audio_behavior,
             release_microphone_while_idle: settings.release_microphone_while_idle,
             feedback_volume: if settings.sound_effects {
@@ -145,6 +147,7 @@ pub fn run(
         double_tap_lock,
         double_tap_only,
         shortcut_mode,
+        share_dictation_shortcut,
         while_dictating,
         release_microphone_while_idle,
         feedback_volume,
@@ -208,6 +211,7 @@ pub fn run(
         double_tap_lock,
         double_tap_only,
         shortcut_mode,
+        share_dictation_shortcut,
     };
     let mut hotkey = shortcuts.start()?;
     let mut while_dictating = while_dictating;
@@ -286,6 +290,7 @@ pub fn run(
                 double_tap_lock: next_config.double_tap_lock,
                 double_tap_only: next_config.double_tap_only,
                 shortcut_mode: next_config.shortcut_mode,
+                share_dictation_shortcut: next_config.share_dictation_shortcut,
             };
             if next_shortcuts != shortcuts {
                 // The old hook goes first; one keyboard hook runs at a time.
@@ -872,6 +877,7 @@ struct Shortcuts {
     double_tap_lock: bool,
     double_tap_only: bool,
     shortcut_mode: crate::dictation::ShortcutMode,
+    share_dictation_shortcut: bool,
 }
 
 impl Shortcuts {
@@ -885,6 +891,7 @@ impl Shortcuts {
             self.double_tap_lock,
             self.double_tap_lock && self.double_tap_only,
             self.shortcut_mode,
+            self.share_dictation_shortcut,
         )
     }
 }

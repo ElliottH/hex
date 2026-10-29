@@ -1495,6 +1495,7 @@ fn advanced_in_use(settings: &AppSettings) -> bool {
     settings.release_microphone_while_idle
         || (double_tap_only_applies(settings) && settings.double_tap_only)
         || settings.updates.channel.is_some()
+        || settings.share_dictation_shortcut
 }
 
 fn double_tap_only_applies(settings: &AppSettings) -> bool {
@@ -1612,6 +1613,23 @@ fn advanced_rows(ui: &Ui, p: Paint) -> Vec<CardRow> {
             }),
         ),
     ];
+    if ui.platform.caps.share_shortcut {
+        rows.push(
+            toggle_row(
+                p,
+                "share-dictation-shortcut",
+                tr("Share dictation shortcut with other apps"),
+                tr("Lets apps such as Discord detect the same key"),
+                settings.share_dictation_shortcut,
+                |ui: &mut Ui| {
+                    ui.advanced = Some(true);
+                    let enabled = !ui.settings.share_dictation_shortcut;
+                    ui.update(|settings| settings.share_dictation_shortcut = enabled);
+                },
+            )
+            .into(),
+        );
+    }
     rows.extend(update_channel_row(ui, p).map(CardRow::from));
     rows
 }
