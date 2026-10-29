@@ -210,8 +210,9 @@ Language row is unexercised.
 ```ts
 Choose a supported language              // setup.language-conditioning; macOS + Linux picker
 ├── Parakeet v3 -> Detect language from audio; selected language does not constrain output
-└── Whisper -> Use selected language to guide decoding; accuracy is not guaranteed
-    └── Recognition hints -> initial prompt; output that only repeats them is dropped
+├── Whisper -> Use selected language to guide decoding; accuracy is not guaranteed
+│   └── Recognition hints -> initial prompt; output that only repeats them is dropped
+└── Bangla -> Whisper only, with the `bn` hint; Auto lets Whisper guess per clip
 ```
 
 Whisper reads the recognition hints as its initial prompt and, on silence or
@@ -269,6 +270,14 @@ reports Portuguese speech misrecognized as English. Source and pinned-model
 metadata inspection establish the prompting limitation, not the cause or repair
 of those transcripts. No v3 audio reproduction or transcription-quality fix has
 been demonstrated.
+
+Bangla (`bn`) is offered because Whisper large-v3-turbo was trained on it; no
+other catalog model supports it, so Whisper is its only, recommended choice and a
+Mac whose first preferred language is Bangla starts on Whisper. Auto is not a
+substitute: in a manual test, Whisper's per-clip detection labeled Bangla speech
+as Arabic, Turkish, and Spanish. `bangla_is_transcribed_by_whisper_with_its_language_hint`
+checks the recommendation, the `bn` hint, and that Qwen3-ASR rejects it. It
+runs no inference, and Bangla accuracy has not been measured.
 
 Checks start in [onboarding.rs](../../src/onboarding.rs),
 [transcription.rs](../../src/transcription.rs), and
