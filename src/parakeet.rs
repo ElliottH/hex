@@ -1933,6 +1933,8 @@ mod tests {
     /// Replays recordings into the production engine as capture would (160 ms
     /// blocks, the last 200 ms held back as the release tail) and compares
     /// the stream's release latency and text with whole-clip transcription.
+    /// `HEX_STREAM_LEADS_MS` (comma-separated) replays each recording behind
+    /// each of those lengths of its own start, shifting where its pauses end.
     #[test]
     #[ignore = "requires HEX_STREAM_MODEL (Unified English GGUF) and HEX_STREAM_WAVS (comma-separated)"]
     fn metal_stream_tracks_offline_transcription() {
@@ -1984,7 +1986,14 @@ mod tests {
                 .filter(|word| !word.is_empty())
                 .collect::<Vec<_>>()
         };
-        for path in std::env::var("HEX_STREAM_WAVS").unwrap().split(',') {
+        let leads = std::env::var("HEX_STREAM_LEADS_MS").unwrap_or_else(|_| "0".into());
+        let wavs = std::env::var("HEX_STREAM_WAVS").unwrap();
+        let replays = wavs.split(',').flat_map(|path| {
+            leads
+                .split(',')
+                .map(move |lead| (path, lead.parse::<usize>().unwrap()))
+        });
+        for (path, lead_ms) in replays {
             let mut reader = WavReader::open(path).unwrap();
             let rate = reader.spec().sample_rate;
             let channels = usize::from(reader.spec().channels);
@@ -2002,7 +2011,11 @@ mod tests {
                 .chunks(channels)
                 .map(|frame| frame.iter().sum::<f32>() / channels as f32)
                 .collect::<Vec<_>>();
-            let samples = resample_for_parakeet(&mono, rate);
+            // The lead repeats the recording's own start, so its room noise
+            // stays continuous.
+            let recording = resample_for_parakeet(&mono, rate);
+            let mut samples = recording[..lead_ms * 16].to_vec();
+            samples.extend(recording);
             // A warm app has already run inputs of this size.
             let run = |samples: Vec<f32>| {
                 engine
@@ -2059,7 +2072,7 @@ mod tests {
             }
             let differences = previous[hypothesis.len()];
             println!(
-                "{path}: audio_ms={} offline_ms={} release_ms={} ({}) word_differences={differences}/{}",
+                "{path} lead_ms={lead_ms}: audio_ms={} offline_ms={} release_ms={} ({}) word_differences={differences}/{}",
                 samples.len() / 16,
                 whole.finish_ms,
                 streamed.finish_ms,

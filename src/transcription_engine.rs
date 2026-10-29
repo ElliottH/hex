@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 use color_eyre::eyre::{Result, eyre};
 use transcribe_cpp::CancelToken;
 
+use crate::pause_segmenter::{FRAME_SAMPLES, SpeechFrames};
+
 /// The model the engine owns: macOS keeps its warm, switchable transcriber
 /// (GGUF or Apple Speech); Linux and Windows load one GGUF model.
 #[cfg(target_os = "macos")]
@@ -37,6 +39,11 @@ const STREAM_FINISH_DEADLINE: Duration = Duration::from_millis(1_500);
 /// Audio fed past the clip's trimmed end (a release handled late) that the
 /// stream may still keep. Beyond it, the offline clip is authoritative.
 const MAX_OVERFED_SAMPLES: usize = 16_000 / 4;
+/// A dictation stream hears at most the first 1.7 s and the last 0.3 s of
+/// a pause: Parakeet's buffered streaming drops the next word after a pause
+/// longer than its 5.6 s left context, and never did after 2 to 5 s.
+const PAUSE_HEAD_SAMPLES: usize = 27_200;
+const PAUSE_TAIL_SAMPLES: usize = 4_800;
 /// How long a job may run once the engine starts it, before the clip's own
 /// share. It covers activating and prewarming the largest model inside the
 /// job (macOS loads a new selection there). Time queued behind other work is
@@ -989,6 +996,7 @@ impl Worker {
             feed_ms,
             feeds,
             partials: changes,
+            dropped,
         } = stats;
         match ended {
             Ok(StreamEnd::Finished {
@@ -1004,6 +1012,7 @@ impl Worker {
                     feeds,
                     feed_ms,
                     partials = changes,
+                    pauses_dropped_ms = dropped / 16,
                     finish_ms = started.elapsed().as_millis(),
                     "finished live stream"
                 );
@@ -1123,6 +1132,97 @@ struct FeedStats {
     feeds: u32,
     /// Changes of text published for live text.
     partials: u32,
+    /// Pause samples the native stream never heard.
+    dropped: usize,
+}
+
+/// Caps the pauses a dictation stream's native stream hears (see
+/// [`PAUSE_HEAD_SAMPLES`]). A pause is a run of 20 ms frames that meetings'
+/// pause detection calls not speech. Its tail is held until speech resumes;
+/// a pause still running at the end keeps only its head. The clip, `fed`,
+/// and the capture are unchanged. `HEX_STREAM_PAUSES=0` turns it off.
+struct PauseCap<'a, S> {
+    stream: &'a mut S,
+    speech: Option<SpeechFrames>,
+    frame: Vec<f32>,
+    /// How much of `frame` was already fed: while a pause is short, every
+    /// sample is fed at once, whatever its frame turns out to be.
+    frame_fed: usize,
+    pause: usize,
+    tail: VecDeque<f32>,
+    dropped: usize,
+}
+
+impl<'a, S: StreamFeed> PauseCap<'a, S> {
+    fn new(stream: &'a mut S, enabled: bool) -> Self {
+        Self {
+            stream,
+            speech: enabled.then(SpeechFrames::default),
+            frame: Vec::with_capacity(FRAME_SAMPLES),
+            frame_fed: 0,
+            pause: 0,
+            tail: VecDeque::new(),
+            dropped: 0,
+        }
+    }
+
+    /// What the native stream hears of the next `samples`.
+    fn cap(&mut self, mut samples: &[f32]) -> Vec<f32> {
+        let Some(speech) = &mut self.speech else {
+            return samples.to_vec();
+        };
+        let mut heard = Vec::with_capacity(samples.len() + PAUSE_TAIL_SAMPLES);
+        while !samples.is_empty() {
+            let take = samples.len().min(FRAME_SAMPLES - self.frame.len());
+            self.frame.extend_from_slice(&samples[..take]);
+            samples = &samples[take..];
+            let unfed = &self.frame[self.frame_fed..];
+            if self.frame.len() < FRAME_SAMPLES {
+                if self.pause + FRAME_SAMPLES <= PAUSE_HEAD_SAMPLES {
+                    heard.extend_from_slice(unfed);
+                    self.frame_fed = self.frame.len();
+                }
+                continue;
+            }
+            if speech.is_speech(&self.frame) {
+                heard.extend(self.tail.drain(..));
+                heard.extend_from_slice(unfed);
+                self.pause = 0;
+            } else if self.pause + FRAME_SAMPLES <= PAUSE_HEAD_SAMPLES {
+                heard.extend_from_slice(unfed);
+                self.pause += FRAME_SAMPLES;
+            } else {
+                self.tail.extend(unfed);
+                let excess = self.tail.len().saturating_sub(PAUSE_TAIL_SAMPLES);
+                self.tail.drain(..excess);
+                self.dropped += excess;
+                self.pause += FRAME_SAMPLES;
+            }
+            self.frame.clear();
+            self.frame_fed = 0;
+        }
+        heard
+    }
+}
+
+impl<S: StreamFeed> StreamFeed for PauseCap<'_, S> {
+    fn feed(&mut self, samples: &[f32]) -> Result<(), String> {
+        let heard = self.cap(samples);
+        if heard.is_empty() {
+            return Ok(());
+        }
+        self.stream.feed(&heard)
+    }
+
+    /// A pause still running at the end is heard only up to its head.
+    fn finalize(&mut self) -> Result<String, String> {
+        self.dropped += self.tail.len() + self.frame.len() - self.frame_fed;
+        self.stream.finalize()
+    }
+
+    fn partial(&self) -> Partial {
+        self.stream.partial()
+    }
 }
 
 /// Handles commands while stream `id` is open, publishing its text to
@@ -1140,6 +1240,8 @@ fn drive_stream(
 ) -> StreamEnd {
     let mut failure: Option<String> = None;
     let mut fed = 0_usize;
+    let enabled = std::env::var("HEX_STREAM_PAUSES").as_deref() != Ok("0");
+    let stream = &mut PauseCap::new(stream, enabled);
     loop {
         let Ok(command) = commands.recv() else {
             return StreamEnd::Disconnected;
@@ -1193,6 +1295,7 @@ fn drive_stream(
                     Some(failure) => Err(failure),
                     None => finish_stream(stream, &clip, fed),
                 };
+                stats.dropped = stream.dropped;
                 return StreamEnd::Finished {
                     result,
                     clip,
@@ -1344,6 +1447,133 @@ mod tests {
                 tentative: String::new(),
             }
         }
+    }
+
+    /// What a capped native stream hears of `audio` fed in uneven blocks,
+    /// and the samples it dropped.
+    fn capped(audio: &[f32]) -> (Vec<f32>, usize) {
+        let mut fake = FakeStream::default();
+        let mut cap = PauseCap::new(&mut fake, true);
+        let mut rest = audio;
+        for size in [1, 333, 2_560, 7_200].into_iter().cycle() {
+            if rest.is_empty() {
+                break;
+            }
+            let (block, after) = rest.split_at(size.min(rest.len()));
+            cap.feed(block).unwrap();
+            rest = after;
+        }
+        cap.finalize().unwrap();
+        let dropped = cap.dropped;
+        assert_eq!(fake.fed.len() + dropped, audio.len());
+        (fake.fed, dropped)
+    }
+
+    fn room(duration_ms: usize, level_db: f32, seed: &mut u32) -> Vec<f32> {
+        if level_db.is_finite() {
+            crate::pause_segmenter::tests::noise(duration_ms, level_db, seed)
+        } else {
+            vec![0.0; duration_ms * 16]
+        }
+    }
+
+    #[test]
+    fn speech_and_pauses_under_two_seconds_reach_the_stream_whole() {
+        use crate::pause_segmenter::tests::utterance;
+        let mut seed = 3;
+        // Speech 20 dB over a quiet and a noisy (-40 dBFS) room, whispers
+        // (-44 dBFS over a -60 dBFS room), pauses up to 1.9 s.
+        let mut audio = utterance(&[(3_000, 1_900), (2_000, 1_500)], -50.0);
+        audio.extend(utterance(&[(3_000, 1_900), (2_000, 1_500)], -40.0));
+        for _ in 0..30 {
+            audio.extend(room(200, -44.0, &mut seed));
+            audio.extend(room(300, -60.0, &mut seed));
+        }
+        audio.extend(room(1_600, f32::NEG_INFINITY, &mut seed));
+        audio.extend(room(500, -44.0, &mut seed));
+        let (heard, dropped) = capped(&audio);
+        assert_eq!(dropped, 0);
+        assert!(heard == audio, "short pauses or quiet speech were changed");
+    }
+
+    #[test]
+    fn long_pauses_reach_the_stream_capped_with_their_ends() {
+        // A quiet room, a -50 dBFS floor, and a -40 dBFS room with speech
+        // 18 dB above it; whole 20 ms frames, so the expectation is exact.
+        for (room_db, speech_db, pause_ms) in [
+            (f32::NEG_INFINITY, -20.0, 8_000),
+            (-50.0, -20.0, 30_000),
+            (-40.0, -22.0, 8_000),
+            (-40.0, -22.0, 14_000),
+        ] {
+            let mut seed = 11;
+            // The room before the first words sets the noise floor.
+            let lead = room(300, room_db, &mut seed);
+            let first = room(1_000, speech_db, &mut seed);
+            let pause = room(pause_ms, room_db, &mut seed);
+            let second = room(1_000, speech_db, &mut seed);
+            let (heard, _) = capped(&[lead.as_slice(), &first, &pause, &second].concat());
+            let tail = &pause[pause.len() - PAUSE_TAIL_SAMPLES..];
+            let expected = [
+                lead.as_slice(),
+                &first,
+                &pause[..PAUSE_HEAD_SAMPLES],
+                tail,
+                &second,
+            ];
+            assert!(heard == expected.concat(), "{room_db} dBFS, {pause_ms} ms");
+            // A pause still running at the end keeps only its head.
+            let (heard, _) = capped(&[lead.as_slice(), &first, &pause].concat());
+            assert!(heard == [lead.as_slice(), &first, &pause[..PAUSE_HEAD_SAMPLES]].concat());
+        }
+    }
+
+    #[test]
+    fn a_dictation_stream_hears_long_pauses_capped_and_finishes_with_the_clip() {
+        let (engine, commands) = TranscriptionEngine::for_test();
+        let mut seed = 5;
+        let audio = [
+            room(300, f32::NEG_INFINITY, &mut seed),
+            room(1_000, -20.0, &mut seed),
+            room(8_000, f32::NEG_INFINITY, &mut seed),
+            room(1_000, -20.0, &mut seed),
+        ]
+        .concat();
+        let mut stream = engine.begin().unwrap();
+        assert!(matches!(commands.try_recv(), Ok(Command::Begin { .. })));
+        for block in audio.chunks(2_560) {
+            stream.feed(block);
+        }
+        assert_eq!(stream.fed(), audio.len());
+        // The clip runs on past what was fed: the finish feeds the rest.
+        let clip = [audio.as_slice(), &room(500, -20.0, &mut seed)].concat();
+        let _pending = engine
+            .finish_with(Some(stream), clip.clone(), Box::new(|_, _| Ok("x".into())))
+            .unwrap();
+        let mut fake = FakeStream::default();
+        let mut stats = FeedStats::default();
+        let ended = drive_stream(
+            1,
+            &mut fake,
+            &commands,
+            &AtomicBool::new(false),
+            None,
+            &mut VecDeque::new(),
+            &mut stats,
+        );
+        let StreamEnd::Finished {
+            result,
+            clip: finished,
+            ..
+        } = ended
+        else {
+            panic!("the stream did not finish");
+        };
+        // 6 s of the 8 s pause is dropped; the clip is untouched.
+        assert_eq!(stats.dropped, 16_000 * 6);
+        assert_eq!(result, Ok(format!("streamed {}", clip.len() - 16_000 * 6)));
+        assert!(finished == clip);
+        assert!(fake.fed[fake.fed.len() - 8_000..] == clip[clip.len() - 8_000..]);
     }
 
     #[test]

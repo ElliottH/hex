@@ -507,6 +507,8 @@ Model advertises streaming, GPU device             // dictate.streaming
        // same audio as the final clip, pre-roll included; never blocks capture
   Release -> Collect the 200 ms tail -> Finish with the complete clip
     -> Feed any unfed remainder -> Finalize -> Final text
+       // the native stream hears each pause's first 1.7 s and last 0.3 s
+       // (dictate.stream-pauses); the clip and the fed count are unchanged
        ├── Stream failed, produced no text, or was fed > 250 ms past the clip
        │   -> Transcribe the whole clip offline (source=fallback)
        ├── No final text within 1.5 s -> Abort the stream -> Whole clip
@@ -555,8 +557,9 @@ a later capture opens one, and the job then waits for its text in order. Linux
 from their capture loops. Parakeet buffers with its largest context menu
 (Unified English: 5.6 s left, 1.04 s chunk, 1.04 s right), its most accurate and
 least compute-intensive setting; `HEX_STREAM_CHUNK_MS` overrides the chunk for
-benchmarks and `HEX_STREAMING=1` streams on any device, including a CPU
-(diagnostics and the Linux CI fixture). Each dictation logs
+benchmarks, `HEX_STREAMING=1` streams on any device, including a CPU
+(diagnostics and the Linux CI fixture), and `HEX_STREAM_PAUSES=0` lets the
+native stream hear pauses whole (see the defect below). Each dictation logs
 `source=stream|offline|fallback` and `finish_ms`. The macOS "Transcribe during
 pauses" setting no longer affects dictation.
 
@@ -571,7 +574,10 @@ and not), `a_stream_starts_with_the_backlog_and_feeds_in_blocks`,
 `escape_and_short_taps_cancel_the_stream_and_submit_nothing`, and
 `a_model_that_cannot_stream_transcribes_the_whole_clip_after_release` in
 linux_dictation.rs; `source_labels_distinguish_fallbacks`,
-`streams_send_their_audio_in_order_and_cancel_when_dropped`, and (macOS, a real
+`streams_send_their_audio_in_order_and_cancel_when_dropped`,
+`speech_and_pauses_under_two_seconds_reach_the_stream_whole`,
+`long_pauses_reach_the_stream_capped_with_their_ends`,
+`a_dictation_stream_hears_long_pauses_capped_and_finishes_with_the_clip`, and (macOS, a real
 engine thread without a model) `a_finish_without_a_stream_transcribes_the_clip_offline`,
 `an_unusable_stream_falls_back_to_the_complete_clip`,
 `work_runs_in_order_and_failures_reach_the_caller`, and
@@ -634,6 +640,34 @@ floor) through `metal_stream_tracks_offline_transcription` lost "I" after the
 8 s gap of digital silence only, and the whole clip kept it: the loss depends
 on where speech resumes against the stream's chunks. Live text does not cause
 it: `HEX_STREAM_LIVE_TEXT=0` gives the same text.
+
+**Fixed October 29, 2026 (`dictate.stream-pauses`):** the loss needs a pause
+longer than Parakeet's 5.6 s left context after finished speech; a 6 to 14 s
+gap lost the next word at every other 40 ms of where speech resumes, 2 to 5 s
+never did, and NeMo's reference buffered streaming does the same. The engine
+now caps each pause the native stream hears (`PauseCap` in
+[transcription_engine.rs](../../src/transcription_engine.rs), dictation
+streams only, not `/streams`): in a run of 20 ms frames that meetings' pause
+detection (`SpeechFrames`) calls not speech, the first 1.7 s and last 0.3 s
+are fed and the middle dropped. The capture, the clip, the fed count, and the
+fallbacks are unchanged, so the final text still comes from the stream without
+added latency; `HEX_STREAM_PAUSES=0` turns it off, and "finished live stream"
+logs `pauses_dropped_ms`. Limits: speech within 12 dB of the room counts as
+pause, and the noise floor rises only about 3 dB a second, so room noise
+louder than what came before (a fan switching on, exact digital silence at
+the start of a capture, or synthetic clips silent under their speech) counts
+as speech for up to about 10 s and its pause is not capped.
+
+**Observed October 29, 2026 (Apple M3 Pro, Metal, Unified English Q8):**
+`metal_stream_tracks_offline_transcription` at 8× with
+`HEX_STREAM_LEADS_MS=0,40,80,120`, `say` sentences around 2, 4, and 6 to
+14 s gaps, every result from the stream. Gaps of 6 s and more, word
+differences from the whole clip with `HEX_STREAM_PAUSES=0` then capped:
+digital silence 18/36 then 0/36; -50 dBFS noise throughout 18/36 then
+0/36; -50 dBFS noise in the gap only (silent under the speech) 18/36 then
+18/36, the floor limit above. Gaps of 2 and 4 s: 0 differences in every
+case. Not verified: a physical microphone and real rooms, and the Linux and
+Windows builds.
 ### Optional Voice Controls
 
 Optional spoken entry requires Commands enabled, its model ready, and recognition

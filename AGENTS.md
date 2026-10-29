@@ -545,9 +545,10 @@ CoreAudio formats, AppleScript details, or event serialization.
   press finishes. Only Escape cancels, and a modifier pressed alone never ends a
   key-chord capture. Double-tap settings apply to Hold only.
 - Streaming dictation is speculative on every OS: a hotkey capture's stream
-  receives exactly the capture's 16 kHz audio, the finish always carries the
-  complete clip, and a failed, empty, overfed, late, or interrupted stream
-  falls back to the whole clip. Nothing pastes or reaches the focused app
+  receives exactly the capture's 16 kHz audio (the engine caps each pause the
+  native stream hears at about 2 s; `HEX_STREAM_PAUSES=0` turns that off), the
+  finish always carries the complete clip, and a failed, empty, overfed, late,
+  or interrupted stream falls back to the whole clip. Nothing pastes or reaches the focused app
   before the final text. With the `live-text` experiment a hotkey capture's
   stream publishes its provisional text for Hex's own HUD only; it is never
   pasted, copied, or kept in History or Paste Last. One engine thread runs every inference because a live
