@@ -6,6 +6,10 @@ license: MIT
 
 # Hex Personal Commands
 
+This skill targets current Hex (dev builds now, and the next stable release).
+Hex 2.3.1 uses an older runtime; its matching skill installs with
+`npx skills add anomalyco/hex#app-v2.3.1 --skill hex-personal-commands`.
+
 Hex runs `~/.config/hex/hex.config.ts` itself, in an embedded JavaScript
 engine. There is no package to install and no build step.
 
@@ -43,6 +47,10 @@ engine. There is no package to install and no build step.
    including phrase overlaps. Optionally type-check with
    `npx -y -p typescript tsc` in `~/.config/hex`. A running Hex reloads the
    config on save and shows load errors in Modes' Transformations section.
+   If `hex` reports `commands check` as an unrecognized subcommand, stop: the
+   user is on an older Hex (such as 2.3.1). Tell them to install the matching
+   skill with `npx skills add anomalyco/hex#app-v2.3.1 --skill hex-personal-commands`,
+   or to switch to the dev build (https://github.com/anomalyco/hex#install-hex).
 
 Completion criterion: the requested behavior is represented in the config,
 `hex commands check` succeeds (or, without the CLI, the reload succeeded in

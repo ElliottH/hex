@@ -178,6 +178,11 @@ install the official Hex skill:
 npx skills add anomalyco/hex --skill hex-personal-commands
 ```
 
+The skill targets current Hex: dev builds now, and the next stable release.
+On Hex 2.3.1, install the matching skill with
+`npx skills add anomalyco/hex#app-v2.3.1 --skill hex-personal-commands`, or
+[switch to the dev build](https://github.com/anomalyco/hex#install-hex).
+
 ## Read Transcripts From The CLI
 
 The macOS release binary provides read-only queries while the app runs:
