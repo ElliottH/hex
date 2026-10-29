@@ -19,6 +19,8 @@ use objc2_core_foundation::CFString;
 use crate::app_settings::{self, RecordingAudioBehavior};
 use crate::browser_media::{self, NativeBrowserAudio, PausedBrowser};
 
+mod ducking;
+
 const VIRTUAL_MAIN_VOLUME: u32 = u32::from_be_bytes(*b"vmvc");
 const POWER_ASSERTION_LEVEL_ON: u32 = 255;
 
@@ -86,13 +88,14 @@ impl MediaPlayer {
 pub(crate) enum Effect {
     Sleep,
     Mute,
+    Duck,
     Pause,
 }
 
 impl Effect {
     /// Restoration order: output is audible again before a session's
     /// callback, and resuming media (AppleScript) never delays it.
-    const ALL: [Self; 3] = [Self::Sleep, Self::Mute, Self::Pause];
+    const ALL: [Self; 4] = [Self::Sleep, Self::Mute, Self::Duck, Self::Pause];
 
     const fn index(self) -> usize {
         self as usize
@@ -112,6 +115,7 @@ impl Hold {
         match effect {
             Effect::Sleep => self.dictation,
             Effect::Mute => self.audio == RecordingAudioBehavior::Mute,
+            Effect::Duck => self.audio == RecordingAudioBehavior::Duck,
             Effect::Pause => self.audio == RecordingAudioBehavior::PauseMedia,
         }
     }
@@ -132,6 +136,7 @@ fn hold_native(effect: Effect) -> Held {
             _guard: prevent_sleep(),
         },
         Effect::Mute => audio(RecordingAudioBehavior::Mute),
+        Effect::Duck => audio(RecordingAudioBehavior::Duck),
         Effect::Pause => audio(RecordingAudioBehavior::PauseMedia),
     }
 }
@@ -200,8 +205,8 @@ impl RecordingEnvironmentController {
     ) -> (Self, JoinHandle<()>) {
         let (commands, receiver) = mpsc::channel();
         let restorer = thread::spawn(move || {
-            let mut sessions = [0_u32; 3];
-            let mut held: [Option<H>; 3] = [None, None, None];
+            let mut sessions = [0_u32; Effect::ALL.len()];
+            let mut held: [Option<H>; Effect::ALL.len()] = std::array::from_fn(|_| None);
             while let Ok(command) = receiver.recv() {
                 match command {
                     EnvironmentCommand::Start(wanted) => {
@@ -405,6 +410,7 @@ unsafe extern "C" {
 }
 
 enum AudioBehaviorGuard {
+    Ducked(ducking::Guard),
     Muted {
         device: u32,
         previous: f32,
@@ -462,6 +468,10 @@ impl AudioBehaviorGuard {
                 }
                 paused_guard(players, browser)
             }
+            RecordingAudioBehavior::Duck => {
+                ducking::Guard::start(app_settings::recording_duck_volume())
+                    .map_or(Self::None, Self::Ducked)
+            }
             RecordingAudioBehavior::DoNothing => Self::None,
         }
     }
@@ -477,6 +487,7 @@ impl Drop for AudioBehaviorGuard {
                     tracing::info!(volume = *previous, "restored system output after recording");
                 }
             }
+            Self::Ducked(guard) => guard.restore(),
             Self::Paused { players, browser } => {
                 // The browser first: its play goes to whatever macOS treats as
                 // playing, which a player resumed just before could become.

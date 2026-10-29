@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use color_eyre::eyre::{Result, eyre};
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::transcription_models::{TranscriptionModelId, TranscriptionSelection};
 
+static RECORDING_DUCK_VOLUME: AtomicU32 = AtomicU32::new(0.2_f32.to_bits());
 static RECORDING_AUDIO_BEHAVIOR: AtomicU8 = AtomicU8::new(0);
 static DOUBLE_TAP_LOCK: AtomicBool = AtomicBool::new(true);
 static DOUBLE_TAP_ONLY: AtomicBool = AtomicBool::new(false);
@@ -1024,6 +1025,7 @@ pub struct UpdateSettings {
 #[serde(rename_all = "snake_case")]
 pub enum RecordingAudioBehavior {
     Mute,
+    Duck,
     PauseMedia,
     #[default]
     DoNothing,
@@ -1265,11 +1267,12 @@ impl CaptureTranscriber {
 pub use crate::text_replacements::TextReplacement;
 
 impl RecordingAudioBehavior {
-    pub const ALL: [Self; 3] = [Self::Mute, Self::PauseMedia, Self::DoNothing];
+    pub const ALL: [Self; 4] = [Self::Mute, Self::PauseMedia, Self::Duck, Self::DoNothing];
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::Mute => "Mute",
+            Self::Duck => "Lower audio",
             Self::PauseMedia => "Pause media",
             Self::DoNothing => "Do nothing",
         }
@@ -1278,6 +1281,7 @@ impl RecordingAudioBehavior {
     const fn encoded(self) -> u8 {
         match self {
             Self::Mute => 0,
+            Self::Duck => 3,
             Self::PauseMedia => 1,
             Self::DoNothing => 2,
         }
@@ -1285,6 +1289,7 @@ impl RecordingAudioBehavior {
 
     fn decode(value: u8) -> Self {
         match value {
+            3 => Self::Duck,
             1 => Self::PauseMedia,
             2 => Self::DoNothing,
             _ => Self::Mute,
@@ -1302,6 +1307,8 @@ pub struct AppSettings {
     pub sound_theme: crate::feedback::SoundTheme,
     pub microphone: Option<String>,
     pub recording_audio_behavior: RecordingAudioBehavior,
+    /// Fraction of the original output volume while ducking (macOS).
+    pub recording_duck_volume: f32,
     /// With Pause media on macOS, also pause a browser that is audibly playing.
     pub pause_browser_media: bool,
     pub double_tap_lock: bool,
@@ -1385,6 +1392,7 @@ impl Default for AppSettings {
             sound_theme: crate::feedback::SoundTheme::default(),
             microphone: None,
             recording_audio_behavior: RecordingAudioBehavior::DoNothing,
+            recording_duck_volume: 0.2,
             pause_browser_media: false,
             double_tap_lock: true,
             double_tap_only: false,
@@ -1694,6 +1702,7 @@ impl AppSettings {
             Ok(data) => {
                 let mut settings: Self = serde_json::from_slice(&data)?;
                 let loaded = serde_json::to_value(&settings)?;
+                settings.validate_recording_duck_volume()?;
                 settings.normalize_microphone_policy();
                 settings.dictation_processing.default_mode.name = "Global".into();
                 settings.normalize_double_tap_settings();
@@ -1728,8 +1737,18 @@ impl AppSettings {
         Ok(())
     }
 
+    fn validate_recording_duck_volume(&self) -> Result<()> {
+        if !self.recording_duck_volume.is_finite()
+            || !(0.0..=1.0).contains(&self.recording_duck_volume)
+        {
+            return Err(eyre!("recording_duck_volume must be between 0 and 1"));
+        }
+        Ok(())
+    }
+
     fn write_to(&self, path: &std::path::Path) -> Result<()> {
         self.validate_microphone_policy()?;
+        self.validate_recording_duck_volume()?;
         let parent = path
             .parent()
             .ok_or_else(|| eyre!("settings path has no parent"))?;
@@ -1758,6 +1777,7 @@ impl AppSettings {
         crate::feedback::set_theme(self.sound_theme);
         crate::desktop_i18n::apply(self.ui_language.as_deref());
         INDICATOR_POSITION.store(self.indicator_position as u8, Ordering::Relaxed);
+        RECORDING_DUCK_VOLUME.store(self.recording_duck_volume.to_bits(), Ordering::Relaxed);
         RECORDING_AUDIO_BEHAVIOR.store(self.recording_audio_behavior.encoded(), Ordering::Relaxed);
         PAUSE_BROWSER_MEDIA.store(self.pause_browser_media, Ordering::Relaxed);
         DOUBLE_TAP_LOCK.store(self.double_tap_lock, Ordering::Relaxed);
@@ -2116,6 +2136,11 @@ pub fn transcription_selection() -> (u64, TranscriptionSelection) {
     let state = TRANSCRIPTION_SELECTION.get_or_init(Default::default);
     let state = state.read().unwrap_or_else(|error| error.into_inner());
     (state.revision, state.selection.clone())
+}
+
+#[cfg(target_os = "macos")]
+pub fn recording_duck_volume() -> f32 {
+    f32::from_bits(RECORDING_DUCK_VOLUME.load(Ordering::Relaxed))
 }
 
 pub fn recording_audio_behavior() -> RecordingAudioBehavior {
@@ -2567,6 +2592,33 @@ mod tests {
             loaded.keyboard_model_switching.mappings,
             [("Russian".to_owned(), russian)].into()
         );
+    }
+
+    #[test]
+    fn ducking_settings_are_opt_in_bounded_and_round_trip() {
+        let mut settings: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            settings.recording_audio_behavior,
+            RecordingAudioBehavior::DoNothing
+        );
+        assert_eq!(settings.recording_duck_volume, 0.2);
+        settings.recording_audio_behavior = RecordingAudioBehavior::Duck;
+        settings.recording_duck_volume = 0.37;
+        let decoded: AppSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            decoded.recording_audio_behavior,
+            RecordingAudioBehavior::Duck
+        );
+        assert_eq!(decoded.recording_duck_volume, 0.37);
+        for invalid in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
+            settings.recording_duck_volume = invalid;
+            assert!(settings.validate_recording_duck_volume().is_err());
+        }
+        for value in [0.0, 0.2, 1.0] {
+            settings.recording_duck_volume = value;
+            assert!(settings.validate_recording_duck_volume().is_ok());
+        }
     }
 
     #[test]

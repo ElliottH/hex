@@ -138,8 +138,13 @@ const KEYS: &[Key] = &[
     ),
     key(
         "recording_audio_behavior",
-        Kind::Choice(&["mute", "pause_media", "do_nothing"]),
+        Kind::Choice(&["mute", "pause_media", "do_nothing", "duck"]),
         "What other audio does while you dictate",
+    ),
+    key(
+        "recording_duck_volume",
+        UNIT,
+        "Fraction of original output volume while lowering audio (macOS), from 0 to 1",
     ),
     key(
         "pause_browser_media",

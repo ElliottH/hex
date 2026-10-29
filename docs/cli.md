@@ -341,9 +341,13 @@ settings but do not observe input-source changes or show these controls.
   `hex model use`. `transcription_recents` and `meetings.calendar.connected`
   are read-only (connecting a calendar asks macOS for access from Settings).
 
+`recording_audio_behavior` also accepts `duck` on macOS.
+`recording_duck_volume` sets the fraction of the original output volume (0–1,
+default 0.2), applied on the next intentional capture when ducking is selected.
+
 Writable keys: `commands_enabled`, `release_microphone_while_idle`,
 `sound_effects`, `sound_effect_volume`, `sound_theme`, `microphone`,
-`recording_audio_behavior`, `double_tap_lock`, `double_tap_only`,
+`recording_audio_behavior`, `recording_duck_volume`, `double_tap_lock`, `double_tap_only`,
 `shortcut_mode`, `dictation_hotkey`, `edit_hotkey`, `paste_last_hotkey`,
 `show_dock_icon`, `transcription.recognition_hints`,
 `dictation_processing.default_mode`, `dictation_processing.modes`,
