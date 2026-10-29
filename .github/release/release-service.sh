@@ -45,29 +45,51 @@ done
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT HUP INT TERM
 
-# request <curl arguments>: an authenticated request; prints the body and
-# sets $status and $response (the body's file). Every request mints its own
-# OIDC token: GitHub's expire within minutes, and a publish's uploads can
-# outlast one. The token stays in a curl config file, never in argv or the
-# log.
-request() {
-  config=$(mktemp "$temporary/token.XXXXXX")
-  response=$(mktemp "$temporary/response.XXXXXX")
+# mint_token <config>: writes a fresh GitHub OIDC token to the curl config
+# file <config>. GitHub's expire five minutes after they are minted, and one
+# upload can take longer than that. The token stays in the config file, never
+# in argv or the log.
+mint_token() {
   (
     umask 077
     token=$(curl -fsS --retry 3 -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
       "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$RELEASE" | jq -er .value)
-    printf 'header = "Authorization: Bearer %s"\n' "$token" > "$config"
+    printf 'header = "Authorization: Bearer %s"\n' "$token" > "$1"
   ) || {
     echo "Could not get a GitHub OIDC token." >&2
     exit 1
   }
-  status=$(curl -sS --config "$config" --retry 3 --retry-all-errors \
-    -o "$response" -w '%{http_code}' "$@") || {
-    rm -f "$config"
-    echo "Request to the release service failed: $*" >&2
-    exit 1
-  }
+}
+
+# request <curl arguments>: an authenticated request; prints the body and
+# sets $status and $response (the body's file). Failed transfers and 429/5xx
+# answers are retried here, not by curl, so every attempt mints its own
+# token; a transfer stalled below 1 KB/s for a minute counts as failed.
+request() {
+  config=$(mktemp "$temporary/token.XXXXXX")
+  response=$(mktemp "$temporary/response.XXXXXX")
+  attempt=1
+  while :; do
+    mint_token "$config"
+    if status=$(curl -sS --config "$config" --speed-limit 1024 --speed-time 60 \
+      -o "$response" -w '%{http_code}' "$@"); then
+      case "$status" in
+        429 | 5??) ;;
+        *) break ;;
+      esac
+      reason="the release service answered $status"
+    else
+      reason="the request failed"
+    fi
+    if [ "$attempt" -ge 4 ]; then
+      rm -f "$config"
+      echo "Request to the release service failed after $attempt attempts ($reason): $*" >&2
+      exit 1
+    fi
+    echo "Attempt $attempt: $reason; retrying: $*" >&2
+    sleep $((attempt * 2))
+    attempt=$((attempt + 1))
+  done
   rm -f "$config"
   cat "$response"
 }
