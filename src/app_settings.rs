@@ -17,6 +17,7 @@ static DOUBLE_TAP_LOCK: AtomicBool = AtomicBool::new(true);
 static DOUBLE_TAP_ONLY: AtomicBool = AtomicBool::new(false);
 static SHORTCUT_TOGGLE: AtomicBool = AtomicBool::new(false);
 static MEETINGS_ENABLED: AtomicBool = AtomicBool::new(false);
+static PAUSE_BROWSER_MEDIA: AtomicBool = AtomicBool::new(false);
 static HEX_MICROPHONE_ENABLED: AtomicBool = AtomicBool::new(false);
 static MEETING_NOTES_ENABLED: AtomicBool = AtomicBool::new(true);
 static MEETING_INDICATOR_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -1301,6 +1302,8 @@ pub struct AppSettings {
     pub sound_theme: crate::feedback::SoundTheme,
     pub microphone: Option<String>,
     pub recording_audio_behavior: RecordingAudioBehavior,
+    /// With Pause media on macOS, also pause a browser that is audibly playing.
+    pub pause_browser_media: bool,
     pub double_tap_lock: bool,
     pub double_tap_only: bool,
     pub shortcut_mode: crate::dictation::ShortcutMode,
@@ -1382,6 +1385,7 @@ impl Default for AppSettings {
             sound_theme: crate::feedback::SoundTheme::default(),
             microphone: None,
             recording_audio_behavior: RecordingAudioBehavior::DoNothing,
+            pause_browser_media: false,
             double_tap_lock: true,
             double_tap_only: false,
             shortcut_mode: crate::dictation::ShortcutMode::Hold,
@@ -1755,6 +1759,7 @@ impl AppSettings {
         crate::desktop_i18n::apply(self.ui_language.as_deref());
         INDICATOR_POSITION.store(self.indicator_position as u8, Ordering::Relaxed);
         RECORDING_AUDIO_BEHAVIOR.store(self.recording_audio_behavior.encoded(), Ordering::Relaxed);
+        PAUSE_BROWSER_MEDIA.store(self.pause_browser_media, Ordering::Relaxed);
         DOUBLE_TAP_LOCK.store(self.double_tap_lock, Ordering::Relaxed);
         DOUBLE_TAP_ONLY.store(
             self.double_tap_lock && self.double_tap_only && self.dictation_hotkey.key.is_some(),
@@ -2115,6 +2120,10 @@ pub fn transcription_selection() -> (u64, TranscriptionSelection) {
 
 pub fn recording_audio_behavior() -> RecordingAudioBehavior {
     RecordingAudioBehavior::decode(RECORDING_AUDIO_BEHAVIOR.load(Ordering::Relaxed))
+}
+
+pub fn pause_browser_media() -> bool {
+    PAUSE_BROWSER_MEDIA.load(Ordering::Relaxed)
 }
 
 pub fn commands_enabled() -> bool {
@@ -2583,6 +2592,7 @@ mod tests {
             settings.recording_audio_behavior,
             RecordingAudioBehavior::DoNothing
         );
+        assert!(!settings.pause_browser_media);
         assert!(settings.double_tap_lock);
         assert!(!settings.double_tap_only);
         assert_eq!(settings.dictation_hotkey, HotkeyBinding::default());
