@@ -3,6 +3,7 @@
 //! every live stream) so retained scheduler scratch never outlives the
 //! inference that sized it.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -102,6 +103,9 @@ pub(crate) struct OfflineGgufSession {
     options: transcribe_cpp::SessionOptions,
     /// When the last run or live stream completed; `None` until the first.
     last_run: Option<Instant>,
+    /// Whether runs rescore toward the vocabulary: Parakeet's transducer
+    /// heads (TDT, RNN-T), which take it as a run extension.
+    takes_vocabulary: bool,
 }
 
 impl OfflineGgufSession {
@@ -116,12 +120,39 @@ impl OfflineGgufSession {
     pub(crate) fn new(model: transcribe_cpp::Model) -> transcribe_cpp::Result<Self> {
         let options = session_options(model.device()?.device_type);
         let session = model.session_with(&options)?;
+        let takes_vocabulary = model.arch() == "parakeet"
+            && model.accepts_ext(
+                transcribe_cpp::ExtSlot::Run,
+                transcribe_cpp::sys::TRANSCRIBE_EXT_KIND_PARAKEET_VOCABULARY,
+            );
         Ok(Self {
             model,
             session: Some(session),
             options,
             last_run: None,
+            takes_vocabulary,
         })
+    }
+
+    /// `options` with the vocabulary (`crate::vocabulary::transcription_bias`)
+    /// added, read now so a settings change applies from the next run. The
+    /// engine rescores spans of the greedy transcript that resemble a term
+    /// and swaps the term in only when the audio supports it.
+    fn with_vocabulary<'a>(
+        &self,
+        options: &'a transcribe_cpp::RunOptions,
+    ) -> Cow<'a, transcribe_cpp::RunOptions> {
+        if !self.takes_vocabulary || options.family.is_some() {
+            return Cow::Borrowed(options);
+        }
+        match crate::vocabulary::transcription_bias() {
+            Some((terms, bias)) => Cow::Owned(transcribe_cpp::RunOptions {
+                vocabulary: terms,
+                family: Some(transcribe_cpp::RunExtension::ParakeetVocabulary(bias)),
+                ..options.clone()
+            }),
+            None => Cow::Borrowed(options),
+        }
     }
 
     /// Whether a run or live stream completed within [`RECENT_RUN`].
@@ -218,8 +249,9 @@ impl OfflineGgufSession {
             None => self.model.session_with(&self.options)?,
         };
         session.set_cancel_token(cancel);
+        let options = self.with_vocabulary(options);
         let result = session
-            .stream(options, stream_options)
+            .stream(&options, stream_options)
             .map(|mut stream| drive(&mut stream));
         drop(session);
         if result.is_ok() {
@@ -245,8 +277,8 @@ impl OfflineGgufSession {
         if let Some(cancel) = job_cancel() {
             session.set_cancel_token(&cancel);
         }
-        let result =
-            keep_repetition_partial(session.run(samples, options)).map(|mut transcript| {
+        let result = keep_repetition_partial(session.run(samples, &self.with_vocabulary(options)))
+            .map(|mut transcript| {
                 if let Some(transcribe_cpp::RunExtension::Whisper(whisper)) = &options.family
                     && let Some(prompt) = &whisper.initial_prompt
                 {

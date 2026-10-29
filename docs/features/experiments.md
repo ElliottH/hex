@@ -132,7 +132,7 @@ The known experiments are compiled into
   Until the model is ready, and if it fails, dictation behaves as if it were
   off.
 - `vocabulary`: a shared list of names and their likely mis-transcriptions,
-  for rewriting and search ([Vocabulary](vocabulary.md)). It adds a Settings
+  for transcription, rewriting and search ([Vocabulary](vocabulary.md)). It adds a Settings
   card and the `hex vocabulary` commands, which appear only while it is on.
 - `voice-filter`: the Voice Filter pane (macOS), the only home of the Hex
   Microphone driver, its filter modes, and Try it

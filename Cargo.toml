@@ -35,11 +35,13 @@ onnx-benchmark = ["dep:transcribe-rs"]
 [profile.release]
 strip = true
 
-# transcribe-cpp-sys 0.4.1 plus one ggml patch that builds only the Vulkan
-# shaders Hex's models use (see `CMAKE_ARGS` in .cargo/config.toml). Drop this
-# once a transcribe.cpp release carries the patch.
+# transcribe.cpp 0.4.1 plus one ggml patch that builds only the Vulkan
+# shaders Hex's models use (see `CMAKE_ARGS` in .cargo/config.toml) and
+# Parakeet's vocabulary rescoring (branch hex/parakeet-vocabulary). Drop this
+# once a transcribe.cpp release carries both.
 [patch.crates-io]
-transcribe-cpp-sys = { git = "https://github.com/anomalyco/transcribe.cpp", rev = "caf6b22b4ff64d8f5fe521c23d7061b057148c5e" }
+transcribe-cpp = { git = "https://github.com/anomalyco/transcribe.cpp", rev = "9badd2a27f660c38e76c379713b9d6c63d45eaaa" }
+transcribe-cpp-sys = { git = "https://github.com/anomalyco/transcribe.cpp", rev = "9badd2a27f660c38e76c379713b9d6c63d45eaaa" }
 
 [profile.moonshine-lab]
 inherits = "release"

@@ -210,6 +210,11 @@ const KEYS: &[Key] = &[
         "Hex records these as you switch models",
     ),
     key(
+        "vocabulary_boost",
+        Kind::Choice(&["off", "light", "normal", "strong"]),
+        "How readily transcription swaps heard words for a vocabulary term (the vocabulary experiment)",
+    ),
+    key(
         "dictation_processing.default_mode",
         Kind::Json,
         "The Global mode: replacements, transformations, and rewriting",

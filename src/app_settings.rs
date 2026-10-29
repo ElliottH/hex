@@ -1399,6 +1399,8 @@ pub struct AppSettings {
     /// while empty, so settings without one stay as they were.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vocabulary: Vec<crate::vocabulary::VocabularyEntry>,
+    /// How readily transcription swaps heard words for a vocabulary term.
+    pub vocabulary_boost: crate::vocabulary::VocabularyBoost,
     /// One-time settings changes already applied. A file that predates a
     /// change lacks its ID, so the change runs once on the next load; new
     /// settings start with every ID because they need none.
@@ -1466,6 +1468,7 @@ impl Default for AppSettings {
             indicator_position: IndicatorPosition::default(),
             updates: UpdateSettings::default(),
             vocabulary: Vec::new(),
+            vocabulary_boost: crate::vocabulary::VocabularyBoost::default(),
             migrations: MIGRATIONS.iter().map(|id| id.to_string()).collect(),
             text_replacements: Vec::new(),
         }
@@ -1892,7 +1895,7 @@ impl AppSettings {
             .get_or_init(Default::default)
             .write()
             .unwrap_or_else(|error| error.into_inner()) = self.voice_action.clone();
-        crate::vocabulary::apply(&self.vocabulary);
+        crate::vocabulary::apply(&self.vocabulary, self.vocabulary_boost);
     }
 
     /// Mode activations saved while Finder showed filename extensions carry a
@@ -2949,11 +2952,9 @@ mod tests {
         fs::write(&dir.path, older).unwrap();
         let settings = AppSettings::load_from(&dir.path).unwrap();
         assert!(settings.vocabulary.is_empty());
-        assert!(
-            !fs::read_to_string(&dir.path)
-                .unwrap()
-                .contains("vocabulary")
-        );
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&dir.path).unwrap()).unwrap();
+        assert!(written.get("vocabulary").is_none());
         assert!(
             serde_json::to_value(AppSettings::default())
                 .unwrap()
@@ -2984,6 +2985,7 @@ mod tests {
                 {"term": "Rune"},
             ])
         );
+        assert_eq!(json["vocabulary_boost"], "normal");
         let reloaded = AppSettings::load_from(&dir.path).unwrap();
         assert_eq!(reloaded.vocabulary, filled.vocabulary);
     }
