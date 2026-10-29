@@ -507,7 +507,7 @@ Model advertises streaming, GPU device             // dictate.streaming
        // same audio as the final clip, pre-roll included; never blocks capture
   Release -> Collect the 200 ms tail -> Finish with the complete clip
     -> Feed any unfed remainder -> Finalize -> Final text
-       // the native stream hears each pause's first 1.7 s and last 0.3 s
+       // the native stream hears each pause's first 2.5 s and last 0.3 s
        // (dictate.stream-pauses); the clip and the fed count are unchanged
        ├── Stream failed, produced no text, or was fed > 250 ms past the clip
        │   -> Transcribe the whole clip offline (source=fallback)
@@ -648,8 +648,10 @@ never did, and NeMo's reference buffered streaming does the same. The engine
 now caps each pause the native stream hears (`PauseCap` in
 [transcription_engine.rs](../../src/transcription_engine.rs), dictation
 streams only, not `/streams`): in a run of 20 ms frames that meetings' pause
-detection (`SpeechFrames`) calls not speech, the first 1.7 s and last 0.3 s
-are fed and the middle dropped. The capture, the clip, the fed count, and the
+detection (`SpeechFrames`) calls not speech, the first 2.5 s and last 0.3 s
+are fed and the middle dropped. The head outlasts a chunk and its lookahead
+(2.08 s), so the words before a pause still reach the live text during it;
+a 1.7 s head left the last word before a pause unshown until speech resumed. The capture, the clip, the fed count, and the
 fallbacks are unchanged, so the final text still comes from the stream without
 added latency; `HEX_STREAM_PAUSES=0` turns it off, and "finished live stream"
 logs `pauses_dropped_ms`. Limits: speech within 12 dB of the room counts as
@@ -666,8 +668,12 @@ differences from the whole clip with `HEX_STREAM_PAUSES=0` then capped:
 digital silence 18/36 then 0/36; -50 dBFS noise throughout 18/36 then
 0/36; -50 dBFS noise in the gap only (silent under the speech) 18/36 then
 18/36, the floor limit above. Gaps of 2 and 4 s: 0 differences in every
-case. Not verified: a physical microphone and real rooms, and the Linux and
-Windows builds.
+case. Rerun with the 2.5 s head: digital silence and noise throughout, gaps of
+2 to 14 s, 0/88. A physical-microphone recording (25.6 s, a 10 s pause)
+replayed the same way showed the word before the pause at 21.3 s, after
+speech resumed, with a 1.7 s head; at 12.5 s, during the pause, with 2.5 s;
+and at 12.3 s uncapped, where the uncapped final text lost a word (0/24 capped,
+1/24 uncapped). Not verified: other rooms, and the Linux and Windows builds.
 ### Optional Voice Controls
 
 Optional spoken entry requires Commands enabled, its model ready, and recognition

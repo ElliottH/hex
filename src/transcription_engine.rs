@@ -39,10 +39,12 @@ const STREAM_FINISH_DEADLINE: Duration = Duration::from_millis(1_500);
 /// Audio fed past the clip's trimmed end (a release handled late) that the
 /// stream may still keep. Beyond it, the offline clip is authoritative.
 const MAX_OVERFED_SAMPLES: usize = 16_000 / 4;
-/// A dictation stream hears at most the first 1.7 s and the last 0.3 s of
+/// A dictation stream hears at most the first 2.5 s and the last 0.3 s of
 /// a pause: Parakeet's buffered streaming drops the next word after a pause
-/// longer than its 5.6 s left context, and never did after 2 to 5 s.
-const PAUSE_HEAD_SAMPLES: usize = 27_200;
+/// longer than its 5.6 s left context, and never did after 2 to 5 s. The
+/// head outlasts a chunk and its lookahead (2.08 s), so the words before the
+/// pause are decoded, and shown as live text, before speech resumes.
+const PAUSE_HEAD_SAMPLES: usize = 40_000;
 const PAUSE_TAIL_SAMPLES: usize = 4_800;
 /// How long a job may run once the engine starts it, before the clip's own
 /// share. It covers activating and prewarming the largest model inside the
@@ -1569,9 +1571,10 @@ mod tests {
         else {
             panic!("the stream did not finish");
         };
-        // 6 s of the 8 s pause is dropped; the clip is untouched.
-        assert_eq!(stats.dropped, 16_000 * 6);
-        assert_eq!(result, Ok(format!("streamed {}", clip.len() - 16_000 * 6)));
+        // 5.2 s of the 8 s pause is dropped; the clip is untouched.
+        let dropped = 8 * 16_000 - PAUSE_HEAD_SAMPLES - PAUSE_TAIL_SAMPLES;
+        assert_eq!(stats.dropped, dropped);
+        assert_eq!(result, Ok(format!("streamed {}", clip.len() - dropped)));
         assert!(finished == clip);
         assert!(fake.fed[fake.fed.len() - 8_000..] == clip[clip.len() - 8_000..]);
     }
